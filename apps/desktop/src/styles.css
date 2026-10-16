@@ -202,6 +202,348 @@ button {
   overflow-y: auto;
   gap: 14px;
 }
+.ai-mode-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid #e5e8ea;
+  border-radius: 6px;
+  background: #f6f7f8;
+}
+.ai-mode-switch button {
+  min-height: 30px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: #7b858e;
+  background: transparent;
+  font-size: 11px;
+  cursor: pointer;
+}
+.ai-mode-switch button.is-active {
+  border-color: #e5e8ea;
+  color: #303941;
+  background: #fff;
+  box-shadow: 0 1px 2px #18202a0a;
+}
+.ai-mode-content[hidden] {
+  display: none;
+}
+.ai-generation-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.ai-agent-mode {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+.agent-panel {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+}
+.agent-panel-heading,
+.agent-proposal-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.agent-panel-heading > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.agent-panel-heading strong,
+.agent-proposal-heading strong {
+  color: #39434c;
+  font-size: 11px;
+}
+.agent-panel-heading span,
+.agent-proposal-heading span {
+  color: #89939c;
+  font-size: 9px;
+  line-height: 1.5;
+}
+.agent-clear-button,
+.agent-reject-button,
+.agent-undo-button {
+  min-height: 27px;
+  padding: 0 8px;
+  border: 1px solid #dfe3e6;
+  border-radius: 4px;
+  color: #65717b;
+  background: #fff;
+  font-size: 10px;
+  cursor: pointer;
+}
+.agent-clear-button:disabled,
+.agent-undo-button:disabled {
+  color: #aab1b7;
+  cursor: not-allowed;
+}
+.agent-transcript {
+  display: flex;
+  min-height: 116px;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  padding: 9px;
+  overflow: auto;
+  border: 1px solid #e7eaed;
+  border-radius: 5px;
+  background: #fbfcfc;
+}
+.agent-empty-state {
+  display: flex;
+  min-height: 94px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 7px;
+  color: #85909a;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.agent-empty-state strong {
+  color: #5e6973;
+  font-size: 10px;
+}
+.agent-message {
+  max-width: 94%;
+  padding: 7px 8px;
+  border: 1px solid #e7eaed;
+  border-radius: 5px;
+  color: #4d5862;
+  background: #fff;
+  font-size: 10px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.agent-message.is-user {
+  align-self: flex-end;
+  border-color: #f0d2ca;
+  background: #fff8f6;
+}
+.agent-message > span {
+  color: #9aa3aa;
+  font-size: 9px;
+}
+.agent-message p {
+  margin: 3px 0 0;
+  white-space: pre-wrap;
+}
+.agent-working {
+  padding: 4px 2px;
+  color: #9a7168;
+  font-size: 10px;
+}
+.agent-actions {
+  border: 1px solid #e7eaed;
+  border-radius: 5px;
+  color: #66717b;
+  background: #fff;
+  font-size: 10px;
+}
+.agent-actions > summary,
+.agent-diff > summary {
+  padding: 7px 9px;
+  cursor: pointer;
+}
+.agent-actions ol {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 0;
+  padding: 0 9px 9px;
+  list-style: none;
+}
+.agent-actions li {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+}
+.agent-action-status {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: #c4cbd0;
+}
+.agent-actions li.is-done .agent-action-status {
+  background: #5ea882;
+}
+.agent-actions li.is-approval .agent-action-status {
+  background: #d9573b;
+}
+.agent-actions li.is-failed .agent-action-status {
+  background: #c45d54;
+}
+.agent-actions li > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.agent-actions li strong {
+  color: #59646d;
+  font-weight: 500;
+}
+.agent-actions li small {
+  color: #929ba2;
+  line-height: 1.45;
+}
+.agent-proposal {
+  padding: 10px;
+  border: 1px solid #e7b7aa;
+  border-radius: 5px;
+  background: #fffaf8;
+}
+.agent-proposal p {
+  margin: 7px 0 4px;
+  color: #4b555e;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.agent-proposal > small {
+  color: #8b949b;
+  font-size: 9px;
+}
+.agent-diff {
+  margin-top: 7px;
+  border: 1px solid #eee2de;
+  border-radius: 4px;
+  color: #7b858e;
+  background: #fff;
+  font-size: 9px;
+}
+.agent-diff pre {
+  max-height: 120px;
+  margin: 0;
+  padding: 0 9px 8px;
+  overflow: auto;
+  color: #4c5962;
+  font: 9px/1.5 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.agent-proposal-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 9px;
+}
+.agent-apply-button {
+  min-height: 29px;
+  padding: 0 10px;
+  border: 1px solid #c54e35;
+  border-radius: 4px;
+  color: #fff;
+  background: var(--accent);
+  font-size: 10px;
+  cursor: pointer;
+}
+.agent-undo-button {
+  align-self: flex-start;
+}
+.agent-error {
+  padding: 7px 8px;
+  border: 1px solid #edc6bd;
+  border-radius: 4px;
+  color: #a33f2c;
+  background: #fff7f5;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.agent-cli-approval-dialog {
+  display: grid;
+  gap: 14px;
+  width: min(560px, 100%);
+}
+.agent-cli-approval-kicker {
+  color: #8a9399;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+}
+.agent-cli-approval-dialog h2 {
+  margin: -6px 0 0;
+  color: #20252b;
+  font-size: 19px;
+}
+.agent-cli-approval-dialog p {
+  margin: 0;
+  line-height: 1.6;
+}
+.agent-cli-approval-rationale,
+.agent-cli-approval-note {
+  color: #78838a;
+  font-size: 12px;
+}
+.agent-cli-approval-dialog details {
+  border: 1px solid #dfe3e6;
+  border-radius: 4px;
+  padding: 10px 12px;
+  font-size: 12px;
+}
+.agent-cli-approval-dialog summary {
+  cursor: pointer;
+}
+.agent-cli-approval-dialog details pre {
+  margin: 10px 0 0;
+  overflow: auto;
+  color: #3f6f54;
+  white-space: pre-wrap;
+}
+.agent-cli-approval-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.agent-cli-approval-actions button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid #dfe3e6;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+}
+.agent-cli-apply-button {
+  border-color: #c76c56 !important;
+  color: #fff;
+  background: #c76c56 !important;
+}
+.agent-compose {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.agent-compose textarea {
+  width: 100%;
+  min-height: 76px;
+  resize: vertical;
+  padding: 9px 10px;
+  border: 1px solid #dfe3e6;
+  border-radius: 5px;
+  outline: none;
+  color: #343c44;
+  background: #fff;
+  font:
+    11px/1.55 -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
+}
+.agent-compose textarea:focus {
+  border-color: #dda091;
+  box-shadow: 0 0 0 2px #f9e9e5;
+}
+.agent-compose textarea:disabled {
+  color: #98a1a8;
+  background: #f6f7f8;
+}
 .ai-intro p {
   margin: 0;
   color: #7b858e;
@@ -379,14 +721,19 @@ button {
   --col-library: 240px;
   --col-source: minmax(280px, 32%);
   --col-ai: 320px;
+  --row-terminal: 0px;
   display: grid;
   grid-template-columns:
     var(--col-library) var(--col-source) minmax(0, 1fr)
     var(--col-ai);
+  grid-template-rows: minmax(0, 1fr) var(--row-terminal);
   min-height: 0;
   padding: 0;
   gap: 0;
   background: #fff;
+}
+.workspace.is-terminal-open {
+  --row-terminal: 250px;
 }
 .workspace.is-library-collapsed {
   --col-library: 42px;
@@ -396,6 +743,42 @@ button {
 }
 .workspace.is-ai-collapsed {
   --col-ai: 42px;
+}
+
+.library-sidebar {
+  grid-column: 1;
+  grid-row: 1 / -1;
+}
+.editor-pane {
+  grid-column: 2;
+  grid-row: 1;
+}
+.preview-pane {
+  grid-column: 3;
+  grid-row: 1;
+}
+.ai-sidebar {
+  grid-column: 4;
+  grid-row: 1 / -1;
+}
+#seamind-terminal-panel {
+  grid-column: 2 / 4;
+  grid-row: 2;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-top: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  background: #fff;
+}
+.workspace.is-source-collapsed .editor-pane {
+  grid-row: 1 / -1;
+}
+.workspace.is-source-collapsed #seamind-terminal-panel {
+  grid-column: 3 / 4;
 }
 
 .editor-pane {
@@ -1906,6 +2289,25 @@ button {
 .app-shell[data-theme='dark'] .settings-dialog {
   box-shadow: 0 14px 45px #0008;
 }
+.app-shell[data-theme='dark'] .agent-cli-approval-dialog h2 {
+  color: #e0e6ea;
+}
+.app-shell[data-theme='dark'] .agent-cli-approval-rationale,
+.app-shell[data-theme='dark'] .agent-cli-approval-note,
+.app-shell[data-theme='dark'] .agent-cli-approval-kicker {
+  color: #9aa6ae;
+}
+.app-shell[data-theme='dark'] .agent-cli-approval-dialog details,
+.app-shell[data-theme='dark'] .agent-cli-approval-actions button {
+  border-color: #38434c;
+  color: #c6d0d6;
+  background: #171d21;
+}
+.app-shell[data-theme='dark'] .agent-cli-apply-button {
+  border-color: #c76c56 !important;
+  color: #fff !important;
+  background: #c76c56 !important;
+}
 .app-shell[data-theme='dark'] .dialog-close {
   color: #aab4bb;
 }
@@ -1946,6 +2348,77 @@ button {
   border-color: #38434c;
   color: #a4b0b9;
   background: #20272d;
+}
+.app-shell[data-theme='dark'] .ai-mode-switch {
+  border-color: #38434c;
+  background: #151a1e;
+}
+.app-shell[data-theme='dark'] .ai-mode-switch button {
+  color: #9aa6ae;
+}
+.app-shell[data-theme='dark'] .ai-mode-switch button.is-active {
+  border-color: #3b464e;
+  color: #e1e7eb;
+  background: #293138;
+  box-shadow: none;
+}
+.app-shell[data-theme='dark'] .agent-panel-heading strong,
+.app-shell[data-theme='dark'] .agent-proposal-heading strong {
+  color: #e0e6ea;
+}
+.app-shell[data-theme='dark'] .agent-panel-heading span,
+.app-shell[data-theme='dark'] .agent-proposal-heading span,
+.app-shell[data-theme='dark'] .agent-empty-state,
+.app-shell[data-theme='dark'] .agent-message > span,
+.app-shell[data-theme='dark'] .agent-proposal > small {
+  color: #8997a1;
+}
+.app-shell[data-theme='dark'] .agent-clear-button,
+.app-shell[data-theme='dark'] .agent-reject-button,
+.app-shell[data-theme='dark'] .agent-undo-button,
+.app-shell[data-theme='dark'] .agent-transcript,
+.app-shell[data-theme='dark'] .agent-actions,
+.app-shell[data-theme='dark'] .agent-message,
+.app-shell[data-theme='dark'] .agent-diff,
+.app-shell[data-theme='dark'] .agent-diff pre,
+.app-shell[data-theme='dark'] .agent-compose textarea {
+  border-color: #38434c;
+  color: #c6d0d6;
+  background: #171d21;
+}
+.app-shell[data-theme='dark'] .agent-empty-state strong,
+.app-shell[data-theme='dark'] .agent-actions li strong,
+.app-shell[data-theme='dark'] .agent-proposal p {
+  color: #c6d0d6;
+}
+.app-shell[data-theme='dark'] .agent-message.is-user {
+  border-color: #63453e;
+  background: #2b201e;
+}
+.app-shell[data-theme='dark'] .agent-actions li small {
+  color: #909da6;
+}
+.app-shell[data-theme='dark'] .agent-proposal {
+  border-color: #71443a;
+  background: #241d1b;
+}
+.app-shell[data-theme='dark'] .agent-diff {
+  background: #1a2024;
+}
+.app-shell[data-theme='dark'] .agent-apply-button {
+  border-color: #bd6a57;
+}
+.app-shell[data-theme='dark'] .agent-error {
+  border-color: #71443a;
+  color: #f0b3a5;
+  background: #2b201e;
+}
+.app-shell[data-theme='dark'] .agent-compose textarea:focus {
+  border-color: #bd6a57;
+  box-shadow: 0 0 0 2px #df735b22;
+}
+.app-shell[data-theme='dark'] .agent-compose textarea::placeholder {
+  color: #6e7c86;
 }
 .app-shell[data-theme='dark'] .ai-intro p {
   color: #8e9ba5;
@@ -2748,25 +3221,27 @@ button {
 
 .seamind-terminal,
 .seamind-terminal-loading {
-  position: fixed;
-  z-index: 90;
-  right: 16px;
-  bottom: 24px;
-  left: 16px;
-  height: min(360px, 44vh);
-  min-height: 230px;
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  border: 1px solid #cbd4d8;
+  border: 0;
+  border-radius: 0;
   background: #fff;
   color: #243039;
   font-family: Inter, 'Segoe UI', sans-serif;
+  overflow: hidden;
 }
 .seamind-terminal-loading {
-  height: auto;
-  min-height: 0;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
   padding: 14px 18px;
   font-size: 12px;
+  color: #7b8991;
 }
 .seamind-terminal-heading {
   height: 38px;
@@ -3025,6 +3500,7 @@ button {
   border-color: #df735b;
   color: #e58a75;
 }
+.app-shell[data-theme='dark'] #seamind-terminal-panel,
 .app-shell[data-theme='dark'] .seamind-terminal,
 .app-shell[data-theme='dark'] .seamind-terminal-loading {
   border-color: #39454c;
@@ -3114,12 +3590,6 @@ button {
 }
 
 @media (max-width: 820px) {
-  .seamind-terminal {
-    right: 8px;
-    bottom: 22px;
-    left: 8px;
-    height: 42vh;
-  }
   .seamind-code-panel {
     width: 400px;
     max-width: 72vw;

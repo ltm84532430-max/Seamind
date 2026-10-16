@@ -14,6 +14,17 @@ import type { Markmap as MarkmapInstance } from 'markmap-view';
 import { hydrateCodeBlocks, updateMarkdownCodeFence } from './code-blocks';
 import 'katex/dist/katex.min.css';
 import LibraryPanel from './LibraryPanel';
+import AgentPanel from './AgentPanel';
+import { agentToolCatalog, executeAgentTool } from './agent/capabilities';
+import type {
+  AgentCapabilities,
+  ProposeNodeEditInput,
+} from './agent/capabilities';
+import type {
+  ActiveMindmapSnapshot,
+  MindmapNodeSnapshot,
+  NodeEditProposal,
+} from './agent/types';
 const TerminalPanel = lazy(() => import('./TerminalPanel'));
 import type {
   LibrarySnapshot,
@@ -52,6 +63,17 @@ interface EditorDraft {
   markdown: string;
   dirty: boolean;
   revision: number;
+}
+
+interface CliAgentToolRequest {
+  requestId: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+interface CliAgentProposal {
+  requestId: string;
+  proposal: NodeEditProposal;
 }
 
 interface EpubOutline {
@@ -952,6 +974,55 @@ function updateMarkdownFromCanvas(
   return lines.join('\n');
 }
 
+function buildAgentMindmapTree(
+  root: PureNode,
+  editablePaths: Set<string>,
+): {
+  root: MindmapNodeSnapshot;
+  nodeCount: number;
+} {
+  const maxNodes = 240;
+  let nextId = 0;
+  let nodeCount = 0;
+  const visit = (
+    node: PureNode,
+    parentPath = '',
+  ): MindmapNodeSnapshot | null => {
+    if (nodeCount >= maxNodes) return null;
+    nextId += 1;
+    nodeCount += 1;
+    const path = parentPath ? `${parentPath}.${nextId}` : `${nextId}`;
+    const document = new DOMParser().parseFromString(node.content, 'text/html');
+    document.body
+      .querySelectorAll('svg')
+      .forEach((element) => element.remove());
+    const isHtmlCard = Boolean(htmlCardDefinitionFromPayload(node));
+    const containsKatex = Boolean(document.body.querySelector('.katex'));
+    const label = normalizeMindmapText(document.body.textContent ?? '').slice(
+      0,
+      300,
+    );
+    const children = node.children
+      .map((child) => visit(child, path))
+      .filter((child): child is MindmapNodeSnapshot => child !== null);
+    return {
+      path,
+      label,
+      editable: editablePaths.has(path) && !isHtmlCard && !containsKatex,
+      children,
+    };
+  };
+  return {
+    root: visit(root) ?? {
+      path: '1',
+      label: '',
+      editable: false,
+      children: [],
+    },
+    nodeCount,
+  };
+}
+
 function Icon({
   name,
 }: {
@@ -1034,6 +1105,7 @@ export default function App() {
   const [categoryDraft, setCategoryDraft] = useState('');
   const [providerSettings, setProviderSettings] =
     useState<ProviderSettings>(readProviderSettings);
+  const [aiMode, setAiMode] = useState<'generate' | 'agent'>('generate');
   const [prompt, setPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationError, setGenerationError] = useState('');
@@ -1042,6 +1114,9 @@ export default function App() {
   const [apiKeySaved, setApiKeySaved] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState('');
   const [lastUpdated, setLastUpdated] = useState('已同步');
+  const [cliAgentProposal, setCliAgentProposal] =
+    useState<CliAgentProposal | null>(null);
+  const cliAgentProposalRef = useRef<CliAgentProposal | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const codeBlocksAbortRef = useRef<AbortController | null>(null);
   const codeBlocksCleanupRef = useRef<(() => void) | null>(null);
@@ -1051,6 +1126,7 @@ export default function App() {
     new Map(),
   );
   const draftRef = useRef(editorDraft);
+  const agentCapabilitiesRef = useRef<AgentCapabilities | null>(null);
   const librarySnapshotRef = useRef<LibrarySnapshot | null>(null);
   const libraryQueryRef = useRef('');
   const categoryFilterRef = useRef('');
@@ -1111,6 +1187,254 @@ export default function App() {
     setEditorDraft(next);
     setPendingEpubImport(false);
     setSaveMessage('有未保存修改');
+  };
+
+  const getAgentMindmap = (): ActiveMindmapSnapshot => {
+    const current = draftRef.current;
+    const root = transformer.transform(current.markdown).root;
+    const sources = buildMarkdownNodeSourceMap(current.markdown, root);
+    const tree = buildAgentMindmapTree(root, new Set(sources.keys()));
+    return {
+      title: current.title,
+      revision: current.revision,
+      relativePath: current.relativePath,
+      nodeCount: tree.nodeCount,
+      root: tree.root,
+    };
+  };
+
+  const proposeAgentNodeEdit = (
+    input: ProposeNodeEditInput,
+  ): NodeEditProposal => {
+    const current = draftRef.current;
+    if (current.revision !== input.baseRevision) {
+      throw new Error('当前导图已变化，请重新读取后再提出修改。');
+    }
+    const root = transformer.transform(current.markdown).root;
+    const source = buildMarkdownNodeSourceMap(current.markdown, root).get(
+      input.nodePath,
+    );
+    if (!source) {
+      throw new Error('找不到这个节点的 Markdown 源位置，请重新读取导图。');
+    }
+    if (
+      input.operation === 'add_child' &&
+      source.kind === 'heading' &&
+      source.level >= 6
+    ) {
+      throw new Error('这个标题已经达到 Markdown 的最大层级，无法添加子标题。');
+    }
+
+    const operation =
+      input.operation === 'add_child'
+        ? 'child'
+        : input.operation === 'add_sibling'
+          ? 'sibling'
+          : undefined;
+    const markdown = updateMarkdownFromCanvas(
+      current.markdown,
+      source,
+      input.text,
+      operation,
+    );
+    if (markdown === current.markdown) {
+      throw new Error('提案没有产生任何 Markdown 变化。');
+    }
+    return {
+      baseRevision: current.revision,
+      baseRelativePath: current.relativePath,
+      baseMarkdown: current.markdown,
+      baseTitle: current.title,
+      markdown,
+      title: markdownTitle(markdown),
+      nodePath: input.nodePath,
+      operation: input.operation,
+      previousLabel: source.label,
+      nextLabel: input.text.replace(/\s*\n+\s*/g, ' ').trim(),
+      rationale: input.rationale,
+    };
+  };
+
+  const agentCapabilities: AgentCapabilities = {
+    getCurrentMindmap: getAgentMindmap,
+    searchLibrary: (query, category) =>
+      invoke<MapDocument[]>('search_library', {
+        query,
+        category: category || null,
+      }),
+    readDocument: (relativePath) =>
+      invoke<OpenedDocument>('open_document', { relativePath }),
+    proposeNodeEdit: proposeAgentNodeEdit,
+  };
+  agentCapabilitiesRef.current = agentCapabilities;
+
+  useEffect(() => {
+    const tools = agentToolCatalog.map(
+      ({ name, description, permission, inputSchema, version }) => ({
+        name,
+        description,
+        inputSchema,
+        annotations: {
+          readOnlyHint: permission === 'read',
+          destructiveHint: permission === 'user_approval',
+          openWorldHint: false,
+        },
+        _meta: {
+          'seamind/version': version,
+          'seamind/permission': permission,
+          ...(permission === 'user_approval'
+            ? { 'anthropic/requiresUserInteraction': true }
+            : {}),
+        },
+      }),
+    );
+    void invoke('agent_bridge_set_tools', { tools }).catch((error: unknown) => {
+      console.error('Unable to register Seamind MCP tools', error);
+    });
+
+    let alive = true;
+    let unlisten: (() => void) | undefined;
+    void listen<CliAgentToolRequest>(
+      'seamind-cli-tool-request',
+      async (event) => {
+        const { requestId, name, arguments: input } = event.payload;
+        const capabilities = agentCapabilitiesRef.current;
+        if (!capabilities) {
+          await invoke('agent_bridge_resolve', {
+            requestId,
+            result: {},
+            error: 'Seamind 能力尚未初始化。',
+          }).catch(() => undefined);
+          return;
+        }
+        try {
+          const execution = await executeAgentTool(
+            name,
+            JSON.stringify(input ?? {}),
+            capabilities,
+          );
+          if (execution.proposal) {
+            if (cliAgentProposalRef.current) {
+              await invoke('agent_bridge_resolve', {
+                requestId,
+                result: {},
+                error: 'Seamind 正在等待你确认另一条导图修改提案。',
+              }).catch(() => undefined);
+              return;
+            }
+            const pending = { requestId, proposal: execution.proposal };
+            cliAgentProposalRef.current = pending;
+            setCliAgentProposal(pending);
+            return;
+          }
+          const structuredContent = {
+            version: execution.version,
+            permission: execution.permission,
+            ...execution.result,
+          };
+          await invoke('agent_bridge_resolve', {
+            requestId,
+            result: {
+              content: [
+                { type: 'text', text: JSON.stringify(structuredContent) },
+              ],
+              structuredContent,
+            },
+            error: null,
+          });
+        } catch (caught) {
+          await invoke('agent_bridge_resolve', {
+            requestId,
+            result: {},
+            error: caught instanceof Error ? caught.message : '工具执行失败。',
+          }).catch(() => undefined);
+        }
+      },
+    )
+      .then((stop) => {
+        if (alive) unlisten = stop;
+        else stop();
+      })
+      .catch((error: unknown) => {
+        console.error('Unable to listen for Seamind MCP requests', error);
+      });
+
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, []);
+
+  const applyAgentProposal = (proposal: NodeEditProposal): number | null => {
+    const current = draftRef.current;
+    if (
+      current.revision !== proposal.baseRevision ||
+      current.relativePath !== proposal.baseRelativePath ||
+      current.markdown !== proposal.baseMarkdown
+    ) {
+      return null;
+    }
+    patchDraft({ markdown: proposal.markdown, title: proposal.title });
+    return draftRef.current.revision;
+  };
+
+  const resolveCliAgentProposal = async (apply: boolean) => {
+    const pending = cliAgentProposalRef.current;
+    if (!pending) return;
+    cliAgentProposalRef.current = null;
+    setCliAgentProposal(null);
+    if (!apply) {
+      await invoke('agent_bridge_resolve', {
+        requestId: pending.requestId,
+        result: {},
+        error: '用户在 Seamind 中拒绝了导图修改提案；导图没有变化。',
+      }).catch(() => undefined);
+      return;
+    }
+    const appliedRevision = applyAgentProposal(pending.proposal);
+    if (appliedRevision === null) {
+      await invoke('agent_bridge_resolve', {
+        requestId: pending.requestId,
+        result: {},
+        error: '当前导图在提案生成后发生了变化。请重新读取导图并提出新提案。',
+      }).catch(() => undefined);
+      return;
+    }
+    await invoke('agent_bridge_resolve', {
+      requestId: pending.requestId,
+      result: {
+        content: [
+          { type: 'text', text: '用户已在 Seamind 中确认并应用修改。' },
+        ],
+        structuredContent: {
+          status: 'applied',
+          title: pending.proposal.title,
+          relativePath: pending.proposal.baseRelativePath,
+          revision: appliedRevision,
+        },
+      },
+      error: null,
+    }).catch(() => undefined);
+  };
+
+  const undoAgentProposal = (
+    proposal: NodeEditProposal,
+    appliedRevision: number,
+  ): boolean => {
+    const current = draftRef.current;
+    if (
+      current.revision !== appliedRevision ||
+      (proposal.baseRelativePath !== null &&
+        current.relativePath !== proposal.baseRelativePath) ||
+      current.markdown !== proposal.markdown
+    ) {
+      return false;
+    }
+    patchDraft({
+      markdown: proposal.baseMarkdown,
+      title: proposal.baseTitle,
+    });
+    return true;
   };
 
   codeBlockEditHandlerRef.current = (
@@ -2171,7 +2495,7 @@ export default function App() {
       </header>
 
       <section
-        className={`workspace${sourceCollapsed ? ' is-source-collapsed' : ''}${libraryCollapsed ? ' is-library-collapsed' : ''}${aiCollapsed ? ' is-ai-collapsed' : ''}`}
+        className={`workspace${sourceCollapsed ? ' is-source-collapsed' : ''}${libraryCollapsed ? ' is-library-collapsed' : ''}${aiCollapsed ? ' is-ai-collapsed' : ''}${terminalOpen ? ' is-terminal-open' : ''}`}
         aria-label="Markdown 思维导图编辑器"
       >
         <LibraryPanel
@@ -2497,88 +2821,170 @@ export default function App() {
             </button>
           </div>
           <div className="ai-content">
-            <div className="ai-intro">
-              <p>
-                输入知识主题或长文资料，LLM
-                将自动推理逻辑架构、梳理多层级关系并即刻呈现为工整的思维导图。
-              </p>
-            </div>
-            <form
-              className="ai-form"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void handleGenerate();
-              }}
-            >
-              <label className="ai-prompt-label" htmlFor="ai-prompt">
-                构想主题或内容梗概
-              </label>
-              <div className="ai-textarea-wrap">
-                <textarea
-                  id="ai-prompt"
-                  className="ai-prompt-textarea"
-                  value={prompt}
-                  onChange={(event) => {
-                    setPrompt(event.target.value);
-                    setGenerationError('');
-                  }}
-                  onKeyDown={(event) => {
-                    if (
-                      (event.ctrlKey || event.metaKey) &&
-                      event.key === 'Enter'
-                    ) {
-                      event.preventDefault();
-                      void handleGenerate();
-                    }
-                  }}
-                  rows={4}
-                  maxLength={4000}
-                  placeholder="例如：梳理大语言模型 (LLM) 的预训练、指令微调、RLHF 对齐与推理优化全流程…"
-                  aria-label="LLM 提示词"
-                />
-                {generationError && (
-                  <div className="generation-error" role="alert">
-                    {generationError}
-                  </div>
-                )}
-              </div>
-              <div className="ai-suggestions">
-                <span className="suggestions-title">快速灵感主题</span>
-                <div className="suggestion-tags">
-                  {promptSuggestions.map((suggestion) => (
-                    <button
-                      type="button"
-                      key={suggestion}
-                      onClick={() => {
-                        setPrompt(suggestion);
-                        setGenerationError('');
-                      }}
-                    >
-                      {suggestion}
-                    </button>
-                  ))}
-                </div>
-              </div>
+            <div className="ai-mode-switch" role="tablist" aria-label="AI 模式">
               <button
-                className="ai-generate-button"
-                type="submit"
-                disabled={isGenerating || !prompt.trim()}
+                type="button"
+                role="tab"
+                aria-selected={aiMode === 'generate'}
+                className={aiMode === 'generate' ? 'is-active' : ''}
+                onClick={() => setAiMode('generate')}
               >
-                {isGenerating ? (
-                  <>
-                    <span className="spinner" />
-                    正在构筑思维导图…
-                  </>
-                ) : (
-                  '生成思维导图'
-                )}
+                生成新图
               </button>
-              <div className="ai-hint-footer">
-                Ctrl + Enter 快捷发送 · 自动保存入库
+              <button
+                type="button"
+                role="tab"
+                aria-selected={aiMode === 'agent'}
+                className={aiMode === 'agent' ? 'is-active' : ''}
+                onClick={() => setAiMode('agent')}
+              >
+                助手
+              </button>
+            </div>
+            <div
+              className="ai-mode-content ai-generation-mode"
+              hidden={aiMode !== 'generate'}
+            >
+              <div className="ai-intro">
+                <p>
+                  输入知识主题或长文资料，LLM
+                  将自动推理逻辑架构、梳理多层级关系并即刻呈现为工整的思维导图。
+                </p>
               </div>
-            </form>
+              <form
+                className="ai-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void handleGenerate();
+                }}
+              >
+                <label className="ai-prompt-label" htmlFor="ai-prompt">
+                  构想主题或内容梗概
+                </label>
+                <div className="ai-textarea-wrap">
+                  <textarea
+                    id="ai-prompt"
+                    className="ai-prompt-textarea"
+                    value={prompt}
+                    onChange={(event) => {
+                      setPrompt(event.target.value);
+                      setGenerationError('');
+                    }}
+                    onKeyDown={(event) => {
+                      if (
+                        (event.ctrlKey || event.metaKey) &&
+                        event.key === 'Enter'
+                      ) {
+                        event.preventDefault();
+                        void handleGenerate();
+                      }
+                    }}
+                    rows={4}
+                    maxLength={4000}
+                    placeholder="例如：梳理大语言模型 (LLM) 的预训练、指令微调、RLHF 对齐与推理优化全流程…"
+                    aria-label="LLM 提示词"
+                  />
+                  {generationError && (
+                    <div className="generation-error" role="alert">
+                      {generationError}
+                    </div>
+                  )}
+                </div>
+                <div className="ai-suggestions">
+                  <span className="suggestions-title">快速灵感主题</span>
+                  <div className="suggestion-tags">
+                    {promptSuggestions.map((suggestion) => (
+                      <button
+                        type="button"
+                        key={suggestion}
+                        onClick={() => {
+                          setPrompt(suggestion);
+                          setGenerationError('');
+                        }}
+                      >
+                        {suggestion}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <button
+                  className="ai-generate-button"
+                  type="submit"
+                  disabled={isGenerating || !prompt.trim()}
+                >
+                  {isGenerating ? (
+                    <>
+                      <span className="spinner" />
+                      正在构筑思维导图…
+                    </>
+                  ) : (
+                    '生成思维导图'
+                  )}
+                </button>
+                <div className="ai-hint-footer">
+                  Ctrl + Enter 快捷发送 · 自动保存入库
+                </div>
+              </form>
+            </div>
+            <div
+              className="ai-mode-content ai-agent-mode"
+              hidden={aiMode !== 'agent'}
+            >
+              <AgentPanel
+                provider={providerSettings}
+                capabilities={agentCapabilities}
+                currentRevision={editorDraft.revision}
+                onApplyProposal={applyAgentProposal}
+                onUndoProposal={undoAgentProposal}
+              />
+            </div>
           </div>
         </aside>
+
+        {terminalOpen && (
+          <Suspense
+            fallback={
+              <div
+                id="seamind-terminal-panel"
+                className="seamind-terminal-loading"
+              >
+                正在加载终端…
+              </div>
+            }
+          >
+            <div id="seamind-terminal-panel">
+              <TerminalPanel
+                key={librarySnapshot?.rootPath ?? 'default-terminal-directory'}
+                cwd={librarySnapshot?.rootPath ?? ''}
+                theme={theme}
+                pendingCommand={pendingTerminalCommand}
+                onCommandSubmitted={(id) =>
+                  setPendingTerminalCommand((current) =>
+                    current?.id === id ? null : current,
+                  )
+                }
+                onCommandOutput={(id, output) => {
+                  const callback = terminalCommandResultsRef.current.get(id);
+                  if (!callback) return;
+                  terminalCommandResultsRef.current.delete(id);
+                  callback(output);
+                }}
+                onClose={() => {
+                  const request = pendingTerminalCommand;
+                  if (request) {
+                    const callback = terminalCommandResultsRef.current.get(
+                      request.id,
+                    );
+                    terminalCommandResultsRef.current.delete(request.id);
+                    callback?.('终端已关闭，命令未执行。');
+                  }
+                  setPendingTerminalCommand(null);
+                  setTerminalOpen(false);
+                }}
+              />
+            </div>
+          </Suspense>
+        )}
       </section>
 
       <footer className="statusbar">
@@ -2850,6 +3256,52 @@ export default function App() {
           </section>
         </div>
       )}
+      {cliAgentProposal && (
+        <div className="settings-backdrop agent-cli-approval-backdrop">
+          <section
+            className="settings-dialog agent-cli-approval-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="agent-cli-approval-title"
+          >
+            <div className="agent-cli-approval-kicker">CLI · SEAMIND MCP</div>
+            <h2 id="agent-cli-approval-title">确认导图修改</h2>
+            <p>
+              {cliAgentProposal.proposal.operation === 'rename'
+                ? `将「${cliAgentProposal.proposal.previousLabel}」改为「${cliAgentProposal.proposal.nextLabel}」`
+                : `在「${cliAgentProposal.proposal.previousLabel}」${cliAgentProposal.proposal.operation === 'add_child' ? '下' : '旁'}添加「${cliAgentProposal.proposal.nextLabel}」`}
+            </p>
+            {cliAgentProposal.proposal.rationale && (
+              <p className="agent-cli-approval-rationale">
+                {cliAgentProposal.proposal.rationale}
+              </p>
+            )}
+            <details>
+              <summary>查看修改内容</summary>
+              <pre>{`− ${cliAgentProposal.proposal.previousLabel}\n+ ${cliAgentProposal.proposal.nextLabel}`}</pre>
+            </details>
+            <p className="agent-cli-approval-note">
+              确认后会更新当前编辑器草稿，并按现有设置自动保存。导图若已变化，提案将无法应用。
+            </p>
+            <div className="agent-cli-approval-actions">
+              <button
+                type="button"
+                className="agent-cli-reject-button"
+                onClick={() => void resolveCliAgentProposal(false)}
+              >
+                拒绝
+              </button>
+              <button
+                type="button"
+                className="agent-cli-apply-button"
+                onClick={() => void resolveCliAgentProposal(true)}
+              >
+                应用并自动保存
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       {terminalCommandConfirmation && (
         <div
           className="settings-backdrop terminal-command-backdrop"
@@ -2934,45 +3386,6 @@ export default function App() {
             </div>
           </section>
         </div>
-      )}
-      {terminalOpen && (
-        <Suspense
-          fallback={
-            <div className="seamind-terminal-loading">正在加载终端…</div>
-          }
-        >
-          <div id="seamind-terminal-panel">
-            <TerminalPanel
-              key={librarySnapshot?.rootPath ?? 'default-terminal-directory'}
-              cwd={librarySnapshot?.rootPath ?? ''}
-              theme={theme}
-              pendingCommand={pendingTerminalCommand}
-              onCommandSubmitted={(id) =>
-                setPendingTerminalCommand((current) =>
-                  current?.id === id ? null : current,
-                )
-              }
-              onCommandOutput={(id, output) => {
-                const callback = terminalCommandResultsRef.current.get(id);
-                if (!callback) return;
-                terminalCommandResultsRef.current.delete(id);
-                callback(output);
-              }}
-              onClose={() => {
-                const request = pendingTerminalCommand;
-                if (request) {
-                  const callback = terminalCommandResultsRef.current.get(
-                    request.id,
-                  );
-                  terminalCommandResultsRef.current.delete(request.id);
-                  callback?.('终端已关闭，命令未执行。');
-                }
-                setPendingTerminalCommand(null);
-                setTerminalOpen(false);
-              }}
-            />
-          </div>
-        </Suspense>
       )}
     </main>
   );

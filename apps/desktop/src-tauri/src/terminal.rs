@@ -1,3 +1,4 @@
+use crate::agent_bridge::AgentBridgeState;
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -21,6 +22,7 @@ struct TerminalSession {
     writer: Box<dyn Write + Send>,
     master: Box<dyn MasterPty + Send>,
     killer: Box<dyn ChildKiller + Send + Sync>,
+    cleanup_paths: Vec<PathBuf>,
 }
 
 #[derive(Clone, Serialize)]
@@ -96,6 +98,7 @@ fn terminal_size(cols: u16, rows: u16) -> PtySize {
 pub fn terminal_start(
     app: AppHandle,
     state: State<'_, TerminalState>,
+    agent_bridge: State<'_, AgentBridgeState>,
     cwd: String,
     cols: u16,
     rows: u16,
@@ -117,10 +120,16 @@ pub fn terminal_start(
         .openpty(terminal_size(cols, rows))
         .map_err(|error| format!("创建终端失败：{error}"))?;
 
+    let mcp_config_path = agent_bridge.create_cli_config()?;
+    let cleanup_paths = vec![mcp_config_path.clone()];
+
     #[cfg(windows)]
     let mut command = {
         let mut command = CommandBuilder::new("powershell.exe");
         command.arg("-NoLogo");
+        command.arg("-NoExit");
+        command.arg("-Command");
+        command.arg(create_powershell_bootstrap(&mcp_config_path));
         command
     };
     #[cfg(not(windows))]
@@ -133,11 +142,18 @@ pub fn terminal_start(
     command.cwd(working_directory);
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
+    command.env(
+        "SEAMIND_CLAUDE_MCP_CONFIG",
+        mcp_config_path.to_string_lossy().to_string(),
+    );
 
-    let mut child = pair
-        .slave
-        .spawn_command(command)
-        .map_err(|error| format!("启动终端 Shell 失败：{error}"))?;
+    let mut child = match pair.slave.spawn_command(command) {
+        Ok(child) => child,
+        Err(error) => {
+            remove_temp_files(&cleanup_paths);
+            return Err(format!("启动终端 Shell 失败：{error}"));
+        }
+    };
     let killer = child.clone_killer();
     let mut reader = pair
         .master
@@ -160,6 +176,7 @@ pub fn terminal_start(
                 writer,
                 master: pair.master,
                 killer,
+                cleanup_paths,
             },
         );
 
@@ -194,7 +211,9 @@ pub fn terminal_start(
             },
         );
         if let Ok(mut sessions) = sessions.lock() {
-            sessions.remove(&cleanup_session_id);
+            if let Some(session) = sessions.remove(&cleanup_session_id) {
+                remove_temp_files(&session.cleanup_paths);
+            }
         }
     });
 
@@ -252,6 +271,21 @@ pub fn terminal_close(state: State<'_, TerminalState>, session_id: String) -> Re
         .map_err(|_| "终端会话状态不可用。".to_string())?;
     if let Some(mut session) = sessions.remove(&session_id) {
         let _ = session.killer.kill();
+        remove_temp_files(&session.cleanup_paths);
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn create_powershell_bootstrap(config_path: &PathBuf) -> String {
+    let config_path = config_path.to_string_lossy().replace('\'', "''");
+    format!(
+        r#"$env:SEAMIND_CLAUDE_MCP_CONFIG = '{config_path}'; $global:SeamindClaudeExecutable = Get-Command claude -All -ErrorAction SilentlyContinue | Where-Object {{ $_.CommandType -in @('Application', 'ExternalScript') }} | Select-Object -First 1; function global:seamind-claude {{ if (-not $global:SeamindClaudeExecutable) {{ Write-Error 'Claude Code CLI 未安装或不在 PATH 中。'; return }}; & $global:SeamindClaudeExecutable.Source --mcp-config $env:SEAMIND_CLAUDE_MCP_CONFIG @args }}; function global:claude {{ seamind-claude @args }}; Write-Host 'Seamind MCP 已接入当前终端会话。运行 claude 即可使用导图和文件库工具。' -ForegroundColor DarkCyan"#
+    )
+}
+
+fn remove_temp_files(paths: &[PathBuf]) {
+    for path in paths {
+        let _ = std::fs::remove_file(path);
+    }
 }

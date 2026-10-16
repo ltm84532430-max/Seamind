@@ -1,18 +1,31 @@
-mod library;
 mod epub;
+mod library;
 mod terminal;
+
+use tauri::Manager;
+mod agent_bridge;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .manage(library::WatcherState::default())
         .manage(terminal::TerminalState::default())
+        .manage(agent_bridge::AgentBridgeState::default())
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            app.state::<agent_bridge::AgentBridgeState>()
+                .start(app.handle().clone())
+                .map_err(std::io::Error::other)?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             has_api_key,
             save_api_key,
             delete_api_key,
             generate_mindmap,
+            agent_completion,
+            agent_bridge::agent_bridge_set_tools,
+            agent_bridge::agent_bridge_resolve,
             epub::import_epub_toc,
             library::library_status,
             library::set_library_root,
@@ -40,6 +53,10 @@ const KEYRING_USER: &str = "openai-compatible-api-key";
 const MAX_PROMPT_CHARS: usize = 4_000;
 const MAX_MARKDOWN_BYTES: usize = 100_000;
 const MAX_RESPONSE_BYTES: usize = 1_048_576;
+const MAX_AGENT_MESSAGES: usize = 32;
+const MAX_AGENT_CONTEXT_BYTES: usize = 250_000;
+const MAX_AGENT_TOOLS: usize = 4;
+const MAX_AGENT_TOOLS_BYTES: usize = 32_000;
 
 #[cfg(windows)]
 fn api_key_entry() -> Result<keyring::Entry, String> {
@@ -210,6 +227,161 @@ async fn generate_mindmap(
         .ok_or_else(|| "AI 服务没有返回可用的 Markdown 内容。".to_string())?;
 
     normalize_generated_markdown(&content)
+}
+
+#[tauri::command]
+async fn agent_completion(
+    base_url: String,
+    model: String,
+    messages: Vec<serde_json::Value>,
+    tools: Vec<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let model = model.trim();
+    if model.is_empty() || model.len() > 200 {
+        return Err("请填写有效的模型名称。".to_string());
+    }
+    if messages.is_empty() || messages.len() > MAX_AGENT_MESSAGES {
+        return Err("AI 对话长度超出限制，请开启新对话后重试。".to_string());
+    }
+    let message_bytes =
+        serde_json::to_vec(&messages).map_err(|_| "AI 对话内容无法序列化。".to_string())?;
+    if message_bytes.len() > MAX_AGENT_CONTEXT_BYTES {
+        return Err("AI 对话上下文过长，请缩小请求范围后重试。".to_string());
+    }
+    for message in &messages {
+        let role = message
+            .get("role")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if !["system", "user", "assistant", "tool"].contains(&role) {
+            return Err("AI 对话包含不支持的消息类型。".to_string());
+        }
+    }
+    if tools.is_empty() || tools.len() > MAX_AGENT_TOOLS {
+        return Err("AI 工具清单无效。".to_string());
+    }
+    let tool_bytes =
+        serde_json::to_vec(&tools).map_err(|_| "AI 工具清单无法序列化。".to_string())?;
+    if tool_bytes.len() > MAX_AGENT_TOOLS_BYTES {
+        return Err("AI 工具清单过大。".to_string());
+    }
+    let allowed_tools = [
+        "mindmap_get_current",
+        "library_search",
+        "library_read_document",
+        "mindmap_propose_node_edit",
+    ];
+    let mut tool_names = Vec::with_capacity(tools.len());
+    for tool in &tools {
+        let name = tool
+            .pointer("/function/name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "AI 工具定义缺少名称。".to_string())?;
+        if !allowed_tools.contains(&name) || tool_names.iter().any(|existing| *existing == name) {
+            return Err("AI 工具清单包含未注册或重复的工具。".to_string());
+        }
+        tool_names.push(name);
+    }
+
+    let api_key = {
+        #[cfg(windows)]
+        {
+            match api_key_entry()?.get_password() {
+                Ok(key) => key,
+                Err(keyring::Error::NoEntry) => {
+                    return Err("请先在模型设置中保存 API 密钥。".to_string());
+                }
+                Err(_) => return Err("读取 Windows 凭据失败。".to_string()),
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            return Err("API 密钥安全存储目前仅支持 Windows。".to_string());
+        }
+    };
+
+    let url = completion_url(&base_url)?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(90))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "无法初始化 AI 网络连接。".to_string())?;
+    let request_body = serde_json::json!({
+        "model": model,
+        "stream": false,
+        "messages": messages,
+        "tools": tools,
+        "tool_choice": "auto",
+    });
+
+    let response = client
+        .post(url)
+        .bearer_auth(api_key)
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|_| "连接 AI 服务失败，请检查网络和 API 地址。".to_string())?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!(
+            "AI 服务返回 HTTP {}，请检查 API 地址、密钥、模型名称及工具调用支持。",
+            status.as_u16()
+        ));
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
+    {
+        return Err("AI 服务返回内容过大，请缩小请求范围后重试。".to_string());
+    }
+    let mut response = response;
+    let mut response_bytes = Vec::with_capacity(
+        response
+            .content_length()
+            .unwrap_or(0)
+            .min(MAX_RESPONSE_BYTES as u64) as usize,
+    );
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "读取 AI 服务响应失败。".to_string())?
+    {
+        if response_bytes.len() + chunk.len() > MAX_RESPONSE_BYTES {
+            return Err("AI 服务返回内容过大，请缩小请求范围后重试。".to_string());
+        }
+        response_bytes.extend_from_slice(&chunk);
+    }
+    let body: serde_json::Value = serde_json::from_slice(&response_bytes)
+        .map_err(|_| "AI 服务返回的内容不是有效 JSON。".to_string())?;
+    let message = body
+        .pointer("/choices/0/message")
+        .ok_or_else(|| "模型没有返回有效的助手消息。".to_string())?;
+    let content = match message.get("content") {
+        Some(serde_json::Value::String(content)) => serde_json::Value::String(content.clone()),
+        Some(serde_json::Value::Array(parts)) => serde_json::Value::String(
+            parts
+                .iter()
+                .filter_map(|part| part.get("text").and_then(serde_json::Value::as_str))
+                .collect::<Vec<_>>()
+                .join(""),
+        ),
+        Some(serde_json::Value::Null) | None => serde_json::Value::Null,
+        _ => return Err("模型返回了不支持的消息内容格式。".to_string()),
+    };
+    let mut assistant = serde_json::json!({
+        "role": "assistant",
+        "content": content,
+    });
+    if let Some(calls) = message.get("tool_calls") {
+        let calls = calls
+            .as_array()
+            .ok_or_else(|| "模型返回的工具调用格式无效。".to_string())?;
+        if calls.len() > MAX_AGENT_TOOLS {
+            return Err("模型一次请求了过多工具。".to_string());
+        }
+        assistant["tool_calls"] = serde_json::Value::Array(calls.clone());
+    }
+    Ok(assistant)
 }
 
 fn completion_url(base_url: &str) -> Result<url::Url, String> {
