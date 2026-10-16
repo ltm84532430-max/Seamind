@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import katex from 'katex';
 import markdownItKatex from '@vscode/markdown-it-katex';
+import { defaultOptions as defaultHtmlParserOptions } from 'markmap-html-parser';
 import { Transformer } from 'markmap-lib';
 import type { PureNode } from 'markmap-lib';
 import { Markmap } from 'markmap-view';
@@ -56,6 +57,25 @@ interface EpubOutline {
   markdown: string;
   chapterCount: number;
   sourceFile: string;
+}
+
+interface ImportedHtmlAsset {
+  assetId: string;
+  entryPath: string;
+  title: string;
+}
+
+interface HtmlCardDefinition extends ImportedHtmlAsset {
+  width: number;
+  height: number;
+}
+
+interface HtmlPreviewSelection extends HtmlCardDefinition {
+  documentRelativePath: string;
+}
+
+interface HtmlCanvasEmbedding extends HtmlPreviewSelection {
+  src: string;
 }
 
 const isEpubPath = (path: string) =>
@@ -256,6 +276,84 @@ const katexSvgAttributes = new Set([
   'aria-hidden',
 ]);
 
+const safeSvgElements = new Set([
+  'svg',
+  'g',
+  'path',
+  'line',
+  'circle',
+  'rect',
+  'ellipse',
+  'polyline',
+  'polygon',
+  'text',
+  'tspan',
+  'title',
+  'desc',
+]);
+const safeSvgAttributes = new Set([
+  'xmlns',
+  'width',
+  'height',
+  'viewbox',
+  'preserveaspectratio',
+  'x',
+  'y',
+  'cx',
+  'cy',
+  'r',
+  'rx',
+  'ry',
+  'x1',
+  'y1',
+  'x2',
+  'y2',
+  'd',
+  'points',
+  'fill',
+  'stroke',
+  'stroke-width',
+  'stroke-linecap',
+  'stroke-linejoin',
+  'fill-rule',
+  'opacity',
+  'fill-opacity',
+  'stroke-opacity',
+  'font-family',
+  'font-size',
+  'font-weight',
+  'text-anchor',
+  'dominant-baseline',
+  'dx',
+  'dy',
+  'letter-spacing',
+  'transform',
+  'role',
+  'aria-label',
+  'aria-hidden',
+]);
+const svgNumber = /^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?(?:px|%)?$/i;
+const svgNonNegativeNumber =
+  /^(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?(?:px|%)?$/i;
+const svgViewBox =
+  /^\s*[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?(?:[\s,]+[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?){3}\s*$/i;
+const svgPathData = /^[MmLlHhVvCcSsQqTtAaZz0-9.,+\-\s]+$/;
+const svgPoints = /^[-+\d.eE,\s]+$/;
+
+const htmlCardParserOptions = {
+  ...defaultHtmlParserOptions,
+  selector: `${defaultHtmlParserOptions.selector},svg`,
+  selectorRules: {
+    ...defaultHtmlParserOptions.selectorRules,
+    svg: ({
+      $node,
+      getContent,
+    }: Parameters<
+      (typeof defaultHtmlParserOptions.selectorRules)['div,p']
+    >[0]) => getContent($node),
+  },
+};
+
 function isSafeKatexSvgAttribute(name: string, value: string): boolean {
   const normalizedValue = value.trim();
   if (name === 'xmlns') return normalizedValue === 'http://www.w3.org/2000/svg';
@@ -308,6 +406,222 @@ function sanitizeKatexStyle(element: Element, value: string): string | null {
   return safeStyle.length ? safeStyle.cssText : null;
 }
 
+function isSafeSvgAttribute(name: string, value: string): boolean {
+  const normalizedValue = value.trim();
+  const boundedNumber = (allowNegative: boolean) => {
+    const matcher = allowNegative ? svgNumber : svgNonNegativeNumber;
+    if (!matcher.test(normalizedValue)) return false;
+    const number = Number(normalizedValue.replace(/(?:px|%)$/i, ''));
+    return Number.isFinite(number) && Math.abs(number) <= 100_000;
+  };
+  if (name === 'xmlns') return normalizedValue === 'http://www.w3.org/2000/svg';
+  if (name === 'viewbox') {
+    if (!svgViewBox.test(normalizedValue)) return false;
+    const values = normalizedValue
+      .trim()
+      .split(/[\s,]+/)
+      .map(Number);
+    return (
+      values.every(
+        (number) => Number.isFinite(number) && Math.abs(number) <= 1_000_000,
+      ) &&
+      values[2] > 0 &&
+      values[3] > 0
+    );
+  }
+  if (name === 'preserveaspectratio')
+    return /^(?:none|xMinYMin|xMidYMin|xMaxYMin|xMinYMid|xMidYMid|xMaxYMid|xMinYMax|xMidYMax|xMaxYMax)(?:\s+(?:meet|slice))?$/i.test(
+      normalizedValue,
+    );
+  if (name === 'd') return svgPathData.test(normalizedValue);
+  if (name === 'points') return svgPoints.test(normalizedValue);
+  if (['width', 'height', 'r', 'rx', 'ry', 'stroke-width'].includes(name))
+    return boundedNumber(false);
+  if (['x', 'y', 'cx', 'cy', 'x1', 'y1', 'x2', 'y2'].includes(name))
+    return boundedNumber(true);
+  if (['dx', 'dy', 'letter-spacing'].includes(name)) return boundedNumber(true);
+  if (name === 'font-size') return boundedNumber(false);
+  if (name === 'font-weight')
+    return /^(?:normal|bold|[1-9]00)$/i.test(normalizedValue);
+  if (name === 'font-family') return /^[\w\s,'-]{1,80}$/.test(normalizedValue);
+  if (name === 'text-anchor')
+    return ['start', 'middle', 'end'].includes(normalizedValue);
+  if (name === 'dominant-baseline')
+    return [
+      'auto',
+      'middle',
+      'central',
+      'hanging',
+      'text-before-edge',
+      'text-after-edge',
+    ].includes(normalizedValue);
+  if (['fill', 'stroke'].includes(name))
+    return /^(?:none|currentcolor|transparent|#[\da-f]{3,8}|[a-z]{1,20})$/i.test(
+      normalizedValue,
+    );
+  if (name === 'stroke-linecap')
+    return ['butt', 'round', 'square'].includes(normalizedValue);
+  if (name === 'stroke-linejoin')
+    return ['miter', 'round', 'bevel'].includes(normalizedValue);
+  if (name === 'fill-rule')
+    return normalizedValue === 'evenodd' || normalizedValue === 'nonzero';
+  if (['opacity', 'fill-opacity', 'stroke-opacity'].includes(name)) {
+    const number = Number(normalizedValue);
+    return Number.isFinite(number) && number >= 0 && number <= 1;
+  }
+  if (name === 'transform')
+    return /^(?:\s*(?:matrix|translate|scale|rotate|skewX|skewY)\s*\(\s*[-+\d.eE,\s]+\)\s*)+$/i.test(
+      normalizedValue,
+    );
+  if (name === 'role')
+    return ['img', 'presentation', 'graphics-symbol'].includes(normalizedValue);
+  if (name === 'aria-hidden')
+    return normalizedValue === 'true' || normalizedValue === 'false';
+  if (name === 'aria-label') return normalizedValue.length <= 240;
+  return false;
+}
+
+function sanitizeSvgTree(root: Element, isKatex = false): void {
+  const allowedElements = isKatex ? katexSvgElements : safeSvgElements;
+  const elements = [root, ...Array.from(root.querySelectorAll('*'))];
+  elements.forEach((element) => {
+    if (!allowedElements.has(element.localName.toLowerCase())) {
+      element.remove();
+      return;
+    }
+    Array.from(element.attributes).forEach((attribute) => {
+      const name = attribute.name.toLowerCase();
+      const isAllowed = isKatex
+        ? katexSvgAttributes.has(name) &&
+          isSafeKatexSvgAttribute(name, attribute.value)
+        : safeSvgAttributes.has(name) &&
+          isSafeSvgAttribute(name, attribute.value);
+      if (!isAllowed) element.removeAttribute(attribute.name);
+    });
+  });
+}
+
+function sanitizeSvgMarkup(source: string): string | null {
+  if (source.length > 100_000 || /<!doctype|<!entity/i.test(source))
+    return null;
+  const parsed = new DOMParser().parseFromString(source, 'image/svg+xml');
+  const root = parsed.documentElement;
+  if (
+    parsed.querySelector('parsererror') ||
+    root.localName.toLowerCase() !== 'svg' ||
+    root.namespaceURI !== 'http://www.w3.org/2000/svg'
+  )
+    return null;
+  sanitizeSvgTree(root);
+  return new XMLSerializer().serializeToString(root);
+}
+
+function escapeHtmlText(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function parseHtmlCardDefinition(value: unknown): HtmlCardDefinition | null {
+  let candidate = value;
+  if (typeof value === 'string') {
+    try {
+      candidate = JSON.parse(value) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  if (!candidate || typeof candidate !== 'object') return null;
+  const input = candidate as Record<string, unknown>;
+  const assetId = typeof input.assetId === 'string' ? input.assetId : '';
+  const entryPath = typeof input.entryPath === 'string' ? input.entryPath : '';
+  const title = typeof input.title === 'string' ? input.title.trim() : '';
+  const width = Number(input.width);
+  const height = Number(input.height);
+  const normalizedPath = entryPath.replace(/\\/g, '/');
+  const pathParts = normalizedPath.split('/');
+  if (
+    !/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(
+      assetId,
+    ) ||
+    !normalizedPath ||
+    normalizedPath.startsWith('/') ||
+    /^[a-z]:/i.test(normalizedPath) ||
+    pathParts.some((part) => !part || part === '.' || part === '..') ||
+    !/\.html?$/i.test(normalizedPath) ||
+    !Number.isInteger(width) ||
+    width < 180 ||
+    width > 960 ||
+    !Number.isInteger(height) ||
+    height < 120 ||
+    height > 700
+  )
+    return null;
+  return {
+    assetId,
+    entryPath: normalizedPath,
+    title: (title || 'HTML 组件').slice(0, 120),
+    width,
+    height,
+  };
+}
+
+function htmlCardDefinitionFromPayload(
+  node: PureNode,
+): HtmlCardDefinition | null {
+  const payload = node.payload as Record<string, unknown> | undefined;
+  if (payload?.seamindCard !== 'html') return null;
+  return parseHtmlCardDefinition({
+    assetId: payload.seamindAssetId,
+    entryPath: payload.seamindEntryPath,
+    title: payload.seamindTitle,
+    width: payload.seamindWidth,
+    height: payload.seamindHeight,
+  });
+}
+
+function htmlCardNodeMarkup(
+  card: HtmlCardDefinition,
+  iframeSource?: string,
+): string {
+  const title = escapeHtmlText(card.title);
+  const assetId = escapeHtmlText(card.assetId);
+  const entryPath = escapeHtmlText(card.entryPath);
+  if (iframeSource) {
+    return `<div class="seamind-html-canvas-node" style="width:${card.width}px;height:${card.height}px"><div class="seamind-html-canvas-toolbar"><span>${title}</span><button type="button" data-seamind-html-exit="true" aria-label="退出 HTML 交互">退出交互</button></div><iframe class="seamind-html-canvas-frame" title="${title}画布交互" src="${escapeHtmlText(iframeSource)}" sandbox="allow-scripts" referrerpolicy="no-referrer" tabindex="0"></iframe></div>`;
+  }
+  return `<button type="button" class="seamind-html-card-node" data-seamind-html-card="true" data-seamind-asset-id="${assetId}" data-seamind-entry-path="${entryPath}" data-seamind-title="${title}" data-seamind-width="${card.width}" data-seamind-height="${card.height}" style="width:${card.width}px;height:${card.height}px" aria-label="打开 HTML 组件：${title}"><span class="seamind-html-card-eyebrow">HTML COMPONENT</span><strong>${title}</strong><span class="seamind-html-card-action">点击打开交互预览</span></button>`;
+}
+
+function prepareHtmlCardNodes(
+  node: PureNode,
+  embedding?: HtmlCanvasEmbedding,
+  embeddingApplied = { value: false },
+): PureNode {
+  const payload = node.payload as Record<string, unknown> | undefined;
+  const card = htmlCardDefinitionFromPayload(node);
+  const isEmbedded = Boolean(
+    embedding &&
+      !embeddingApplied.value &&
+      card?.assetId === embedding.assetId &&
+      card.entryPath === embedding.entryPath,
+  );
+  if (isEmbedded) embeddingApplied.value = true;
+  return {
+    ...node,
+    content:
+      payload?.seamindCard === 'html' && card
+        ? htmlCardNodeMarkup(card, isEmbedded ? embedding?.src : undefined)
+        : node.content,
+    children: node.children.map((child) =>
+      prepareHtmlCardNodes(child, embedding, embeddingApplied),
+    ),
+  };
+}
+
 function sanitizeNode(node: PureNode): PureNode {
   const document = new DOMParser().parseFromString(node.content, 'text/html');
   document.body
@@ -315,25 +629,24 @@ function sanitizeNode(node: PureNode): PureNode {
       'script,style,iframe,object,embed,form,input,button,meta,base,link,audio,video,source,track',
     )
     .forEach((element) => element.remove());
-  document.body.querySelectorAll('svg').forEach((element) => {
-    if (!element.closest('.katex')) {
-      element.remove();
-      return;
-    }
-    element.querySelectorAll('*').forEach((child) => {
-      if (!katexSvgElements.has(child.tagName.toLowerCase())) child.remove();
-    });
-  });
+  document.body
+    .querySelectorAll('svg')
+    .forEach((element) =>
+      sanitizeSvgTree(element, Boolean(element.closest('.katex'))),
+    );
   document.body.querySelectorAll('*').forEach((element) => {
     Array.from(element.attributes).forEach((attribute) => {
       const name = attribute.name.toLowerCase();
-      if (
-        element.namespaceURI === 'http://www.w3.org/2000/svg' &&
-        (!katexSvgElements.has(element.tagName.toLowerCase()) ||
-          !katexSvgAttributes.has(name) ||
-          !isSafeKatexSvgAttribute(name, attribute.value))
-      ) {
-        element.removeAttribute(attribute.name);
+      if (element.namespaceURI === 'http://www.w3.org/2000/svg') {
+        const isKatex = Boolean(element.closest('.katex'));
+        const allowed = isKatex
+          ? katexSvgElements.has(element.localName.toLowerCase()) &&
+            katexSvgAttributes.has(name) &&
+            isSafeKatexSvgAttribute(name, attribute.value)
+          : safeSvgElements.has(element.localName.toLowerCase()) &&
+            safeSvgAttributes.has(name) &&
+            isSafeSvgAttribute(name, attribute.value);
+        if (!allowed) element.removeAttribute(attribute.name);
       } else if (name === 'style') {
         const safeStyle = sanitizeKatexStyle(element, attribute.value);
         if (safeStyle) element.setAttribute(attribute.name, safeStyle);
@@ -520,15 +833,19 @@ function buildMarkdownNodeSourceMap(
   const visit = (node: PureNode, parentPath = '') => {
     nodeId += 1;
     const path = parentPath ? `${parentPath}.${nodeId}` : `${nodeId}`;
+    const isHtmlCard = Boolean(htmlCardDefinitionFromPayload(node));
     const nodeDocument = new DOMParser().parseFromString(
       node.content,
       'text/html',
     );
+    nodeDocument.body
+      .querySelectorAll('svg')
+      .forEach((element) => element.remove());
     const containsKatex = Boolean(nodeDocument.body.querySelector('.katex'));
     const label = containsKatex
       ? ''
       : normalizeMindmapText(nodeDocument.body.textContent ?? '');
-    if (label) {
+    if (label && !isHtmlCard) {
       while (
         sourceCursor < sourceLines.length &&
         sourceLines[sourceCursor].label !== label
@@ -664,6 +981,14 @@ export default function App() {
   const [epubDropActive, setEpubDropActive] = useState(false);
   const [libraryError, setLibraryError] = useState('');
   const [saveMessage, setSaveMessage] = useState('正在初始化文件库…');
+  const [htmlImportBusy, setHtmlImportBusy] = useState(false);
+  const [htmlPreview, setHtmlPreview] = useState<HtmlPreviewSelection | null>(
+    null,
+  );
+  const [htmlPreviewSrc, setHtmlPreviewSrc] = useState('');
+  const [htmlPreviewError, setHtmlPreviewError] = useState('');
+  const [htmlCanvasEmbed, setHtmlCanvasEmbed] =
+    useState<HtmlCanvasEmbedding | null>(null);
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
   const [categoryDraft, setCategoryDraft] = useState('');
   const [providerSettings, setProviderSettings] =
@@ -695,6 +1020,32 @@ export default function App() {
     const instance = new Transformer([]);
     instance.md.set({ html: false });
     instance.md.use(markdownItKatex, { katex, throwOnError: false });
+    const defaultFenceRenderer = instance.md.renderer.rules.fence;
+    instance.md.renderer.rules.fence = (
+      tokens,
+      index,
+      options,
+      env,
+      renderer,
+    ) => {
+      const token = tokens[index];
+      const language = token.info.trim().split(/\s+/, 1)[0]?.toLowerCase();
+      if (language === 'svg') {
+        const svg = sanitizeSvgMarkup(token.content);
+        return svg
+          ? `${svg}\n`
+          : `<pre><code>${escapeHtmlText(token.content)}</code></pre>\n`;
+      }
+      if (language === 'seamind-html-card') {
+        const card = parseHtmlCardDefinition(token.content);
+        if (!card)
+          return '<pre><code>HTML 卡片声明无效，请重新导入 HTML 文件。</code></pre>\n';
+        return `<h6 data-seamind-card="html" data-seamind-asset-id="${escapeHtmlText(card.assetId)}" data-seamind-entry-path="${escapeHtmlText(card.entryPath)}" data-seamind-title="${escapeHtmlText(card.title)}" data-seamind-width="${card.width}" data-seamind-height="${card.height}">${escapeHtmlText(card.title)}</h6>\n`;
+      }
+      return defaultFenceRenderer
+        ? defaultFenceRenderer(tokens, index, options, env, renderer)
+        : renderer.renderToken(tokens, index, options);
+    };
     return instance;
   }, []);
 
@@ -1008,6 +1359,82 @@ export default function App() {
       setLibraryError(errorMessage(error, '导入 EPUB 目录失败'));
       setSaveMessage('EPUB 导入失败');
     }
+  };
+
+  const insertSvgTemplate = () => {
+    const template = [
+      '```svg',
+      '<svg xmlns="http://www.w3.org/2000/svg" width="220" height="130" viewBox="0 0 220 130">',
+      '  <rect x="8" y="8" width="204" height="114" rx="12" fill="#f3f6f7" stroke="#758a96" stroke-width="3"/>',
+      '  <circle cx="110" cy="65" r="24" fill="#d76e49"/>',
+      '</svg>',
+      '```',
+    ].join('\n');
+    const markdown = draftRef.current.markdown.trimEnd();
+    patchDraft({
+      markdown: `${markdown ? `${markdown}\n\n` : ''}${template}\n`,
+    });
+    setSaveMessage('已插入 SVG 模板');
+  };
+
+  const importHtmlAsset = async () => {
+    if (htmlImportBusy) return;
+    if (!librarySnapshotRef.current?.rootPath) {
+      setLibraryError('请先设置文件库，再导入 HTML 文件。');
+      return;
+    }
+    setLibraryError('');
+    try {
+      const selected = await openDialog({
+        directory: false,
+        multiple: false,
+        title: '导入 HTML 组件',
+        filters: [{ name: 'HTML 文件', extensions: ['html', 'htm'] }],
+      });
+      if (typeof selected !== 'string') return;
+      if (!(await saveDraft(true))) return;
+      const current = draftRef.current;
+      if (!current.relativePath) {
+        setLibraryError('请先保存当前思维导图，再导入 HTML 组件。');
+        return;
+      }
+
+      setHtmlImportBusy(true);
+      setSaveMessage('正在导入 HTML 资源…');
+      const imported = await invoke<ImportedHtmlAsset>('import_html_asset', {
+        documentRelativePath: current.relativePath,
+        sourcePath: selected,
+      });
+      const card: HtmlCardDefinition = {
+        ...imported,
+        width: 420,
+        height: 260,
+      };
+      const cardFence = `\`\`\`seamind-html-card\n${JSON.stringify(card, null, 2)}\n\`\`\``;
+      const markdown = current.markdown.trimEnd();
+      patchDraft({
+        markdown: `${markdown ? `${markdown}\n\n` : ''}${cardFence}\n`,
+      });
+      setSaveMessage('HTML 组件已插入思维导图');
+      setLibraryError('');
+    } catch (error) {
+      setLibraryError(errorMessage(error, '导入 HTML 组件失败'));
+      setSaveMessage('HTML 导入失败');
+    } finally {
+      setHtmlImportBusy(false);
+    }
+  };
+
+  const closeHtmlPreview = () => {
+    setHtmlPreview(null);
+    setHtmlPreviewSrc('');
+    setHtmlPreviewError('');
+  };
+
+  const embedHtmlPreviewInCanvas = () => {
+    if (!htmlPreview || !htmlPreviewSrc) return;
+    setHtmlCanvasEmbed({ ...htmlPreview, src: htmlPreviewSrc });
+    closeHtmlPreview();
   };
 
   const createCategory = async (event: FormEvent<HTMLFormElement>) => {
@@ -1429,8 +1856,45 @@ export default function App() {
       }
     };
 
+    const handleHtmlCardClick = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const exitButton = target.closest<HTMLElement>(
+        '[data-seamind-html-exit="true"]',
+      );
+      if (exitButton) {
+        event.preventDefault();
+        event.stopPropagation();
+        setHtmlCanvasEmbed(null);
+        return;
+      }
+      const cardElement = target.closest<HTMLElement>(
+        'button[data-seamind-html-card="true"]',
+      );
+      if (!cardElement) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const card = parseHtmlCardDefinition({
+        assetId: cardElement.dataset.seamindAssetId,
+        entryPath: cardElement.dataset.seamindEntryPath,
+        title: cardElement.dataset.seamindTitle,
+        width: cardElement.dataset.seamindWidth,
+        height: cardElement.dataset.seamindHeight,
+      });
+      const documentRelativePath = draftRef.current.relativePath;
+      if (!card || !documentRelativePath) {
+        setLibraryError('卡片信息无效，请重新导入 HTML 文件。');
+        return;
+      }
+      setHtmlPreviewError('');
+      setHtmlPreviewSrc('');
+      setHtmlPreview({ ...card, documentRelativePath });
+    };
+
+    svg.addEventListener('click', handleHtmlCardClick, true);
     svg.addEventListener('dblclick', handleCanvasDoubleClick, true);
     return () => {
+      svg.removeEventListener('click', handleHtmlCardClick, true);
       svg.removeEventListener('dblclick', handleCanvasDoubleClick, true);
       map.destroy();
       markmapRef.current = null;
@@ -1453,24 +1917,80 @@ export default function App() {
   }, [mindmapStyle, theme]);
 
   useEffect(() => {
+    if (!htmlPreview) return;
+    let active = true;
+    setHtmlPreviewSrc('');
+    setHtmlPreviewError('');
+    void invoke<string>('resolve_html_asset', {
+      documentRelativePath: htmlPreview.documentRelativePath,
+      assetId: htmlPreview.assetId,
+      entryPath: htmlPreview.entryPath,
+    })
+      .then((path) => {
+        if (active) setHtmlPreviewSrc(convertFileSrc(path));
+      })
+      .catch((error) => {
+        if (active)
+          setHtmlPreviewError(errorMessage(error, '无法打开 HTML 组件。'));
+      });
+    return () => {
+      active = false;
+    };
+  }, [htmlPreview]);
+
+  useEffect(() => {
+    if (
+      htmlCanvasEmbed &&
+      htmlCanvasEmbed.documentRelativePath !== editorDraft.relativePath
+    ) {
+      setHtmlCanvasEmbed(null);
+    }
+  }, [editorDraft.relativePath, htmlCanvasEmbed]);
+
+  useEffect(() => {
+    if (!htmlPreview) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeHtmlPreview();
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [htmlPreview]);
+
+  useEffect(() => {
     const timer = window.setTimeout(async () => {
       const map = markmapRef.current;
       if (!map) return;
       const { root } = transformer.transform(
         normalizeKatexDelimiters(editorDraft.markdown),
+        htmlCardParserOptions,
       );
-      const safeRoot = sanitizeNode(root);
+      const embedding =
+        htmlCanvasEmbed?.documentRelativePath === editorDraft.relativePath
+          ? htmlCanvasEmbed
+          : undefined;
+      const embeddingApplied = { value: false };
+      const safeRoot = prepareHtmlCardNodes(
+        sanitizeNode(root),
+        embedding,
+        embeddingApplied,
+      );
       markdownNodeSourcesMarkdownRef.current = editorDraft.markdown;
       markdownNodeSourcesRef.current = buildMarkdownNodeSourceMap(
         editorDraft.markdown,
         safeRoot,
       );
       await map.setData(safeRoot);
+      if (embedding && !embeddingApplied.value) setHtmlCanvasEmbed(null);
       setLastUpdated('已同步');
     }, 180);
     setLastUpdated('正在更新…');
     return () => window.clearTimeout(timer);
-  }, [editorDraft.markdown, transformer]);
+  }, [
+    editorDraft.markdown,
+    editorDraft.relativePath,
+    htmlCanvasEmbed,
+    transformer,
+  ]);
 
   const handleZoom = (factor: number) => {
     void markmapRef.current?.rescale(factor);
@@ -1577,7 +2097,30 @@ export default function App() {
               <span className="pane-kicker">01 / SOURCE</span>
               <h1>Markdown</h1>
             </div>
-            {!sourceCollapsed && <span className="format-badge">.md</span>}
+            {!sourceCollapsed && (
+              <div className="source-header-actions">
+                <span className="format-badge">.md</span>
+                <div className="source-insert-tools" aria-label="插入节点">
+                  <button
+                    type="button"
+                    aria-label="插入 SVG 模板"
+                    title="在 Markdown 末尾插入 SVG 模板"
+                    onClick={insertSvgTemplate}
+                  >
+                    SVG
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="导入 HTML 文件"
+                    title="导入 HTML 文件并插入本地交互卡片"
+                    disabled={htmlImportBusy}
+                    onClick={() => void importHtmlAsset()}
+                  >
+                    {htmlImportBusy ? '…' : 'HTML'}
+                  </button>
+                </div>
+              </div>
+            )}
             <button
               type="button"
               className="pane-collapse-button"
@@ -1673,6 +2216,16 @@ export default function App() {
               <h1>思维导图</h1>
             </div>
             <div className="canvas-tools" aria-label="画布工具">
+              {htmlCanvasEmbed?.documentRelativePath ===
+                editorDraft.relativePath && (
+                <button
+                  type="button"
+                  className="html-canvas-mode-button"
+                  onClick={() => setHtmlCanvasEmbed(null)}
+                >
+                  退出 HTML 交互
+                </button>
+              )}
               <div className="map-style-picker" ref={mindmapStylePickerRef}>
                 <button
                   type="button"
@@ -1768,12 +2321,26 @@ export default function App() {
             </div>
           </div>
           <div className="canvas-wrap">
-            <div className="canvas-hint">
+            <div
+              className={`canvas-hint${htmlCanvasEmbed?.documentRelativePath === editorDraft.relativePath ? ' is-html-interactive' : ''}`}
+            >
               <span className="hint-dot" />
-              实时预览 <span className="hint-separator">·</span> 拖动平移{' '}
-              <span className="hint-separator">·</span> 滚轮缩放{' '}
-              <span className="hint-separator">·</span> 双击编辑{' '}
-              <span className="hint-separator">·</span> Enter 同级 / Tab 子级
+              {htmlCanvasEmbed?.documentRelativePath ===
+              editorDraft.relativePath ? (
+                <>
+                  HTML 交互模式：组件区域接收鼠标操作{' '}
+                  <span className="hint-separator">·</span>{' '}
+                  点击节点顶部或工具栏“退出 HTML 交互”恢复画布操作
+                </>
+              ) : (
+                <>
+                  实时预览 <span className="hint-separator">·</span> 拖动平移{' '}
+                  <span className="hint-separator">·</span> 滚轮缩放{' '}
+                  <span className="hint-separator">·</span> 双击编辑{' '}
+                  <span className="hint-separator">·</span> Enter 同级 / Tab
+                  子级
+                </>
+              )}
             </div>
             <svg
               ref={svgRef}
@@ -1934,6 +2501,72 @@ export default function App() {
           >
             ×
           </button>
+        </div>
+      )}
+
+      {htmlPreview && (
+        <div
+          className="html-preview-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeHtmlPreview();
+          }}
+        >
+          <section
+            className="html-preview-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="html-preview-title"
+          >
+            <div className="html-preview-heading">
+              <div>
+                <span className="pane-kicker">LOCAL HTML COMPONENT</span>
+                <h2 id="html-preview-title">{htmlPreview.title}</h2>
+              </div>
+              <div className="html-preview-actions">
+                <button
+                  type="button"
+                  className="html-preview-embed-button"
+                  disabled={!htmlPreviewSrc || Boolean(htmlPreviewError)}
+                  onClick={embedHtmlPreviewInCanvas}
+                >
+                  在画布中交互
+                </button>
+                <button
+                  type="button"
+                  className="dialog-close"
+                  aria-label="关闭 HTML 预览"
+                  onClick={closeHtmlPreview}
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+            <div className="html-preview-meta">
+              本地资源 · {htmlPreview.width} × {htmlPreview.height} 卡片
+            </div>
+            <div
+              className="html-preview-content"
+              aria-busy={!htmlPreviewSrc && !htmlPreviewError}
+            >
+              {htmlPreviewError ? (
+                <div className="html-preview-message" role="alert">
+                  {htmlPreviewError}
+                </div>
+              ) : htmlPreviewSrc ? (
+                <iframe
+                  className="html-preview-frame"
+                  title={`${htmlPreview.title}交互预览`}
+                  src={htmlPreviewSrc}
+                  sandbox="allow-scripts"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="html-preview-message" role="status">
+                  正在打开本地 HTML 组件…
+                </div>
+              )}
+            </div>
+          </section>
         </div>
       )}
 

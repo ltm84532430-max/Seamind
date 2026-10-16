@@ -1,14 +1,46 @@
 declare module 'markmap-lib' {
+  interface MarkdownItToken {
+    info: string;
+    content: string;
+  }
+
+  interface MarkdownItRenderer {
+    renderToken(
+      tokens: MarkdownItToken[],
+      index: number,
+      options: unknown,
+    ): string;
+  }
+
+  type MarkdownFenceRenderer = (
+    tokens: MarkdownItToken[],
+    index: number,
+    options: unknown,
+    env: unknown,
+    renderer: MarkdownItRenderer,
+  ) => string;
+
+  interface MarkdownItLike {
+    set(options: { html?: boolean }): void;
+    use(plugin: unknown, options?: unknown): MarkdownItLike;
+    renderer: { rules: { fence?: MarkdownFenceRenderer } };
+  }
+
   export interface PureNode {
     content: string;
-    payload?: { fold?: number };
+    payload?: { fold?: number; [key: string]: unknown };
     children: PureNode[];
   }
 
   export class Transformer {
-    md: { set(options: { html?: boolean }): void };
+    md: MarkdownItLike;
     constructor(plugins?: unknown[]);
-    transform(content: string): { root: PureNode };
+    transform(
+      content: string,
+      fallbackParserOptions?: object,
+    ): {
+      root: PureNode;
+    };
   }
 }
 

@@ -380,10 +380,9 @@ button {
   --col-source: minmax(280px, 32%);
   --col-ai: 320px;
   display: grid;
-  grid-template-columns: var(--col-library) var(--col-source) minmax(
-      0,
-      1fr
-    ) var(--col-ai);
+  grid-template-columns:
+    var(--col-library) var(--col-source) minmax(0, 1fr)
+    var(--col-ai);
   min-height: 0;
   padding: 0;
   gap: 0;
@@ -2352,4 +2351,312 @@ button {
   border-color: #27333b;
   color: #9aa9b0;
   background: #141b1f;
+}
+
+.source-header-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+  margin-left: auto;
+  margin-right: 10px;
+}
+.source-insert-tools {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.source-insert-tools button {
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid #e3e6e8;
+  border-radius: 3px;
+  color: #5d6871;
+  background: #fff;
+  font-size: 10px;
+  cursor: pointer;
+}
+.source-insert-tools button:hover:not(:disabled) {
+  border-color: #d5a095;
+  color: #a75542;
+  background: #fffaf8;
+}
+.source-insert-tools button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.markmap-node .seamind-html-card-node {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-width: 180px;
+  max-width: 960px;
+  min-height: 120px;
+  max-height: 700px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 9px;
+  overflow: hidden;
+  padding: 15px 17px;
+  border: 1px solid #d7dfe4;
+  border-radius: 7px;
+  color: #26333a;
+  background: #f8fafb;
+  font: inherit;
+  text-align: left;
+  white-space: normal;
+  cursor: pointer;
+}
+.markmap-node > foreignObject > div > div:has(> .seamind-html-card-node) {
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.markmap-node > foreignObject > div > div:has(> .seamind-html-canvas-node) {
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.markmap-node .seamind-html-card-node:hover {
+  border-color: #d98c78;
+  background: #fffaf8;
+}
+.markmap-node .seamind-html-canvas-node {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #d7dfe4;
+  border-radius: 7px;
+  background: #fff;
+}
+.seamind-html-canvas-toolbar {
+  min-height: 29px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: 0 0 29px;
+  padding: 0 8px 0 10px;
+  border-bottom: 1px solid #e6ebee;
+  color: #64717a;
+  background: #f6f8f9;
+  font-size: 9px;
+}
+.seamind-html-canvas-toolbar span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.seamind-html-canvas-toolbar button {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  border: 1px solid #d8dfe3;
+  border-radius: 3px;
+  color: #66737b;
+  background: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+.seamind-html-canvas-toolbar button:hover {
+  border-color: #d98c78;
+  color: #a75542;
+}
+.seamind-html-canvas-frame {
+  width: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+  border: 0;
+  background: #fff;
+}
+.seamind-html-card-eyebrow {
+  color: #9aa4ab;
+  font: 9px var(--mono);
+  letter-spacing: 0.8px;
+}
+.seamind-html-card-node strong {
+  max-width: 100%;
+  overflow: hidden;
+  color: inherit;
+  font-size: 14px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+}
+.seamind-html-card-action {
+  color: #8a959d;
+  font-size: 10px;
+}
+
+.html-preview-backdrop {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: flex;
+  justify-content: flex-end;
+  background: #17202970;
+}
+.html-preview-drawer {
+  width: min(780px, 92vw);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid #dfe4e7;
+  background: #fff;
+  box-shadow: -12px 0 36px #10182020;
+}
+.html-preview-heading {
+  min-height: 62px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 18px;
+  border-bottom: 1px solid #e8ebed;
+}
+.html-preview-heading h2 {
+  max-width: min(60vw, 580px);
+  overflow: hidden;
+  margin: 3px 0 0;
+  color: #29323a;
+  font-size: 15px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.html-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.html-preview-embed-button,
+.canvas-tools .html-canvas-mode-button {
+  padding: 6px 9px;
+  border: 1px solid #dce2e5;
+  border-radius: 3px;
+  color: #52616a;
+  background: #fff;
+  font-size: 10px;
+  cursor: pointer;
+}
+.html-preview-embed-button:hover:not(:disabled),
+.canvas-tools .html-canvas-mode-button:hover {
+  border-color: #d98c78;
+  color: #a75542;
+}
+.html-preview-embed-button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+.html-preview-meta {
+  padding: 8px 18px;
+  border-bottom: 1px solid #edf0f1;
+  color: #8d979e;
+  font-size: 10px;
+}
+.html-preview-content {
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  background: #f5f7f8;
+}
+.html-preview-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+.html-preview-message {
+  width: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: #7d8991;
+  font-size: 12px;
+  text-align: center;
+}
+.canvas-hint.is-html-interactive {
+  color: #a4513f;
+}
+.canvas-hint.is-html-interactive .hint-dot {
+  background: #d9775f;
+}
+.app-shell[data-theme='dark'] .source-insert-tools button {
+  border-color: #3b464e;
+  color: #b9c3c9;
+  background: #20272d;
+}
+.app-shell[data-theme='dark'] .source-insert-tools button:hover:not(:disabled) {
+  border-color: #805246;
+  color: #f0b09d;
+  background: #2b211f;
+}
+.app-shell[data-theme='dark'] .markmap-node .seamind-html-card-node {
+  border-color: #3a474e;
+  color: #dce4e8;
+  background: #1d272c;
+}
+.app-shell[data-theme='dark'] .markmap-node .seamind-html-card-node:hover {
+  border-color: #8c5c4e;
+  background: #282321;
+}
+.app-shell[data-theme='dark'] .seamind-html-card-eyebrow,
+.app-shell[data-theme='dark'] .seamind-html-card-action {
+  color: #93a0a7;
+}
+.app-shell[data-theme='dark'] .markmap-node .seamind-html-canvas-node {
+  border-color: #3a474e;
+  background: #182126;
+}
+.app-shell[data-theme='dark'] .seamind-html-canvas-toolbar {
+  border-color: #303a41;
+  color: #a9b5bb;
+  background: #20292f;
+}
+.app-shell[data-theme='dark'] .seamind-html-canvas-toolbar button,
+.app-shell[data-theme='dark'] .html-preview-embed-button,
+.app-shell[data-theme='dark'] .canvas-tools .html-canvas-mode-button {
+  border-color: #3b464e;
+  color: #c2ccd1;
+  background: #20272d;
+}
+.app-shell[data-theme='dark'] .seamind-html-canvas-toolbar button:hover,
+.app-shell[data-theme='dark'] .html-preview-embed-button:hover:not(:disabled),
+.app-shell[data-theme='dark'] .canvas-tools .html-canvas-mode-button:hover {
+  border-color: #805246;
+  color: #f0b09d;
+}
+.app-shell[data-theme='dark'] .canvas-hint.is-html-interactive {
+  color: #f0b09d;
+}
+.app-shell[data-theme='dark'] .html-preview-drawer {
+  border-color: #343e45;
+  background: #1c2227;
+}
+.app-shell[data-theme='dark'] .html-preview-heading,
+.app-shell[data-theme='dark'] .html-preview-meta {
+  border-color: #303a41;
+}
+.app-shell[data-theme='dark'] .html-preview-heading h2 {
+  color: #e0e6e9;
+}
+.app-shell[data-theme='dark'] .html-preview-content {
+  background: #14191d;
+}
+.app-shell[data-theme='dark'] .html-preview-frame {
+  background: #fff;
+}
+.app-shell[data-theme='dark'] .html-preview-backdrop {
+  background: #05080bb8;
 }

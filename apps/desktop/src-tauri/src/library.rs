@@ -18,6 +18,9 @@ const SETTINGS_FILE: &str = "library.json";
 const DATABASE_FILE: &str = "library-index.sqlite3";
 const META_PREFIX: &str = "<!-- markmap-desktop: ";
 const MAX_DOCUMENT_BYTES: usize = 5 * 1024 * 1024;
+const MAX_HTML_ASSET_FILE_BYTES: u64 = 20 * 1024 * 1024;
+const MAX_HTML_ASSET_BUNDLE_BYTES: u64 = 50 * 1024 * 1024;
+const MAX_HTML_ASSET_FILES: usize = 2_000;
 const MAX_DOCUMENTS: usize = 50_000;
 const MAX_SEARCH_RESULTS: usize = 10_000;
 
@@ -58,6 +61,14 @@ pub struct LibrarySnapshot {
 pub struct OpenedDocument {
     pub document: MapDocument,
     pub markdown: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedHtmlAsset {
+    pub asset_id: String,
+    pub entry_path: String,
+    pub title: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -343,18 +354,169 @@ pub fn save_document(app: AppHandle, input: SaveDocumentInput) -> Result<MapDocu
 }
 
 #[tauri::command]
+pub fn import_html_asset(
+    app: AppHandle,
+    document_relative_path: String,
+    source_path: String,
+) -> Result<ImportedHtmlAsset, String> {
+    let root = require_root(&app)?;
+    let document_relative = validate_markdown_path(&document_relative_path)?;
+    let document_path = ensure_existing_inside_root(&root, &root.join(&document_relative))?;
+    let document_markdown = fs::read_to_string(&document_path)
+        .map_err(|error| format!("无法读取当前思维导图：{error}"))?;
+    let document_id = metadata_from_markdown(&document_markdown)
+        .map(|metadata| metadata.id)
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or_else(|| legacy_id(&path_to_relative_string(&document_relative)));
+
+    let selected_path = PathBuf::from(source_path.trim());
+    let selected_metadata = fs::symlink_metadata(&selected_path)
+        .map_err(|error| format!("无法读取所选 HTML 文件：{error}"))?;
+    if selected_metadata.file_type().is_symlink() || !selected_metadata.is_file() {
+        return Err("请选择普通 HTML 文件，不能选择符号链接。".to_string());
+    }
+    let selected_path = selected_path
+        .canonicalize()
+        .map_err(|error| format!("无法解析所选 HTML 文件：{error}"))?;
+    let extension = selected_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    if !extension.eq_ignore_ascii_case("html") && !extension.eq_ignore_ascii_case("htm") {
+        return Err("请选择 .html 或 .htm 文件。".to_string());
+    }
+    let source_root = selected_path
+        .parent()
+        .ok_or_else(|| "无法确定 HTML 文件所在目录。".to_string())?
+        .to_path_buf();
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|error| format!("无法读取文件库目录：{error}"))?;
+    if source_root.starts_with(&canonical_root) || canonical_root.starts_with(&source_root) {
+        return Err("请从文件库目录之外选择 HTML 文件，避免重复导入文件库内容。".to_string());
+    }
+    let entry_path = PathBuf::from(
+        selected_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| "HTML 文件名包含无效字符。".to_string())?,
+    );
+    validate_html_entry_path(&path_to_relative_string(&entry_path))?;
+
+    let asset_id = Uuid::new_v4();
+    let bundle_relative = Path::new("assets")
+        .join(asset_owner_directory_name(&document_id))
+        .join(asset_id.to_string());
+    let bundle_directory = create_directory_inside_root(&root, &bundle_relative)?;
+    let mut copy_state = HtmlBundleCopyState::default();
+    if let Err(error) = copy_html_bundle_directory(
+        &source_root,
+        &source_root,
+        &bundle_relative,
+        &root,
+        &entry_path,
+        &mut copy_state,
+    ) {
+        let _ = fs::remove_dir_all(&bundle_directory);
+        return Err(error);
+    }
+    if !copy_state.entry_copied {
+        let _ = fs::remove_dir_all(&bundle_directory);
+        return Err("没有成功复制 HTML 入口文件。".to_string());
+    }
+
+    let file_stem = entry_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("HTML 组件");
+    let title = if file_stem.eq_ignore_ascii_case("index") {
+        source_root
+            .file_name()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(file_stem)
+            .to_string()
+    } else {
+        file_stem.to_string()
+    };
+
+    Ok(ImportedHtmlAsset {
+        asset_id: asset_id.to_string(),
+        entry_path: path_to_relative_string(&entry_path),
+        title,
+    })
+}
+
+#[tauri::command]
+pub fn resolve_html_asset(
+    app: AppHandle,
+    document_relative_path: String,
+    asset_id: String,
+    entry_path: String,
+) -> Result<String, String> {
+    let root = require_root(&app)?;
+    let document_relative = validate_markdown_path(&document_relative_path)?;
+    let document_path = ensure_existing_inside_root(&root, &root.join(&document_relative))?;
+    let document_markdown = fs::read_to_string(&document_path)
+        .map_err(|error| format!("无法读取当前思维导图：{error}"))?;
+    let document_id = metadata_from_markdown(&document_markdown)
+        .map(|metadata| metadata.id)
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or_else(|| legacy_id(&path_to_relative_string(&document_relative)));
+    let asset_id = Uuid::parse_str(asset_id.trim())
+        .map_err(|_| "HTML 卡片引用的资源编号无效。".to_string())?;
+    let entry_relative = validate_html_entry_path(&entry_path)?;
+    let bundle_relative = Path::new("assets")
+        .join(asset_owner_directory_name(&document_id))
+        .join(asset_id.to_string());
+    let bundle_directory = ensure_existing_inside_root(&root, &root.join(bundle_relative))?;
+    if !bundle_directory.is_dir() {
+        return Err("找不到该 HTML 卡片的资源文件夹。".to_string());
+    }
+    let entry_file = ensure_existing_inside_root(&root, &bundle_directory.join(entry_relative))?;
+    if !entry_file.starts_with(&bundle_directory) || !entry_file.is_file() {
+        return Err("HTML 卡片入口文件不在资源文件夹内。".to_string());
+    }
+
+    app.asset_protocol_scope()
+        .allow_directory(&bundle_directory, true)
+        .map_err(|error| format!("无法授权读取 HTML 资源：{error}"))?;
+    Ok(entry_file.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
 pub fn delete_document(app: AppHandle, relative_path: String) -> Result<(), String> {
     let root = require_root(&app)?;
     let relative = validate_markdown_path(&relative_path)?;
     let path = ensure_existing_inside_root(&root, &root.join(&relative))?;
-    fs::remove_file(&path).map_err(|error| format!("无法删除思维导图：{error}"))?;
+    let relative_string = path_to_relative_string(&relative);
     let connection = open_database(&app)?;
+    let indexed_document_id: Option<String> = connection
+        .query_row(
+            "SELECT id FROM maps WHERE relative_path = ?1",
+            params![relative_string],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_error)?;
+    fs::remove_file(&path).map_err(|error| format!("无法删除思维导图：{error}"))?;
     connection
         .execute(
             "DELETE FROM maps WHERE relative_path = ?1",
-            params![path_to_relative_string(&relative)],
+            params![relative_string],
         )
         .map_err(db_error)?;
+    if let Some(document_id) = indexed_document_id {
+        let asset_owner = Path::new("assets").join(asset_owner_directory_name(&document_id));
+        let asset_owner_path = root.join(&asset_owner);
+        if asset_owner_path.exists() {
+            let asset_owner_path = ensure_existing_inside_root(&root, &asset_owner_path)?;
+            if asset_owner_path.is_dir() {
+                fs::remove_dir_all(&asset_owner_path)
+                    .map_err(|error| format!("思维导图已删除，但无法清理 HTML 资源：{error}"))?;
+            }
+        }
+    }
     remove_empty_parent_directories(&root, Some(&relative));
     Ok(())
 }
@@ -822,6 +984,166 @@ fn validate_name(value: &str) -> Result<String, String> {
         return Err("该名称是 Windows 保留设备名，请换一个名称。".to_string());
     }
     Ok(value.to_string())
+}
+
+#[derive(Default)]
+struct HtmlBundleCopyState {
+    files: usize,
+    total_bytes: u64,
+    entry_copied: bool,
+}
+
+fn asset_owner_directory_name(document_id: &str) -> String {
+    Uuid::new_v5(&Uuid::NAMESPACE_OID, document_id.as_bytes()).to_string()
+}
+
+fn validate_html_entry_path(value: &str) -> Result<PathBuf, String> {
+    let path = Path::new(value);
+    if path.as_os_str().is_empty() || path.is_absolute() {
+        return Err("HTML 入口文件路径无效。".to_string());
+    }
+    for component in path.components() {
+        match component {
+            Component::Normal(name) => {
+                let name = name
+                    .to_str()
+                    .ok_or_else(|| "HTML 入口文件路径包含无效字符。".to_string())?;
+                validate_name(name)?;
+            }
+            _ => return Err("HTML 入口文件不能离开资源文件夹。".to_string()),
+        }
+    }
+    if !path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("html") || extension.eq_ignore_ascii_case("htm")
+        })
+    {
+        return Err("HTML 入口文件必须是 .html 或 .htm。".to_string());
+    }
+    Ok(path.to_path_buf())
+}
+
+fn copy_html_bundle_directory(
+    source_root: &Path,
+    source_directory: &Path,
+    destination_relative: &Path,
+    root: &Path,
+    entry_relative: &Path,
+    state: &mut HtmlBundleCopyState,
+) -> Result<(), String> {
+    let entries = fs::read_dir(source_directory)
+        .map_err(|error| format!("无法读取 HTML 资源目录：{error}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("无法读取 HTML 资源目录：{error}"))?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| "HTML 资源目录包含无效文件名。".to_string())?;
+        let extension = Path::new(&name)
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if name.eq_ignore_ascii_case(".git")
+            || name.eq_ignore_ascii_case("node_modules")
+            || name.eq_ignore_ascii_case(".env")
+            || name.to_ascii_lowercase().starts_with(".env.")
+            || ["pem", "key", "p12", "pfx", "jks"]
+                .iter()
+                .any(|sensitive_extension| extension.eq_ignore_ascii_case(sensitive_extension))
+        {
+            continue;
+        }
+        validate_name(&name)?;
+        let source_path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("无法读取 HTML 资源类型：{error}"))?;
+        if file_type.is_symlink() {
+            return Err("HTML 资源包不能包含符号链接。".to_string());
+        }
+        let relative_path = source_path
+            .strip_prefix(source_root)
+            .map_err(|_| "HTML 资源路径超出所选文件夹。".to_string())?;
+        let destination_path = destination_relative.join(relative_path);
+
+        if file_type.is_dir() {
+            create_directory_inside_root(root, &destination_path)?;
+            copy_html_bundle_directory(
+                source_root,
+                &source_path,
+                destination_relative,
+                root,
+                entry_relative,
+                state,
+            )?;
+            continue;
+        }
+        if !file_type.is_file() {
+            return Err("HTML 资源包只能包含普通文件和文件夹。".to_string());
+        }
+
+        let metadata = entry
+            .metadata()
+            .map_err(|error| format!("无法读取 HTML 资源信息：{error}"))?;
+        let file_bytes = metadata.len();
+        if file_bytes > MAX_HTML_ASSET_FILE_BYTES {
+            return Err("HTML 资源包中的单个文件不能超过 20 MB。".to_string());
+        }
+        state.files += 1;
+        state.total_bytes = state.total_bytes.saturating_add(file_bytes);
+        if state.files > MAX_HTML_ASSET_FILES {
+            return Err("HTML 资源包最多支持 2,000 个文件。".to_string());
+        }
+        if state.total_bytes > MAX_HTML_ASSET_BUNDLE_BYTES {
+            return Err("HTML 资源包总大小不能超过 50 MB。".to_string());
+        }
+
+        let parent = destination_path
+            .parent()
+            .unwrap_or_else(|| Path::new(""));
+        let destination_directory = create_directory_inside_root(root, parent)?;
+        let file_name = destination_path
+            .file_name()
+            .ok_or_else(|| "HTML 资源文件名无效。".to_string())?;
+        let destination_file = destination_directory.join(file_name);
+        let content = fs::read(&source_path)
+            .map_err(|error| format!("无法复制 HTML 资源文件：{error}"))?;
+        if relative_path == entry_relative {
+            let html = String::from_utf8(content)
+                .map_err(|_| "HTML 入口文件必须使用 UTF-8 编码。".to_string())?;
+            fs::write(&destination_file, inject_html_preview_csp(&html))
+                .map_err(|error| format!("无法保存 HTML 入口文件：{error}"))?;
+            state.entry_copied = true;
+        } else {
+            fs::write(&destination_file, content)
+                .map_err(|error| format!("无法复制 HTML 资源文件：{error}"))?;
+        }
+    }
+    Ok(())
+}
+
+fn inject_html_preview_csp(html: &str) -> String {
+    const CSP_META: &str = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'self' asset: http://asset.localhost data: blob:; script-src 'self' asset: http://asset.localhost 'unsafe-inline'; style-src 'self' asset: http://asset.localhost 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: blob:; font-src 'self' asset: http://asset.localhost data: blob:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'\">";
+    let lower = html.to_ascii_lowercase();
+    if let Some(head_start) = lower.find("<head") {
+        if let Some(head_end) = html[head_start..].find('>') {
+            let insert_at = head_start + head_end + 1;
+            return format!("{}{CSP_META}{}", &html[..insert_at], &html[insert_at..]);
+        }
+    }
+    if let Some(html_start) = lower.find("<html") {
+        if let Some(html_end) = html[html_start..].find('>') {
+            let insert_at = html_start + html_end + 1;
+            return format!(
+                "{}<head>{CSP_META}</head>{}",
+                &html[..insert_at],
+                &html[insert_at..]
+            );
+        }
+    }
+    format!("<!doctype html><html><head>{CSP_META}</head><body>{html}</body></html>")
 }
 
 fn validate_markdown_path(value: &str) -> Result<PathBuf, String> {

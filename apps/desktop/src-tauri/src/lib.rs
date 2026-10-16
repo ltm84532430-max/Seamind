@@ -17,6 +17,8 @@ pub fn run() {
             library::search_library,
             library::open_document,
             library::save_document,
+            library::import_html_asset,
+            library::resolve_html_asset,
             library::delete_document,
             library::create_category,
             library::rebuild_library_index,

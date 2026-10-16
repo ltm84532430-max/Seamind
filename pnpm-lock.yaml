@@ -91,6 +91,9 @@ importers:
       katex:
         specifier: ^0.16.8
         version: 0.16.18
+      markmap-html-parser:
+        specifier: workspace:*
+        version: link:../../packages/markmap-html-parser
       markmap-lib:
         specifier: workspace:*
         version: link:../../packages/markmap-lib
