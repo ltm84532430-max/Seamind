@@ -12,9 +12,14 @@ import { pluginFrontmatter, pluginSourceLines } from 'markmap-lib/plugins';
 import type { PureNode } from 'markmap-lib';
 import { Markmap } from 'markmap-view';
 import type { Markmap as MarkmapInstance } from 'markmap-view';
-import { hydrateCodeBlocks, updateMarkdownCodeFence } from './code-blocks';
+import {
+  hydrateCodeBlocks,
+  updateMarkdownCodeFence,
+  updateMarkdownCodeFenceAtRange,
+} from './code-blocks';
 import MarkdownEditor from './MarkdownEditor';
 import type { MarkdownEditorHandle, MarkdownSelection } from './MarkdownEditor';
+import MarkdownPreview from './MarkdownPreview';
 import {
   buildYouTubeEmbedUrl,
   nextYouTubeThumbnail,
@@ -37,7 +42,6 @@ import type {
 import {
   applyMarkdownNodeCommand,
   buildMarkdownNodeSourceMap,
-  findMarkmapNodeByPath,
   findSourcePathForLine,
   getMarkdownNodeNote,
   getMarkdownNodeNotes,
@@ -728,7 +732,25 @@ function prepareHtmlCardNodes(
   };
 }
 
-function sanitizeNode(node: PureNode): PureNode {
+function isSafeMarkdownImageSource(source: string): boolean {
+  const value = source.trim();
+  if (/^(?:\/(?!\/)|\.\.?\/)/.test(value)) return true;
+  try {
+    const url = new URL(value, window.location.origin);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function renderMarkdownToHtml(renderer: unknown, source: string): string {
+  return (renderer as { render(markdown: string): string }).render(source);
+}
+
+function sanitizeNode(
+  node: PureNode,
+  options: { allowMarkdownImages?: boolean } = {},
+): PureNode {
   const document = new DOMParser().parseFromString(node.content, 'text/html');
   document.body
     .querySelectorAll(
@@ -761,11 +783,20 @@ function sanitizeNode(node: PureNode): PureNode {
         element.removeAttribute(attribute.name);
       } else if (name === 'href' && !sanitizeHref(attribute.value)) {
         element.removeAttribute(attribute.name);
-      } else if (name === 'src' && element.tagName.toLowerCase() !== 'img') {
-        element.removeAttribute(attribute.name);
+      } else if (name === 'src') {
+        const isMarkdownImage =
+          options.allowMarkdownImages &&
+          element.tagName.toLowerCase() === 'img' &&
+          isSafeMarkdownImageSource(attribute.value);
+        if (!isMarkdownImage) element.removeAttribute(attribute.name);
       }
     });
-    if (element.tagName.toLowerCase() === 'img') element.removeAttribute('src');
+    if (
+      element.tagName.toLowerCase() === 'img' &&
+      (!options.allowMarkdownImages ||
+        !isSafeMarkdownImageSource(element.getAttribute('src') || ''))
+    )
+      element.removeAttribute('src');
     if (element.getAttribute('target') === '_blank')
       element.setAttribute('rel', 'noopener noreferrer');
   });
@@ -773,7 +804,7 @@ function sanitizeNode(node: PureNode): PureNode {
   return {
     ...node,
     content: document.body.innerHTML,
-    children: node.children.map((child) => sanitizeNode(child)),
+    children: node.children.map((child) => sanitizeNode(child, options)),
   };
 }
 
@@ -822,12 +853,6 @@ function addFallbackMindmapTitle(
 
 function errorMessage(error: unknown, fallback: string): string {
   return typeof error === 'string' ? error : fallback;
-}
-
-interface MarkmapNodeLike {
-  state?: { path?: string };
-  payload?: Record<string, unknown>;
-  children?: MarkmapNodeLike[];
 }
 
 function normalizeKatexDelimiters(markdown: string): string {
@@ -1059,6 +1084,10 @@ export default function App() {
     useState<MindmapStyle>(readMindmapStyle);
   const [mindmapStyleMenuOpen, setMindmapStyleMenuOpen] = useState(false);
   const [sourceCollapsed, setSourceCollapsed] = useState(false);
+  const [markdownPaneMode, setMarkdownPaneMode] = useState<'edit' | 'preview'>(
+    'edit',
+  );
+  const [markdownFullscreen, setMarkdownFullscreen] = useState(false);
   const [libraryCollapsed, setLibraryCollapsed] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalCommandConfirmation, setTerminalCommandConfirmation] =
@@ -1119,6 +1148,8 @@ export default function App() {
   const cliAgentProposalRef = useRef<CliAgentProposal | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const markdownEditorRef = useRef<MarkdownEditorHandle | null>(null);
+  const markdownPaneModeRef = useRef(markdownPaneMode);
+  markdownPaneModeRef.current = markdownPaneMode;
   const pendingMarkdownTitleRef = useRef<string | null>(null);
   const codeBlocksAbortRef = useRef<AbortController | null>(null);
   const codeBlocksCleanupRef = useRef<(() => void) | null>(null);
@@ -1174,9 +1205,30 @@ export default function App() {
   }, []);
   const nodeNotePreviewHtml = useMemo(() => {
     if (!nodeNoteDialog?.markdown.trim()) return '';
-    const rendered = transformer.md.render(`\n${nodeNoteDialog.markdown}`);
+    const rendered = renderMarkdownToHtml(
+      transformer.md,
+      `\n${nodeNoteDialog.markdown}`,
+    );
     return sanitizeNode({ content: rendered, children: [] }).content;
   }, [nodeNoteDialog?.markdown, transformer]);
+  const markdownPreviewHtml = useMemo(() => {
+    const source = normalizeKatexDelimiters(markdownBody(editorDraft.markdown));
+    if (!source.trim()) return '<p>暂无 Markdown 内容</p>';
+    const rendered = renderMarkdownToHtml(transformer.md, source);
+    return sanitizeNode(
+      { content: rendered, children: [] },
+      { allowMarkdownImages: true },
+    ).content;
+  }, [editorDraft.markdown, transformer]);
+
+  useEffect(() => {
+    if (!markdownFullscreen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMarkdownFullscreen(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [markdownFullscreen]);
 
   const installDraft = (next: EditorDraft) => {
     draftRef.current = next;
@@ -1212,7 +1264,12 @@ export default function App() {
 
   const applyMarkdownFromCanvas = (
     markdown: string,
-    options: { lineIndex?: number; focus?: boolean; title?: string } = {},
+    options: {
+      lineIndex?: number;
+      endLineIndex?: number;
+      focus?: boolean;
+      title?: string;
+    } = {},
   ) => {
     if (markdown === draftRef.current.markdown) return;
     pendingMarkdownTitleRef.current = options.title || null;
@@ -1606,6 +1663,40 @@ export default function App() {
       next,
     );
     if (markdown !== activeDraft.markdown) applyMarkdownFromCanvas(markdown);
+  };
+
+  const handleMathVisualizationChange = (
+    language: string,
+    previous: string,
+    next: string,
+    nodePath: string | null,
+  ) => {
+    if (
+      !nodePath ||
+      markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown
+    )
+      return;
+    const source = markdownNodeSourcesRef.current.get(nodePath);
+    if (!source || source.kind !== 'block') return;
+    const current = draftRef.current.markdown;
+    const markdown = updateMarkdownCodeFenceAtRange(
+      current,
+      language,
+      source.lineIndex,
+      source.endLineIndex,
+      previous,
+      next,
+    );
+    if (markdown === current) {
+      setLibraryError('无法定位该数学可视化代码块，请先从源文本重新渲染。');
+      return;
+    }
+    setLibraryError('');
+    applyMarkdownFromCanvas(markdown, {
+      lineIndex: source.lineIndex,
+      endLineIndex: source.endLineIndex,
+      focus: true,
+    });
   };
 
   const installLibrarySnapshot = (snapshot: LibrarySnapshot) => {
@@ -2451,7 +2542,7 @@ export default function App() {
       if (!(target instanceof Element)) return;
       if (
         target.closest(
-          '.seamind-code-panel, button, input, textarea, .cm-editor, [contenteditable="true"]',
+          'button, input, textarea, select, .cm-editor, [contenteditable="true"]',
         )
       )
         return;
@@ -2463,7 +2554,20 @@ export default function App() {
       if (!nodeGroup || !path) return;
       setActiveMapPath(path);
       const source = markdownNodeSourcesRef.current.get(path);
-      if (source) markdownEditorRef.current?.selectLine(source.lineIndex, true);
+      if (source) {
+        const selectSource = () =>
+          markdownEditorRef.current?.selectLines(
+            source.lineIndex,
+            source.endLineIndex,
+            true,
+          );
+        if (markdownPaneModeRef.current === 'preview') {
+          setMarkdownPaneMode('edit');
+          window.requestAnimationFrame(selectSource);
+        } else {
+          selectSource();
+        }
+      }
     };
 
     const handleYouTubeCardClick = (event: MouseEvent) => {
@@ -2544,18 +2648,17 @@ export default function App() {
   }, [mindmapStyle, theme]);
 
   useEffect(() => {
-    const map = markmapRef.current;
-    if (!map) return;
-    const root = (map as unknown as { state?: { data?: MarkmapNodeLike } })
-      .state?.data;
-    const node = activeMapPath
-      ? findMarkmapNodeByPath(root, activeMapPath)
-      : null;
-    const typedNode = node as unknown as
-      | Parameters<MarkmapInstance['setHighlight']>[0]
-      | null;
-    map.setHighlight(typedNode);
-    if (typedNode) void map.ensureVisible(typedNode);
+    const svg = svgRef.current;
+    if (!svg) return;
+    svg
+      .querySelectorAll<SVGGElement>('g.markmap-node[data-path]')
+      .forEach((nodeGroup) => {
+        if (nodeGroup.getAttribute('data-path') === activeMapPath) {
+          nodeGroup.setAttribute('data-active', 'true');
+        } else {
+          nodeGroup.removeAttribute('data-active');
+        }
+      });
   }, [activeMapPath, sourceMapVersion]);
 
   useEffect(() => {
@@ -2668,6 +2771,8 @@ export default function App() {
         {
           onCodeChange: (language, previous, next) =>
             codeBlockEditHandlerRef.current(language, previous, next),
+          onMathVisualizationChange: (language, previous, next, nodePath) =>
+            handleMathVisualizationChange(language, previous, next, nodePath),
           onTerminalCommand: (language, source, onResult) => {
             const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
             terminalCommandResultsRef.current.set(id, onResult);
@@ -2790,7 +2895,7 @@ export default function App() {
       </header>
 
       <section
-        className={`workspace${sourceCollapsed ? ' is-source-collapsed' : ''}${libraryCollapsed ? ' is-library-collapsed' : ''}${aiCollapsed ? ' is-ai-collapsed' : ''}${terminalOpen ? ' is-terminal-open' : ''}`}
+        className={`workspace${sourceCollapsed ? ' is-source-collapsed' : ''}${libraryCollapsed ? ' is-library-collapsed' : ''}${aiCollapsed ? ' is-ai-collapsed' : ''}${terminalOpen ? ' is-terminal-open' : ''}${markdownFullscreen ? ' is-markdown-fullscreen' : ''}`}
         aria-label="Markdown 思维导图编辑器"
       >
         <LibraryPanel
@@ -2829,6 +2934,30 @@ export default function App() {
             </div>
             {!sourceCollapsed && (
               <div className="source-header-actions">
+                <div
+                  className="markdown-mode-switch"
+                  role="group"
+                  aria-label="Markdown 查看模式"
+                >
+                  <button
+                    type="button"
+                    className={markdownPaneMode === 'edit' ? 'is-active' : ''}
+                    aria-pressed={markdownPaneMode === 'edit'}
+                    onClick={() => setMarkdownPaneMode('edit')}
+                  >
+                    编辑
+                  </button>
+                  <button
+                    type="button"
+                    className={
+                      markdownPaneMode === 'preview' ? 'is-active' : ''
+                    }
+                    aria-pressed={markdownPaneMode === 'preview'}
+                    onClick={() => setMarkdownPaneMode('preview')}
+                  >
+                    预览
+                  </button>
+                </div>
                 <span className="format-badge">.md</span>
                 <div className="source-insert-tools" aria-label="插入节点">
                   <button
@@ -2849,6 +2978,22 @@ export default function App() {
                     {htmlImportBusy ? '…' : 'HTML'}
                   </button>
                 </div>
+                <button
+                  type="button"
+                  className="markdown-fullscreen-button"
+                  aria-label={
+                    markdownFullscreen ? '退出 Markdown 全屏' : 'Markdown 全屏'
+                  }
+                  title={
+                    markdownFullscreen ? '退出全屏（Esc）' : 'Markdown 全屏'
+                  }
+                  aria-pressed={markdownFullscreen}
+                  onClick={() =>
+                    setMarkdownFullscreen((fullscreen) => !fullscreen)
+                  }
+                >
+                  {markdownFullscreen ? '退出' : '全屏'}
+                </button>
               </div>
             )}
             <button
@@ -2865,7 +3010,7 @@ export default function App() {
                   : '收起 Markdown 源文本栏'
               }
               aria-expanded={!sourceCollapsed}
-              aria-controls="markdown-editor"
+              aria-controls="markdown-pane-content"
               onClick={() => setSourceCollapsed((collapsed) => !collapsed)}
             >
               <Icon name={sourceCollapsed ? 'expand' : 'collapse'} />
@@ -2922,17 +3067,31 @@ export default function App() {
               />
             </label>
           </div>
-          <label className="editor-label" htmlFor="markdown-editor">
-            编辑源文本
-          </label>
-          <MarkdownEditor
-            key={markdownEditorSession}
-            ref={markdownEditorRef}
-            id="markdown-editor"
-            value={editorDraft.markdown}
-            onChange={handleMarkdownEditorChange}
-            onSelectionChange={handleMarkdownSelectionChange}
-          />
+          <div id="markdown-pane-content" className="markdown-pane-content">
+            <label
+              className="editor-label"
+              htmlFor="markdown-editor"
+              hidden={markdownPaneMode !== 'edit'}
+            >
+              编辑源文本
+            </label>
+            <div
+              className="markdown-editor-frame"
+              hidden={markdownPaneMode !== 'edit'}
+            >
+              <MarkdownEditor
+                key={markdownEditorSession}
+                ref={markdownEditorRef}
+                id="markdown-editor"
+                value={editorDraft.markdown}
+                onChange={handleMarkdownEditorChange}
+                onSelectionChange={handleMarkdownSelectionChange}
+              />
+            </div>
+            {markdownPaneMode === 'preview' && (
+              <MarkdownPreview html={markdownPreviewHtml} theme={theme} />
+            )}
+          </div>
           <div className="editor-footer">
             <span>{saveMessage}</span>
             <span>{editorDraft.markdown.length} 字符</span>

@@ -163,7 +163,7 @@ async fn generate_mindmap(
         "messages": [
             {
                 "role": "system",
-                "content": "你是思维导图编辑助手。根据用户内容输出结构清楚的 Markdown 思维导图。只输出 Markdown，不要代码围栏、说明文字或 HTML。第一行必须是唯一的一级标题（#），下面用二级/三级标题和列表组织层级；保留关键事实，避免重复，内容具体、简洁。"
+                "content": "你是思维导图编辑助手。根据用户内容输出结构清楚的 Markdown 思维导图。只输出 Markdown，不要在整份回答外层包代码围栏、不要附加说明文字或 HTML。第一行必须是唯一的一级标题（#），下面用二级/三级标题和列表组织层级；保留关键事实，避免重复，内容具体、简洁。遇到适合展示的数学函数时，可以在对应主题下加入 seamind-math 代码围栏，内容必须是符合 schemaVersion 1 的 JSON；kind 支持 function-2d、contour-2d、vector-field-2d、integral-1d 和 surface-3d。function-2d 使用 expression、domain.x 和可选 samples；contour-2d 使用 expression、domain.x、domain.y、levels 和可选 resolution；vector-field-2d 使用 vector.u、vector.v、domain.x、domain.y 和 resolution；integral-1d 使用 expression、domain.x、interval 和可选 samples；surface-3d 使用 expression、domain.x、domain.y 和 resolution，表达 z=f(x,y) 的三维曲面。表达式可引用 x、y，以及 parameters 中声明的参数；parameters 中每项提供 value、min、max、step，可选 label。需要交互时可提供 controls.domain.x/y 或 controls.interval，其范围控件包含 min、max、step，并覆盖当前图表范围或积分区间。常量只使用 pi 和 e；表达式仅使用 +、-、*、/、^、括号及 abs、sin、cos、tan、asin、acos、atan、ceil、floor、round、cosh、sinh、tanh、exp、ln、log、log10、sqrt 函数。数学图表必须提供可计算的公式和合理范围，不要输出 JavaScript、HTML、原始 ECharts JSON 或无法计算的符号表达式；无法确定公式时不要生成图表代码块。"
             },
             { "role": "user", "content": prompt }
         ]

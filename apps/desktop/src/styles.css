@@ -744,6 +744,33 @@ button {
 .workspace.is-ai-collapsed {
   --col-ai: 42px;
 }
+.workspace.is-markdown-fullscreen {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  background: #fff;
+}
+.workspace.is-markdown-fullscreen > :not(.editor-pane) {
+  display: none;
+}
+.workspace.is-markdown-fullscreen .editor-pane {
+  grid-column: 1;
+  grid-row: 1;
+  border: 0;
+}
+.workspace.is-markdown-fullscreen .pane-collapse-button {
+  display: none;
+}
+.workspace.is-markdown-fullscreen .document-metadata,
+.workspace.is-markdown-fullscreen .editor-label {
+  display: none;
+}
+.app-shell[data-theme='dark'] .workspace.is-markdown-fullscreen {
+  background: #1c2227;
+}
 
 .library-sidebar {
   grid-column: 1;
@@ -878,13 +905,31 @@ button {
   background: #fff;
   overflow: hidden;
 }
+.markdown-pane-content,
+.markdown-editor-frame {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+.markdown-pane-content > [hidden],
+.markdown-editor-frame[hidden] {
+  display: none !important;
+}
+.markdown-editor-frame > .markdown-editor {
+  flex: 1;
+}
 .markdown-editor:focus-within {
   box-shadow: inset 2px 0 0 #e5a293;
 }
 .markdown-editor .cm-editor {
-  width: 100%;
+  width: 0;
   height: 100%;
   min-height: 0;
+  min-width: 0;
+  flex: 1;
   color: inherit;
   background: transparent;
   font: 12px/1.9 var(--mono);
@@ -913,6 +958,170 @@ button {
 }
 .markdown-editor .cm-focused {
   outline: none;
+}
+.markdown-minimap {
+  --minimap-line: #8b9aa7;
+  --minimap-heading: #c56f59;
+  --minimap-code: #6486a8;
+  --minimap-active: #d9573b;
+  position: relative;
+  width: 78px;
+  min-width: 58px;
+  height: 100%;
+  flex: 0 0 78px;
+  overflow: hidden;
+  border-left: 1px solid #edf0f1;
+  background: #fafbfc;
+  cursor: pointer;
+  touch-action: none;
+}
+.markdown-minimap-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: 0.82;
+  pointer-events: none;
+}
+.markdown-minimap-viewport {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 0;
+  left: 0;
+  min-height: 18px;
+  border: 1px solid #d9573b66;
+  background: #d9573b12;
+  pointer-events: none;
+}
+.markdown-minimap:focus-visible {
+  outline: 2px solid #d9573b;
+  outline-offset: -2px;
+}
+.markdown-rendered-preview {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 24px clamp(20px, 5vw, 48px) 40px;
+  color: #35414a;
+  background: #fff;
+  font-size: 14px;
+  line-height: 1.85;
+  overflow-wrap: anywhere;
+}
+.markdown-rendered-preview > * {
+  max-width: 900px;
+  margin-right: auto;
+  margin-left: auto;
+}
+.markdown-rendered-preview .seamind-code-panel {
+  width: 100%;
+  max-width: 900px;
+  margin: 16px auto;
+}
+.markdown-rendered-preview .seamind-viz-output {
+  height: 360px;
+}
+.markdown-rendered-preview .seamind-math-controls[hidden],
+.markdown-rendered-preview .seamind-math-control-actions[hidden],
+.markdown-rendered-preview [hidden] {
+  display: none !important;
+}
+.markdown-rendered-preview h1,
+.markdown-rendered-preview h2,
+.markdown-rendered-preview h3,
+.markdown-rendered-preview h4,
+.markdown-rendered-preview h5,
+.markdown-rendered-preview h6 {
+  color: #202b34;
+  line-height: 1.4;
+}
+.markdown-rendered-preview h1 {
+  margin-top: 0;
+  padding-bottom: 0.35em;
+  border-bottom: 1px solid #e7eaed;
+  font-size: 1.85em;
+}
+.markdown-rendered-preview h2 {
+  margin-top: 1.8em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid #e7eaed;
+  font-size: 1.45em;
+}
+.markdown-rendered-preview h3 {
+  margin-top: 1.5em;
+  font-size: 1.2em;
+}
+.markdown-rendered-preview p,
+.markdown-rendered-preview ul,
+.markdown-rendered-preview ol,
+.markdown-rendered-preview blockquote {
+  margin-top: 0.75em;
+  margin-bottom: 0.9em;
+}
+.markdown-rendered-preview a {
+  color: #b34f39;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.markdown-rendered-preview blockquote {
+  padding: 2px 0 2px 14px;
+  border-left: 3px solid #d9a092;
+  color: #707b84;
+}
+.markdown-rendered-preview :not(pre) > code {
+  padding: 0.15em 0.38em;
+  border: 1px solid #e8ebed;
+  border-radius: 3px;
+  background: #f5f6f7;
+  font: 0.9em var(--mono);
+}
+.markdown-rendered-preview pre {
+  max-width: 900px;
+  overflow: auto;
+  padding: 14px 16px;
+  border: 1px solid #e1e5e8;
+  border-radius: 4px;
+  background: #f7f8f9;
+  font: 12px/1.7 var(--mono);
+}
+.markdown-rendered-preview pre code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.markdown-rendered-preview table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow: auto;
+  border-collapse: collapse;
+}
+.markdown-rendered-preview th,
+.markdown-rendered-preview td {
+  padding: 6px 10px;
+  border: 1px solid #dfe4e7;
+  text-align: left;
+}
+.markdown-rendered-preview th {
+  background: #f5f6f7;
+}
+.markdown-rendered-preview img {
+  max-width: 100%;
+  height: auto;
+}
+.markdown-rendered-preview hr {
+  border: 0;
+  border-top: 1px solid #e2e6e9;
+}
+.markdown-rendered-preview .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 0;
+}
+.markdown-rendered-preview .katex-display > .katex {
+  white-space: nowrap;
 }
 .editor-footer {
   display: flex;
@@ -2527,6 +2736,74 @@ button {
   .cm-selectionBackground {
   background: #70463b !important;
 }
+.app-shell[data-theme='dark'] .markdown-minimap {
+  --minimap-line: #7e8d98;
+  --minimap-heading: #d28a74;
+  --minimap-code: #81a4c8;
+  --minimap-active: #f09a82;
+  border-color: #30383f;
+  background: #171d21;
+}
+.app-shell[data-theme='dark'] .markdown-minimap-viewport {
+  border-color: #f09a8266;
+  background: #f09a8218;
+}
+.app-shell[data-theme='dark'] .markdown-rendered-preview {
+  color: #cdd6dc;
+  background: #1c2227;
+}
+.app-shell[data-theme='dark'] .markdown-rendered-preview h1,
+.app-shell[data-theme='dark'] .markdown-rendered-preview h2,
+.app-shell[data-theme='dark'] .markdown-rendered-preview h3,
+.app-shell[data-theme='dark'] .markdown-rendered-preview h4,
+.app-shell[data-theme='dark'] .markdown-rendered-preview h5,
+.app-shell[data-theme='dark'] .markdown-rendered-preview h6 {
+  color: #e5ebef;
+}
+.app-shell[data-theme='dark'] .markdown-rendered-preview h1,
+.app-shell[data-theme='dark'] .markdown-rendered-preview h2,
+.app-shell[data-theme='dark'] .markdown-rendered-preview th,
+.app-shell[data-theme='dark'] .markdown-rendered-preview td,
+.app-shell[data-theme='dark'] .markdown-rendered-preview pre {
+  border-color: #354048;
+}
+.app-shell[data-theme='dark'] .markdown-rendered-preview pre,
+.app-shell[data-theme='dark'] .markdown-rendered-preview th,
+.app-shell[data-theme='dark'] .markdown-rendered-preview :not(pre) > code {
+  color: #d3dce1;
+  background: #171d21;
+}
+.app-shell[data-theme='dark'] .markdown-rendered-preview blockquote {
+  border-color: #986254;
+  color: #aab6bd;
+}
+.app-shell[data-theme='dark'] .markdown-rendered-preview a {
+  color: #e58b73;
+}
+.app-shell[data-theme='dark'] .markdown-rendered-preview hr {
+  border-color: #354048;
+}
+.app-shell[data-theme='dark'] .markdown-mode-switch {
+  border-color: #3a444c;
+  background: #171d21;
+}
+.app-shell[data-theme='dark'] .markdown-mode-switch button {
+  color: #9aa6ae;
+}
+.app-shell[data-theme='dark'] .markdown-mode-switch button.is-active {
+  color: #f1a08b;
+  background: #2a3339;
+  box-shadow: 0 0 0 1px #765148;
+}
+.app-shell[data-theme='dark'] .markdown-fullscreen-button {
+  border-color: #3a444c;
+  color: #c5cdd3;
+  background: #20272d;
+}
+.app-shell[data-theme='dark'] .markdown-fullscreen-button:hover {
+  border-color: #8b594d;
+  color: #ed9c89;
+}
 .app-shell[data-theme='dark'] .canvas-tools .canvas-node-action:disabled {
   color: #59656d;
 }
@@ -3463,6 +3740,38 @@ button {
   margin-left: auto;
   margin-right: 10px;
 }
+.markdown-mode-switch {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid #e3e6e8;
+  border-radius: 3px;
+  background: #f7f8f9;
+}
+.markdown-mode-switch button,
+.markdown-fullscreen-button {
+  min-height: 23px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 2px;
+  color: #76818a;
+  background: transparent;
+  font-size: 10px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.markdown-mode-switch button.is-active {
+  color: #9f4936;
+  background: #fff;
+  box-shadow: 0 0 0 1px #e6d7d3;
+}
+.markdown-fullscreen-button {
+  border: 1px solid #e3e6e8;
+  background: #fff;
+}
+.markdown-fullscreen-button:hover {
+  border-color: #d5a095;
+  color: #a75542;
+}
 .source-insert-tools {
   display: flex;
   align-items: center;
@@ -4111,12 +4420,30 @@ button {
   cursor: wait;
 }
 .seamind-viz-output {
+  position: relative;
   width: 100%;
   min-height: 220px;
   overflow: hidden;
 }
 .seamind-viz-output canvas {
   display: block;
+}
+.seamind-viz-output .seamind-surface3d-canvas {
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: none;
+}
+.seamind-surface3d-canvas:active {
+  cursor: grabbing;
+}
+.seamind-surface3d-hint {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  color: #82939c;
+  font-size: 10px;
+  pointer-events: none;
 }
 .seamind-viz-output .seamind-diagram-svg {
   display: block;
@@ -4126,6 +4453,75 @@ button {
 }
 .seamind-echarts-panel .seamind-viz-output {
   height: 290px;
+}
+.seamind-math-panel .seamind-viz-output {
+  height: 290px;
+}
+.seamind-math-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding-top: 9px;
+  border-top: 1px solid #e7ecef;
+}
+.seamind-math-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 8px;
+  min-width: 130px;
+  flex: 1 1 145px;
+  color: #52636c;
+  font-size: 10px;
+  letter-spacing: 0;
+}
+.seamind-math-control-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.seamind-math-control output {
+  color: #263840;
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.seamind-math-control input[type='range'] {
+  grid-column: 1 / -1;
+  width: 100%;
+  margin: 1px 0 0;
+  accent-color: #c85f49;
+  cursor: ew-resize;
+}
+.seamind-math-control-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 7px;
+}
+.seamind-math-control-status {
+  color: #788890;
+  font-size: 10px;
+  letter-spacing: 0;
+}
+.seamind-math-apply {
+  padding: 4px 8px;
+  border: 1px solid #d6dfe3;
+  border-radius: 3px;
+  color: #52636c;
+  background: #fff;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+.seamind-math-apply:hover:not(:disabled) {
+  border-color: #c8a097;
+  color: #9e4533;
+}
+.seamind-math-apply:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 .seamind-code-error {
   margin: 0;
@@ -4313,6 +4709,28 @@ button {
   border-color: #8b594d;
   color: #ed9c89;
 }
+.app-shell[data-theme='dark'] .seamind-math-controls {
+  border-color: #35434a;
+}
+.app-shell[data-theme='dark'] .seamind-math-control {
+  color: #a9b7be;
+}
+.app-shell[data-theme='dark'] .seamind-math-control output {
+  color: #d7e0e4;
+}
+.app-shell[data-theme='dark']
+  .seamind-math-control-actions
+  .seamind-math-apply {
+  border-color: #39454c;
+  color: #c1ccd2;
+  background: #20272d;
+}
+.app-shell[data-theme='dark']
+  .seamind-math-control-actions
+  .seamind-math-apply:hover:not(:disabled) {
+  border-color: #8b594d;
+  color: #ed9c89;
+}
 .app-shell[data-theme='dark'] .seamind-python-source,
 .app-shell[data-theme='dark'] .seamind-python-output,
 .app-shell[data-theme='dark'] .seamind-terminal-code-source,
@@ -4358,4 +4776,22 @@ button {
     max-width: 72vw;
     min-width: 260px;
   }
+}
+
+.app-shell .markmap-node[data-active='true'] > foreignObject > div > div {
+  border-color: #94a3b8 !important;
+  color: #1e293b !important;
+  background: #e2e8f0 !important;
+  box-shadow: inset 0 0 0 1px rgba(100, 116, 139, 0.16) !important;
+}
+
+.app-shell[data-theme='dark']
+  .markmap-node[data-active='true']
+  > foreignObject
+  > div
+  > div {
+  border-color: #94a3b8 !important;
+  color: #f1f5f9 !important;
+  background: #2b353d !important;
+  box-shadow: inset 0 0 0 1px rgba(226, 232, 240, 0.18) !important;
 }
