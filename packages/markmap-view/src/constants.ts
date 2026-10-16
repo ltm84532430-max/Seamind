@@ -23,6 +23,9 @@ export const defaultOptions: IMarkmapOptions = {
   zoom: true,
   pan: true,
   toggleRecursively: false,
+  direction: 'right',
+  linkShape: 'curve',
+  linkRadius: 8,
 
   color: (node: INode): string => defaultColorFn(`${node.state?.path || ''}`),
   lineWidth: lineWidthFactory(),

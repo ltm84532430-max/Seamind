@@ -49,6 +49,17 @@ export interface IMarkmapOptions {
   toggleRecursively: boolean;
   zoom: boolean;
 
+  /** Layout root branches to both sides when set to `both`. */
+  direction?: 'right' | 'both';
+  /** Connector geometry. Defaults to the existing curved links. */
+  linkShape?: 'curve' | 'orthogonal' | 'rounded-orthogonal';
+  /** Radius for rounded orthogonal connectors. Defaults to 8. */
+  linkRadius?: number;
+  /**
+   * Vertical attachment point for connectors. Defaults to the node's bottom edge.
+   */
+  linkAnchor?: (node: INode) => 'bottom' | 'center';
+
   // Theme options
   color: (node: INode) => string;
   lineWidth: (node: INode) => number;

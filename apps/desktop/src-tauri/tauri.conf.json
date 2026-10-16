@@ -1,0 +1,34 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "seamind",
+  "version": "0.1.0",
+  "identifier": "com.markmap.desktop",
+  "build": {
+    "beforeDevCommand": "corepack pnpm@9.15.9 dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "corepack pnpm@9.15.9 build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "seamind",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 960,
+        "minHeight": 640,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:;"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": ["icons/icon.ico"],
+    "category": "Productivity",
+    "shortDescription": "Markdown mind maps on your desktop",
+    "targets": ["nsis"]
+  }
+}

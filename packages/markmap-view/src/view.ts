@@ -36,7 +36,79 @@ const SELECTOR_NODE = 'g.markmap-node';
 const SELECTOR_LINK = 'path.markmap-link';
 const SELECTOR_HIGHLIGHT = 'g.markmap-highlight';
 
-const linkShape = linkHorizontal();
+const curveLinkShape = linkHorizontal();
+
+export type LinkPoint = [number, number];
+export type LinkEndpoints = { source: LinkPoint; target: LinkPoint };
+
+export function renderLinkPath(
+  endpoints: LinkEndpoints,
+  shape: IMarkmapOptions['linkShape'] = 'curve',
+  radius = 8,
+): string {
+  if (shape === 'orthogonal') {
+    const [sourceX, sourceY] = endpoints.source;
+    const [targetX, targetY] = endpoints.target;
+    const middleX = sourceX + (targetX - sourceX) / 2;
+    return `M${sourceX},${sourceY}H${middleX}V${targetY}H${targetX}`;
+  }
+  if (shape === 'rounded-orthogonal') {
+    const [sourceX, sourceY] = endpoints.source;
+    const [targetX, targetY] = endpoints.target;
+    const dx = targetX - sourceX;
+    const dy = targetY - sourceY;
+    const middleX = sourceX + dx / 2;
+
+    if (radius <= 0 || Math.abs(dy) <= 2 || Math.abs(dx) <= 2) {
+      return `M${sourceX},${sourceY}H${middleX}V${targetY}H${targetX}`;
+    }
+
+    const r = Math.min(radius, Math.abs(dx) / 2, Math.abs(dy) / 2);
+    const dirX = dx >= 0 ? 1 : -1;
+    const dirY = dy >= 0 ? 1 : -1;
+
+    return [
+      `M${sourceX},${sourceY}`,
+      `H${middleX - dirX * r}`,
+      `Q${middleX},${sourceY} ${middleX},${sourceY + dirY * r}`,
+      `V${targetY - dirY * r}`,
+      `Q${middleX},${targetY} ${middleX + dirX * r},${targetY}`,
+      `H${targetX}`,
+    ].join('');
+  }
+  return curveLinkShape(endpoints) || '';
+}
+
+function getLinkEndpoints(
+  source: INode,
+  target: INode,
+  lineWidth: IMarkmapOptions['lineWidth'],
+  linkAnchor: IMarkmapOptions['linkAnchor'],
+): LinkEndpoints {
+  const sourceRect = source.state.rect;
+  const targetRect = target.state.rect;
+  const targetIsLeft = targetRect.x < sourceRect.x;
+  return {
+    source: [
+      targetIsLeft ? sourceRect.x : sourceRect.x + sourceRect.width,
+      getNodeLinkY(source, sourceRect, lineWidth, linkAnchor),
+    ],
+    target: [
+      targetIsLeft ? targetRect.x + targetRect.width : targetRect.x,
+      getNodeLinkY(target, targetRect, lineWidth, linkAnchor),
+    ],
+  };
+}
+
+function getNodeLinkY(
+  node: INode,
+  rect: { y: number; height: number },
+  lineWidth: IMarkmapOptions['lineWidth'],
+  linkAnchor: IMarkmapOptions['linkAnchor'],
+): number {
+  if (linkAnchor?.(node) === 'center') return rect.y + rect.height / 2;
+  return rect.y + rect.height + lineWidth(node) / 2;
+}
 
 function minBy(numbers: number[], by: (v: number) => number): number {
   const index = minIndex(numbers, by);
@@ -254,6 +326,87 @@ export class Markmap {
         height: fnode.xSize,
       };
     });
+
+    if (this.options.direction === 'both' && tree.children?.length) {
+      const directChildren = tree.children;
+      const nestedBranches = directChildren.filter((fnode) =>
+        Boolean(fnode.data.children?.length),
+      );
+      let leftChildren = [] as typeof directChildren;
+      let rightChildren = [] as typeof directChildren;
+
+      if (nestedBranches.length === 1 && directChildren.length > 1) {
+        rightChildren = nestedBranches;
+        leftChildren = directChildren.filter(
+          (fnode) => fnode !== nestedBranches[0],
+        );
+      } else if (directChildren.length > 1) {
+        const countSubtree = (node: INode) => {
+          const pending = [node];
+          let count = 0;
+          while (pending.length) {
+            const current = pending.pop()!;
+            count += 1;
+            pending.push(...(current.children || []));
+          }
+          return count;
+        };
+        const sides = [
+          { children: leftChildren, weight: 0 },
+          { children: rightChildren, weight: 0 },
+        ];
+        [...directChildren]
+          .map((child) => ({ child, weight: countSubtree(child.data) }))
+          .sort((a, b) => b.weight - a.weight)
+          .forEach(({ child, weight }) => {
+            const side =
+              sides[0].weight <= sides[1].weight ? sides[0] : sides[1];
+            side.children.push(child);
+            side.weight += weight;
+          });
+      } else {
+        rightChildren = directChildren;
+      }
+
+      const rootRect = this.state.data.state.rect;
+      const rootCenterX = rootRect.x + rootRect.width / 2;
+      const rootCenterY = rootRect.y + rootRect.height / 2;
+      const gap = spacingVertical * 2;
+      [
+        { children: leftChildren, isLeft: true },
+        { children: rightChildren, isLeft: false },
+      ].forEach(({ children, isLeft }) => {
+        const groups = children
+          .map((child) => {
+            const descendants = child.descendants();
+            let top = Number.POSITIVE_INFINITY;
+            let bottom = Number.NEGATIVE_INFINITY;
+            descendants.forEach((item) => {
+              const rect = item.data.state.rect;
+              top = Math.min(top, rect.y);
+              bottom = Math.max(bottom, rect.y + rect.height);
+            });
+            return { descendants, top, height: bottom - top };
+          })
+          .sort((a, b) => a.top - b.top);
+        const totalHeight =
+          groups.reduce((total, group) => total + group.height, 0) +
+          gap * Math.max(0, groups.length - 1);
+        let nextY = rootCenterY - totalHeight / 2;
+        groups.forEach((group) => {
+          const shiftY = nextY - group.top;
+          group.descendants.forEach((item) => {
+            const rect = item.data.state.rect;
+            rect.y += shiftY;
+            if (isLeft) {
+              rect.x = rootCenterX * 2 - rect.x - rect.width;
+            }
+          });
+          nextY += group.height + gap;
+        });
+      });
+    }
+
     this.state.rect = {
       x1: min(fnodes, (fnode) => fnode.data.state.rect.x) || 0,
       y1: min(fnodes, (fnode) => fnode.data.state.rect.y) || 0,
@@ -315,7 +468,16 @@ export class Markmap {
   }
 
   async renderData(originData?: INode) {
-    const { paddingX, autoFit, color, maxWidth, lineWidth } = this.options;
+    const {
+      paddingX,
+      autoFit,
+      color,
+      maxWidth,
+      lineWidth,
+      linkShape,
+      linkRadius,
+      linkAnchor,
+    } = this.options;
     const rootNode = this.state.data;
     if (!rootNode) return;
 
@@ -374,8 +536,6 @@ export class Markmap {
     const mmGEnter = mmG
       .enter()
       .append('g')
-      .attr('data-depth', (d) => d.state.depth)
-      .attr('data-path', (d) => d.state.path)
       .each((d) => {
         setOriginNode(nodeMap[parentMap[d.state.id]]);
       });
@@ -384,6 +544,8 @@ export class Markmap {
     });
     const mmGMerge = mmG
       .merge(mmGEnter)
+      .attr('data-depth', (d) => d.state.depth)
+      .attr('data-path', (d) => d.state.path)
       .attr('class', (d) =>
         ['markmap-node', d.payload?.fold && 'markmap-fold']
           .filter(Boolean)
@@ -490,11 +652,16 @@ export class Markmap {
       .attr('data-path', (d) => d.target.state.path)
       .attr('d', (d) => {
         const originRect = getOriginSourceRect(d.target);
-        const pathOrigin: [number, number] = [
-          originRect.x + originRect.width,
-          originRect.y + originRect.height,
+        const targetIsLeft = d.target.state.rect.x < d.source.state.rect.x;
+        const sourcePoint: LinkPoint = [
+          targetIsLeft ? originRect.x : originRect.x + originRect.width,
+          getNodeLinkY(d.source, originRect, lineWidth, linkAnchor),
         ];
-        return linkShape({ source: pathOrigin, target: pathOrigin });
+        return renderLinkPath(
+          { source: sourcePoint, target: sourcePoint },
+          linkShape,
+          linkRadius,
+        );
       })
       .attr('stroke-width', 0);
     const mmPathMerge = mmPathEnter.merge(mmPath);
@@ -546,8 +713,16 @@ export class Markmap {
       .attr('x1', (d) => d.state.rect.width)
       .attr('x2', (d) => d.state.rect.width);
     mmLineMerge
-      .attr('y1', (d) => d.state.rect.height + lineWidth(d) / 2)
-      .attr('y2', (d) => d.state.rect.height + lineWidth(d) / 2);
+      .attr(
+        'y1',
+        (d) =>
+          getNodeLinkY(d, d.state.rect, lineWidth, linkAnchor) - d.state.rect.y,
+      )
+      .attr(
+        'y2',
+        (d) =>
+          getNodeLinkY(d, d.state.rect, lineWidth, linkAnchor) - d.state.rect.y,
+      );
     this.transition(mmLineMerge)
       .attr('x1', -1)
       .attr('x2', (d) => d.state.rect.width + 2)
@@ -559,9 +734,17 @@ export class Markmap {
     );
     this.transition(mmCircleExit).attr('r', 0).attr('stroke-width', 0);
     mmCircleMerge
-      .attr('cx', (d) => d.state.rect.width)
-      .attr('cy', (d) => d.state.rect.height + lineWidth(d) / 2);
-    this.transition(mmCircleMerge).attr('r', 6).attr('stroke-width', '1.5');
+      .attr('cx', (d) => {
+        const isLeft =
+          rootNode && d !== rootNode && d.state.rect.x < rootNode.state.rect.x;
+        return isLeft ? 0 : d.state.rect.width;
+      })
+      .attr(
+        'cy',
+        (d) =>
+          getNodeLinkY(d, d.state.rect, lineWidth, linkAnchor) - d.state.rect.y,
+      );
+    this.transition(mmCircleMerge).attr('r', 5).attr('stroke-width', '1.5');
 
     this.transition(mmFoExit).style('opacity', 0);
     mmFoMerge
@@ -572,11 +755,16 @@ export class Markmap {
     this.transition(mmPathExit)
       .attr('d', (d) => {
         const targetRect = getOriginTargetRect(d.target);
-        const pathTarget: [number, number] = [
-          targetRect.x + targetRect.width,
-          targetRect.y + targetRect.height + lineWidth(d.target) / 2,
+        const targetIsLeft = d.target.state.rect.x < d.source.state.rect.x;
+        const pathTarget: LinkPoint = [
+          targetIsLeft ? targetRect.x + targetRect.width : targetRect.x,
+          getNodeLinkY(d.target, targetRect, lineWidth, linkAnchor),
         ];
-        return linkShape({ source: pathTarget, target: pathTarget });
+        return renderLinkPath(
+          { source: pathTarget, target: pathTarget },
+          linkShape,
+          linkRadius,
+        );
       })
       .attr('stroke-width', 0)
       .remove();
@@ -585,21 +773,11 @@ export class Markmap {
       .attr('stroke', (d) => color(d.target))
       .attr('stroke-width', (d) => lineWidth(d.target))
       .attr('d', (d) => {
-        const origSource = d.source;
-        const origTarget = d.target;
-        const source: [number, number] = [
-          origSource.state.rect.x + origSource.state.rect.width,
-          origSource.state.rect.y +
-            origSource.state.rect.height +
-            lineWidth(origSource) / 2,
-        ];
-        const target: [number, number] = [
-          origTarget.state.rect.x,
-          origTarget.state.rect.y +
-            origTarget.state.rect.height +
-            lineWidth(origTarget) / 2,
-        ];
-        return linkShape({ source, target });
+        return renderLinkPath(
+          getLinkEndpoints(d.source, d.target, lineWidth, linkAnchor),
+          linkShape,
+          linkRadius,
+        );
       });
 
     if (autoFit) this.fit();
