@@ -1,3 +1,5 @@
+import type { EditorView as CodeMirrorEditorView } from 'codemirror';
+
 type AppTheme = 'light' | 'dark';
 
 const maxVisualizationSource = 50_000;
@@ -8,6 +10,62 @@ type PythonWorkerMessage = {
   output?: string;
   error?: string;
 };
+
+export interface CodeBlockHandlers {
+  onCodeChange?: (language: string, previous: string, next: string) => void;
+  onTerminalCommand?: (
+    language: string,
+    source: string,
+    onResult: (output: string) => void,
+  ) => void;
+}
+
+function normalizeFenceSource(source: string): string {
+  return source.replace(/\r\n/g, '\n').replace(/\n$/, '');
+}
+
+export function updateMarkdownCodeFence(
+  markdown: string,
+  language: string,
+  previousSource: string,
+  nextSource: string,
+): string {
+  const lineEnding = markdown.includes('\r\n') ? '\r\n' : '\n';
+  const lines = markdown.split(/\r?\n/);
+  for (let start = 0; start < lines.length; start += 1) {
+    const opening = lines[start].match(/^ {0,3}(`{3,}|~{3,})[ \t]*(.*)$/);
+    if (!opening) continue;
+    const infoLanguage = opening[2]
+      .trim()
+      .split(/[ \t]+/, 1)[0]
+      ?.toLowerCase();
+    if (infoLanguage !== language.toLowerCase()) continue;
+
+    const fence = opening[1];
+    let end = start + 1;
+    for (; end < lines.length; end += 1) {
+      const closing = lines[end].match(/^ {0,3}(`+|~+)\s*$/);
+      if (
+        closing &&
+        closing[1][0] === fence[0] &&
+        closing[1].length >= fence.length
+      )
+        break;
+    }
+    if (end === lines.length) continue;
+
+    const body = lines.slice(start + 1, end).join('\n');
+    if (normalizeFenceSource(body) !== normalizeFenceSource(previousSource)) {
+      start = end;
+      continue;
+    }
+
+    const replacement = normalizeFenceSource(nextSource).split('\n');
+    lines.splice(start + 1, end - start - 1, ...replacement);
+    return lines.join(lineEnding);
+  }
+  return markdown;
+}
 
 function createPanel(title: string, kind: string): HTMLElement {
   const panel = document.createElement('section');
@@ -314,8 +372,11 @@ async function renderECharts(
 function createPythonPanel(
   pre: HTMLElement,
   source: string,
+  language: string,
+  theme: AppTheme,
   signal: AbortSignal,
   dispose: (callback: () => void) => void,
+  onCodeChange?: CodeBlockHandlers['onCodeChange'],
 ): HTMLElement {
   const panel = createPanel('Python · 点击运行', 'python');
   const header = panel.querySelector<HTMLElement>(
@@ -328,22 +389,115 @@ function createPythonPanel(
   runButton.setAttribute('aria-label', '运行 Python 代码');
   header?.append(runButton);
 
+  const editButton = document.createElement('button');
+  editButton.type = 'button';
+  editButton.className = 'seamind-python-edit';
+  editButton.textContent = '编辑代码';
+  const saveButton = document.createElement('button');
+  saveButton.type = 'button';
+  saveButton.textContent = '保存';
+  saveButton.hidden = true;
+  const cancelButton = document.createElement('button');
+  cancelButton.type = 'button';
+  cancelButton.textContent = '取消';
+  cancelButton.hidden = true;
+  header?.append(editButton, saveButton, cancelButton);
+
   const code = document.createElement('pre');
   code.className = 'seamind-python-source';
   const codeText = document.createElement('code');
   codeText.textContent = source;
   code.append(codeText);
+  const editorHost = document.createElement('div');
+  editorHost.className = 'seamind-python-editor';
+  editorHost.hidden = true;
   const output = document.createElement('pre');
   output.className = 'seamind-python-output';
   output.textContent = '第三方包未启用；可直接使用 Python 标准库。';
-  panel.append(code, output);
+  panel.append(code, editorHost, output);
 
+  let currentSource = source;
+  let persistedSource = source;
+  let editor: CodeMirrorEditorView | null = null;
   let worker: Worker | null = null;
   let timeout: number | undefined;
+  const closeEditor = () => {
+    editor?.destroy();
+    editor = null;
+    editorHost.hidden = true;
+    code.hidden = false;
+    runButton.disabled = false;
+    editButton.disabled = false;
+    editButton.hidden = false;
+    saveButton.hidden = true;
+    cancelButton.hidden = true;
+  };
+  const startEditing = async () => {
+    editButton.disabled = true;
+    output.textContent = '正在加载 Python 编辑器…';
+    try {
+      const [codemirror, pythonLanguage] = await Promise.all([
+        import('codemirror'),
+        import('@codemirror/lang-python'),
+      ]);
+      if (signal.aborted) return;
+      editorHost.hidden = false;
+      code.hidden = true;
+      runButton.disabled = true;
+      editButton.hidden = true;
+      saveButton.hidden = false;
+      cancelButton.hidden = false;
+      editor = new codemirror.EditorView({
+        doc: currentSource,
+        parent: editorHost,
+        extensions: [
+          codemirror.basicSetup,
+          pythonLanguage.python(),
+          codemirror.EditorView.theme(
+            {
+              '&': {
+                fontSize: '12px',
+                maxHeight: '240px',
+                backgroundColor: theme === 'dark' ? '#11171b' : '#ffffff',
+                color: theme === 'dark' ? '#d7e0e4' : '#263238',
+              },
+              '.cm-scroller': { overflow: 'auto', fontFamily: 'monospace' },
+              '.cm-gutters': {
+                backgroundColor: theme === 'dark' ? '#11171b' : '#f5f7f8',
+                color: theme === 'dark' ? '#71818a' : '#7a878d',
+                border: 'none',
+              },
+            },
+            { dark: theme === 'dark' },
+          ),
+        ],
+      });
+      editor.focus();
+    } catch (error) {
+      output.textContent = `编辑器加载失败：${error instanceof Error ? error.message : String(error)}`;
+      editButton.disabled = false;
+    }
+  };
+  const openEditor = () => void startEditing();
+  const saveEditing = () => {
+    if (!editor) return;
+    currentSource = editor.state.doc.toString();
+    codeText.textContent = currentSource;
+    const previousSource = persistedSource;
+    persistedSource = currentSource;
+    closeEditor();
+    onCodeChange?.(language, previousSource, currentSource);
+    output.textContent = '代码已保存到 Markdown。';
+  };
+  const cancelEditing = () => {
+    if (!editor) return;
+    closeEditor();
+    output.textContent = '已取消编辑，代码未更改。';
+  };
   const run = () => {
     if (signal.aborted) return;
     if (timeout !== undefined) window.clearTimeout(timeout);
-    if (source.length > 30_000) {
+    if (currentSource.length > 30_000) {
       output.textContent = 'Python 代码块超过 30 KB。';
       return;
     }
@@ -375,7 +529,7 @@ function createPythonPanel(
     };
     const indexURL = new URL('pyodide/', document.baseURI).href;
     const moduleURL = new URL('pyodide/pyodide.mjs', document.baseURI).href;
-    worker.postMessage({ source, indexURL, moduleURL });
+    worker.postMessage({ source: currentSource, indexURL, moduleURL });
     timeout = window.setTimeout(() => {
       worker?.terminate();
       worker = null;
@@ -385,13 +539,77 @@ function createPythonPanel(
     }, 20_000);
   };
   runButton.addEventListener('click', run);
+  editButton.addEventListener('click', openEditor);
+  saveButton.addEventListener('click', saveEditing);
+  cancelButton.addEventListener('click', cancelEditing);
   dispose(() => {
     runButton.removeEventListener('click', run);
+    editButton.removeEventListener('click', openEditor);
+    saveButton.removeEventListener('click', saveEditing);
+    cancelButton.removeEventListener('click', cancelEditing);
     if (timeout !== undefined) window.clearTimeout(timeout);
     worker?.terminate();
     worker = null;
+    editor?.destroy();
+    editor = null;
   });
   replacePre(pre, panel, source, 'python');
+  return panel;
+}
+
+function createTerminalCommandPanel(
+  pre: HTMLElement,
+  source: string,
+  language: string,
+  signal: AbortSignal,
+  dispose: (callback: () => void) => void,
+  onTerminalCommand?: CodeBlockHandlers['onTerminalCommand'],
+): HTMLElement {
+  const panel = createPanel(
+    `${language.toUpperCase()} · 本机终端`,
+    'terminal-code',
+  );
+  const header = panel.querySelector<HTMLElement>(
+    '.seamind-code-panel-heading',
+  );
+  const sendButton = document.createElement('button');
+  sendButton.type = 'button';
+  sendButton.className = 'seamind-terminal-code-run';
+  sendButton.textContent = '请求运行';
+  sendButton.setAttribute('aria-label', '请求在本机终端运行此命令');
+  header?.append(sendButton);
+  const code = document.createElement('pre');
+  code.className = 'seamind-terminal-code-source';
+  code.textContent = source;
+  const output = document.createElement('pre');
+  output.className = 'seamind-terminal-code-output';
+  output.hidden = true;
+  const note = document.createElement('p');
+  note.className = 'seamind-terminal-code-note';
+  note.textContent = '点击后先预览完整命令；确认后才会在本机终端执行。';
+  if (new TextEncoder().encode(source).length > 40_000) {
+    sendButton.disabled = true;
+    sendButton.textContent = '命令过长';
+    note.textContent = '终端命令超过 40 KB，无法发送。';
+  }
+  panel.append(code, note, output);
+  const requestRun = () => {
+    if (signal.aborted) return;
+    if (!onTerminalCommand) return;
+    sendButton.disabled = true;
+    sendButton.textContent = '等待确认';
+    output.hidden = false;
+    output.textContent = '等待确认并启动终端…';
+    onTerminalCommand(language, source, (result) => {
+      if (signal.aborted) return;
+      output.textContent = result || '执行完成（无输出）。';
+      sendButton.disabled = false;
+      sendButton.textContent = '请求运行';
+    });
+  };
+  sendButton.addEventListener('click', requestRun);
+  dispose(() => sendButton.removeEventListener('click', requestRun));
+  replacePre(pre, panel, source, language);
   return panel;
 }
 
@@ -399,6 +617,7 @@ export async function hydrateCodeBlocks(
   svg: SVGSVGElement,
   theme: AppTheme,
   signal: AbortSignal,
+  handlers: CodeBlockHandlers = {},
 ): Promise<() => void> {
   const cleanupCallbacks: Array<() => void> = [];
   let cleaned = false;
@@ -430,12 +649,40 @@ export async function hydrateCodeBlocks(
     const source = code.textContent ?? '';
     if (
       !language ||
-      !['mermaid', 'echarts', 'echart', 'python', 'py'].includes(language)
+      ![
+        'mermaid',
+        'echarts',
+        'echart',
+        'python',
+        'py',
+        'powershell',
+        'pwsh',
+      ].includes(language)
     )
       continue;
 
     if (language === 'python' || language === 'py') {
-      createPythonPanel(pre, source, signal, dispose);
+      createPythonPanel(
+        pre,
+        source,
+        language,
+        theme,
+        signal,
+        dispose,
+        handlers.onCodeChange,
+      );
+      continue;
+    }
+
+    if (language === 'powershell' || language === 'pwsh') {
+      createTerminalCommandPanel(
+        pre,
+        source,
+        language,
+        signal,
+        dispose,
+        handlers.onTerminalCommand,
+      );
       continue;
     }
 

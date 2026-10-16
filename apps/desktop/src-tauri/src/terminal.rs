@@ -1,6 +1,7 @@
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -9,6 +10,7 @@ use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
 const MAX_TERMINAL_INPUT_BYTES: usize = 65_536;
+const MAX_TERMINAL_SCRIPT_BYTES: usize = 40_000;
 
 #[derive(Default, Clone)]
 pub struct TerminalState {
@@ -32,6 +34,53 @@ struct TerminalOutput {
 #[serde(rename_all = "camelCase")]
 struct TerminalExit {
     session_id: String,
+}
+
+#[tauri::command]
+pub fn terminal_stage_script(source: String) -> Result<String, String> {
+    if source.as_bytes().len() > MAX_TERMINAL_SCRIPT_BYTES {
+        return Err("终端脚本不能超过 40 KB。".to_string());
+    }
+    let path = std::env::temp_dir().join(format!("seamind-terminal-{}.ps1", Uuid::new_v4()));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|_| "无法创建临时终端脚本。".to_string())?;
+    file.write_all(&[0xEF, 0xBB, 0xBF])
+        .and_then(|_| file.write_all(source.as_bytes()))
+        .map_err(|_| {
+            let _ = std::fs::remove_file(&path);
+            "无法写入临时终端脚本。".to_string()
+        })?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub fn terminal_remove_script(path: String) -> Result<(), String> {
+    let path = PathBuf::from(path);
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let temp_directory = std::env::temp_dir()
+        .canonicalize()
+        .map_err(|_| "无法访问临时目录。".to_string())?;
+    let parent = path
+        .parent()
+        .and_then(|parent| parent.canonicalize().ok())
+        .ok_or_else(|| "临时脚本路径无效。".to_string())?;
+    if parent != temp_directory
+        || !file_name.starts_with("seamind-terminal-")
+        || !file_name.ends_with(".ps1")
+    {
+        return Err("拒绝删除临时目录以外的文件。".to_string());
+    }
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err("无法清理临时终端脚本。".to_string()),
+    }
 }
 
 fn terminal_size(cols: u16, rows: u16) -> PtySize {

@@ -11,7 +11,7 @@ import { Transformer } from 'markmap-lib';
 import type { PureNode } from 'markmap-lib';
 import { Markmap } from 'markmap-view';
 import type { Markmap as MarkmapInstance } from 'markmap-view';
-import { hydrateCodeBlocks } from './code-blocks';
+import { hydrateCodeBlocks, updateMarkdownCodeFence } from './code-blocks';
 import 'katex/dist/katex.min.css';
 import LibraryPanel from './LibraryPanel';
 const TerminalPanel = lazy(() => import('./TerminalPanel'));
@@ -78,6 +78,12 @@ interface HtmlPreviewSelection extends HtmlCardDefinition {
 
 interface HtmlCanvasEmbedding extends HtmlPreviewSelection {
   src: string;
+}
+
+interface TerminalCommandRequest {
+  id: string;
+  language: string;
+  source: string;
 }
 
 const isEpubPath = (path: string) =>
@@ -998,6 +1004,13 @@ export default function App() {
   const [sourceCollapsed, setSourceCollapsed] = useState(false);
   const [libraryCollapsed, setLibraryCollapsed] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalCommandConfirmation, setTerminalCommandConfirmation] =
+    useState<TerminalCommandRequest | null>(null);
+  const [pendingTerminalCommand, setPendingTerminalCommand] =
+    useState<TerminalCommandRequest | null>(null);
+  const terminalCommandResultsRef = useRef(
+    new Map<string, (output: string) => void>(),
+  );
   const [aiCollapsed, setAiCollapsed] = useState<boolean>(readAiCollapsed);
   const [librarySnapshot, setLibrarySnapshot] =
     useState<LibrarySnapshot | null>(null);
@@ -1042,6 +1055,9 @@ export default function App() {
   const libraryQueryRef = useRef('');
   const categoryFilterRef = useRef('');
   const activeSaveRef = useRef<Promise<boolean> | null>(null);
+  const codeBlockEditHandlerRef = useRef<
+    (language: string, previous: string, next: string) => void
+  >(() => {});
   const epubImportInFlightRef = useRef(false);
   const epubDropHandlerRef = useRef<(paths: string[]) => void>(() => {});
   const searchRequestRef = useRef(0);
@@ -1095,6 +1111,21 @@ export default function App() {
     setEditorDraft(next);
     setPendingEpubImport(false);
     setSaveMessage('有未保存修改');
+  };
+
+  codeBlockEditHandlerRef.current = (
+    language: string,
+    previous: string,
+    next: string,
+  ) => {
+    const activeDraft = draftRef.current;
+    const markdown = updateMarkdownCodeFence(
+      activeDraft.markdown,
+      language,
+      previous,
+      next,
+    );
+    if (markdown !== activeDraft.markdown) patchDraft({ markdown });
   };
 
   const installLibrarySnapshot = (snapshot: LibrarySnapshot) => {
@@ -1788,6 +1819,12 @@ export default function App() {
     const handleCanvasDoubleClick = (event: MouseEvent) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
+      if (
+        target.closest(
+          '.seamind-code-panel, button, input, textarea, .cm-editor',
+        )
+      )
+        return;
       const nodeGroup = target.closest<SVGGElement>('g.markmap-node');
       if (!nodeGroup) return;
       const sourcePath = nodeGroup.getAttribute('data-path');
@@ -2026,6 +2063,15 @@ export default function App() {
         svg,
         theme,
         codeBlocksAbort.signal,
+        {
+          onCodeChange: (language, previous, next) =>
+            codeBlockEditHandlerRef.current(language, previous, next),
+          onTerminalCommand: (language, source, onResult) => {
+            const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            terminalCommandResultsRef.current.set(id, onResult);
+            setTerminalCommandConfirmation({ id, language, source });
+          },
+        },
       );
       if (codeBlocksAbort.signal.aborted) cleanupCodeBlocks();
       else codeBlocksCleanupRef.current = cleanupCodeBlocks;
@@ -2804,6 +2850,91 @@ export default function App() {
           </section>
         </div>
       )}
+      {terminalCommandConfirmation && (
+        <div
+          className="settings-backdrop terminal-command-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              const callback = terminalCommandResultsRef.current.get(
+                terminalCommandConfirmation.id,
+              );
+              terminalCommandResultsRef.current.delete(
+                terminalCommandConfirmation.id,
+              );
+              callback?.('已取消执行。');
+              setTerminalCommandConfirmation(null);
+            }
+          }}
+        >
+          <section
+            className="settings-dialog terminal-command-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="terminal-command-title"
+          >
+            <div className="settings-heading">
+              <div>
+                <span className="pane-kicker">LOCAL TERMINAL</span>
+                <h2 id="terminal-command-title">运行本机命令？</h2>
+              </div>
+              <button
+                type="button"
+                className="dialog-close"
+                aria-label="取消运行"
+                onClick={() => {
+                  const callback = terminalCommandResultsRef.current.get(
+                    terminalCommandConfirmation.id,
+                  );
+                  terminalCommandResultsRef.current.delete(
+                    terminalCommandConfirmation.id,
+                  );
+                  callback?.('已取消执行。');
+                  setTerminalCommandConfirmation(null);
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <p className="terminal-command-warning">
+              这段 {terminalCommandConfirmation.language} 代码将在{' '}
+              {librarySnapshot?.rootPath || '当前工作目录'} 中，以当前 Windows
+              用户权限执行。请先检查完整命令。
+            </p>
+            <pre className="terminal-command-preview">
+              <code>{terminalCommandConfirmation.source}</code>
+            </pre>
+            <div className="settings-footer">
+              <button
+                type="button"
+                className="done-button"
+                onClick={() => {
+                  const callback = terminalCommandResultsRef.current.get(
+                    terminalCommandConfirmation.id,
+                  );
+                  terminalCommandResultsRef.current.delete(
+                    terminalCommandConfirmation.id,
+                  );
+                  callback?.('已取消执行。');
+                  setTerminalCommandConfirmation(null);
+                }}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="save-key-button"
+                onClick={() => {
+                  setPendingTerminalCommand(terminalCommandConfirmation);
+                  setTerminalOpen(true);
+                  setTerminalCommandConfirmation(null);
+                }}
+              >
+                确认并运行
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       {terminalOpen && (
         <Suspense
           fallback={
@@ -2815,7 +2946,30 @@ export default function App() {
               key={librarySnapshot?.rootPath ?? 'default-terminal-directory'}
               cwd={librarySnapshot?.rootPath ?? ''}
               theme={theme}
-              onClose={() => setTerminalOpen(false)}
+              pendingCommand={pendingTerminalCommand}
+              onCommandSubmitted={(id) =>
+                setPendingTerminalCommand((current) =>
+                  current?.id === id ? null : current,
+                )
+              }
+              onCommandOutput={(id, output) => {
+                const callback = terminalCommandResultsRef.current.get(id);
+                if (!callback) return;
+                terminalCommandResultsRef.current.delete(id);
+                callback(output);
+              }}
+              onClose={() => {
+                const request = pendingTerminalCommand;
+                if (request) {
+                  const callback = terminalCommandResultsRef.current.get(
+                    request.id,
+                  );
+                  terminalCommandResultsRef.current.delete(request.id);
+                  callback?.('终端已关闭，命令未执行。');
+                }
+                setPendingTerminalCommand(null);
+                setTerminalOpen(false);
+              }}
             />
           </div>
         </Suspense>

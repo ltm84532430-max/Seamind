@@ -2843,11 +2843,34 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 6px;
   min-height: 24px;
   margin-bottom: 7px;
   color: #70808a;
   font-size: 10px;
   letter-spacing: 0.08em;
+}
+.seamind-code-panel-heading strong {
+  margin-right: auto;
+}
+.seamind-code-panel-heading button {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid #d6dfe3;
+  border-radius: 3px;
+  color: #52636c;
+  background: #fff;
+  font: inherit;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+.seamind-code-panel-heading button:hover:not(:disabled) {
+  border-color: #c8a097;
+  color: #9e4533;
+}
+.seamind-code-panel-heading button:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 .seamind-viz-output {
   width: 100%;
@@ -2906,11 +2929,91 @@ button {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
+.seamind-python-editor .cm-editor {
+  max-height: 240px;
+  border: 1px solid #e2e7e9;
+  border-radius: 3px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
+}
+.seamind-python-editor .cm-content {
+  font-family: 'Cascadia Code', Consolas, monospace;
+}
+.seamind-python-editor .cm-scroller {
+  overflow: auto;
+}
 .seamind-python-output {
   max-height: 140px;
   margin-top: 7px;
   color: #56656d;
   background: #fbfcfc;
+}
+.seamind-terminal-code-source {
+  max-height: 210px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid #e2e7e9;
+  border-radius: 3px;
+  color: #33434b;
+  background: #f7f9fa;
+  font:
+    11px/1.55 'Cascadia Code',
+    Consolas,
+    monospace;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.seamind-terminal-code-output {
+  max-height: 180px;
+  overflow: auto;
+  margin: 7px 0 0;
+  padding: 8px 10px;
+  border: 1px solid #e2e7e9;
+  border-radius: 3px;
+  color: #56656d;
+  background: #fbfcfc;
+  font:
+    11px/1.55 'Cascadia Code',
+    Consolas,
+    monospace;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.seamind-terminal-code-note {
+  margin: 7px 0 0;
+  color: #7b8991;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.terminal-command-dialog {
+  width: min(760px, 100%);
+}
+.terminal-command-warning {
+  margin: -5px 0 12px;
+  color: #715b56;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.terminal-command-preview {
+  max-height: min(52vh, 440px);
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #dfe3e6;
+  border-radius: 4px;
+  color: #28363d;
+  background: #f7f9fa;
+  font:
+    11px/1.6 'Cascadia Code',
+    Consolas,
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.terminal-command-dialog .settings-footer {
+  justify-content: flex-end;
+  gap: 9px;
 }
 
 .app-shell[data-theme='dark'] .terminal-toggle-button {
@@ -2960,15 +3063,44 @@ button {
 .app-shell[data-theme='dark'] .seamind-code-panel-heading {
   color: #a9b7be;
 }
+.app-shell[data-theme='dark'] .seamind-code-panel-heading button {
+  border-color: #39454c;
+  color: #c1ccd2;
+  background: #20272d;
+}
+.app-shell[data-theme='dark']
+  .seamind-code-panel-heading
+  button:hover:not(:disabled) {
+  border-color: #8b594d;
+  color: #ed9c89;
+}
 .app-shell[data-theme='dark'] .seamind-python-source,
-.app-shell[data-theme='dark'] .seamind-python-output {
+.app-shell[data-theme='dark'] .seamind-python-output,
+.app-shell[data-theme='dark'] .seamind-terminal-code-source,
+.app-shell[data-theme='dark'] .seamind-terminal-code-output {
   border-color: #3d4a52;
   color: #d2dce1;
   background: #151d21;
 }
+.app-shell[data-theme='dark'] .seamind-python-editor .cm-editor {
+  border-color: #3d4a52;
+}
 .app-shell[data-theme='dark'] .seamind-python-output {
   color: #a9b7be;
   background: #172025;
+}
+.app-shell[data-theme='dark'] .seamind-terminal-code-output {
+  color: #a9b7be;
+  background: #172025;
+}
+.app-shell[data-theme='dark'] .seamind-terminal-code-note,
+.app-shell[data-theme='dark'] .terminal-command-warning {
+  color: #b7a8a3;
+}
+.app-shell[data-theme='dark'] .terminal-command-preview {
+  border-color: #3d4a52;
+  color: #d2dce1;
+  background: #151d21;
 }
 .app-shell[data-theme='dark'] .seamind-python-run {
   border-color: #8b594d;

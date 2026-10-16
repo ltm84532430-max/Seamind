@@ -26,6 +26,8 @@ pub fn run() {
             library::rebuild_library_index,
             terminal::terminal_start,
             terminal::terminal_write,
+            terminal::terminal_stage_script,
+            terminal::terminal_remove_script,
             terminal::terminal_resize,
             terminal::terminal_close,
         ])
