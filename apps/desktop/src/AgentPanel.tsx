@@ -240,7 +240,13 @@ export default function AgentPanel({
           <p>
             {proposal.operation === 'rename'
               ? `将「${proposal.previousLabel}」改为「${proposal.nextLabel}」`
-              : `在「${proposal.previousLabel}」${proposal.operation === 'add_child' ? '下' : '旁'}添加「${proposal.nextLabel}」`}
+              : proposal.operation === 'add_child'
+                ? `在「${proposal.previousLabel}」下添加「${proposal.nextLabel}」`
+                : proposal.operation === 'add_sibling'
+                  ? `在「${proposal.previousLabel}」旁添加「${proposal.nextLabel}」`
+                  : proposal.operation === 'delete'
+                    ? `删除「${proposal.previousLabel}」及其子节点`
+                    : `更新「${proposal.previousLabel}」的备注`}
           </p>
           {proposal.rationale && <small>{proposal.rationale}</small>}
           <details className="agent-diff">

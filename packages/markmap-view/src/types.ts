@@ -49,8 +49,8 @@ export interface IMarkmapOptions {
   toggleRecursively: boolean;
   zoom: boolean;
 
-  /** Layout root branches to both sides when set to `both`. */
-  direction?: 'right' | 'both';
+  /** Layout direction: 'right' (default), 'both' (both sides), or 'down' (top-down tree). */
+  direction?: 'right' | 'both' | 'down';
   /** Connector geometry. Defaults to the existing curved links. */
   linkShape?: 'curve' | 'orthogonal' | 'rounded-orthogonal';
   /** Radius for rounded orthogonal connectors. Defaults to 8. */

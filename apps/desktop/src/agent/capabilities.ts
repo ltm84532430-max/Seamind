@@ -1,4 +1,5 @@
 import type { MapDocument, OpenedDocument } from '../library';
+import { MAX_MARKDOWN_NODE_NOTE_CHARS } from '../mindmap/commands';
 import type {
   ActiveMindmapSnapshot,
   AgentToolDefinition,
@@ -9,7 +10,8 @@ import type {
 
 export interface ProposeNodeEditInput {
   baseRevision: number;
-  nodePath: string;
+  nodeId?: string;
+  nodePath?: string;
   operation: NodeEditOperation;
   text: string;
   rationale: string;
@@ -47,7 +49,7 @@ export const agentToolCatalog: AgentToolDescriptor[] = [
     version: 1,
     name: 'mindmap_get_current',
     description:
-      '读取当前打开的思维导图结构。节点路径只在返回的 revision 版本内有效；修改前必须先调用此工具。',
+      '读取当前打开的思维导图结构和节点 Markdown 备注。每个节点包含持久 nodeId（旧节点可能为空）、allowedOperations 和 noteTruncated；只对 allowedOperations 中列出的操作提出修改。节点路径只在返回的 revision 版本内有效；快照若 truncated 为 true，表示只返回了部分节点。修改前必须先调用此工具。',
     permission: 'read',
     inputSchema: schema({}),
   },
@@ -83,20 +85,38 @@ export const agentToolCatalog: AgentToolDescriptor[] = [
     version: 1,
     name: 'mindmap_propose_node_edit',
     description:
-      '为当前思维导图提出一个节点改名、添加子节点或添加同级节点的修改提案。必须使用 mindmap_get_current 返回的 revision 和 nodePath。此工具只生成预览，不会直接修改或保存文件。',
+      '为当前思维导图提出节点改名、增删节点或编辑 Markdown/数学公式备注的提案。只能执行目标节点 allowedOperations 中允许的操作。必须使用 mindmap_get_current 返回的 revision；优先提供节点 nodeId，旧节点尚无持久 ID 时可使用 nodePath。set_note 的 text 最长 8,000 字符。此工具只生成预览，必须由用户确认后才会修改。',
     permission: 'user_approval',
     inputSchema: schema(
       {
         baseRevision: { type: 'integer', minimum: 0 },
-        nodePath: { type: 'string', minLength: 1, maxLength: 200 },
+        nodeId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+          description:
+            '目标节点的持久 ID；优先使用 mindmap_get_current 返回的 nodeId。',
+        },
+        nodePath: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 200,
+          description:
+            '仅当目标 nodeId 为空时使用；必须来自同一 revision 的节点快照。',
+        },
         operation: {
           type: 'string',
-          enum: ['rename', 'add_child', 'add_sibling'],
+          enum: ['rename', 'add_child', 'add_sibling', 'delete', 'set_note'],
         },
-        text: { type: 'string', minLength: 1, maxLength: 300 },
+        text: {
+          type: 'string',
+          maxLength: MAX_MARKDOWN_NODE_NOTE_CHARS,
+          description:
+            '改名或新增时的节点文字；set_note 时为 Markdown 备注；delete 时传空字符串。',
+        },
         rationale: { type: 'string', maxLength: 500 },
       },
-      ['baseRevision', 'nodePath', 'operation', 'text', 'rationale'],
+      ['baseRevision', 'operation', 'text', 'rationale'],
     ),
   },
 ];
@@ -150,6 +170,22 @@ function requireString(
   return normalized;
 }
 
+function requireText(
+  input: Record<string, unknown>,
+  key: string,
+  maxLength: number,
+  minLength = 0,
+): string {
+  const value = input[key];
+  if (typeof value !== 'string') throw new Error(`参数 ${key} 必须是文本。`);
+  if (value.trim().length < minLength || value.length > maxLength) {
+    throw new Error(
+      `参数 ${key} 长度必须为 ${minLength} 到 ${maxLength} 个字符。`,
+    );
+  }
+  return value;
+}
+
 function requireInteger(input: Record<string, unknown>, key: string): number {
   const value = input[key];
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
@@ -191,7 +227,9 @@ export async function executeAgentTool(
       permission: 'read',
       name,
       label: '读取当前导图',
-      summary: `读取「${current.title}」，共 ${current.nodeCount} 个节点。`,
+      summary: current.truncated
+        ? `读取「${current.title}」的部分结构，当前快照包含 ${current.nodeCount} 个节点，结果已截断。`
+        : `读取「${current.title}」，共 ${current.nodeCount} 个节点。`,
       result: current as unknown as Record<string, unknown>,
     };
   }
@@ -241,6 +279,7 @@ export async function executeAgentTool(
   if (name === 'mindmap_propose_node_edit') {
     assertOnlyKeys(input, [
       'baseRevision',
+      'nodeId',
       'nodePath',
       'operation',
       'text',
@@ -250,15 +289,32 @@ export async function executeAgentTool(
     if (
       operation !== 'rename' &&
       operation !== 'add_child' &&
-      operation !== 'add_sibling'
+      operation !== 'add_sibling' &&
+      operation !== 'delete' &&
+      operation !== 'set_note'
     ) {
       throw new Error('操作类型不受支持。');
     }
+    const nodeId =
+      input.nodeId === undefined
+        ? undefined
+        : requireString(input, 'nodeId', 128);
+    const nodePath =
+      input.nodePath === undefined
+        ? undefined
+        : requireString(input, 'nodePath', 200);
+    if (!nodeId && !nodePath) throw new Error('必须提供 nodeId 或 nodePath。');
     const proposal = capabilities.proposeNodeEdit({
       baseRevision: requireInteger(input, 'baseRevision'),
-      nodePath: requireString(input, 'nodePath', 200),
+      nodeId,
+      nodePath,
       operation: operation as NodeEditOperation,
-      text: requireString(input, 'text', 300),
+      text: requireText(
+        input,
+        'text',
+        operation === 'set_note' ? MAX_MARKDOWN_NODE_NOTE_CHARS : 300,
+        operation === 'delete' || operation === 'set_note' ? 0 : 1,
+      ),
       rationale: requireString(input, 'rationale', 500, 0),
     });
     return {
@@ -266,13 +322,25 @@ export async function executeAgentTool(
       permission: 'user_approval',
       name,
       label: '提出节点修改',
-      summary: `${proposal.operation === 'rename' ? '改名' : '新增节点'}「${proposal.nextLabel}」，等待你确认。`,
+      summary:
+        proposal.operation === 'rename'
+          ? `将「${proposal.previousLabel}」改为「${proposal.nextLabel}」，等待你确认。`
+          : proposal.operation === 'add_child'
+            ? `在「${proposal.previousLabel}」下添加「${proposal.nextLabel}」，等待你确认。`
+            : proposal.operation === 'add_sibling'
+              ? `在「${proposal.previousLabel}」旁添加「${proposal.nextLabel}」，等待你确认。`
+              : proposal.operation === 'delete'
+                ? `删除「${proposal.previousLabel}」及其子节点，等待你确认。`
+                : `更新「${proposal.previousLabel}」的备注，等待你确认。`,
       result: {
         status: 'awaiting_user_approval',
+        nodeId: proposal.nodeId,
         nodePath: proposal.nodePath,
         operation: proposal.operation,
         previousLabel: proposal.previousLabel,
         nextLabel: proposal.nextLabel,
+        previousNote: proposal.previousNote,
+        nextNote: proposal.nextNote,
         rationale: proposal.rationale,
       },
       proposal,

@@ -41,11 +41,50 @@ const curveLinkShape = linkHorizontal();
 export type LinkPoint = [number, number];
 export type LinkEndpoints = { source: LinkPoint; target: LinkPoint };
 
-export function renderLinkPath(
+export function renderVerticalLinkPath(
   endpoints: LinkEndpoints,
   shape: IMarkmapOptions['linkShape'] = 'curve',
   radius = 8,
 ): string {
+  const [sourceX, sourceY] = endpoints.source;
+  const [targetX, targetY] = endpoints.target;
+  const dx = targetX - sourceX;
+  const dy = targetY - sourceY;
+  const middleY = sourceY + dy / 2;
+
+  if (shape === 'orthogonal') {
+    return `M${sourceX},${sourceY}V${middleY}H${targetX}V${targetY}`;
+  }
+  if (shape === 'rounded-orthogonal') {
+    if (radius <= 0 || Math.abs(dx) <= 2 || Math.abs(dy) <= 2) {
+      return `M${sourceX},${sourceY}V${middleY}H${targetX}V${targetY}`;
+    }
+
+    const r = Math.min(radius, Math.abs(dx) / 2, Math.abs(dy) / 2);
+    const dirX = dx >= 0 ? 1 : -1;
+    const dirY = dy >= 0 ? 1 : -1;
+
+    return [
+      `M${sourceX},${sourceY}`,
+      `V${middleY - dirY * r}`,
+      `Q${sourceX},${middleY} ${sourceX + dirX * r},${middleY}`,
+      `H${targetX - dirX * r}`,
+      `Q${targetX},${middleY} ${targetX},${middleY + dirY * r}`,
+      `V${targetY}`,
+    ].join('');
+  }
+  return `M${sourceX},${sourceY}C${sourceX},${middleY} ${targetX},${middleY} ${targetX},${targetY}`;
+}
+
+export function renderLinkPath(
+  endpoints: LinkEndpoints,
+  shape: IMarkmapOptions['linkShape'] = 'curve',
+  radius = 8,
+  direction?: IMarkmapOptions['direction'],
+): string {
+  if (direction === 'down') {
+    return renderVerticalLinkPath(endpoints, shape, radius);
+  }
   if (shape === 'orthogonal') {
     const [sourceX, sourceY] = endpoints.source;
     const [targetX, targetY] = endpoints.target;
@@ -77,6 +116,18 @@ export function renderLinkPath(
     ].join('');
   }
   return curveLinkShape(endpoints) || '';
+}
+
+function getVerticalLinkEndpoints(source: INode, target: INode): LinkEndpoints {
+  const sourceRect = source.state.rect;
+  const targetRect = target.state.rect;
+  return {
+    source: [
+      sourceRect.x + sourceRect.width / 2,
+      sourceRect.y + sourceRect.height,
+    ],
+    target: [targetRect.x + targetRect.width / 2, targetRect.y],
+  };
 }
 
 function getLinkEndpoints(
@@ -300,111 +351,146 @@ export class Markmap {
 
     const { lineWidth, paddingX, spacingHorizontal, spacingVertical } =
       this.options;
-    const layout = flextree<INode>({})
-      .children((d) => {
-        if (!d.payload?.fold) return d.children;
-      })
-      .nodeSize((node) => {
-        const [width, height] = node.data.state.size;
-        return [height, width + (width ? paddingX * 2 : 0) + spacingHorizontal];
-      })
-      .spacing((a, b) => {
-        return (
-          (a.parent === b.parent ? spacingVertical : spacingVertical * 2) +
-          lineWidth(a.data)
-        );
-      });
-    const tree = layout.hierarchy(this.state.data);
-    layout(tree);
-    const fnodes = tree.descendants();
-    fnodes.forEach((fnode) => {
-      const node = fnode.data;
-      node.state.rect = {
-        x: fnode.y,
-        y: fnode.x - fnode.xSize / 2,
-        width: fnode.ySize - spacingHorizontal,
-        height: fnode.xSize,
-      };
-    });
+    let fnodes: Array<any> = [];
 
-    if (this.options.direction === 'both' && tree.children?.length) {
-      const directChildren = tree.children;
-      const nestedBranches = directChildren.filter((fnode) =>
-        Boolean(fnode.data.children?.length),
-      );
-      let leftChildren = [] as typeof directChildren;
-      let rightChildren = [] as typeof directChildren;
-
-      if (nestedBranches.length === 1 && directChildren.length > 1) {
-        rightChildren = nestedBranches;
-        leftChildren = directChildren.filter(
-          (fnode) => fnode !== nestedBranches[0],
-        );
-      } else if (directChildren.length > 1) {
-        const countSubtree = (node: INode) => {
-          const pending = [node];
-          let count = 0;
-          while (pending.length) {
-            const current = pending.pop()!;
-            count += 1;
-            pending.push(...(current.children || []));
-          }
-          return count;
-        };
-        const sides = [
-          { children: leftChildren, weight: 0 },
-          { children: rightChildren, weight: 0 },
-        ];
-        [...directChildren]
-          .map((child) => ({ child, weight: countSubtree(child.data) }))
-          .sort((a, b) => b.weight - a.weight)
-          .forEach(({ child, weight }) => {
-            const side =
-              sides[0].weight <= sides[1].weight ? sides[0] : sides[1];
-            side.children.push(child);
-            side.weight += weight;
-          });
-      } else {
-        rightChildren = directChildren;
-      }
-
-      const rootRect = this.state.data.state.rect;
-      const rootCenterX = rootRect.x + rootRect.width / 2;
-      const rootCenterY = rootRect.y + rootRect.height / 2;
-      const gap = spacingVertical * 2;
-      [
-        { children: leftChildren, isLeft: true },
-        { children: rightChildren, isLeft: false },
-      ].forEach(({ children, isLeft }) => {
-        const groups = children
-          .map((child) => {
-            const descendants = child.descendants();
-            let top = Number.POSITIVE_INFINITY;
-            let bottom = Number.NEGATIVE_INFINITY;
-            descendants.forEach((item) => {
-              const rect = item.data.state.rect;
-              top = Math.min(top, rect.y);
-              bottom = Math.max(bottom, rect.y + rect.height);
-            });
-            return { descendants, top, height: bottom - top };
-          })
-          .sort((a, b) => a.top - b.top);
-        const totalHeight =
-          groups.reduce((total, group) => total + group.height, 0) +
-          gap * Math.max(0, groups.length - 1);
-        let nextY = rootCenterY - totalHeight / 2;
-        groups.forEach((group) => {
-          const shiftY = nextY - group.top;
-          group.descendants.forEach((item) => {
-            const rect = item.data.state.rect;
-            rect.y += shiftY;
-            if (isLeft) {
-              rect.x = rootCenterX * 2 - rect.x - rect.width;
-            }
-          });
-          nextY += group.height + gap;
+    if (this.options.direction === 'down') {
+      const layout = flextree<INode>({})
+        .children((d) => {
+          if (!d.payload?.fold) return d.children;
+        })
+        .nodeSize((node) => {
+          const [width, height] = node.data.state.size;
+          return [width, height + spacingVertical];
+        })
+        .spacing((a, b) => {
+          return (
+            (a.parent === b.parent
+              ? spacingHorizontal
+              : spacingHorizontal * 1.5) + lineWidth(a.data)
+          );
         });
+      const tree = layout.hierarchy(this.state.data);
+      layout(tree);
+      fnodes = tree.descendants();
+      fnodes.forEach((fnode) => {
+        const node = fnode.data;
+        node.state.rect = {
+          x: fnode.x - fnode.xSize / 2,
+          y: fnode.y,
+          width: fnode.xSize,
+          height: fnode.ySize - spacingVertical,
+        };
       });
+    } else {
+      const layout = flextree<INode>({})
+        .children((d) => {
+          if (!d.payload?.fold) return d.children;
+        })
+        .nodeSize((node) => {
+          const [width, height] = node.data.state.size;
+          return [
+            height,
+            width + (width ? paddingX * 2 : 0) + spacingHorizontal,
+          ];
+        })
+        .spacing((a, b) => {
+          return (
+            (a.parent === b.parent ? spacingVertical : spacingVertical * 2) +
+            lineWidth(a.data)
+          );
+        });
+      const tree = layout.hierarchy(this.state.data);
+      layout(tree);
+      fnodes = tree.descendants();
+      fnodes.forEach((fnode) => {
+        const node = fnode.data;
+        node.state.rect = {
+          x: fnode.y,
+          y: fnode.x - fnode.xSize / 2,
+          width: fnode.ySize - spacingHorizontal,
+          height: fnode.xSize,
+        };
+      });
+
+      if (this.options.direction === 'both' && tree.children?.length) {
+        const directChildren = tree.children;
+        const nestedBranches = directChildren.filter((fnode) =>
+          Boolean(fnode.data.children?.length),
+        );
+        let leftChildren = [] as typeof directChildren;
+        let rightChildren = [] as typeof directChildren;
+
+        if (nestedBranches.length === 1 && directChildren.length > 1) {
+          rightChildren = nestedBranches;
+          leftChildren = directChildren.filter(
+            (fnode) => fnode !== nestedBranches[0],
+          );
+        } else if (directChildren.length > 1) {
+          const countSubtree = (node: INode) => {
+            const pending = [node];
+            let count = 0;
+            while (pending.length) {
+              const current = pending.pop()!;
+              count += 1;
+              pending.push(...(current.children || []));
+            }
+            return count;
+          };
+          const sides = [
+            { children: leftChildren, weight: 0 },
+            { children: rightChildren, weight: 0 },
+          ];
+          [...directChildren]
+            .map((child) => ({ child, weight: countSubtree(child.data) }))
+            .sort((a, b) => b.weight - a.weight)
+            .forEach(({ child, weight }) => {
+              const side =
+                sides[0].weight <= sides[1].weight ? sides[0] : sides[1];
+              side.children.push(child);
+              side.weight += weight;
+            });
+        } else {
+          rightChildren = directChildren;
+        }
+
+        const rootRect = this.state.data.state.rect;
+        const rootCenterX = rootRect.x + rootRect.width / 2;
+        const rootCenterY = rootRect.y + rootRect.height / 2;
+        const gap = spacingVertical * 2;
+        [
+          { children: leftChildren, isLeft: true },
+          { children: rightChildren, isLeft: false },
+        ].forEach(({ children, isLeft }) => {
+          const groups = children
+            .map((child) => {
+              const descendants = child.descendants();
+              let top = Number.POSITIVE_INFINITY;
+              let bottom = Number.NEGATIVE_INFINITY;
+              descendants.forEach((item) => {
+                const rect = item.data.state.rect;
+                top = Math.min(top, rect.y);
+                bottom = Math.max(bottom, rect.y + rect.height);
+              });
+              return { descendants, top, height: bottom - top };
+            })
+            .sort((a, b) => a.top - b.top);
+          const totalHeight =
+            groups.reduce((total, group) => total + group.height, 0) +
+            gap * Math.max(0, groups.length - 1);
+          let nextY = rootCenterY - totalHeight / 2;
+          groups.forEach((group) => {
+            const shiftY = nextY - group.top;
+            group.descendants.forEach((item) => {
+              const rect = item.data.state.rect;
+              rect.y += shiftY;
+              if (isLeft) {
+                rect.x = rootCenterX * 2 - rect.x - rect.width;
+              }
+            });
+            nextY += group.height + gap;
+          });
+        });
+      }
     }
 
     this.state.rect = {
@@ -477,7 +563,9 @@ export class Markmap {
       linkShape,
       linkRadius,
       linkAnchor,
+      direction,
     } = this.options;
+    const isVertical = direction === 'down';
     const rootNode = this.state.data;
     if (!rootNode) return;
 
@@ -652,6 +740,18 @@ export class Markmap {
       .attr('data-path', (d) => d.target.state.path)
       .attr('d', (d) => {
         const originRect = getOriginSourceRect(d.target);
+        if (isVertical) {
+          const sourcePoint: LinkPoint = [
+            originRect.x + originRect.width / 2,
+            originRect.y + originRect.height,
+          ];
+          return renderLinkPath(
+            { source: sourcePoint, target: sourcePoint },
+            linkShape,
+            linkRadius,
+            direction,
+          );
+        }
         const targetIsLeft = d.target.state.rect.x < d.source.state.rect.x;
         const sourcePoint: LinkPoint = [
           targetIsLeft ? originRect.x : originRect.x + originRect.width,
@@ -661,6 +761,7 @@ export class Markmap {
           { source: sourcePoint, target: sourcePoint },
           linkShape,
           linkRadius,
+          direction,
         );
       })
       .attr('stroke-width', 0);
@@ -685,6 +786,11 @@ export class Markmap {
 
     mmGEnter.attr('transform', (d) => {
       const originRect = getOriginSourceRect(d);
+      if (isVertical) {
+        return `translate(${originRect.x + (originRect.width - d.state.rect.width) / 2},${
+          originRect.y + originRect.height
+        })`;
+      }
       return `translate(${originRect.x + originRect.width - d.state.rect.width},${
         originRect.y + originRect.height - d.state.rect.height
       })`;
@@ -692,6 +798,12 @@ export class Markmap {
     this.transition(mmGExit)
       .attr('transform', (d) => {
         const targetRect = getOriginTargetRect(d);
+        if (isVertical) {
+          const targetX =
+            targetRect.x + (targetRect.width - d.state.rect.width) / 2;
+          const targetY = targetRect.y + targetRect.height;
+          return `translate(${targetX},${targetY})`;
+        }
         const targetX = targetRect.x + targetRect.width - d.state.rect.width;
         const targetY = targetRect.y + targetRect.height - d.state.rect.height;
         return `translate(${targetX},${targetY})`;
@@ -715,17 +827,26 @@ export class Markmap {
     mmLineMerge
       .attr(
         'y1',
-        (d) =>
-          getNodeLinkY(d, d.state.rect, lineWidth, linkAnchor) - d.state.rect.y,
+        isVertical
+          ? (d) => d.state.rect.height
+          : (d) =>
+              getNodeLinkY(d, d.state.rect, lineWidth, linkAnchor) -
+              d.state.rect.y,
       )
       .attr(
         'y2',
-        (d) =>
-          getNodeLinkY(d, d.state.rect, lineWidth, linkAnchor) - d.state.rect.y,
+        isVertical
+          ? (d) => d.state.rect.height
+          : (d) =>
+              getNodeLinkY(d, d.state.rect, lineWidth, linkAnchor) -
+              d.state.rect.y,
       );
     this.transition(mmLineMerge)
-      .attr('x1', -1)
-      .attr('x2', (d) => d.state.rect.width + 2)
+      .attr('x1', isVertical ? 0 : -1)
+      .attr(
+        'x2',
+        isVertical ? (d) => d.state.rect.width : (d) => d.state.rect.width + 2,
+      )
       .attr('stroke', (d) => color(d))
       .attr('stroke-width', lineWidth);
 
@@ -735,26 +856,42 @@ export class Markmap {
     this.transition(mmCircleExit).attr('r', 0).attr('stroke-width', 0);
     mmCircleMerge
       .attr('cx', (d) => {
+        if (isVertical) return d.state.rect.width / 2;
         const isLeft =
           rootNode && d !== rootNode && d.state.rect.x < rootNode.state.rect.x;
         return isLeft ? 0 : d.state.rect.width;
       })
-      .attr(
-        'cy',
-        (d) =>
-          getNodeLinkY(d, d.state.rect, lineWidth, linkAnchor) - d.state.rect.y,
-      );
+      .attr('cy', (d) => {
+        if (isVertical) return d.state.rect.height;
+        return (
+          getNodeLinkY(d, d.state.rect, lineWidth, linkAnchor) - d.state.rect.y
+        );
+      });
     this.transition(mmCircleMerge).attr('r', 5).attr('stroke-width', '1.5');
 
     this.transition(mmFoExit).style('opacity', 0);
     mmFoMerge
-      .attr('width', (d) => Math.max(0, d.state.rect.width - paddingX * 2))
+      .attr('width', (d) =>
+        Math.max(0, d.state.rect.width - (isVertical ? 0 : paddingX * 2)),
+      )
       .attr('height', (d) => d.state.rect.height);
     this.transition(mmFoMerge).style('opacity', 1);
 
     this.transition(mmPathExit)
       .attr('d', (d) => {
         const targetRect = getOriginTargetRect(d.target);
+        if (isVertical) {
+          const pathTarget: LinkPoint = [
+            targetRect.x + targetRect.width / 2,
+            targetRect.y,
+          ];
+          return renderLinkPath(
+            { source: pathTarget, target: pathTarget },
+            linkShape,
+            linkRadius,
+            direction,
+          );
+        }
         const targetIsLeft = d.target.state.rect.x < d.source.state.rect.x;
         const pathTarget: LinkPoint = [
           targetIsLeft ? targetRect.x + targetRect.width : targetRect.x,
@@ -764,6 +901,7 @@ export class Markmap {
           { source: pathTarget, target: pathTarget },
           linkShape,
           linkRadius,
+          direction,
         );
       })
       .attr('stroke-width', 0)
@@ -773,11 +911,10 @@ export class Markmap {
       .attr('stroke', (d) => color(d.target))
       .attr('stroke-width', (d) => lineWidth(d.target))
       .attr('d', (d) => {
-        return renderLinkPath(
-          getLinkEndpoints(d.source, d.target, lineWidth, linkAnchor),
-          linkShape,
-          linkRadius,
-        );
+        const endpoints = isVertical
+          ? getVerticalLinkEndpoints(d.source, d.target)
+          : getLinkEndpoints(d.source, d.target, lineWidth, linkAnchor);
+        return renderLinkPath(endpoints, linkShape, linkRadius, direction);
       });
 
     if (autoFit) this.fit();

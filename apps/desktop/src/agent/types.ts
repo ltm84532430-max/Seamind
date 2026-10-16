@@ -1,6 +1,10 @@
 export interface MindmapNodeSnapshot {
   path: string;
+  nodeId: string | null;
   label: string;
+  note: string;
+  noteTruncated: boolean;
+  allowedOperations: NodeEditOperation[];
   editable: boolean;
   children: MindmapNodeSnapshot[];
 }
@@ -10,10 +14,16 @@ export interface ActiveMindmapSnapshot {
   revision: number;
   relativePath: string | null;
   nodeCount: number;
+  truncated: boolean;
   root: MindmapNodeSnapshot;
 }
 
-export type NodeEditOperation = 'rename' | 'add_child' | 'add_sibling';
+export type NodeEditOperation =
+  | 'rename'
+  | 'add_child'
+  | 'add_sibling'
+  | 'delete'
+  | 'set_note';
 
 export interface NodeEditProposal {
   baseRevision: number;
@@ -22,10 +32,13 @@ export interface NodeEditProposal {
   baseTitle: string;
   markdown: string;
   title: string;
+  nodeId: string | null;
   nodePath: string;
   operation: NodeEditOperation;
   previousLabel: string;
   nextLabel: string;
+  previousNote?: string;
+  nextNote?: string;
   rationale: string;
 }
 

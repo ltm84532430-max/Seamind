@@ -74,7 +74,16 @@ export default defineConfig({
   envPrefix: ['VITE_', 'TAURI_ENV_*'],
   resolve: {
     alias: [
-      { find: 'markmap-lib', replacement: sourcePath('markmap-lib') },
+      {
+        find: 'markmap-lib/plugins',
+        replacement: fileURLToPath(
+          new URL(
+            '../../packages/markmap-lib/src/plugins/index.ts',
+            import.meta.url,
+          ),
+        ),
+      },
+      { find: /^markmap-lib$/, replacement: sourcePath('markmap-lib') },
       { find: 'markmap-view', replacement: sourcePath('markmap-view') },
       { find: 'markmap-common', replacement: sourcePath('markmap-common') },
       {

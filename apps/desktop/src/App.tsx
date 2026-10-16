@@ -8,10 +8,13 @@ import katex from 'katex';
 import markdownItKatex from '@vscode/markdown-it-katex';
 import { defaultOptions as defaultHtmlParserOptions } from 'markmap-html-parser';
 import { Transformer } from 'markmap-lib';
+import { pluginFrontmatter, pluginSourceLines } from 'markmap-lib/plugins';
 import type { PureNode } from 'markmap-lib';
 import { Markmap } from 'markmap-view';
 import type { Markmap as MarkmapInstance } from 'markmap-view';
 import { hydrateCodeBlocks, updateMarkdownCodeFence } from './code-blocks';
+import MarkdownEditor from './MarkdownEditor';
+import type { MarkdownEditorHandle, MarkdownSelection } from './MarkdownEditor';
 import {
   buildYouTubeEmbedUrl,
   nextYouTubeThumbnail,
@@ -28,8 +31,22 @@ import type {
 import type {
   ActiveMindmapSnapshot,
   MindmapNodeSnapshot,
+  NodeEditOperation,
   NodeEditProposal,
 } from './agent/types';
+import {
+  applyMarkdownNodeCommand,
+  buildMarkdownNodeSourceMap,
+  findMarkmapNodeByPath,
+  findSourcePathForLine,
+  getMarkdownNodeNote,
+  getMarkdownNodeNotes,
+  MAX_MARKDOWN_NODE_NOTE_CHARS,
+  markdownBody,
+  markdownForMindmap,
+  normalizeMindmapText,
+  type MarkdownNodeSource,
+} from './mindmap/commands';
 const TerminalPanel = lazy(() => import('./TerminalPanel'));
 import type {
   LibrarySnapshot,
@@ -40,20 +57,24 @@ import type {
 
 type ProviderSettings = { baseUrl: string; model: string };
 type Theme = 'light' | 'dark';
-type MindmapStyle = 'gray' | 'warm' | 'cards';
+type MindmapStyle = 'gray' | 'roots' | 'cards' | 'warm';
 interface MapColorNode {
   state: { depth: number; path?: string };
 }
 type StylableMarkmap = Omit<MarkmapInstance, 'setData'> & {
   options: {
     color: (node: MapColorNode) => string;
+    lineWidth: (node: MapColorNode) => number;
     linkAnchor: (node: MapColorNode) => 'bottom' | 'center';
+    direction?: 'right' | 'both' | 'down';
   };
   setData(
     data?: PureNode | null,
     options?: {
       color: (node: MapColorNode) => string;
+      lineWidth: (node: MapColorNode) => number;
       linkAnchor: (node: MapColorNode) => 'bottom' | 'center';
+      direction?: 'right' | 'both' | 'down';
     },
   ): Promise<void>;
 };
@@ -133,14 +154,48 @@ const promptSuggestions = [
   '敏捷项目研发与交付流程',
   '用户增长模型与生命周期',
 ];
-const mindmapStyles: {
+interface MindmapStyleDefinition {
   id: MindmapStyle;
   label: string;
-  description: string;
-}[] = [
-  { id: 'gray', label: '灰阶层级', description: '白底灰阶，突出层级关系' },
-  { id: 'warm', label: '暖色分支', description: '用暖色区分一级分支' },
-  { id: 'cards', label: '结构卡片', description: '卡片节点与清晰分组' },
+  badge: string;
+  summary: string;
+  bestFor: string;
+  direction: 'both' | 'down';
+}
+
+const mindmapStyles: MindmapStyleDefinition[] = [
+  {
+    id: 'gray',
+    label: '学术专著',
+    badge: '经典发散',
+    summary: '墨砚高对比实线 · 严谨出版级排印',
+    bestFor: '论文答辩、研究综述、技术白皮书',
+    direction: 'both',
+  },
+  {
+    id: 'roots',
+    label: '树根架构',
+    badge: '向下扎根',
+    summary: '主旨顶置 · 自顶向下垂直分叉 · 树根演进脉络',
+    bestFor: '系统架构拆解、因果溯源 (5-Whys)、项目 WBS、版本路线图',
+    direction: 'down',
+  },
+  {
+    id: 'cards',
+    label: '工程卡片',
+    badge: '模块工整',
+    summary: '板岩蓝卡片容器 · 高信息密度 · 清晰分组边界',
+    bestFor: '系统组件全景、API 接口规范、需求清单、模块归属',
+    direction: 'both',
+  },
+  {
+    id: 'warm',
+    label: '暖色聚类',
+    badge: '思维发散',
+    summary: '陶土茶色分支染色 · 柔和护眼 · 模块亲和聚类',
+    bestFor: '头脑风暴、概念发散、多主线交叉思考',
+    direction: 'both',
+  },
 ];
 const defaultProviderSettings: ProviderSettings = {
   baseUrl: 'https://api.openai.com/v1',
@@ -233,18 +288,19 @@ function mapNodeColor(
   path: string,
   theme: Theme,
 ): string {
-  if (style === 'gray') return theme === 'dark' ? '#68747c' : '#b8bbc0';
-  if (depth === 0) return theme === 'dark' ? '#87939a' : '#929ba1';
+  if (style === 'gray') return theme === 'dark' ? '#94a3b8' : '#475569';
+  if (style === 'roots') return theme === 'dark' ? '#94a3b8' : '#334155';
+  if (depth === 0) return theme === 'dark' ? '#cbd5e1' : '#0f172a';
 
   const branchId = Number(path.split('.')[1] || 1);
   const palette =
     style === 'warm'
       ? theme === 'dark'
         ? ['#e58a62', '#d7aa58', '#84a27e', '#829cbd', '#bd8fc1', '#d17b84']
-        : ['#d76e49', '#c89035', '#718b5e', '#6384a5', '#9972a7', '#c36673']
+        : ['#c25e38', '#b57c26', '#5d7d4c', '#4a6f94', '#845893', '#b34d5c']
       : theme === 'dark'
         ? ['#8aa7b5', '#8ca897', '#a695bc', '#bea27e', '#7f9bbd', '#b18888']
-        : ['#6d8996', '#708c7a', '#8d7ba0', '#9b8665', '#6684a5', '#a17d7d'];
+        : ['#475569', '#3b5a6c', '#5a4f6e', '#6e5a40', '#3b5c77', '#6c4b4b'];
   return palette[(branchId - 1) % palette.length];
 }
 
@@ -253,8 +309,17 @@ function mapNodeLinkAnchor(
   depth: number,
 ): 'bottom' | 'center' {
   const usesCard =
-    style === 'cards' || style === 'gray' || (style === 'warm' && depth === 0);
+    style === 'cards' ||
+    style === 'gray' ||
+    style === 'roots' ||
+    (style === 'warm' && depth === 0);
   return usesCard ? 'center' : 'bottom';
+}
+
+function mapNodeLineWidth(depth: number): number {
+  if (depth === 0) return 2.4;
+  if (depth === 1) return 1.9;
+  return 1.5;
 }
 
 function sanitizeHref(href: string): boolean {
@@ -713,8 +778,21 @@ function sanitizeNode(node: PureNode): PureNode {
 }
 
 function markdownTitle(markdown: string): string {
-  const heading = markdown.match(/^#{1,2}\s+(.+)\s*$/m)?.[1]?.trim();
+  const heading = markdownForMindmap(markdownBody(markdown))
+    .match(/^#{1,2}\s+(.+)\s*$/m)?.[1]
+    ?.trim();
   return heading || '新建思维导图';
+}
+
+function markdownTitleLineIndex(markdown: string): number {
+  const body = markdownBody(markdown);
+  const bodyOffset = markdown.length - body.length;
+  const headingIndex = body
+    .split(/\r?\n/)
+    .findIndex((line) => /^#{1,2}\s+.+/.test(line));
+  if (headingIndex < 0) return -1;
+  const lineOffset = (markdown.slice(0, bodyOffset).match(/\n/g) || []).length;
+  return lineOffset + headingIndex;
 }
 
 function addFallbackMindmapTitle(
@@ -737,8 +815,8 @@ function addFallbackMindmapTitle(
   if (hasVisibleText || hasVisualContent || htmlCardDefinitionFromPayload(root))
     return root;
 
-  const heading = markdown.match(/^#{1,2}\s+(.+?)\s*$/m)?.[1]?.trim();
-  const title = heading || documentTitle.trim() || '未命名思维导图';
+  const title =
+    markdownTitle(markdown) || documentTitle.trim() || '未命名思维导图';
   return { ...root, content: escapeHtmlText(title) };
 }
 
@@ -746,35 +824,10 @@ function errorMessage(error: unknown, fallback: string): string {
   return typeof error === 'string' ? error : fallback;
 }
 
-type MarkdownNodeSource =
-  | {
-      kind: 'heading';
-      lineIndex: number;
-      prefix: string;
-      level: number;
-      label: string;
-    }
-  | {
-      kind: 'list';
-      lineIndex: number;
-      prefix: string;
-      indent: string;
-      marker: string;
-      hasCheckbox: boolean;
-      label: string;
-    };
-
-function normalizeMindmapText(value: string): string {
-  const decoded = document.createElement('textarea');
-  decoded.innerHTML = value;
-  return decoded.value
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/(\*\*|__)(.*?)\1/g, '$2')
-    .replace(/[\\`*_~]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+interface MarkmapNodeLike {
+  state?: { path?: string };
+  payload?: Record<string, unknown>;
+  children?: MarkmapNodeLike[];
 }
 
 function normalizeKatexDelimiters(markdown: string): string {
@@ -855,153 +908,30 @@ function normalizeKatexDelimiters(markdown: string): string {
     .join('\n');
 }
 
-function parseMarkdownNodeSource(
-  line: string,
-  lineIndex: number,
-): MarkdownNodeSource | null {
-  const heading = line.match(/^(\s*)(#{1,6})(\s+)(.*)$/);
-  if (heading) {
-    const content = heading[4].replace(/\s+#+\s*$/, '');
-    return {
-      kind: 'heading',
-      lineIndex,
-      prefix: `${heading[1]}${heading[2]}${heading[3]}`,
-      level: heading[2].length,
-      label: normalizeMindmapText(content),
-    };
-  }
-
-  const list = line.match(/^(\s*)([-+*]|\d+[.)])(\s+)((?:\[[ xX]\]\s+)?)(.*)$/);
-  if (!list) return null;
-  return {
-    kind: 'list',
-    lineIndex,
-    prefix: `${list[1]}${list[2]}${list[3]}${list[4]}`,
-    indent: list[1],
-    marker: list[2],
-    hasCheckbox: Boolean(list[4]),
-    label: normalizeMindmapText(list[5]),
-  };
-}
-
-function buildMarkdownNodeSourceMap(
-  markdown: string,
-  root: PureNode,
-): Map<string, MarkdownNodeSource> {
-  const sourceLines = markdown.split(/\r?\n/).flatMap((line, lineIndex) => {
-    const source = parseMarkdownNodeSource(line, lineIndex);
-    return source ? [source] : [];
-  });
-  const result = new Map<string, MarkdownNodeSource>();
-  let sourceCursor = 0;
-  let nodeId = 0;
-
-  const visit = (node: PureNode, parentPath = '') => {
-    nodeId += 1;
-    const path = parentPath ? `${parentPath}.${nodeId}` : `${nodeId}`;
-    const isHtmlCard = Boolean(htmlCardDefinitionFromPayload(node));
-    const payload = node.payload as Record<string, unknown> | undefined;
-    const isYouTubeCard = payload?.seamindCard === 'youtube';
-    const nodeDocument = new DOMParser().parseFromString(
-      node.content,
-      'text/html',
-    );
-    nodeDocument.body
-      .querySelectorAll('svg')
-      .forEach((element) => element.remove());
-    const containsKatex = Boolean(nodeDocument.body.querySelector('.katex'));
-    const label = containsKatex
-      ? ''
-      : normalizeMindmapText(nodeDocument.body.textContent ?? '');
-    if (label && !isHtmlCard && !isYouTubeCard) {
-      while (
-        sourceCursor < sourceLines.length &&
-        sourceLines[sourceCursor].label !== label
-      )
-        sourceCursor += 1;
-      if (sourceCursor < sourceLines.length) {
-        result.set(path, sourceLines[sourceCursor]);
-        sourceCursor += 1;
-      }
-    }
-    node.children.forEach((child) => visit(child, path));
-  };
-
-  visit(root);
-  return result;
-}
-
-function updateMarkdownFromCanvas(
-  markdown: string,
-  source: MarkdownNodeSource,
-  value: string,
-  addNode?: 'sibling' | 'child',
-): string {
-  const lines = markdown.split(/\r?\n/);
-  const nextLabel = value.replace(/\s*\n+\s*/g, ' ').trim();
-  if (source.lineIndex < 0 || source.lineIndex >= lines.length) return markdown;
-  lines[source.lineIndex] = `${source.prefix}${nextLabel}`;
-  if (!addNode) return lines.join('\n');
-
-  let insertionIndex = source.lineIndex + 1;
-  let newLine: string;
-  if (
-    source.kind === 'heading' &&
-    (addNode === 'sibling' || source.level < 6)
-  ) {
-    const level = addNode === 'child' ? source.level + 1 : source.level;
-    newLine = `${'#'.repeat(level)} ${'新主题'}`;
-    if (addNode === 'sibling') {
-      insertionIndex = lines.length;
-      for (let index = source.lineIndex + 1; index < lines.length; index += 1) {
-        const next = parseMarkdownNodeSource(lines[index], index);
-        if (next?.kind === 'heading' && next.level <= source.level) {
-          insertionIndex = index;
-          break;
-        }
-      }
-    }
-  } else {
-    const indent = source.kind === 'list' ? source.indent : '';
-    const marker = source.kind === 'list' ? source.marker : '-';
-    const taskPrefix =
-      source.kind === 'list' && source.hasCheckbox ? '[ ] ' : '';
-    const childIndent = addNode === 'child' ? `${indent}  ` : indent;
-    newLine = `${childIndent}${marker} ${taskPrefix}新主题`;
-    if (addNode === 'sibling' && source.kind === 'list') {
-      insertionIndex = lines.length;
-      for (let index = source.lineIndex + 1; index < lines.length; index += 1) {
-        const next = parseMarkdownNodeSource(lines[index], index);
-        if (
-          next?.kind === 'heading' ||
-          (next?.kind === 'list' && next.indent.length <= source.indent.length)
-        ) {
-          insertionIndex = index;
-          break;
-        }
-      }
-    }
-  }
-
-  lines.splice(insertionIndex, 0, newLine);
-  return lines.join('\n');
-}
-
 function buildAgentMindmapTree(
   root: PureNode,
-  editablePaths: Set<string>,
+  sources: Map<string, MarkdownNodeSource>,
+  markdown: string,
 ): {
   root: MindmapNodeSnapshot;
   nodeCount: number;
+  truncated: boolean;
 } {
-  const maxNodes = 240;
+  const maxNodes = 200;
+  const maxNoteCharsPerNode = 800;
+  let remainingNoteChars = 12_000;
+  let truncated = false;
+  const markdownNotes = getMarkdownNodeNotes(markdown);
   let nextId = 0;
   let nodeCount = 0;
   const visit = (
     node: PureNode,
     parentPath = '',
   ): MindmapNodeSnapshot | null => {
-    if (nodeCount >= maxNodes) return null;
+    if (nodeCount >= maxNodes) {
+      truncated = true;
+      return null;
+    }
     nextId += 1;
     nodeCount += 1;
     const path = parentPath ? `${parentPath}.${nextId}` : `${nextId}`;
@@ -1013,34 +943,70 @@ function buildAgentMindmapTree(
     const payload = node.payload as Record<string, unknown> | undefined;
     const isYouTubeCard = payload?.seamindCard === 'youtube';
     const containsKatex = Boolean(document.body.querySelector('.katex'));
+    const source = sources.get(path);
     const label = (
       isYouTubeCard && typeof payload?.seamindVideoTitle === 'string'
         ? payload.seamindVideoTitle
         : normalizeMindmapText(document.body.textContent ?? '')
-    ).slice(0, 300);
+    ).slice(0, 160);
     const children = node.children
       .map((child) => visit(child, path))
       .filter((child): child is MindmapNodeSnapshot => child !== null);
+    const fullNote = source?.id ? markdownNotes.get(source.id) || '' : '';
+    const note = fullNote.slice(
+      0,
+      Math.min(maxNoteCharsPerNode, remainingNoteChars),
+    );
+    remainingNoteChars = Math.max(0, remainingNoteChars - note.length);
+    const allowedOperations: NodeEditOperation[] = source
+      ? ['set_note', 'delete']
+      : [];
+    if (
+      source &&
+      source.kind !== 'block' &&
+      !isHtmlCard &&
+      !isYouTubeCard &&
+      !containsKatex
+    ) {
+      allowedOperations.unshift('rename', 'add_child', 'add_sibling');
+    }
     return {
       path,
+      nodeId: source?.id || null,
       label,
-      editable:
-        editablePaths.has(path) &&
-        !isHtmlCard &&
-        !isYouTubeCard &&
-        !containsKatex,
+      note,
+      noteTruncated: note.length < fullNote.length,
+      allowedOperations,
+      editable: allowedOperations.length > 0,
       children,
     };
   };
   return {
     root: visit(root) ?? {
       path: '1',
+      nodeId: null,
       label: '',
+      note: '',
+      noteTruncated: false,
+      allowedOperations: [],
       editable: false,
       children: [],
     },
     nodeCount,
+    truncated,
   };
+}
+
+function findAgentMindmapNode(
+  root: MindmapNodeSnapshot,
+  path: string,
+): MindmapNodeSnapshot | null {
+  if (root.path === path) return root;
+  for (const child of root.children) {
+    const match = findAgentMindmapNode(child, path);
+    if (match) return match;
+  }
+  return null;
 }
 
 function Icon({
@@ -1140,8 +1106,20 @@ export default function App() {
   const [lastUpdated, setLastUpdated] = useState('已同步');
   const [cliAgentProposal, setCliAgentProposal] =
     useState<CliAgentProposal | null>(null);
+  const [activeMapPath, setActiveMapPath] = useState<string | null>(null);
+  const [nodeNoteDialog, setNodeNoteDialog] = useState<{
+    nodeId: string | null;
+    nodePath: string;
+    label: string;
+    markdown: string;
+    error: string;
+  } | null>(null);
+  const [sourceMapVersion, setSourceMapVersion] = useState(0);
+  const [markdownEditorSession, setMarkdownEditorSession] = useState(0);
   const cliAgentProposalRef = useRef<CliAgentProposal | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  const markdownEditorRef = useRef<MarkdownEditorHandle | null>(null);
+  const pendingMarkdownTitleRef = useRef<string | null>(null);
   const codeBlocksAbortRef = useRef<AbortController | null>(null);
   const codeBlocksCleanupRef = useRef<(() => void) | null>(null);
   const mindmapStylePickerRef = useRef<HTMLDivElement>(null);
@@ -1163,7 +1141,7 @@ export default function App() {
   const searchRequestRef = useRef(0);
   const markdownNodeSourcesMarkdownRef = useRef(editorDraft.markdown);
   const transformer = useMemo(() => {
-    const instance = new Transformer([]);
+    const instance = new Transformer([pluginFrontmatter, pluginSourceLines]);
     instance.md.set({ html: false });
     instance.md.use(markdownItKatex, { katex, throwOnError: false });
     const defaultFenceRenderer = instance.md.renderer.rules.fence;
@@ -1194,10 +1172,18 @@ export default function App() {
     };
     return instance;
   }, []);
+  const nodeNotePreviewHtml = useMemo(() => {
+    if (!nodeNoteDialog?.markdown.trim()) return '';
+    const rendered = transformer.md.render(`\n${nodeNoteDialog.markdown}`);
+    return sanitizeNode({ content: rendered, children: [] }).content;
+  }, [nodeNoteDialog?.markdown, transformer]);
 
   const installDraft = (next: EditorDraft) => {
     draftRef.current = next;
     setEditorDraft(next);
+    setMarkdownEditorSession((session) => session + 1);
+    setActiveMapPath(null);
+    setNodeNoteDialog(null);
   };
 
   const patchDraft = (patch: Partial<EditorDraft>) => {
@@ -1213,16 +1199,147 @@ export default function App() {
     setSaveMessage('有未保存修改');
   };
 
+  const handleMarkdownEditorChange = (markdown: string) => {
+    const current = draftRef.current;
+    const title =
+      pendingMarkdownTitleRef.current ||
+      (current.title === markdownTitle(current.markdown)
+        ? markdownTitle(markdown)
+        : null);
+    pendingMarkdownTitleRef.current = null;
+    patchDraft({ markdown, ...(title ? { title } : {}) });
+  };
+
+  const applyMarkdownFromCanvas = (
+    markdown: string,
+    options: { lineIndex?: number; focus?: boolean; title?: string } = {},
+  ) => {
+    if (markdown === draftRef.current.markdown) return;
+    pendingMarkdownTitleRef.current = options.title || null;
+    if (markdownEditorRef.current) {
+      markdownEditorRef.current.applyDocument(markdown, options);
+    } else {
+      pendingMarkdownTitleRef.current = null;
+      patchDraft({
+        markdown,
+        ...(options.title ? { title: options.title } : {}),
+      });
+    }
+  };
+
+  const handleMarkdownSelectionChange = (selection: MarkdownSelection) => {
+    setActiveMapPath(
+      findSourcePathForLine(
+        selection.lineIndex,
+        markdownNodeSourcesRef.current,
+      ),
+    );
+  };
+
+  const applySelectedNodeOperation = (
+    operation: 'child' | 'sibling' | 'delete',
+  ) => {
+    if (!activeMapPath) return;
+    if (markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown)
+      return;
+    const source = markdownNodeSourcesRef.current.get(activeMapPath);
+    if (!source || (source.kind === 'block' && operation !== 'delete')) return;
+    const markdown = draftRef.current.markdown;
+    try {
+      const command = applyMarkdownNodeCommand(
+        markdown,
+        source,
+        operation === 'child'
+          ? 'add_child'
+          : operation === 'sibling'
+            ? 'add_sibling'
+            : 'delete',
+        '新主题',
+      );
+      if (command.markdown === markdown) return;
+      if (operation === 'delete') setActiveMapPath(null);
+      applyMarkdownFromCanvas(command.markdown, {
+        lineIndex: command.lineIndex,
+        focus: true,
+        ...(source.lineIndex === markdownTitleLineIndex(markdown)
+          ? { title: markdownTitle(command.markdown) }
+          : {}),
+      });
+    } catch (error) {
+      setLibraryError(errorMessage(error, '无法修改所选节点。'));
+    }
+  };
+
+  const openSelectedNodeNote = () => {
+    if (!activeMapPath) return;
+    if (markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown)
+      return;
+    const source = markdownNodeSourcesRef.current.get(activeMapPath);
+    if (!source) return;
+    const current = draftRef.current.markdown;
+    setNodeNoteDialog({
+      nodeId: source.id || null,
+      nodePath: activeMapPath,
+      label: source.label,
+      markdown: source.id ? getMarkdownNodeNote(current, source.id) : '',
+      error: '',
+    });
+  };
+
+  const saveSelectedNodeNote = () => {
+    if (!nodeNoteDialog) return;
+    if (!nodeNoteDialog.nodeId && !nodeNoteDialog.markdown.trim()) {
+      setNodeNoteDialog(null);
+      return;
+    }
+    const current = draftRef.current.markdown;
+    const root = transformer.transform(markdownForMindmap(current)).root;
+    const sources = buildMarkdownNodeSourceMap(current, root);
+    const source = nodeNoteDialog.nodeId
+      ? [...sources.values()].find(
+          (candidate) => candidate.id === nodeNoteDialog.nodeId,
+        )
+      : sources.get(nodeNoteDialog.nodePath);
+    if (!source) {
+      setNodeNoteDialog((dialog) =>
+        dialog
+          ? { ...dialog, error: '节点已变化，请关闭后重新打开备注。' }
+          : dialog,
+      );
+      return;
+    }
+    try {
+      const command = applyMarkdownNodeCommand(
+        current,
+        source,
+        'set_note',
+        nodeNoteDialog.markdown,
+      );
+      if (command.markdown !== current)
+        applyMarkdownFromCanvas(command.markdown);
+      setNodeNoteDialog(null);
+    } catch (error) {
+      setNodeNoteDialog((dialog) =>
+        dialog
+          ? { ...dialog, error: errorMessage(error, '节点备注无法保存。') }
+          : dialog,
+      );
+    }
+  };
+
   const getAgentMindmap = (): ActiveMindmapSnapshot => {
     const current = draftRef.current;
-    const root = transformer.transform(current.markdown).root;
+    const root = transformer.transform(
+      markdownForMindmap(current.markdown),
+    ).root;
     const sources = buildMarkdownNodeSourceMap(current.markdown, root);
-    const tree = buildAgentMindmapTree(root, new Set(sources.keys()));
+    const tree = buildAgentMindmapTree(root, sources, current.markdown);
     return {
       title: current.title,
       revision: current.revision,
       relativePath: current.relativePath,
       nodeCount: tree.nodeCount,
+      truncated: tree.truncated,
       root: tree.root,
     };
   };
@@ -1234,47 +1351,63 @@ export default function App() {
     if (current.revision !== input.baseRevision) {
       throw new Error('当前导图已变化，请重新读取后再提出修改。');
     }
-    const root = transformer.transform(current.markdown).root;
-    const source = buildMarkdownNodeSourceMap(current.markdown, root).get(
-      input.nodePath,
-    );
-    if (!source) {
+    const root = transformer.transform(
+      markdownForMindmap(current.markdown),
+    ).root;
+    const sources = buildMarkdownNodeSourceMap(current.markdown, root);
+    const targetEntry = input.nodeId
+      ? [...sources.entries()].find(([, source]) => source.id === input.nodeId)
+      : input.nodePath
+        ? ([input.nodePath, sources.get(input.nodePath)] as const)
+        : undefined;
+    const [nodePath, source] = targetEntry || [];
+    if (!nodePath || !source) {
       throw new Error('找不到这个节点的 Markdown 源位置，请重新读取导图。');
     }
-    if (
-      input.operation === 'add_child' &&
-      source.kind === 'heading' &&
-      source.level >= 6
-    ) {
-      throw new Error('这个标题已经达到 Markdown 的最大层级，无法添加子标题。');
+    const targetSnapshot = findAgentMindmapNode(
+      buildAgentMindmapTree(root, sources, current.markdown).root,
+      nodePath,
+    );
+    if (!targetSnapshot?.allowedOperations.includes(input.operation)) {
+      throw new Error(
+        '此节点不支持该操作，请按当前导图快照中的 allowedOperations 修改。',
+      );
     }
-
-    const operation =
-      input.operation === 'add_child'
-        ? 'child'
-        : input.operation === 'add_sibling'
-          ? 'sibling'
-          : undefined;
-    const markdown = updateMarkdownFromCanvas(
+    const command = applyMarkdownNodeCommand(
       current.markdown,
       source,
+      input.operation,
       input.text,
-      operation,
     );
-    if (markdown === current.markdown) {
+    if (command.markdown === current.markdown) {
       throw new Error('提案没有产生任何 Markdown 变化。');
     }
+    const previousNote = source.id
+      ? getMarkdownNodeNote(current.markdown, source.id)
+      : '';
+    const nextLabel =
+      input.operation === 'delete'
+        ? '删除该节点及其子节点'
+        : input.operation === 'set_note'
+          ? '更新节点备注'
+          : input.operation === 'rename'
+            ? input.text.replace(/\s*\n+\s*/g, ' ').trim()
+            : input.text.replace(/\s*\n+\s*/g, ' ').trim() || '新主题';
     return {
       baseRevision: current.revision,
       baseRelativePath: current.relativePath,
       baseMarkdown: current.markdown,
       baseTitle: current.title,
-      markdown,
-      title: markdownTitle(markdown),
-      nodePath: input.nodePath,
+      markdown: command.markdown,
+      title: markdownTitle(command.markdown),
+      nodeId: command.nodeId || source.id || null,
+      nodePath,
       operation: input.operation,
       previousLabel: source.label,
-      nextLabel: input.text.replace(/\s*\n+\s*/g, ' ').trim(),
+      nextLabel,
+      ...(input.operation === 'set_note'
+        ? { previousNote, nextNote: input.text }
+        : {}),
       rationale: input.rationale,
     };
   };
@@ -1398,7 +1531,7 @@ export default function App() {
     ) {
       return null;
     }
-    patchDraft({ markdown: proposal.markdown, title: proposal.title });
+    applyMarkdownFromCanvas(proposal.markdown, { title: proposal.title });
     return draftRef.current.revision;
   };
 
@@ -1454,8 +1587,7 @@ export default function App() {
     ) {
       return false;
     }
-    patchDraft({
-      markdown: proposal.baseMarkdown,
+    applyMarkdownFromCanvas(proposal.baseMarkdown, {
       title: proposal.baseTitle,
     });
     return true;
@@ -1473,7 +1605,7 @@ export default function App() {
       previous,
       next,
     );
-    if (markdown !== activeDraft.markdown) patchDraft({ markdown });
+    if (markdown !== activeDraft.markdown) applyMarkdownFromCanvas(markdown);
   };
 
   const installLibrarySnapshot = (snapshot: LibrarySnapshot) => {
@@ -2145,11 +2277,13 @@ export default function App() {
     const map = Markmap.create(svgRef.current, {
       autoFit: true,
       duration: 220,
-      direction: 'both',
+      direction:
+        mindmapStyles.find((s) => s.id === mindmapStyle)?.direction || 'both',
       linkShape: 'rounded-orthogonal',
       linkRadius: 8,
       linkAnchor: (node: MapColorNode) =>
         mapNodeLinkAnchor(mindmapStyle, node.state.depth),
+      lineWidth: (node: MapColorNode) => mapNodeLineWidth(node.state.depth),
       color: (node: MapColorNode) =>
         mapNodeColor(
           mindmapStyle,
@@ -2186,6 +2320,7 @@ export default function App() {
       );
       if (
         !source ||
+        source.kind === 'block' ||
         !editor ||
         markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown
       )
@@ -2225,20 +2360,23 @@ export default function App() {
           return;
         }
         const activeDraft = draftRef.current;
-        const titleLineIndex = activeDraft.markdown
-          .split(/\r?\n/)
-          .findIndex((line) => /^#{1,2}\s+.+/.test(line));
-        const markdown = updateMarkdownFromCanvas(
+        const titleLineIndex = markdownTitleLineIndex(activeDraft.markdown);
+        const command = applyMarkdownNodeCommand(
           activeDraft.markdown,
           source,
+          action === 'child'
+            ? 'add_child'
+            : action === 'sibling'
+              ? 'add_sibling'
+              : 'rename',
           nextText,
-          action === 'sibling' || action === 'child' ? action : undefined,
         );
-        if (markdown !== activeDraft.markdown) {
-          patchDraft({
-            markdown,
-            ...(source.lineIndex === titleLineIndex
-              ? { title: markdownTitle(markdown) }
+        if (command.markdown !== activeDraft.markdown) {
+          applyMarkdownFromCanvas(command.markdown, {
+            lineIndex: command.lineIndex,
+            focus: true,
+            ...(!action && source.lineIndex === titleLineIndex
+              ? { title: markdownTitle(command.markdown) }
               : {}),
           });
         }
@@ -2308,6 +2446,26 @@ export default function App() {
       setHtmlPreview({ ...card, documentRelativePath });
     };
 
+    const handleMapNodeClick = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (
+        target.closest(
+          '.seamind-code-panel, button, input, textarea, .cm-editor, [contenteditable="true"]',
+        )
+      )
+        return;
+      if (markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown)
+        return;
+      if (!target.closest('foreignObject')) return;
+      const nodeGroup = target.closest<SVGGElement>('g.markmap-node');
+      const path = nodeGroup?.getAttribute('data-path');
+      if (!nodeGroup || !path) return;
+      setActiveMapPath(path);
+      const source = markdownNodeSourcesRef.current.get(path);
+      if (source) markdownEditorRef.current?.selectLine(source.lineIndex, true);
+    };
+
     const handleYouTubeCardClick = (event: MouseEvent) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
@@ -2349,11 +2507,13 @@ export default function App() {
       image.replaceWith(placeholder);
     };
 
+    svg.addEventListener('click', handleMapNodeClick, true);
     svg.addEventListener('click', handleHtmlCardClick, true);
     svg.addEventListener('click', handleYouTubeCardClick, true);
     svg.addEventListener('error', handleYouTubeThumbnailError, true);
     svg.addEventListener('dblclick', handleCanvasDoubleClick, true);
     return () => {
+      svg.removeEventListener('click', handleMapNodeClick, true);
       svg.removeEventListener('click', handleHtmlCardClick, true);
       svg.removeEventListener('click', handleYouTubeCardClick, true);
       svg.removeEventListener('error', handleYouTubeThumbnailError, true);
@@ -2366,17 +2526,37 @@ export default function App() {
   useEffect(() => {
     const map = markmapRef.current as StylableMarkmap | null;
     if (!map) return;
-    void map.setData(undefined, {
-      color: (node) =>
-        mapNodeColor(
-          mindmapStyle,
-          node.state.depth,
-          node.state.path || '',
-          theme,
-        ),
-      linkAnchor: (node) => mapNodeLinkAnchor(mindmapStyle, node.state.depth),
-    });
+    void map
+      .setData(undefined, {
+        direction:
+          mindmapStyles.find((s) => s.id === mindmapStyle)?.direction || 'both',
+        color: (node) =>
+          mapNodeColor(
+            mindmapStyle,
+            node.state.depth,
+            node.state.path || '',
+            theme,
+          ),
+        lineWidth: (node) => mapNodeLineWidth(node.state.depth),
+        linkAnchor: (node) => mapNodeLinkAnchor(mindmapStyle, node.state.depth),
+      })
+      .then(() => setSourceMapVersion((version) => version + 1));
   }, [mindmapStyle, theme]);
+
+  useEffect(() => {
+    const map = markmapRef.current;
+    if (!map) return;
+    const root = (map as unknown as { state?: { data?: MarkmapNodeLike } })
+      .state?.data;
+    const node = activeMapPath
+      ? findMarkmapNodeByPath(root, activeMapPath)
+      : null;
+    const typedNode = node as unknown as
+      | Parameters<MarkmapInstance['setHighlight']>[0]
+      | null;
+    map.setHighlight(typedNode);
+    if (typedNode) void map.ensureVisible(typedNode);
+  }, [activeMapPath, sourceMapVersion]);
 
   useEffect(() => {
     if (!htmlPreview) return;
@@ -2446,7 +2626,7 @@ export default function App() {
       const codeBlocksAbort = new AbortController();
       codeBlocksAbortRef.current = codeBlocksAbort;
       const { root } = transformer.transform(
-        normalizeKatexDelimiters(editorDraft.markdown),
+        normalizeKatexDelimiters(markdownForMindmap(editorDraft.markdown)),
         htmlCardParserOptions,
       );
       const embedding =
@@ -2464,13 +2644,23 @@ export default function App() {
         editorDraft.markdown,
         editorDraft.title,
       );
-      markdownNodeSourcesMarkdownRef.current = editorDraft.markdown;
-      markdownNodeSourcesRef.current = buildMarkdownNodeSourceMap(
+      const nextMarkdownNodeSources = buildMarkdownNodeSourceMap(
         editorDraft.markdown,
         safeRoot,
       );
       await map.setData(displayRoot);
       if (codeBlocksAbort.signal.aborted) return;
+      markdownNodeSourcesMarkdownRef.current = editorDraft.markdown;
+      markdownNodeSourcesRef.current = nextMarkdownNodeSources;
+      const selection = markdownEditorRef.current?.getSelection();
+      if (selection)
+        setActiveMapPath(
+          findSourcePathForLine(
+            selection.lineIndex,
+            markdownNodeSourcesRef.current,
+          ),
+        );
+      setSourceMapVersion((version) => version + 1);
       const cleanupCodeBlocks = await hydrateCodeBlocks(
         svg,
         theme,
@@ -2509,6 +2699,23 @@ export default function App() {
   const handleZoom = (factor: number) => {
     void markmapRef.current?.rescale(factor);
   };
+
+  const selectedNodeSource = activeMapPath
+    ? markdownNodeSourcesRef.current.get(activeMapPath)
+    : undefined;
+  const sourceMapIsCurrent =
+    markdownNodeSourcesMarkdownRef.current === editorDraft.markdown;
+  const canAddSelectedNode = Boolean(
+    sourceMapIsCurrent &&
+      selectedNodeSource &&
+      selectedNodeSource.kind !== 'block',
+  );
+  const canDeleteSelectedNode = Boolean(
+    sourceMapIsCurrent && selectedNodeSource,
+  );
+  const canEditSelectedNodeNote = Boolean(
+    sourceMapIsCurrent && selectedNodeSource,
+  );
 
   return (
     <main
@@ -2718,13 +2925,13 @@ export default function App() {
           <label className="editor-label" htmlFor="markdown-editor">
             编辑源文本
           </label>
-          <textarea
+          <MarkdownEditor
+            key={markdownEditorSession}
+            ref={markdownEditorRef}
             id="markdown-editor"
-            className="markdown-editor"
-            spellCheck={false}
             value={editorDraft.markdown}
-            onChange={(event) => patchDraft({ markdown: event.target.value })}
-            aria-label="Markdown 源文本"
+            onChange={handleMarkdownEditorChange}
+            onSelectionChange={handleMarkdownSelectionChange}
           />
           <div className="editor-footer">
             <span>{saveMessage}</span>
@@ -2749,6 +2956,65 @@ export default function App() {
                   退出 HTML 交互
                 </button>
               )}
+              <button
+                type="button"
+                className="canvas-node-action"
+                title="添加子节点"
+                aria-label="添加子节点"
+                disabled={!canAddSelectedNode}
+                onClick={() => applySelectedNodeOperation('child')}
+              >
+                子级＋
+              </button>
+              <button
+                type="button"
+                className="canvas-node-action"
+                title="添加同级节点"
+                aria-label="添加同级节点"
+                disabled={!canAddSelectedNode}
+                onClick={() => applySelectedNodeOperation('sibling')}
+              >
+                同级＋
+              </button>
+              <button
+                type="button"
+                className="canvas-node-action"
+                title="删除所选节点及其子节点，可用撤销恢复"
+                aria-label="删除所选节点"
+                disabled={!canDeleteSelectedNode}
+                onClick={() => applySelectedNodeOperation('delete')}
+              >
+                删除
+              </button>
+              <button
+                type="button"
+                className="canvas-node-action"
+                title="编辑所选节点的 Markdown 备注"
+                aria-label="编辑节点备注"
+                disabled={!canEditSelectedNodeNote}
+                onClick={openSelectedNodeNote}
+              >
+                备注
+              </button>
+              <span className="tool-divider" />
+              <button
+                type="button"
+                className="canvas-node-action"
+                title="撤销"
+                aria-label="撤销"
+                onClick={() => markdownEditorRef.current?.undo()}
+              >
+                撤销
+              </button>
+              <button
+                type="button"
+                className="canvas-node-action"
+                title="重做"
+                aria-label="重做"
+                onClick={() => markdownEditorRef.current?.redo()}
+              >
+                重做
+              </button>
               <div className="map-style-picker" ref={mindmapStylePickerRef}>
                 <button
                   type="button"
@@ -2804,8 +3070,19 @@ export default function App() {
                           <i />
                         </span>
                         <span className="map-style-option-copy">
-                          <strong>{style.label}</strong>
-                          <small>{style.description}</small>
+                          <span className="map-style-title-row">
+                            <strong>{style.label}</strong>
+                            <span className="map-style-badge">
+                              {style.badge}
+                            </span>
+                          </span>
+                          <span className="map-style-summary">
+                            {style.summary}
+                          </span>
+                          <span className="map-style-best-for">
+                            <em>适用：</em>
+                            {style.bestFor}
+                          </span>
                         </span>
                         <span className="map-style-check" aria-hidden="true">
                           {mindmapStyle === style.id ? '✓' : ''}
@@ -3388,6 +3665,89 @@ export default function App() {
           </section>
         </div>
       )}
+      {nodeNoteDialog && (
+        <div className="settings-backdrop node-note-backdrop">
+          <section
+            className="settings-dialog node-note-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="node-note-title"
+          >
+            <div className="settings-heading">
+              <div>
+                <span className="pane-kicker">NODE NOTE · MARKDOWN</span>
+                <h2 id="node-note-title">{nodeNoteDialog.label} · 备注</h2>
+              </div>
+              <button
+                type="button"
+                className="dialog-close"
+                aria-label="关闭节点备注"
+                onClick={() => setNodeNoteDialog(null)}
+              >
+                ×
+              </button>
+            </div>
+            <label
+              className="node-note-editor-label"
+              htmlFor="node-note-editor"
+            >
+              支持 Markdown、代码块和数学公式；备注会保存在导图的 YAML
+              frontmatter 中。
+            </label>
+            <textarea
+              id="node-note-editor"
+              className="node-note-editor"
+              value={nodeNoteDialog.markdown}
+              maxLength={MAX_MARKDOWN_NODE_NOTE_CHARS}
+              onChange={(event) =>
+                setNodeNoteDialog((dialog) =>
+                  dialog
+                    ? { ...dialog, markdown: event.target.value, error: '' }
+                    : dialog,
+                )
+              }
+              placeholder={'补充节点说明…\n\n例如：$E = mc^2$'}
+              autoFocus
+            />
+            <div className="node-note-preview-wrap">
+              <div className="node-note-preview-heading">预览</div>
+              {nodeNotePreviewHtml ? (
+                <div
+                  className="node-note-preview markdown-body"
+                  dangerouslySetInnerHTML={{ __html: nodeNotePreviewHtml }}
+                />
+              ) : (
+                <div className="node-note-preview-empty">备注为空</div>
+              )}
+            </div>
+            {nodeNoteDialog.error && (
+              <p className="node-note-error" role="alert">
+                {nodeNoteDialog.error}
+              </p>
+            )}
+            <div className="node-note-actions">
+              <span>
+                {nodeNoteDialog.markdown.length} /{' '}
+                {MAX_MARKDOWN_NODE_NOTE_CHARS.toLocaleString()}
+              </span>
+              <button
+                type="button"
+                className="agent-reject-button"
+                onClick={() => setNodeNoteDialog(null)}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="agent-apply-button"
+                onClick={saveSelectedNodeNote}
+              >
+                保存备注
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       {cliAgentProposal && (
         <div className="settings-backdrop agent-cli-approval-backdrop">
           <section
@@ -3401,7 +3761,13 @@ export default function App() {
             <p>
               {cliAgentProposal.proposal.operation === 'rename'
                 ? `将「${cliAgentProposal.proposal.previousLabel}」改为「${cliAgentProposal.proposal.nextLabel}」`
-                : `在「${cliAgentProposal.proposal.previousLabel}」${cliAgentProposal.proposal.operation === 'add_child' ? '下' : '旁'}添加「${cliAgentProposal.proposal.nextLabel}」`}
+                : cliAgentProposal.proposal.operation === 'add_child'
+                  ? `在「${cliAgentProposal.proposal.previousLabel}」下添加「${cliAgentProposal.proposal.nextLabel}」`
+                  : cliAgentProposal.proposal.operation === 'add_sibling'
+                    ? `在「${cliAgentProposal.proposal.previousLabel}」旁添加「${cliAgentProposal.proposal.nextLabel}」`
+                    : cliAgentProposal.proposal.operation === 'delete'
+                      ? `删除「${cliAgentProposal.proposal.previousLabel}」及其子节点`
+                      : `更新「${cliAgentProposal.proposal.previousLabel}」的备注`}
             </p>
             {cliAgentProposal.proposal.rationale && (
               <p className="agent-cli-approval-rationale">
@@ -3410,7 +3776,13 @@ export default function App() {
             )}
             <details>
               <summary>查看修改内容</summary>
-              <pre>{`− ${cliAgentProposal.proposal.previousLabel}\n+ ${cliAgentProposal.proposal.nextLabel}`}</pre>
+              <pre>
+                {cliAgentProposal.proposal.operation === 'set_note'
+                  ? `− ${cliAgentProposal.proposal.previousNote || '(空备注)'}\n+ ${cliAgentProposal.proposal.nextNote || '(空备注)'}`
+                  : cliAgentProposal.proposal.operation === 'delete'
+                    ? `− ${cliAgentProposal.proposal.previousLabel}（及其子节点）`
+                    : `− ${cliAgentProposal.proposal.previousLabel}\n+ ${cliAgentProposal.proposal.nextLabel}`}
+              </pre>
             </details>
             <p className="agent-cli-approval-note">
               确认后会更新当前编辑器草稿，并按现有设置自动保存。导图若已变化，提案将无法应用。
