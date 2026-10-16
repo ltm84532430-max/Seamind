@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -11,8 +11,10 @@ import { Transformer } from 'markmap-lib';
 import type { PureNode } from 'markmap-lib';
 import { Markmap } from 'markmap-view';
 import type { Markmap as MarkmapInstance } from 'markmap-view';
+import { hydrateCodeBlocks } from './code-blocks';
 import 'katex/dist/katex.min.css';
 import LibraryPanel from './LibraryPanel';
+const TerminalPanel = lazy(() => import('./TerminalPanel'));
 import type {
   LibrarySnapshot,
   MapDocument,
@@ -676,6 +678,31 @@ function markdownTitle(markdown: string): string {
   return heading || '新建思维导图';
 }
 
+function addFallbackMindmapTitle(
+  root: PureNode,
+  markdown: string,
+  documentTitle: string,
+): PureNode {
+  const rootDocument = new DOMParser().parseFromString(
+    root.content,
+    'text/html',
+  );
+  const hasVisibleText = normalizeMindmapText(
+    rootDocument.body.textContent ?? '',
+  );
+  const hasVisualContent = Boolean(
+    rootDocument.body.querySelector(
+      '.katex, svg, table, pre, img, .seamind-html-card-node, .seamind-html-canvas-node',
+    ),
+  );
+  if (hasVisibleText || hasVisualContent || htmlCardDefinitionFromPayload(root))
+    return root;
+
+  const heading = markdown.match(/^#{1,2}\s+(.+?)\s*$/m)?.[1]?.trim();
+  const title = heading || documentTitle.trim() || '未命名思维导图';
+  return { ...root, content: escapeHtmlText(title) };
+}
+
 function errorMessage(error: unknown, fallback: string): string {
   return typeof error === 'string' ? error : fallback;
 }
@@ -970,6 +997,7 @@ export default function App() {
   const [mindmapStyleMenuOpen, setMindmapStyleMenuOpen] = useState(false);
   const [sourceCollapsed, setSourceCollapsed] = useState(false);
   const [libraryCollapsed, setLibraryCollapsed] = useState(false);
+  const [terminalOpen, setTerminalOpen] = useState(false);
   const [aiCollapsed, setAiCollapsed] = useState<boolean>(readAiCollapsed);
   const [librarySnapshot, setLibrarySnapshot] =
     useState<LibrarySnapshot | null>(null);
@@ -1002,6 +1030,8 @@ export default function App() {
   const [settingsMessage, setSettingsMessage] = useState('');
   const [lastUpdated, setLastUpdated] = useState('已同步');
   const svgRef = useRef<SVGSVGElement>(null);
+  const codeBlocksAbortRef = useRef<AbortController | null>(null);
+  const codeBlocksCleanupRef = useRef<(() => void) | null>(null);
   const mindmapStylePickerRef = useRef<HTMLDivElement>(null);
   const markmapRef = useRef<MarkmapInstance | null>(null);
   const markdownNodeSourcesRef = useRef<Map<string, MarkdownNodeSource>>(
@@ -1959,7 +1989,13 @@ export default function App() {
   useEffect(() => {
     const timer = window.setTimeout(async () => {
       const map = markmapRef.current;
-      if (!map) return;
+      const svg = svgRef.current;
+      if (!map || !svg) return;
+      codeBlocksAbortRef.current?.abort();
+      codeBlocksCleanupRef.current?.();
+      codeBlocksCleanupRef.current = null;
+      const codeBlocksAbort = new AbortController();
+      codeBlocksAbortRef.current = codeBlocksAbort;
       const { root } = transformer.transform(
         normalizeKatexDelimiters(editorDraft.markdown),
         htmlCardParserOptions,
@@ -1974,21 +2010,41 @@ export default function App() {
         embedding,
         embeddingApplied,
       );
+      const displayRoot = addFallbackMindmapTitle(
+        safeRoot,
+        editorDraft.markdown,
+        editorDraft.title,
+      );
       markdownNodeSourcesMarkdownRef.current = editorDraft.markdown;
       markdownNodeSourcesRef.current = buildMarkdownNodeSourceMap(
         editorDraft.markdown,
         safeRoot,
       );
-      await map.setData(safeRoot);
+      await map.setData(displayRoot);
+      if (codeBlocksAbort.signal.aborted) return;
+      const cleanupCodeBlocks = await hydrateCodeBlocks(
+        svg,
+        theme,
+        codeBlocksAbort.signal,
+      );
+      if (codeBlocksAbort.signal.aborted) cleanupCodeBlocks();
+      else codeBlocksCleanupRef.current = cleanupCodeBlocks;
       if (embedding && !embeddingApplied.value) setHtmlCanvasEmbed(null);
       setLastUpdated('已同步');
     }, 180);
     setLastUpdated('正在更新…');
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+      codeBlocksAbortRef.current?.abort();
+      codeBlocksCleanupRef.current?.();
+      codeBlocksAbortRef.current = null;
+      codeBlocksCleanupRef.current = null;
+    };
   }, [
     editorDraft.markdown,
     editorDraft.relativePath,
     htmlCanvasEmbed,
+    theme,
     transformer,
   ]);
 
@@ -2047,6 +2103,15 @@ export default function App() {
             disabled={saveMessage === '正在保存…'}
           >
             保存
+          </button>
+          <button
+            type="button"
+            className={`terminal-toggle-button${terminalOpen ? ' is-active' : ''}`}
+            aria-expanded={terminalOpen}
+            aria-controls="seamind-terminal-panel"
+            onClick={() => setTerminalOpen((open) => !open)}
+          >
+            终端
           </button>
           <span className="phase-badge">AI · SEAMIND</span>
           <button
@@ -2338,7 +2403,8 @@ export default function App() {
                   <span className="hint-separator">·</span> 滚轮缩放{' '}
                   <span className="hint-separator">·</span> 双击编辑{' '}
                   <span className="hint-separator">·</span> Enter 同级 / Tab
-                  子级
+                  子级 <span className="hint-separator">·</span> Mermaid /
+                  ECharts / Python 代码围栏
                 </>
               )}
             </div>
@@ -2737,6 +2803,22 @@ export default function App() {
             </div>
           </section>
         </div>
+      )}
+      {terminalOpen && (
+        <Suspense
+          fallback={
+            <div className="seamind-terminal-loading">正在加载终端…</div>
+          }
+        >
+          <div id="seamind-terminal-panel">
+            <TerminalPanel
+              key={librarySnapshot?.rootPath ?? 'default-terminal-directory'}
+              cwd={librarySnapshot?.rootPath ?? ''}
+              theme={theme}
+              onClose={() => setTerminalOpen(false)}
+            />
+          </div>
+        </Suspense>
       )}
     </main>
   );

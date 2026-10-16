@@ -1,10 +1,12 @@
 mod library;
 mod epub;
+mod terminal;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .manage(library::WatcherState::default())
+        .manage(terminal::TerminalState::default())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             has_api_key,
@@ -22,6 +24,10 @@ pub fn run() {
             library::delete_document,
             library::create_category,
             library::rebuild_library_index,
+            terminal::terminal_start,
+            terminal::terminal_write,
+            terminal::terminal_resize,
+            terminal::terminal_close,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Markmap Desktop");

@@ -2308,6 +2308,75 @@ button {
   background: #fafcfd;
   font-size: 11.5px;
 }
+/* Keep plain-text branch cards wide enough for about five CJK characters. */
+.app-shell[data-map-style]
+  .markmap-node[data-depth='1']
+  > foreignObject
+  > div
+  > div:not(
+    :has(
+      .seamind-html-card-node,
+      .seamind-html-canvas-node,
+      .seamind-code-panel,
+      .katex,
+      svg,
+      table,
+      pre,
+      img
+    )
+  ) {
+  width: calc(5em + 32px);
+  min-width: calc(5em + 32px);
+  max-width: calc(5em + 32px);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.app-shell[data-map-style]
+  .markmap-node[data-depth='2']
+  > foreignObject
+  > div
+  > div:not(
+    :has(
+      .seamind-html-card-node,
+      .seamind-html-canvas-node,
+      .seamind-code-panel,
+      .katex,
+      svg,
+      table,
+      pre,
+      img
+    )
+  ) {
+  width: calc(5em + 24px);
+  min-width: calc(5em + 24px);
+  max-width: calc(5em + 24px);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.app-shell[data-map-style]
+  .markmap-node:not([data-depth='0']):not([data-depth='1']):not(
+    [data-depth='2']
+  )
+  > foreignObject
+  > div
+  > div:not(
+    :has(
+      .seamind-html-card-node,
+      .seamind-html-canvas-node,
+      .seamind-code-panel,
+      .katex,
+      svg,
+      table,
+      pre,
+      img
+    )
+  ) {
+  width: calc(5em + 20px);
+  min-width: calc(5em + 20px);
+  max-width: calc(5em + 20px);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .app-shell[data-theme='dark'][data-map-style='cards']
   .markmap-node
   > foreignObject {
@@ -2659,4 +2728,269 @@ button {
 }
 .app-shell[data-theme='dark'] .html-preview-backdrop {
   background: #05080bb8;
+}
+
+.terminal-toggle-button {
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink);
+  background: transparent;
+  font-size: 11px;
+  cursor: pointer;
+}
+.terminal-toggle-button:hover,
+.terminal-toggle-button.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.seamind-terminal,
+.seamind-terminal-loading {
+  position: fixed;
+  z-index: 90;
+  right: 16px;
+  bottom: 24px;
+  left: 16px;
+  height: min(360px, 44vh);
+  min-height: 230px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #cbd4d8;
+  background: #fff;
+  color: #243039;
+  font-family: Inter, 'Segoe UI', sans-serif;
+}
+.seamind-terminal-loading {
+  height: auto;
+  min-height: 0;
+  padding: 14px 18px;
+  font-size: 12px;
+}
+.seamind-terminal-heading {
+  height: 38px;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  border-bottom: 1px solid #dce2e5;
+  background: #f5f7f8;
+  font-size: 11px;
+}
+.seamind-terminal-heading > div,
+.seamind-terminal-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.seamind-terminal-heading strong {
+  color: #27343c;
+  font-size: 12px;
+}
+.seamind-terminal-heading span {
+  max-width: 60vw;
+  overflow: hidden;
+  color: #7b8991;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.seamind-terminal-actions button {
+  padding: 4px 8px;
+  border: 1px solid #d4dce0;
+  border-radius: 3px;
+  color: #50606a;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+.seamind-terminal-actions button:hover {
+  border-color: #aebbc2;
+  background: #fff;
+}
+.seamind-terminal-host {
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  padding: 8px 12px 0;
+  background: #fff;
+}
+.seamind-terminal-host .xterm {
+  height: 100%;
+}
+.seamind-terminal-note {
+  min-height: 20px;
+  padding: 3px 12px;
+  border-top: 1px solid #e6eaec;
+  color: #7b8991;
+  font-size: 10px;
+}
+
+.seamind-code-panel {
+  box-sizing: border-box;
+  width: 520px;
+  max-width: min(68vw, 700px);
+  min-width: 300px;
+  padding: 10px 12px;
+  border: 1px solid #d5dde1;
+  border-radius: 5px;
+  background: #fff;
+  color: #25323a;
+  white-space: normal;
+}
+.seamind-code-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 24px;
+  margin-bottom: 7px;
+  color: #70808a;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+.seamind-viz-output {
+  width: 100%;
+  min-height: 220px;
+  overflow: hidden;
+}
+.seamind-viz-output canvas {
+  display: block;
+}
+.seamind-viz-output .seamind-diagram-svg {
+  display: block;
+  width: 100%;
+  max-height: 520px;
+  overflow: visible;
+}
+.seamind-echarts-panel .seamind-viz-output {
+  height: 290px;
+}
+.seamind-code-error {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid #edd3cd;
+  border-radius: 3px;
+  color: #a33d2b;
+  background: #fff8f6;
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+.seamind-python-run {
+  padding: 4px 9px;
+  border: 1px solid #d6a195;
+  border-radius: 3px;
+  color: #9e4533;
+  background: #fff;
+  font: inherit;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+.seamind-python-run:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+.seamind-python-source,
+.seamind-python-output {
+  max-height: 180px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid #e2e7e9;
+  border-radius: 3px;
+  color: #33434b;
+  background: #f7f9fa;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.seamind-python-output {
+  max-height: 140px;
+  margin-top: 7px;
+  color: #56656d;
+  background: #fbfcfc;
+}
+
+.app-shell[data-theme='dark'] .terminal-toggle-button {
+  border-color: #37424a;
+  color: #dce3e8;
+}
+.app-shell[data-theme='dark'] .terminal-toggle-button:hover,
+.app-shell[data-theme='dark'] .terminal-toggle-button.is-active {
+  border-color: #df735b;
+  color: #e58a75;
+}
+.app-shell[data-theme='dark'] .seamind-terminal,
+.app-shell[data-theme='dark'] .seamind-terminal-loading {
+  border-color: #39454c;
+  background: #11171b;
+  color: #d7e0e4;
+}
+.app-shell[data-theme='dark'] .seamind-terminal-heading {
+  border-color: #303b42;
+  background: #192126;
+}
+.app-shell[data-theme='dark'] .seamind-terminal-heading strong {
+  color: #dce3e8;
+}
+.app-shell[data-theme='dark'] .seamind-terminal-heading span,
+.app-shell[data-theme='dark'] .seamind-terminal-note {
+  color: #9aa6ae;
+}
+.app-shell[data-theme='dark'] .seamind-terminal-actions button {
+  border-color: #39454c;
+  color: #c1ccd2;
+}
+.app-shell[data-theme='dark'] .seamind-terminal-actions button:hover {
+  background: #202b31;
+}
+.app-shell[data-theme='dark'] .seamind-terminal-host {
+  background: #11171b;
+}
+.app-shell[data-theme='dark'] .seamind-terminal-note {
+  border-color: #303b42;
+}
+.app-shell[data-theme='dark'] .seamind-code-panel {
+  border-color: #3d4a52;
+  background: #1b2429;
+  color: #d7e0e4;
+}
+.app-shell[data-theme='dark'] .seamind-code-panel-heading {
+  color: #a9b7be;
+}
+.app-shell[data-theme='dark'] .seamind-python-source,
+.app-shell[data-theme='dark'] .seamind-python-output {
+  border-color: #3d4a52;
+  color: #d2dce1;
+  background: #151d21;
+}
+.app-shell[data-theme='dark'] .seamind-python-output {
+  color: #a9b7be;
+  background: #172025;
+}
+.app-shell[data-theme='dark'] .seamind-python-run {
+  border-color: #8b594d;
+  color: #ed9c89;
+  background: #232d32;
+}
+.app-shell[data-theme='dark'] .seamind-code-error {
+  border-color: #704d45;
+  color: #f0a18f;
+  background: #2a211f;
+}
+
+@media (max-width: 820px) {
+  .seamind-terminal {
+    right: 8px;
+    bottom: 22px;
+    left: 8px;
+    height: 42vh;
+  }
+  .seamind-code-panel {
+    width: 400px;
+    max-width: 72vw;
+    min-width: 260px;
+  }
 }
