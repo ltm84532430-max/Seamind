@@ -12,6 +12,11 @@ import type { PureNode } from 'markmap-lib';
 import { Markmap } from 'markmap-view';
 import type { Markmap as MarkmapInstance } from 'markmap-view';
 import { hydrateCodeBlocks, updateMarkdownCodeFence } from './code-blocks';
+import {
+  buildYouTubeEmbedUrl,
+  nextYouTubeThumbnail,
+  prepareYouTubeCards,
+} from './youtube';
 import 'katex/dist/katex.min.css';
 import LibraryPanel from './LibraryPanel';
 import AgentPanel from './AgentPanel';
@@ -99,6 +104,12 @@ interface HtmlPreviewSelection extends HtmlCardDefinition {
 }
 
 interface HtmlCanvasEmbedding extends HtmlPreviewSelection {
+  src: string;
+}
+
+interface YouTubePreviewSelection {
+  id: string;
+  title: string;
   src: string;
 }
 
@@ -720,7 +731,7 @@ function addFallbackMindmapTitle(
   );
   const hasVisualContent = Boolean(
     rootDocument.body.querySelector(
-      '.katex, svg, table, pre, img, .seamind-html-card-node, .seamind-html-canvas-node',
+      '.katex, svg, table, pre, img, .seamind-html-card-node, .seamind-html-canvas-node, .seamind-youtube-card',
     ),
   );
   if (hasVisibleText || hasVisualContent || htmlCardDefinitionFromPayload(root))
@@ -889,6 +900,8 @@ function buildMarkdownNodeSourceMap(
     nodeId += 1;
     const path = parentPath ? `${parentPath}.${nodeId}` : `${nodeId}`;
     const isHtmlCard = Boolean(htmlCardDefinitionFromPayload(node));
+    const payload = node.payload as Record<string, unknown> | undefined;
+    const isYouTubeCard = payload?.seamindCard === 'youtube';
     const nodeDocument = new DOMParser().parseFromString(
       node.content,
       'text/html',
@@ -900,7 +913,7 @@ function buildMarkdownNodeSourceMap(
     const label = containsKatex
       ? ''
       : normalizeMindmapText(nodeDocument.body.textContent ?? '');
-    if (label && !isHtmlCard) {
+    if (label && !isHtmlCard && !isYouTubeCard) {
       while (
         sourceCursor < sourceLines.length &&
         sourceLines[sourceCursor].label !== label
@@ -997,18 +1010,25 @@ function buildAgentMindmapTree(
       .querySelectorAll('svg')
       .forEach((element) => element.remove());
     const isHtmlCard = Boolean(htmlCardDefinitionFromPayload(node));
+    const payload = node.payload as Record<string, unknown> | undefined;
+    const isYouTubeCard = payload?.seamindCard === 'youtube';
     const containsKatex = Boolean(document.body.querySelector('.katex'));
-    const label = normalizeMindmapText(document.body.textContent ?? '').slice(
-      0,
-      300,
-    );
+    const label = (
+      isYouTubeCard && typeof payload?.seamindVideoTitle === 'string'
+        ? payload.seamindVideoTitle
+        : normalizeMindmapText(document.body.textContent ?? '')
+    ).slice(0, 300);
     const children = node.children
       .map((child) => visit(child, path))
       .filter((child): child is MindmapNodeSnapshot => child !== null);
     return {
       path,
       label,
-      editable: editablePaths.has(path) && !isHtmlCard && !containsKatex,
+      editable:
+        editablePaths.has(path) &&
+        !isHtmlCard &&
+        !isYouTubeCard &&
+        !containsKatex,
       children,
     };
   };
@@ -1099,6 +1119,10 @@ export default function App() {
   );
   const [htmlPreviewSrc, setHtmlPreviewSrc] = useState('');
   const [htmlPreviewError, setHtmlPreviewError] = useState('');
+  const [youtubePreview, setYoutubePreview] =
+    useState<YouTubePreviewSelection | null>(null);
+  const youtubeCardOpenerRef = useRef<HTMLElement | null>(null);
+  const youtubeCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const [htmlCanvasEmbed, setHtmlCanvasEmbed] =
     useState<HtmlCanvasEmbedding | null>(null);
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
@@ -1822,6 +1846,8 @@ export default function App() {
     closeHtmlPreview();
   };
 
+  const closeYouTubePreview = () => setYoutubePreview(null);
+
   const createCategory = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!categoryDraft.trim()) return;
@@ -2282,10 +2308,55 @@ export default function App() {
       setHtmlPreview({ ...card, documentRelativePath });
     };
 
+    const handleYouTubeCardClick = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const card = target.closest<HTMLButtonElement>(
+        'button[data-seamind-youtube-card="true"]',
+      );
+      if (!card) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const id = card.dataset.seamindYoutubeId || '';
+      const src = buildYouTubeEmbedUrl(id);
+      if (!src) return;
+      youtubeCardOpenerRef.current = card;
+      setYoutubePreview({
+        id,
+        src,
+        title: card.dataset.seamindYoutubeTitle || 'YouTube 视频',
+      });
+    };
+
+    const handleYouTubeThumbnailError = (event: Event) => {
+      const image = event.target;
+      if (
+        !(image instanceof HTMLImageElement) ||
+        image.dataset.seamindYoutubeThumbnail !== 'true'
+      )
+        return;
+      const videoId = image.dataset.seamindYoutubeId || '';
+      const currentQuality = Number(image.dataset.seamindYoutubeQuality || '0');
+      const fallback = nextYouTubeThumbnail(videoId, currentQuality);
+      if (fallback) {
+        image.dataset.seamindYoutubeQuality = String(fallback.quality);
+        image.src = fallback.src;
+        return;
+      }
+      const placeholder = document.createElement('div');
+      placeholder.className = 'seamind-youtube-thumbnail-fallback';
+      placeholder.textContent = '封面暂不可用';
+      image.replaceWith(placeholder);
+    };
+
     svg.addEventListener('click', handleHtmlCardClick, true);
+    svg.addEventListener('click', handleYouTubeCardClick, true);
+    svg.addEventListener('error', handleYouTubeThumbnailError, true);
     svg.addEventListener('dblclick', handleCanvasDoubleClick, true);
     return () => {
       svg.removeEventListener('click', handleHtmlCardClick, true);
+      svg.removeEventListener('click', handleYouTubeCardClick, true);
+      svg.removeEventListener('error', handleYouTubeThumbnailError, true);
       svg.removeEventListener('dblclick', handleCanvasDoubleClick, true);
       map.destroy();
       markmapRef.current = null;
@@ -2348,6 +2419,23 @@ export default function App() {
   }, [htmlPreview]);
 
   useEffect(() => {
+    if (!youtubePreview) return;
+    const opener = youtubeCardOpenerRef.current;
+    youtubeCloseButtonRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeYouTubePreview();
+      }
+    };
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('keydown', closeOnEscape);
+      if (opener?.isConnected) opener.focus();
+    };
+  }, [youtubePreview]);
+
+  useEffect(() => {
     const timer = window.setTimeout(async () => {
       const map = markmapRef.current;
       const svg = svgRef.current;
@@ -2367,7 +2455,7 @@ export default function App() {
           : undefined;
       const embeddingApplied = { value: false };
       const safeRoot = prepareHtmlCardNodes(
-        sanitizeNode(root),
+        prepareYouTubeCards(sanitizeNode(root)),
         embedding,
         embeddingApplied,
       );
@@ -3083,6 +3171,50 @@ export default function App() {
                   正在打开本地 HTML 组件…
                 </div>
               )}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {youtubePreview && (
+        <div
+          className="youtube-player-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeYouTubePreview();
+          }}
+        >
+          <section
+            className="youtube-player-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="youtube-player-title"
+          >
+            <div className="youtube-player-heading">
+              <div>
+                <span className="pane-kicker">YOUTUBE PLAYER</span>
+                <h2 id="youtube-player-title">{youtubePreview.title}</h2>
+              </div>
+              <button
+                ref={youtubeCloseButtonRef}
+                type="button"
+                className="dialog-close youtube-player-close"
+                aria-label="关闭 YouTube 播放器"
+                onClick={closeYouTubePreview}
+              >
+                ×
+              </button>
+            </div>
+            <div className="youtube-player-stage">
+              <iframe
+                title={`播放 ${youtubePreview.title}`}
+                src={youtubePreview.src}
+                allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; web-share"
+                referrerPolicy="strict-origin-when-cross-origin"
+                allowFullScreen
+              />
+            </div>
+            <div className="youtube-player-meta">
+              视频由 YouTube 提供 · 视频可用性和播放画质由视频源决定
             </div>
           </section>
         </div>

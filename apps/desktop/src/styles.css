@@ -2972,6 +2972,105 @@ button {
   border-color: #d98c78;
   background: #fffaf8;
 }
+.markmap-node > foreignObject > div > div:has(> .seamind-youtube-card) {
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.markmap-node .seamind-youtube-card {
+  display: block;
+  padding: 0;
+  box-sizing: border-box;
+  width: 280px;
+  height: 205px;
+  overflow: hidden;
+  border: 1px solid #d7dfe4;
+  border-radius: 7px;
+  color: #26333a;
+  background: #fff;
+  appearance: none;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  white-space: normal;
+}
+.markmap-node .seamind-youtube-card:hover {
+  border-color: #b95844;
+}
+.markmap-node .seamind-youtube-card:focus-visible {
+  outline: 2px solid #c96c56;
+  outline-offset: 2px;
+}
+.seamind-youtube-thumbnail {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 157px;
+  overflow: hidden;
+  background: #182126;
+}
+.seamind-youtube-thumbnail-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.seamind-youtube-play-icon {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: 48px;
+  height: 34px;
+  place-items: center;
+  transform: translate(-50%, -50%);
+  border-radius: 8px;
+  color: #fff;
+  background: #17191bd9;
+  font-size: 15px;
+  padding-left: 2px;
+  transition: background-color 120ms ease;
+}
+.markmap-node .seamind-youtube-card:hover .seamind-youtube-play-icon {
+  background: #d35440;
+}
+.seamind-youtube-thumbnail-fallback {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  color: #aeb9bf;
+  font-size: 12px;
+}
+.seamind-youtube-details {
+  display: flex;
+  height: 46px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 10px;
+}
+.seamind-youtube-details strong {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.seamind-youtube-details span {
+  max-width: 120px;
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: #8a959d;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .markmap-node .seamind-html-canvas-node {
   box-sizing: border-box;
   display: flex;
@@ -3128,6 +3227,64 @@ button {
   font-size: 12px;
   text-align: center;
 }
+
+.youtube-player-backdrop {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: #0b1115d9;
+}
+.youtube-player-dialog {
+  width: min(1040px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  border: 1px solid #364149;
+  border-radius: 6px;
+  color: #26333a;
+  background: #fff;
+}
+.youtube-player-heading {
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #e4e8ea;
+}
+.youtube-player-heading h2 {
+  max-width: min(75vw, 900px);
+  overflow: hidden;
+  margin: 3px 0 0;
+  font-size: 14px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.youtube-player-close {
+  flex: 0 0 auto;
+}
+.youtube-player-stage {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+}
+.youtube-player-stage iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.youtube-player-meta {
+  padding: 9px 16px;
+  border-top: 1px solid #e4e8ea;
+  color: #849098;
+  font-size: 10px;
+}
 .canvas-hint.is-html-interactive {
   color: #a4513f;
 }
@@ -3152,6 +3309,17 @@ button {
 .app-shell[data-theme='dark'] .markmap-node .seamind-html-card-node:hover {
   border-color: #8c5c4e;
   background: #282321;
+}
+.app-shell[data-theme='dark'] .markmap-node .seamind-youtube-card {
+  border-color: #3a474e;
+  color: #dce4e8;
+  background: #1d272c;
+}
+.app-shell[data-theme='dark'] .markmap-node .seamind-youtube-card:hover {
+  border-color: #8c5c4e;
+}
+.app-shell[data-theme='dark'] .seamind-youtube-details span {
+  color: #93a0a7;
 }
 .app-shell[data-theme='dark'] .seamind-html-card-eyebrow,
 .app-shell[data-theme='dark'] .seamind-html-card-action {
@@ -3201,6 +3369,41 @@ button {
 }
 .app-shell[data-theme='dark'] .html-preview-backdrop {
   background: #05080bb8;
+}
+.app-shell[data-theme='dark'] .youtube-player-dialog {
+  border-color: #3a474e;
+  color: #dce4e8;
+  background: #1c2227;
+}
+.app-shell[data-theme='dark'] .youtube-player-heading,
+.app-shell[data-theme='dark'] .youtube-player-meta {
+  border-color: #303a41;
+}
+.app-shell[data-theme='dark'] .youtube-player-meta {
+  color: #9aa7ae;
+}
+
+@media (max-height: 720px) {
+  .youtube-player-stage {
+    max-height: calc(100vh - 150px);
+  }
+}
+
+@media (max-width: 640px) {
+  .youtube-player-backdrop {
+    padding: 12px;
+  }
+  .youtube-player-dialog {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+  }
+  .youtube-player-heading {
+    min-height: 58px;
+    padding: 8px 12px;
+  }
+  .youtube-player-meta {
+    padding: 8px 12px;
+  }
 }
 
 .terminal-toggle-button {
