@@ -71,6 +71,25 @@ function parseYouTubeVideoUrl(
   }
 }
 
+export function parseYouTubeEmbedInput(
+  value: string,
+): { id: string; startSeconds: number } | null {
+  const input = value.trim();
+  if (!input) return null;
+
+  let candidate = input;
+  if (/<\s*iframe\b/i.test(input)) {
+    const document = new DOMParser().parseFromString(input, 'text/html');
+    const iframes = document.querySelectorAll('iframe');
+    if (iframes.length !== 1) return null;
+    const iframe = iframes[0];
+    if (!iframe || iframe.hasAttribute('srcdoc')) return null;
+    candidate = iframe.getAttribute('src')?.trim() || '';
+  }
+
+  return candidate ? parseYouTubeVideoUrl(candidate) : null;
+}
+
 function findYouTubeVideo(content: string): YouTubeVideo | null {
   const document = new DOMParser().parseFromString(content, 'text/html');
   const candidates = new Map<string, { title: string; startSeconds: number }>();

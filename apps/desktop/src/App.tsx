@@ -23,6 +23,7 @@ import MarkdownPreview from './MarkdownPreview';
 import {
   buildYouTubeEmbedUrl,
   nextYouTubeThumbnail,
+  parseYouTubeEmbedInput,
   prepareYouTubeCards,
 } from './youtube';
 import {
@@ -1455,6 +1456,13 @@ export default function App() {
     markdown: string;
     error: string;
   } | null>(null);
+  const [videoEmbedDialog, setVideoEmbedDialog] = useState<{
+    nodePath: string;
+    nodeLabel: string;
+    input: string;
+    title: string;
+    error: string;
+  } | null>(null);
   const [sourceMapVersion, setSourceMapVersion] = useState(0);
   const [markdownEditorSession, setMarkdownEditorSession] = useState(0);
   const cliAgentProposalRef = useRef<CliAgentProposal | null>(null);
@@ -1684,6 +1692,101 @@ export default function App() {
       });
     } catch (error) {
       setLibraryError(errorMessage(error, '无法修改所选节点。'));
+    }
+  };
+
+  const openVideoEmbedDialog = () => {
+    if (
+      !activeMapPath ||
+      markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown
+    )
+      return;
+    const source = markdownNodeSourcesRef.current.get(activeMapPath);
+    if (!source || source.kind === 'block') return;
+    setVideoEmbedDialog({
+      nodePath: activeMapPath,
+      nodeLabel: source.label,
+      input: '',
+      title: '',
+      error: '',
+    });
+  };
+
+  const insertVideoEmbedChild = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const dialog = videoEmbedDialog;
+    if (!dialog) return;
+    if (markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown) {
+      setVideoEmbedDialog((current) =>
+        current
+          ? {
+              ...current,
+              error: '文档刚刚发生变化，请关闭后重新选择目标节点。',
+            }
+          : current,
+      );
+      return;
+    }
+    const source = markdownNodeSourcesRef.current.get(dialog.nodePath);
+    if (!source || source.kind === 'block') {
+      setVideoEmbedDialog((current) =>
+        current
+          ? { ...current, error: '找不到原来的目标节点，请重新选择节点。' }
+          : current,
+      );
+      return;
+    }
+    const video = parseYouTubeEmbedInput(dialog.input);
+    if (!video) {
+      setVideoEmbedDialog((current) =>
+        current
+          ? {
+              ...current,
+              error:
+                '无法识别视频。请粘贴 YouTube 链接，或包含 YouTube embed 地址的 iframe。',
+            }
+          : current,
+      );
+      return;
+    }
+
+    const title =
+      dialog.title
+        .trim()
+        .replace(/[\r\n]+/g, ' ')
+        .slice(0, 120) || 'YouTube 视频';
+    const safeTitle = title
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/\\/g, '\\\\')
+      .replace(/\[/g, '\\[')
+      .replace(/\]/g, '\\]');
+    const startParameter =
+      video.startSeconds > 0 ? `&t=${video.startSeconds}s` : '';
+    const childText = `[${safeTitle}](https://www.youtube.com/watch?v=${video.id}${startParameter})`;
+    try {
+      const command = applyMarkdownNodeCommand(
+        draftRef.current.markdown,
+        source,
+        'add_child',
+        childText,
+      );
+      applyMarkdownFromCanvas(command.markdown, {
+        lineIndex: command.lineIndex,
+        focus: true,
+      });
+      setActiveMapPath(dialog.nodePath);
+      setVideoEmbedDialog(null);
+    } catch (error) {
+      setVideoEmbedDialog((current) =>
+        current
+          ? {
+              ...current,
+              error: errorMessage(error, '无法将视频添加到所选节点。'),
+            }
+          : current,
+      );
     }
   };
 
@@ -4275,6 +4378,16 @@ export default function App() {
                 >
                   备注
                 </button>
+                <button
+                  type="button"
+                  className="canvas-node-action"
+                  title="粘贴 YouTube 链接或 iframe，并添加为所选节点的子节点"
+                  aria-label="为所选节点嵌入 YouTube 视频"
+                  disabled={!canAddSelectedNode}
+                  onClick={openVideoEmbedDialog}
+                >
+                  视频
+                </button>
                 <span className="tool-divider" aria-hidden="true" />
                 <button
                   type="button"
@@ -5455,6 +5568,103 @@ export default function App() {
                 完成
               </button>
             </div>
+          </section>
+        </div>
+      )}
+      {videoEmbedDialog && (
+        <div
+          className="settings-backdrop video-embed-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setVideoEmbedDialog(null);
+          }}
+        >
+          <section
+            className="settings-dialog video-embed-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="video-embed-title"
+            aria-describedby="video-embed-description"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.stopPropagation();
+                setVideoEmbedDialog(null);
+              }
+            }}
+          >
+            <div className="settings-heading">
+              <div>
+                <span className="pane-kicker">VIDEO · YOUTUBE</span>
+                <h2 id="video-embed-title">嵌入视频到节点</h2>
+              </div>
+              <button
+                type="button"
+                className="dialog-close"
+                aria-label="关闭视频嵌入窗口"
+                onClick={() => setVideoEmbedDialog(null)}
+              >
+                ×
+              </button>
+            </div>
+            <p id="video-embed-description" className="video-embed-description">
+              目标节点：{videoEmbedDialog.nodeLabel}。粘贴 YouTube 链接或完整
+              iframe，确认后会在目标节点下添加可播放的视频节点。
+            </p>
+            <form onSubmit={insertVideoEmbedChild}>
+              <label className="video-embed-field" htmlFor="video-embed-input">
+                视频链接或 iframe
+                <textarea
+                  id="video-embed-input"
+                  value={videoEmbedDialog.input}
+                  maxLength={5000}
+                  onChange={(event) =>
+                    setVideoEmbedDialog((dialog) =>
+                      dialog
+                        ? { ...dialog, input: event.target.value, error: '' }
+                        : dialog,
+                    )
+                  }
+                  placeholder="https://www.youtube.com/watch?v=…\n或粘贴 YouTube iframe 代码"
+                  autoFocus
+                />
+              </label>
+              <label
+                className="video-embed-field"
+                htmlFor="video-embed-node-label"
+              >
+                节点标题（可选）
+                <input
+                  id="video-embed-node-label"
+                  value={videoEmbedDialog.title}
+                  maxLength={120}
+                  onChange={(event) =>
+                    setVideoEmbedDialog((dialog) =>
+                      dialog
+                        ? { ...dialog, title: event.target.value, error: '' }
+                        : dialog,
+                    )
+                  }
+                  placeholder="默认显示 YouTube 视频"
+                />
+              </label>
+              {videoEmbedDialog.error && (
+                <p className="video-embed-error" role="alert">
+                  {videoEmbedDialog.error}
+                </p>
+              )}
+              <div className="node-note-actions video-embed-actions">
+                <span>支持 YouTube 视频链接与 embed iframe</span>
+                <button
+                  type="button"
+                  className="agent-reject-button"
+                  onClick={() => setVideoEmbedDialog(null)}
+                >
+                  取消
+                </button>
+                <button type="submit" className="agent-apply-button">
+                  添加视频节点
+                </button>
+              </div>
+            </form>
           </section>
         </div>
       )}

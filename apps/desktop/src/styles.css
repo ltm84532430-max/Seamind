@@ -1857,6 +1857,68 @@ button {
 .node-note-backdrop {
   z-index: 14;
 }
+.video-embed-backdrop {
+  z-index: 15;
+}
+.video-embed-dialog {
+  width: min(620px, 100%);
+  border-radius: 0;
+  box-shadow: none;
+}
+.video-embed-description {
+  margin: 0;
+  color: #6f7a82;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.video-embed-dialog form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.video-embed-field {
+  display: grid;
+  gap: 6px;
+  color: #59656e;
+  font-size: 10px;
+}
+.video-embed-field textarea,
+.video-embed-field input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid #dfe3e6;
+  border-radius: 0;
+  outline: none;
+  color: #303a42;
+  background: #fff;
+  font: 11px/1.55 var(--mono);
+}
+.video-embed-field textarea {
+  min-height: 132px;
+  resize: vertical;
+}
+.video-embed-field input {
+  min-height: 34px;
+}
+.video-embed-field textarea:focus,
+.video-embed-field input:focus {
+  border-color: #d78c79;
+  box-shadow: 0 0 0 2px #f9e9e5;
+}
+.video-embed-field textarea::placeholder,
+.video-embed-field input::placeholder {
+  color: #a4adb4;
+}
+.video-embed-error {
+  margin: 0;
+  color: #a34232;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.video-embed-actions {
+  margin-top: 2px;
+}
 .node-note-dialog {
   display: flex;
   width: min(900px, 100%);
@@ -3192,6 +3254,26 @@ button {
   border-color: #38434c;
   color: #d5dee3;
   background: #151b1f;
+}
+.app-shell[data-theme='dark'] .video-embed-field textarea,
+.app-shell[data-theme='dark'] .video-embed-field input {
+  border-color: #38434c;
+  color: #d5dee3;
+  background: #151b1f;
+}
+.app-shell[data-theme='dark'] .video-embed-field textarea:focus,
+.app-shell[data-theme='dark'] .video-embed-field input:focus {
+  border-color: #bd6a57;
+  box-shadow: 0 0 0 2px #df735b22;
+}
+.app-shell[data-theme='dark'] .video-embed-description,
+.app-shell[data-theme='dark'] .video-embed-field,
+.app-shell[data-theme='dark'] .video-embed-actions > span {
+  color: #96a2aa;
+}
+.app-shell[data-theme='dark'] .video-embed-field textarea::placeholder,
+.app-shell[data-theme='dark'] .video-embed-field input::placeholder {
+  color: #8997a1;
 }
 .app-shell[data-theme='dark'] .node-note-editor:focus {
   border-color: #bd6a57;

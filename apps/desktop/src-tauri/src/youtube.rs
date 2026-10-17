@@ -248,10 +248,10 @@ fn resolve_with_newpipe_bridge(
     let video_url = format!("https://www.youtube.com/watch?v={video_id}");
     let response_file = NewPipeBridgeTempFile::create()?;
     let bridge_path = std::path::Path::new(program);
-    let mut command = if bridge_path
+    let is_powershell_script = bridge_path
         .extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("ps1"))
-    {
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("ps1"));
+    let mut command = if is_powershell_script {
         let mut powershell = Command::new("powershell.exe");
         powershell
             .args([
@@ -266,11 +266,24 @@ fn resolve_with_newpipe_bridge(
     } else {
         Command::new(program)
     };
+
+    if is_powershell_script {
+        command
+            .arg("-Action")
+            .arg("resolve")
+            .arg("-VideoUrl")
+            .arg(&video_url)
+            .arg("-OutputFile")
+            .arg(response_file.path());
+    } else {
+        command
+            .arg("--seamind-resolve")
+            .arg(video_url)
+            .arg("--output-file")
+            .arg(response_file.path());
+    }
+
     command
-        .arg("--seamind-resolve")
-        .arg(video_url)
-        .arg("--output-file")
-        .arg(response_file.path())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -296,7 +309,7 @@ fn resolve_with_newpipe_bridge(
     let stdout_reader = thread::spawn(move || read_all(stdout));
     let stderr_reader = thread::spawn(move || read_all(stderr));
 
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let deadline = Instant::now() + Duration::from_secs(300);
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -318,15 +331,21 @@ fn resolve_with_newpipe_bridge(
         }
     };
 
-    let _stdout = stdout_reader
+    let stdout = stdout_reader
         .join()
         .map_err(|_| "读取 NewPipe 辅助进程输出时发生线程错误。".to_string())?;
     let stderr = stderr_reader
         .join()
         .map_err(|_| "读取 NewPipe 辅助进程错误输出时发生线程错误。".to_string())?;
     if !status.success() {
-        let detail = String::from_utf8_lossy(&stderr);
-        return Err(truncate_message(detail.trim(), 500));
+        let stdout = String::from_utf8_lossy(&stdout);
+        let stderr = String::from_utf8_lossy(&stderr);
+        let detail = [stdout.trim(), stderr.trim()]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(truncate_message(&detail, 500));
     }
 
     let response = std::fs::read(response_file.path())
