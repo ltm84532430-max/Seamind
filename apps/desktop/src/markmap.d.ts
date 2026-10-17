@@ -47,9 +47,28 @@ declare module 'markmap-lib' {
 declare module 'markmap-view' {
   import type { PureNode } from 'markmap-lib';
 
+  export interface IMarkmapOptions {
+    autoFit?: boolean;
+    duration?: number;
+    spacingHorizontal?: number;
+    spacingVertical?: number;
+    direction?: 'right' | 'both' | 'down';
+    linkShape?: 'curve' | 'orthogonal' | 'rounded-orthogonal';
+    linkRadius?: number;
+    linkAnchor?: (node: any) => 'bottom' | 'center';
+    lineWidth?: (node: any) => number;
+    color?: (node: any) => string;
+    [key: string]: unknown;
+  }
+
   export class Markmap {
+    options: IMarkmapOptions;
     static create(svg: SVGElement, options?: Record<string, unknown>): Markmap;
-    setData(data: PureNode): Promise<void>;
+    setData(
+      data?: PureNode | null,
+      options?: Record<string, unknown>,
+    ): Promise<void>;
+    setOptions(options?: Record<string, unknown>): void;
     fit(): Promise<void>;
     rescale(scale: number): Promise<void>;
     destroy(): void;

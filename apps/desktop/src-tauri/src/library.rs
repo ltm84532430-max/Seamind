@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 const SETTINGS_FILE: &str = "library.json";
 const DATABASE_FILE: &str = "library-index.sqlite3";
+const HISTORY_DATABASE_FILE: &str = "document-history.sqlite3";
 const META_PREFIX: &str = "<!-- markmap-desktop: ";
 const MAX_DOCUMENT_BYTES: usize = 5 * 1024 * 1024;
 const MAX_HTML_ASSET_FILE_BYTES: u64 = 20 * 1024 * 1024;
@@ -91,6 +92,30 @@ pub struct SaveDocumentInput {
     pub category: String,
     pub map_type: String,
     pub tags: Vec<String>,
+    pub markdown: String,
+    pub history_source: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentVersion {
+    pub version_id: String,
+    pub document_id: String,
+    pub relative_path: String,
+    pub title: String,
+    pub category: String,
+    pub map_type: String,
+    pub tags: Vec<String>,
+    pub source: String,
+    pub created_at: u64,
+    pub markdown_bytes: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentVersionSnapshot {
+    #[serde(flatten)]
+    pub version: DocumentVersion,
     pub markdown: String,
 }
 
@@ -243,10 +268,9 @@ pub fn open_document(app: AppHandle, relative_path: String) -> Result<OpenedDocu
         created_at,
         updated_at,
     };
-    Ok(OpenedDocument {
-        document,
-        markdown: strip_metadata(&content).to_string(),
-    })
+    let markdown = strip_metadata(&content).to_string();
+    let _ = record_document_version(&app, &document, &markdown, "baseline");
+    Ok(OpenedDocument { document, markdown })
 }
 
 #[tauri::command]
@@ -360,8 +384,137 @@ pub fn save_document(app: AppHandle, input: SaveDocumentInput) -> Result<MapDocu
             remove_empty_parent_directories(&root, old_relative.as_deref());
         }
     }
+    let history_source = match input.history_source.as_deref() {
+        Some("manual") => "manual",
+        Some("restore") => "restore",
+        _ => "autosave",
+    };
+    record_document_version(&app, &document, &markdown, history_source)
+        .map_err(|error| format!("文件已保存，但版本历史写入失败：{error}"))?;
     upsert_document(&app, &document, &markdown)?;
     Ok(document)
+}
+
+#[tauri::command]
+pub fn list_document_versions(
+    app: AppHandle,
+    document_id: String,
+) -> Result<Vec<DocumentVersion>, String> {
+    if document_id.trim().is_empty() {
+        return Err("当前思维导图没有可用的文件 ID。".to_string());
+    }
+    let connection = open_history_database(&app)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT version_id, document_id, relative_path, title, category, map_type,
+                    tags, source, created_at, length(CAST(markdown AS BLOB))
+             FROM document_versions
+             WHERE document_id = ?1
+             ORDER BY created_at DESC, rowid DESC",
+        )
+        .map_err(history_db_error)?;
+    let rows = statement
+        .query_map(params![document_id], |row| {
+            let tags_json: String = row.get(6)?;
+            Ok(DocumentVersion {
+                version_id: row.get(0)?,
+                document_id: row.get(1)?,
+                relative_path: row.get(2)?,
+                title: row.get(3)?,
+                category: row.get(4)?,
+                map_type: row.get(5)?,
+                tags: serde_json::from_str(&tags_json).unwrap_or_default(),
+                source: row.get(7)?,
+                created_at: row.get(8)?,
+                markdown_bytes: row.get::<_, i64>(9)?.max(0) as usize,
+            })
+        })
+        .map_err(history_db_error)?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(history_db_error)
+}
+
+#[tauri::command]
+pub fn load_document_version(
+    app: AppHandle,
+    document_id: String,
+    version_id: String,
+) -> Result<DocumentVersionSnapshot, String> {
+    let connection = open_history_database(&app)?;
+    let row = connection
+        .query_row(
+            "SELECT version_id, document_id, relative_path, title, category, map_type,
+                    tags, source, created_at, length(CAST(markdown AS BLOB)), markdown
+             FROM document_versions
+             WHERE document_id = ?1 AND version_id = ?2",
+            params![document_id, version_id],
+            |row| {
+                let tags_json: String = row.get(6)?;
+                Ok(DocumentVersionSnapshot {
+                    version: DocumentVersion {
+                        version_id: row.get(0)?,
+                        document_id: row.get(1)?,
+                        relative_path: row.get(2)?,
+                        title: row.get(3)?,
+                        category: row.get(4)?,
+                        map_type: row.get(5)?,
+                        tags: serde_json::from_str(&tags_json).unwrap_or_default(),
+                        source: row.get(7)?,
+                        created_at: row.get(8)?,
+                        markdown_bytes: row.get::<_, i64>(9)?.max(0) as usize,
+                    },
+                    markdown: row.get(10)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(history_db_error)?
+        .ok_or_else(|| "找不到所选的历史版本。".to_string())?;
+    Ok(row)
+}
+
+#[tauri::command]
+pub fn restore_document_version(
+    app: AppHandle,
+    document_id: String,
+    relative_path: String,
+    version_id: String,
+) -> Result<OpenedDocument, String> {
+    let snapshot = load_document_version(app.clone(), document_id.clone(), version_id)?;
+    if snapshot.version.document_id != document_id {
+        return Err("所选版本不属于当前思维导图。".to_string());
+    }
+    let root = require_root(&app)?;
+    let current_relative = validate_markdown_path(&relative_path)?;
+    let current_path = root.join(&current_relative);
+    if current_path.exists() {
+        let current_path = ensure_existing_inside_root(&root, &current_path)?;
+        let current_content = fs::read_to_string(&current_path)
+            .map_err(|error| format!("无法校验当前思维导图：{error}"))?;
+        let current_id = metadata_from_markdown(&current_content)
+            .map(|metadata| metadata.id)
+            .unwrap_or_else(|| legacy_id(&path_to_relative_string(&current_relative)));
+        if current_id != document_id {
+            return Err("当前文件已变化，请重新打开思维导图后再恢复。".to_string());
+        }
+        let current = open_document(app.clone(), path_to_relative_string(&current_relative))?;
+        record_document_version(&app, &current.document, &current.markdown, "manual")
+            .map_err(|error| format!("无法保留当前版本，未执行恢复：{error}"))?;
+    }
+    let restored = save_document(
+        app.clone(),
+        SaveDocumentInput {
+            id: Some(document_id),
+            relative_path: Some(path_to_relative_string(&current_relative)),
+            title: snapshot.version.title,
+            category: snapshot.version.category,
+            map_type: snapshot.version.map_type,
+            tags: snapshot.version.tags,
+            markdown: snapshot.markdown,
+            history_source: Some("restore".to_string()),
+        },
+    )?;
+    open_document(app, restored.relative_path)
 }
 
 #[tauri::command]
@@ -804,6 +957,158 @@ fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|error| format!("无法定位 SQLite 数据目录：{error}"))?;
     fs::create_dir_all(&directory).map_err(|error| format!("无法创建 SQLite 数据目录：{error}"))?;
     Ok(directory.join(DATABASE_FILE))
+}
+
+fn history_database_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let directory = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| format!("无法定位历史版本数据库目录：{error}"))?;
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("无法创建历史版本数据库目录：{error}"))?;
+    Ok(directory.join(HISTORY_DATABASE_FILE))
+}
+
+fn open_history_database(app: &AppHandle) -> Result<Connection, String> {
+    let connection = Connection::open(history_database_path(app)?).map_err(history_db_error)?;
+    connection
+        .execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA busy_timeout = 3000;
+             CREATE TABLE IF NOT EXISTS document_versions (
+                 version_id TEXT PRIMARY KEY NOT NULL,
+                 document_id TEXT NOT NULL,
+                 relative_path TEXT NOT NULL,
+                 title TEXT NOT NULL,
+                 category TEXT NOT NULL,
+                 map_type TEXT NOT NULL,
+                 tags TEXT NOT NULL,
+                 source TEXT NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 markdown TEXT NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_document_versions_recent
+                 ON document_versions(document_id, created_at DESC);",
+        )
+        .map_err(history_db_error)?;
+    Ok(connection)
+}
+
+fn record_document_version(
+    app: &AppHandle,
+    document: &MapDocument,
+    markdown: &str,
+    source: &str,
+) -> Result<(), String> {
+    let connection = open_history_database(app)?;
+    let tags = serde_json::to_string(&document.tags).map_err(|error| error.to_string())?;
+    let now = timestamp_now();
+    let latest = connection
+        .query_row(
+            "SELECT version_id, source, created_at, relative_path, title, category,
+                    map_type, tags, markdown
+             FROM document_versions
+             WHERE document_id = ?1
+             ORDER BY created_at DESC, rowid DESC
+             LIMIT 1",
+            params![document.id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, u64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(history_db_error)?;
+
+    if let Some((
+        version_id,
+        latest_source,
+        created_at,
+        relative_path,
+        title,
+        category,
+        map_type,
+        latest_tags,
+        latest_markdown,
+    )) = latest
+    {
+        let unchanged = relative_path == document.relative_path
+            && title == document.title
+            && category == document.category
+            && map_type == document.map_type
+            && latest_tags == tags
+            && latest_markdown == markdown;
+        if source != "restore" && unchanged {
+            return Ok(());
+        }
+        if source == "autosave"
+            && latest_source == "autosave"
+            && now.saturating_sub(created_at) <= 45
+        {
+            connection
+                .execute(
+                    "UPDATE document_versions
+                     SET relative_path = ?2, title = ?3, category = ?4, map_type = ?5,
+                         tags = ?6, source = ?7, markdown = ?8
+                     WHERE version_id = ?1",
+                    params![
+                        version_id,
+                        document.relative_path,
+                        document.title,
+                        document.category,
+                        document.map_type,
+                        tags,
+                        source,
+                        markdown,
+                    ],
+                )
+                .map_err(history_db_error)?;
+            return Ok(());
+        }
+    }
+
+    let version_id = Uuid::new_v4().to_string();
+    connection
+        .execute(
+            "INSERT INTO document_versions
+             (version_id, document_id, relative_path, title, category, map_type,
+              tags, source, created_at, markdown)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                version_id,
+                document.id,
+                document.relative_path,
+                document.title,
+                document.category,
+                document.map_type,
+                tags,
+                source,
+                now,
+                markdown,
+            ],
+        )
+        .map_err(history_db_error)?;
+    connection
+        .execute(
+            "DELETE FROM document_versions
+             WHERE document_id = ?1 AND version_id NOT IN (
+                 SELECT version_id FROM document_versions
+                 WHERE document_id = ?1
+                 ORDER BY created_at DESC, rowid DESC LIMIT 100
+             )",
+            params![document.id],
+        )
+        .map_err(history_db_error)?;
+    Ok(())
 }
 
 fn open_database(app: &AppHandle) -> Result<Connection, String> {
@@ -1481,4 +1786,8 @@ fn remove_empty_parent_directories(root: &Path, relative: Option<&Path>) {
 
 fn db_error(error: rusqlite::Error) -> String {
     format!("SQLite 文件库错误：{error}")
+}
+
+fn history_db_error(error: rusqlite::Error) -> String {
+    format!("SQLite 历史版本错误：{error}")
 }

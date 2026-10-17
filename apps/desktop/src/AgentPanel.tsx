@@ -8,8 +8,13 @@ import type {
   AgentChatMessage,
   AgentTurnDetails,
   AgentTurnUsage,
+  ModelContextWindow,
   NodeEditProposal,
 } from './agent/types';
+import {
+  formatContextWindow,
+  resolveModelContextWindow,
+} from './agent/model-context';
 
 interface AgentTarget {
   nodeId: string | null;
@@ -43,6 +48,7 @@ interface DisplayMessage {
 interface ActiveAgentTurn {
   providerLabel: string;
   model: string;
+  contextWindow: ModelContextWindow | null;
   mode: AgentAnalysisMode;
   targetLabel: string;
   startedAt: number;
@@ -110,15 +116,6 @@ function reportedValue(
       ? `（${reportedRequests}/${requestCount} 次）`
       : '';
   return `${value.toLocaleString()}${partial}`;
-}
-
-function usageLabel(usage: AgentTurnUsage): string {
-  if (!usage.reportedRequests) return 'Token 用量：服务未返回';
-  return [
-    `输入 ${reportedValue(usage.promptTokens, usage.promptReportedRequests, usage.requestCount)}`,
-    `输出 ${reportedValue(usage.completionTokens, usage.completionReportedRequests, usage.requestCount)}`,
-    `合计 ${reportedValue(usage.totalTokens, usage.totalReportedRequests, usage.requestCount)}`,
-  ].join(' · ');
 }
 
 function usageFromEvents(events: AgentCallEvent[]): AgentTurnUsage {
@@ -192,6 +189,7 @@ function completeTurn(
     startedAt: activeTurn.startedAt,
     endedAt,
     durationMs: endedAt - activeTurn.startedAt,
+    contextWindow: activeTurn.contextWindow,
     usage,
     events: activeTurn.events,
   };
@@ -229,26 +227,166 @@ function turnStatusLabel(status: AgentTurnDetails['status']): string {
   }
 }
 
+function requestContextUsage(
+  event: Extract<AgentCallEvent, { kind: 'model' }>,
+): { tokens: number; label: string } {
+  const usage = event.usage;
+  if (
+    Number.isSafeInteger(usage?.totalTokens) &&
+    (usage?.totalTokens ?? -1) >= 0
+  ) {
+    return { tokens: usage!.totalTokens!, label: '服务统计合计' };
+  }
+  if (
+    Number.isSafeInteger(usage?.promptTokens) &&
+    (usage?.promptTokens ?? -1) >= 0 &&
+    Number.isSafeInteger(usage?.completionTokens) &&
+    (usage?.completionTokens ?? -1) >= 0
+  ) {
+    return {
+      tokens: usage!.promptTokens! + usage!.completionTokens!,
+      label: '服务统计输入 + 输出',
+    };
+  }
+  if (
+    Number.isSafeInteger(usage?.promptTokens) &&
+    (usage?.promptTokens ?? -1) >= 0
+  ) {
+    return {
+      tokens: usage!.promptTokens!,
+      label: '服务统计，仅输入',
+    };
+  }
+  return {
+    tokens: event.contextTokensEstimate,
+    label: '本地估算，请求体输入',
+  };
+}
+
 function AgentCallDetails({ details }: { details: AgentTurnDetails }) {
   const modeLabel = details.mode === 'drilldown' ? '节点下探' : '可视化分析';
-  const contextEstimate = details.usage.contextTokensEstimate;
+  const modelRequests = details.events.filter(
+    (event): event is Extract<AgentCallEvent, { kind: 'model' }> =>
+      event.kind === 'model',
+  );
+  const contextUsage = modelRequests
+    .map(requestContextUsage)
+    .reduce(
+      (largest, current) =>
+        current.tokens > largest.tokens ? current : largest,
+      {
+        tokens: details.usage.contextTokensEstimate,
+        label: details.usage.contextTokensEstimate
+          ? '本地估算，请求体输入'
+          : '上下文估算不可用',
+      },
+    );
+  const contextWindow = details.contextWindow;
+  const contextPercent =
+    contextWindow && contextUsage.tokens > 0
+      ? (contextUsage.tokens / contextWindow.tokens) * 100
+      : null;
+  const contextSourceTitle = contextWindow
+    ? contextWindow.sourceLabel +
+      '；核对日期 ' +
+      contextWindow.verifiedOn +
+      '；' +
+      contextWindow.sourceUrl
+    : '未核实该模型的官方上下文容量';
+  const reportedBreakdown =
+    details.usage.promptReportedRequests > 0 ||
+    details.usage.completionReportedRequests > 0;
+  const breakdownTotal =
+    details.usage.promptTokens + details.usage.completionTokens;
+  const promptShare =
+    breakdownTotal > 0
+      ? (details.usage.promptTokens / breakdownTotal) * 100
+      : 0;
+  const summaryTokenCount =
+    details.usage.totalReportedRequests > 0
+      ? details.usage.totalTokens
+      : breakdownTotal;
+  const hasSummaryTokenCount =
+    details.usage.totalReportedRequests > 0 || reportedBreakdown;
+  const summaryUsageIsPartial =
+    details.usage.totalReportedRequests > 0
+      ? details.usage.totalReportedRequests < details.usage.requestCount
+      : details.usage.promptReportedRequests < details.usage.requestCount ||
+        details.usage.completionReportedRequests < details.usage.requestCount;
   return (
     <details
       className={`agent-call-details is-${details.status}`}
       open={details.status === 'running' || details.status === 'failed'}
     >
-      <summary>
-        <strong>调用详情</strong>
-        <span>
-          {details.providerLabel} · {details.model}
+      <summary className="agent-call-summary">
+        <span
+          className={'agent-call-icon is-' + details.status}
+          aria-hidden="true"
+        >
+          <svg viewBox="0 0 16 16">
+            <path d="M9.5 1.5 3 9h4l-.5 5.5L13 7h-4l.5-5.5Z" />
+          </svg>
         </span>
-        <span className="agent-call-status">
-          {turnStatusLabel(details.status)}
+        <span className="agent-call-summary-content">
+          <span className="agent-call-summary-top">
+            <strong>API 调用</strong>
+            <span>
+              {details.providerLabel} · {details.model}
+            </span>
+            <span className="agent-call-status">
+              {turnStatusLabel(details.status)}
+            </span>
+          </span>
+          <span className="agent-call-summary-bottom">
+            {reportedBreakdown && breakdownTotal > 0 ? (
+              <span
+                className="agent-call-mini-meter"
+                role="img"
+                aria-label={
+                  '输入 ' +
+                  details.usage.promptTokens.toLocaleString() +
+                  ' tokens，输出 ' +
+                  details.usage.completionTokens.toLocaleString() +
+                  ' tokens'
+                }
+                title={
+                  '输入 ' +
+                  details.usage.promptTokens.toLocaleString() +
+                  ' · 输出 ' +
+                  details.usage.completionTokens.toLocaleString()
+                }
+              >
+                <span
+                  className="is-input"
+                  style={{ width: String(promptShare) + '%' }}
+                />
+                <span
+                  className="is-output"
+                  style={{ width: String(100 - promptShare) + '%' }}
+                />
+              </span>
+            ) : (
+              <span
+                className="agent-call-mini-meter is-unavailable"
+                aria-hidden="true"
+              />
+            )}
+            <strong>
+              {hasSummaryTokenCount
+                ? summaryTokenCount.toLocaleString() +
+                  ' tokens' +
+                  (summaryUsageIsPartial ? ' · 部分返回' : '')
+                : '服务未返回用量'}
+            </strong>
+            <span>
+              {details.usage.requestCount} 次请求 ·{' '}
+              {durationLabel(details.durationMs)}
+            </span>
+          </span>
         </span>
-        <span>
-          {details.usage.requestCount} 次请求 · {usageLabel(details.usage)}
+        <span className="agent-call-summary-chevron" aria-hidden="true">
+          ⌄
         </span>
-        <span>{durationLabel(details.durationMs)}</span>
       </summary>
       <div className="agent-call-body">
         <div className="agent-call-meta">
@@ -288,11 +426,54 @@ function AgentCallDetails({ details }: { details: AgentTurnDetails }) {
             </strong>
           </div>
         </div>
-        <div className="agent-call-context">
-          {contextEstimate
-            ? `最后一次请求上下文约 ${contextEstimate.toLocaleString()} tokens（本地估算）`
-            : '上下文估算不可用'}
-          {' · 容量上限未知'}
+        <div className="agent-context-meter" title={contextSourceTitle}>
+          <div className="agent-context-meter-header">
+            <span>
+              单次请求最高 · {contextUsage.label} ·{' '}
+              {contextUsage.tokens.toLocaleString()} tokens
+            </span>
+            {contextWindow ? (
+              <strong>
+                {contextPercent !== null
+                  ? contextPercent.toFixed(1) + '%'
+                  : '比例不可用'}
+                {' / '}
+                {formatContextWindow(contextWindow.tokens)} tokens
+              </strong>
+            ) : (
+              <strong>模型容量上限未知</strong>
+            )}
+          </div>
+          {contextWindow && contextPercent !== null && (
+            <div
+              className="agent-context-meter-track"
+              role="progressbar"
+              aria-label="模型上下文窗口使用比例"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.min(100, Math.max(0, contextPercent))}
+              aria-valuetext={
+                contextPercent.toFixed(1) + '%（' + contextUsage.label + '）'
+              }
+            >
+              <span
+                className="agent-context-meter-fill"
+                style={{
+                  width:
+                    String(Math.min(100, Math.max(0, contextPercent))) + '%',
+                }}
+              />
+            </div>
+          )}
+          <small>
+            {contextWindow
+              ? '容量依据：' +
+                contextWindow.sourceLabel +
+                '，' +
+                contextWindow.verifiedOn +
+                ' 核对'
+              : '未知模型容量时不显示占比；自定义兼容端点不会套用其他厂商上限。'}
+          </small>
         </div>
         <ol className="agent-call-events">
           {details.events.map((event) =>
@@ -381,6 +562,10 @@ export default function AgentPanel({
       targetLabel: target.label,
       startedAt,
       events: [],
+      contextWindow: resolveModelContextWindow(
+        provider.baseUrl,
+        provider.model,
+      ),
     };
     setInput('');
     setBusy(true);
@@ -554,6 +739,17 @@ export default function AgentPanel({
     estimateTokenCount(
       JSON.stringify({ mapTitle, target, markdown: mapMarkdown }),
     );
+  const contextWindow = resolveModelContextWindow(
+    provider.baseUrl,
+    provider.model,
+  );
+  const contextWindowTitle = contextWindow
+    ? contextWindow.sourceLabel +
+      '；核对日期 ' +
+      contextWindow.verifiedOn +
+      '；' +
+      contextWindow.sourceUrl
+    : '未核实该模型的官方上下文容量';
 
   return (
     <section className="agent-panel" aria-label={`LLM ${modeLabel}`}>
@@ -584,9 +780,15 @@ export default function AgentPanel({
         <span className="agent-context-model">
           API · {providerLabel} · {provider.model || '未设置模型'}
         </span>
-        <span title={`${markdownSize.toLocaleString()} 字节 Markdown 原文`}>
+        <span title={markdownSize.toLocaleString() + ' 字节 Markdown 原文'}>
           全图上下文 · 约 {contextEstimate.toLocaleString()} tokens（本地估算）
-          · 容量上限未知
+        </span>
+        <span title={contextWindowTitle}>
+          {contextWindow
+            ? '模型窗口 ' +
+              formatContextWindow(contextWindow.tokens) +
+              ' tokens'
+            : '模型窗口未知'}
         </span>
       </div>
 
@@ -782,17 +984,17 @@ export default function AgentPanel({
           disabled={busy || Boolean(conversation.proposal) || !target}
         />
         <button
-          className="ai-generate-button"
+          className="agent-send-button"
           type="submit"
+          aria-label={busy ? '模型正在处理中' : '发送消息'}
+          title={busy ? '模型正在处理中' : '发送消息'}
           disabled={
             busy || Boolean(conversation.proposal) || !input.trim() || !target
           }
         >
-          {busy
-            ? '处理中…'
-            : mode === 'drilldown'
-              ? '生成下探预览'
-              : '生成可视化预览'}
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M10 16V4M5 9l5-5 5 5" />
+          </svg>
         </button>
         <div className="ai-hint-footer">
           Ctrl + Enter 发送 · 整张导图作为上下文 · 插入前需确认

@@ -57,6 +57,8 @@ import {
 } from './mindmap/commands';
 const TerminalPanel = lazy(() => import('./TerminalPanel'));
 import type {
+  DocumentVersion,
+  DocumentVersionSnapshot,
   LibrarySnapshot,
   MapDocument,
   OpenedDocument,
@@ -66,7 +68,6 @@ import type {
 type ProviderSettings = { baseUrl: string; model: string };
 type Theme = 'light' | 'dark';
 type MindmapStyle = 'gray' | 'roots' | 'cards' | 'warm';
-type NodeWrapMode = 'auto' | 'manual';
 interface MapColorNode {
   state: { depth: number; path?: string };
 }
@@ -76,6 +77,8 @@ type StylableMarkmap = Omit<MarkmapInstance, 'setData'> & {
     lineWidth: (node: MapColorNode) => number;
     linkAnchor: (node: MapColorNode) => 'bottom' | 'center';
     direction?: 'right' | 'both' | 'down';
+    linkShape?: 'curve' | 'orthogonal' | 'rounded-orthogonal';
+    linkRadius?: number;
   };
   setData(
     data?: PureNode | null,
@@ -84,6 +87,8 @@ type StylableMarkmap = Omit<MarkmapInstance, 'setData'> & {
       lineWidth: (node: MapColorNode) => number;
       linkAnchor: (node: MapColorNode) => 'bottom' | 'center';
       direction?: 'right' | 'both' | 'down';
+      linkShape?: 'curve' | 'orthogonal' | 'rounded-orthogonal';
+      linkRadius?: number;
     },
   ): Promise<void>;
 };
@@ -168,8 +173,14 @@ const isEpubPath = (path: string) =>
 const settingsStorageKey = 'markmap.desktop.provider-settings.v1';
 const themeStorageKey = 'seamind.theme.v1';
 const mindmapStyleStorageKey = 'seamind.map-style.v1';
-const nodeWrapStorageKey = 'seamind.node-wrap.v1';
+const nodeSpacingStorageKey = 'seamind.node-spacing.v1';
 const aiCollapsedStorageKey = 'seamind.ai-collapsed.v1';
+interface NodeSpacing {
+  horizontal: number;
+  vertical: number;
+}
+
+const defaultNodeSpacing: NodeSpacing = { horizontal: 56, vertical: 14 };
 const promptSuggestions = [
   '机器学习核心知识体系',
   'Web 全栈架构全景图',
@@ -297,14 +308,51 @@ function readMindmapStyle(): MindmapStyle {
   }
 }
 
-function readNodeWrapMode(): NodeWrapMode {
+function normalizeNodeSpacingValue(
+  value: unknown,
+  axis: keyof NodeSpacing,
+): number {
+  if (typeof value !== 'number' || !Number.isFinite(value))
+    return defaultNodeSpacing[axis];
+
+  const min = axis === 'horizontal' ? 28 : 7;
+  const max = axis === 'horizontal' ? 112 : 28;
+  const step = axis === 'horizontal' ? 4 : 1;
+  const clamped = Math.min(max, Math.max(min, value));
+  return Math.min(max, min + Math.round((clamped - min) / step) * step);
+}
+
+function readNodeSpacing(): NodeSpacing {
   try {
-    return localStorage.getItem(nodeWrapStorageKey) === 'manual'
-      ? 'manual'
-      : 'auto';
+    const saved = localStorage.getItem(nodeSpacingStorageKey);
+    if (saved === null) return defaultNodeSpacing;
+
+    const parsed: unknown = JSON.parse(saved);
+    if (typeof parsed === 'number' && parsed >= 50 && parsed <= 200) {
+      const scale = parsed / 100;
+      return {
+        horizontal: normalizeNodeSpacingValue(
+          defaultNodeSpacing.horizontal * scale,
+          'horizontal',
+        ),
+        vertical: normalizeNodeSpacingValue(
+          defaultNodeSpacing.vertical * scale,
+          'vertical',
+        ),
+      };
+    }
+
+    if (parsed && typeof parsed === 'object') {
+      const values = parsed as Partial<NodeSpacing>;
+      return {
+        horizontal: normalizeNodeSpacingValue(values.horizontal, 'horizontal'),
+        vertical: normalizeNodeSpacingValue(values.vertical, 'vertical'),
+      };
+    }
   } catch {
-    return 'auto';
+    // Use the current map spacing when local storage is unavailable.
   }
+  return defaultNodeSpacing;
 }
 
 function readAiCollapsed(): boolean {
@@ -978,6 +1026,30 @@ function errorMessage(error: unknown, fallback: string): string {
   return typeof error === 'string' ? error : fallback;
 }
 
+function formatHistoryTimestamp(timestamp: number): string {
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).format(new Date(timestamp * 1000));
+}
+
+function historySourceLabel(source: DocumentVersion['source']): string {
+  if (source === 'baseline') return '初始快照';
+  if (source === 'manual') return '手动保存';
+  if (source === 'restore') return '恢复记录';
+  return '自动保存';
+}
+
+function formatHistoryBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function providerLabel(baseUrl: string): string {
   try {
     const host = new URL(baseUrl).hostname.toLowerCase();
@@ -1066,6 +1138,51 @@ function normalizeKatexDelimiters(markdown: string): string {
       return result;
     })
     .join('\n');
+}
+
+function countKatexRenderErrors(root: PureNode): number {
+  let errorCount = 0;
+  const pending = [root];
+  while (pending.length > 0) {
+    const node = pending.pop();
+    if (!node) continue;
+    const parsed = new DOMParser().parseFromString(node.content, 'text/html');
+    errorCount += parsed.body.querySelectorAll('.katex-error').length;
+    pending.push(...(node.children || []));
+  }
+  return errorCount;
+}
+
+function findMathInNodeLabelLines(markdown: string): number[] {
+  let fenceMarker = '';
+  const issueLines: number[] = [];
+  markdown.split(/\r?\n/).forEach((line, index) => {
+    const fence = line.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (fence) {
+      const marker = fence[1];
+      if (!fenceMarker) fenceMarker = marker[0].repeat(marker.length);
+      else if (
+        marker[0] === fenceMarker[0] &&
+        marker.length >= fenceMarker.length
+      ) {
+        fenceMarker = '';
+      }
+      return;
+    }
+    if (fenceMarker) return;
+
+    const isNodeLabel =
+      /^ {0,3}#{1,6}\s+/.test(line) || /^\s*(?:[-+*]|\d+[.)])\s+/.test(line);
+    if (!isNodeLabel) return;
+
+    const text = line.replace(/\\\$/g, '');
+    const hasMath =
+      text.includes('$$') ||
+      /(^|[^\\])\$[^$\r\n]+\$/.test(text) ||
+      /\\{1,2}[[(]/.test(text);
+    if (hasMath) issueLines.push(index + 1);
+  });
+  return issueLines;
 }
 
 function buildAgentMindmapTree(
@@ -1222,8 +1339,11 @@ export default function App() {
   const [theme, setTheme] = useState<Theme>(readTheme);
   const [mindmapStyle, setMindmapStyle] =
     useState<MindmapStyle>(readMindmapStyle);
-  const [nodeWrapMode, setNodeWrapMode] =
-    useState<NodeWrapMode>(readNodeWrapMode);
+  const [nodeSpacing, setNodeSpacing] = useState<NodeSpacing>(readNodeSpacing);
+  const activeNodeSpacing =
+    nodeSpacing && typeof nodeSpacing === 'object'
+      ? nodeSpacing
+      : readNodeSpacing();
   const [mindmapStyleMenuOpen, setMindmapStyleMenuOpen] = useState(false);
   const [sourceCollapsed, setSourceCollapsed] = useState(false);
   const [markdownPaneMode, setMarkdownPaneMode] = useState<'edit' | 'preview'>(
@@ -1251,6 +1371,13 @@ export default function App() {
   const [epubDropActive, setEpubDropActive] = useState(false);
   const [libraryError, setLibraryError] = useState('');
   const [saveMessage, setSaveMessage] = useState('正在初始化文件库…');
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyVersions, setHistoryVersions] = useState<DocumentVersion[]>([]);
+  const [historyPreview, setHistoryPreview] =
+    useState<DocumentVersionSnapshot | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyError, setHistoryError] = useState('');
   const [htmlImportBusy, setHtmlImportBusy] = useState(false);
   const [htmlPreview, setHtmlPreview] = useState<HtmlPreviewSelection | null>(
     null,
@@ -1267,6 +1394,12 @@ export default function App() {
   const [categoryDraft, setCategoryDraft] = useState('');
   const [providerSettings, setProviderSettings] =
     useState<ProviderSettings>(readProviderSettings);
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [providerModels, setProviderModels] = useState<string[]>([]);
+  const [providerModelsLoading, setProviderModelsLoading] = useState(false);
+  const [providerModelsError, setProviderModelsError] = useState('');
+  const [providerModelQuery, setProviderModelQuery] = useState('');
+  const [manualProviderModel, setManualProviderModel] = useState('');
   const [aiMode, setAiMode] = useState<AgentAnalysisMode>('drilldown');
   const [prompt, setPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
@@ -1298,6 +1431,7 @@ export default function App() {
   const codeBlocksAbortRef = useRef<AbortController | null>(null);
   const codeBlocksCleanupRef = useRef<(() => void) | null>(null);
   const mindmapStylePickerRef = useRef<HTMLDivElement>(null);
+  const modelPickerRef = useRef<HTMLDivElement>(null);
   const markmapRef = useRef<MarkmapInstance | null>(null);
   const markdownNodeSourcesRef = useRef<Map<string, MarkdownNodeSource>>(
     new Map(),
@@ -1305,6 +1439,7 @@ export default function App() {
   const draftRef = useRef(editorDraft);
   const agentCapabilitiesRef = useRef<AgentCapabilities | null>(null);
   const librarySnapshotRef = useRef<LibrarySnapshot | null>(null);
+  const historyLoadRequestRef = useRef(0);
   const libraryQueryRef = useRef('');
   const categoryFilterRef = useRef('');
   const activeSaveRef = useRef<Promise<boolean> | null>(null);
@@ -1347,6 +1482,32 @@ export default function App() {
     };
     return instance;
   }, []);
+  const ensureAiMathRenderable = (
+    markdown: string,
+    source: string,
+    checkNodeLabels = true,
+  ) => {
+    const crowdedMathLines = checkNodeLabels
+      ? findMathInNodeLabelLines(markdown)
+      : [];
+    if (crowdedMathLines.length > 0) {
+      const lines = crowdedMathLines.slice(0, 5).join('、');
+      const remaining = crowdedMathLines.length - 5;
+      throw new Error(
+        `${source}把数学公式放进了标题或列表节点（第 ${lines}${remaining > 0 ? ` 等 ${crowdedMathLines.length} 处` : ''} 行）。请将公式移到独立数学段落后再应用。`,
+      );
+    }
+    const { root } = transformer.transform(
+      normalizeKatexDelimiters(markdownForMindmap(markdown)),
+      htmlCardParserOptions,
+    );
+    const errorCount = countKatexRenderErrors(root);
+    if (errorCount > 0) {
+      throw new Error(
+        `${source}中有 ${errorCount} 处数学公式无法由 KaTeX 渲染；请让模型修正公式后再应用。`,
+      );
+    }
+  };
   const nodeNotePreviewHtml = useMemo(() => {
     if (!nodeNoteDialog?.markdown.trim()) return '';
     const rendered = renderMarkdownToHtml(
@@ -1368,6 +1529,18 @@ export default function App() {
       { allowMarkdownImages: true },
     ).content;
   }, [markdownPreviewSource, transformer]);
+  const historyPreviewHtml = useMemo(() => {
+    if (!historyPreview?.markdown.trim())
+      return '<p>此版本没有 Markdown 内容。</p>';
+    const rendered = renderMarkdownToHtml(
+      transformer.md,
+      normalizeKatexDelimiters(markdownBody(historyPreview.markdown)),
+    );
+    return sanitizeNode(
+      { content: rendered, children: [] },
+      { allowMarkdownImages: true },
+    ).content;
+  }, [historyPreview?.markdown, transformer]);
 
   useEffect(() => {
     if (!markdownFullscreen) return;
@@ -1588,6 +1761,14 @@ export default function App() {
     if (command.markdown === current.markdown) {
       throw new Error('提案没有产生任何 Markdown 变化。');
     }
+    if (input.operation !== 'delete') {
+      if (input.operation === 'set_note') {
+        ensureAiMathRenderable(input.text, 'AI 节点备注', false);
+      } else {
+        const nodeLabel = input.text.replace(/\s*\n+\s*/g, ' ').trim();
+        ensureAiMathRenderable(`- ${nodeLabel}`, 'AI 节点修改');
+      }
+    }
     const previousNote = source.id
       ? getMarkdownNodeNote(current.markdown, source.id)
       : '';
@@ -1654,6 +1835,7 @@ export default function App() {
       throw new Error('该节点不支持添加下探分支，请选择普通标题或列表节点。');
     }
     const prepared = prepareGeneratedBranchAssets(input.branchMarkdown);
+    ensureAiMathRenderable(prepared.markdown, 'AI 分支');
     const command = applyMarkdownNodeBranch(
       current.markdown,
       source,
@@ -1970,6 +2152,153 @@ export default function App() {
     setLibraryDocuments(documents);
   };
 
+  const loadHistoryVersion = async (versionId: string) => {
+    const documentId = draftRef.current.id;
+    if (!documentId) return;
+    const request = ++historyLoadRequestRef.current;
+    setHistoryLoading(true);
+    setHistoryError('');
+    try {
+      const snapshot = await invoke<DocumentVersionSnapshot>(
+        'load_document_version',
+        { documentId, versionId },
+      );
+      if (
+        request === historyLoadRequestRef.current &&
+        draftRef.current.id === documentId
+      ) {
+        setHistoryPreview(snapshot);
+      }
+    } catch (error) {
+      if (request === historyLoadRequestRef.current)
+        setHistoryError(errorMessage(error, '无法读取历史版本内容。'));
+    } finally {
+      if (request === historyLoadRequestRef.current) setHistoryLoading(false);
+    }
+  };
+
+  const closeDocumentHistory = () => {
+    historyLoadRequestRef.current += 1;
+    setHistoryOpen(false);
+  };
+
+  const openDocumentHistory = async () => {
+    const current = draftRef.current;
+    if (!current.id || !current.relativePath) return;
+    const request = ++historyLoadRequestRef.current;
+    setHistoryOpen(true);
+    setHistoryLoading(true);
+    setHistoryError('');
+    setHistoryPreview(null);
+    setHistoryVersions([]);
+    if (current.dirty && !(await saveDraft())) {
+      if (request === historyLoadRequestRef.current) {
+        setHistoryError('当前修改尚未保存，历史记录未能加载。');
+        setHistoryLoading(false);
+      }
+      return;
+    }
+    if (request !== historyLoadRequestRef.current) return;
+    const target = draftRef.current;
+    if (!target.id || target.id !== current.id) {
+      setHistoryError('当前思维导图已变化，请重新打开历史记录。');
+      setHistoryLoading(false);
+      return;
+    }
+    try {
+      const versions = await invoke<DocumentVersion[]>(
+        'list_document_versions',
+        { documentId: target.id },
+      );
+      if (
+        request !== historyLoadRequestRef.current ||
+        draftRef.current.id !== target.id
+      ) {
+        return;
+      }
+      setHistoryVersions(versions);
+      if (versions[0]) await loadHistoryVersion(versions[0].versionId);
+    } catch (error) {
+      if (request === historyLoadRequestRef.current)
+        setHistoryError(errorMessage(error, '无法读取历史版本列表。'));
+    } finally {
+      if (request === historyLoadRequestRef.current) setHistoryLoading(false);
+    }
+  };
+
+  const restoreHistoryVersion = async () => {
+    const selected = historyPreview;
+    const current = draftRef.current;
+    if (
+      !selected ||
+      !current.id ||
+      !current.relativePath ||
+      current.id !== selected.documentId
+    ) {
+      setHistoryError('当前思维导图已变化，请重新打开历史记录。');
+      return;
+    }
+    setHistoryBusy(true);
+    setHistoryError('');
+    try {
+      if (current.dirty && !(await saveDraft())) return;
+      const latest = draftRef.current;
+      if (latest.id !== selected.documentId || !latest.relativePath) {
+        setHistoryError('当前思维导图已变化，未执行恢复。');
+        return;
+      }
+      const restored = await invoke<OpenedDocument>(
+        'restore_document_version',
+        {
+          documentId: selected.documentId,
+          relativePath: latest.relativePath,
+          versionId: selected.versionId,
+        },
+      );
+      installDraft(
+        createDraft({
+          id: restored.document.id,
+          relativePath: restored.document.relativePath,
+          title: restored.document.title,
+          category: restored.document.category || '未分类',
+          mapType: restored.document.mapType || '通用',
+          tags: restored.document.tags.join(', '),
+          markdown: restored.markdown,
+          revision: latest.revision + 1,
+        }),
+      );
+      const updatedLibrary = librarySnapshotRef.current;
+      if (updatedLibrary) {
+        const parts = restored.document.category.split('/').filter(Boolean);
+        const categories = new Set(updatedLibrary.categories);
+        for (let index = 1; index <= parts.length; index += 1)
+          categories.add(parts.slice(0, index).join('/'));
+        const nextLibrary = {
+          ...updatedLibrary,
+          categories: [...categories].sort(),
+          documents: [
+            restored.document,
+            ...updatedLibrary.documents.filter(
+              (document) => document.id !== restored.document.id,
+            ),
+          ],
+        };
+        installLibrarySnapshot(nextLibrary);
+      }
+      void searchLibrary().catch((error) =>
+        setLibraryError(errorMessage(error, '更新搜索索引失败')),
+      );
+      closeDocumentHistory();
+      setHistoryPreview(null);
+      setSaveMessage('已恢复到所选版本');
+      setLibraryError('');
+    } catch (error) {
+      setHistoryError(errorMessage(error, '恢复历史版本失败。'));
+    } finally {
+      setHistoryBusy(false);
+    }
+  };
+
   const saveDraft = async (force = false): Promise<boolean> => {
     const activeSave = activeSaveRef.current;
     if (activeSave) {
@@ -1997,6 +2326,7 @@ export default function App() {
         .map((tag) => tag.trim())
         .filter(Boolean),
       markdown: snapshot.markdown,
+      historySource: force ? 'manual' : 'autosave',
     };
     setSaveMessage('正在保存…');
     const task = (async () => {
@@ -2449,6 +2779,7 @@ export default function App() {
         model: providerSettings.model,
         prompt: prompt.trim(),
       });
+      ensureAiMathRenderable(generatedMarkdown, 'AI 生成结果');
       const activeDraft = draftRef.current;
       if (activeDraft.relativePath) {
         if (activeDraft.dirty && !(await saveDraft())) {
@@ -2486,6 +2817,44 @@ export default function App() {
     } finally {
       setIsGenerating(false);
     }
+  };
+
+  const loadProviderModels = async () => {
+    setProviderModelsLoading(true);
+    setProviderModels([]);
+    setProviderModelsError('');
+    try {
+      const models = await invoke<string[]>('list_provider_models', {
+        baseUrl: providerSettings.baseUrl,
+      });
+      setProviderModels(models);
+    } catch (error) {
+      setProviderModels([]);
+      setProviderModelsError(
+        errorMessage(error, '无法获取模型列表；可以手动填写模型 ID。'),
+      );
+    } finally {
+      setProviderModelsLoading(false);
+    }
+  };
+
+  const toggleModelPicker = () => {
+    if (modelPickerOpen) {
+      setModelPickerOpen(false);
+      return;
+    }
+    setProviderModelQuery('');
+    setManualProviderModel(providerSettings.model);
+    setModelPickerOpen(true);
+    void loadProviderModels();
+  };
+
+  const chooseProviderModel = (model: string) => {
+    const selected = model.trim();
+    if (!selected) return;
+    setProviderSettings((current) => ({ ...current, model: selected }));
+    setManualProviderModel(selected);
+    setModelPickerOpen(false);
   };
 
   const openSettings = () => {
@@ -2528,6 +2897,27 @@ export default function App() {
   }, [providerSettings]);
 
   useEffect(() => {
+    if (!modelPickerOpen) return;
+    const closeOnPointerDown = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !modelPickerRef.current?.contains(event.target)
+      ) {
+        setModelPickerOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setModelPickerOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnPointerDown);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnPointerDown);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [modelPickerOpen]);
+
+  useEffect(() => {
     try {
       localStorage.setItem(themeStorageKey, theme);
     } catch {
@@ -2544,12 +2934,22 @@ export default function App() {
   }, [mindmapStyle]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(nodeWrapStorageKey, nodeWrapMode);
-    } catch {
-      // Keep the selected node wrapping mode for this session.
+    if (!nodeSpacing || typeof nodeSpacing !== 'object') {
+      const migrated = readNodeSpacing();
+      setNodeSpacing(migrated);
+      try {
+        localStorage.setItem(nodeSpacingStorageKey, JSON.stringify(migrated));
+      } catch {
+        // Keep the selected node spacing for this session.
+      }
+      return;
     }
-  }, [nodeWrapMode]);
+    try {
+      localStorage.setItem(nodeSpacingStorageKey, JSON.stringify(nodeSpacing));
+    } catch {
+      // Keep the selected node spacing for this session.
+    }
+  }, [nodeSpacing]);
 
   useEffect(() => {
     try {
@@ -2692,8 +3092,8 @@ export default function App() {
       duration: 220,
       direction:
         mindmapStyles.find((s) => s.id === mindmapStyle)?.direction || 'both',
-      linkShape: 'rounded-orthogonal',
-      linkRadius: 8,
+      linkShape: 'orthogonal',
+      linkRadius: 0,
       linkAnchor: (node: MapColorNode) =>
         mapNodeLinkAnchor(mindmapStyle, node.state.depth),
       lineWidth: (node: MapColorNode) => mapNodeLineWidth(node.state.depth),
@@ -2704,9 +3104,9 @@ export default function App() {
           node.state.path || '',
           theme,
         ),
-      maxWidth: 260,
-      spacingHorizontal: 56,
-      spacingVertical: 14,
+      maxWidth: 380,
+      spacingHorizontal: defaultNodeSpacing.horizontal,
+      spacingVertical: defaultNodeSpacing.vertical,
       fitRatio: 0.9,
       pan: true,
       zoom: true,
@@ -2748,7 +3148,7 @@ export default function App() {
       editor.setAttribute('role', 'textbox');
       editor.setAttribute(
         'aria-label',
-        '编辑思维导图节点；按 Enter 添加同级节点，按 Tab 添加子节点',
+        '\u6309 Enter \u6362\u884c\uff0c\u6309 Ctrl+Enter \u6dfb\u52a0\u540c\u7ea7\uff0c\u6309 Tab \u6dfb\u52a0\u5b50\u8282\u70b9',
       );
       editor.setAttribute('spellcheck', 'false');
       editor.classList.add('is-canvas-editing');
@@ -2801,7 +3201,14 @@ export default function App() {
           keyEvent.preventDefault();
           keyEvent.stopPropagation();
           finish('cancel');
-        } else if (keyEvent.key === 'Enter' && keyEvent.shiftKey) {
+        } else if (
+          keyEvent.key === 'Enter' &&
+          (keyEvent.ctrlKey || keyEvent.metaKey)
+        ) {
+          keyEvent.preventDefault();
+          keyEvent.stopPropagation();
+          finish('sibling');
+        } else if (keyEvent.key === 'Enter') {
           keyEvent.preventDefault();
           keyEvent.stopPropagation();
           const selection = window.getSelection();
@@ -2815,10 +3222,6 @@ export default function App() {
           range.collapse(true);
           selection.removeAllRanges();
           selection.addRange(range);
-        } else if (keyEvent.key === 'Enter') {
-          keyEvent.preventDefault();
-          keyEvent.stopPropagation();
-          finish('sibling');
         } else if (keyEvent.key === 'Tab') {
           keyEvent.preventDefault();
           keyEvent.stopPropagation();
@@ -2970,6 +3373,8 @@ export default function App() {
       .setData(undefined, {
         direction:
           mindmapStyles.find((s) => s.id === mindmapStyle)?.direction || 'both',
+        linkShape: 'orthogonal',
+        linkRadius: 0,
         color: (node) =>
           mapNodeColor(
             mindmapStyle,
@@ -2981,7 +3386,7 @@ export default function App() {
         linkAnchor: (node) => mapNodeLinkAnchor(mindmapStyle, node.state.depth),
       })
       .then(() => setSourceMapVersion((version) => version + 1));
-  }, [mindmapStyle, theme, nodeWrapMode]);
+  }, [mindmapStyle, theme]);
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -3143,6 +3548,44 @@ export default function App() {
     transformer,
   ]);
 
+  useEffect(() => {
+    const map = markmapRef.current;
+    if (!map) return;
+
+    const spacingHorizontal = activeNodeSpacing.horizontal;
+    const spacingVertical = activeNodeSpacing.vertical;
+    if (
+      map.options.spacingHorizontal === spacingHorizontal &&
+      map.options.spacingVertical === spacingVertical
+    )
+      return;
+
+    const timer = window.setTimeout(() => {
+      if (markmapRef.current !== map) return;
+      const previousAutoFit = map.options.autoFit;
+      const previousDuration = map.options.duration;
+      void map
+        .setData(undefined, {
+          autoFit: false,
+          duration: 0,
+          spacingHorizontal,
+          spacingVertical,
+        })
+        .catch((error) => {
+          console.error('Failed to update mindmap spacing', error);
+        })
+        .finally(() => {
+          if (markmapRef.current === map)
+            map.setOptions({
+              autoFit: previousAutoFit,
+              duration: previousDuration,
+            });
+        });
+    }, 80);
+
+    return () => window.clearTimeout(timer);
+  }, [nodeSpacing]);
+
   const handleZoom = (factor: number) => {
     void markmapRef.current?.rescale(factor);
   };
@@ -3182,7 +3625,6 @@ export default function App() {
       className="app-shell"
       data-theme={theme}
       data-map-style={mindmapStyle}
-      data-node-wrap={nodeWrapMode}
     >
       <header className="topbar">
         <div className="brand-lockup">
@@ -3396,6 +3838,16 @@ export default function App() {
                     预览
                   </button>
                 </div>
+                <button
+                  type="button"
+                  className="source-history-button"
+                  title="查看并恢复历史版本"
+                  aria-label="查看历史版本"
+                  disabled={!editorDraft.id || !editorDraft.relativePath}
+                  onClick={() => void openDocumentHistory()}
+                >
+                  历史
+                </button>
                 <span className="format-badge">.md</span>
                 <div className="source-insert-tools" aria-label="插入节点">
                   <button
@@ -3642,11 +4094,12 @@ export default function App() {
                       <strong>画布</strong>拖动平移 · 滚轮缩放 · 实时预览
                     </p>
                     <p>
-                      <strong>节点</strong>双击编辑 · Enter 添加同级 · Tab
-                      添加子级
+                      <strong>节点</strong>
+                      双击编辑 · Enter 换行 · Ctrl+Enter 添加同级 · Tab 添加子级
                     </p>
                     <p>
-                      <strong>换行</strong>手动模式下使用 Shift+Enter 换行
+                      <strong>自动换行</strong>约 20
+                      个汉字；短文本按内容宽度显示
                     </p>
                     <p>
                       <strong>内容</strong>支持
@@ -3661,28 +4114,49 @@ export default function App() {
                   </div>
                 </details>
                 <div
-                  className="node-wrap-picker"
+                  className="canvas-spacing-control"
                   role="group"
-                  aria-label="节点换行方式"
+                  aria-label="节点水平和垂直间距"
+                  title="分别调整水平和垂直间距；默认值为 56 和 14"
                 >
-                  <button
-                    type="button"
-                    className={`node-wrap-option${nodeWrapMode === 'auto' ? ' is-selected' : ''}`}
-                    aria-pressed={nodeWrapMode === 'auto'}
-                    title="按约 10 个汉字宽度自动换行"
-                    onClick={() => setNodeWrapMode('auto')}
-                  >
-                    自动 10 字
-                  </button>
-                  <button
-                    type="button"
-                    className={`node-wrap-option${nodeWrapMode === 'manual' ? ' is-selected' : ''}`}
-                    aria-pressed={nodeWrapMode === 'manual'}
-                    title="双击节点编辑，按 Shift+Enter 插入换行"
-                    onClick={() => setNodeWrapMode('manual')}
-                  >
-                    手动换行
-                  </button>
+                  <label className="canvas-spacing-axis" title="水平节点间距">
+                    <span>横</span>
+                    <input
+                      type="range"
+                      min={28}
+                      max={112}
+                      step={4}
+                      value={activeNodeSpacing.horizontal}
+                      aria-label="水平节点距离"
+                      aria-valuetext={`${activeNodeSpacing.horizontal}`}
+                      onChange={(event) =>
+                        setNodeSpacing({
+                          ...activeNodeSpacing,
+                          horizontal: Number(event.target.value),
+                        })
+                      }
+                    />
+                    <output>{activeNodeSpacing.horizontal}</output>
+                  </label>
+                  <label className="canvas-spacing-axis" title="垂直节点间距">
+                    <span>竖</span>
+                    <input
+                      type="range"
+                      min={7}
+                      max={28}
+                      step={1}
+                      value={activeNodeSpacing.vertical}
+                      aria-label="垂直节点距离"
+                      aria-valuetext={`${activeNodeSpacing.vertical}`}
+                      onChange={(event) =>
+                        setNodeSpacing({
+                          ...activeNodeSpacing,
+                          vertical: Number(event.target.value),
+                        })
+                      }
+                    />
+                    <output>{activeNodeSpacing.vertical}</output>
+                  </label>
                 </div>
                 <span className="tool-divider" aria-hidden="true" />
                 <button
@@ -3815,13 +4289,137 @@ export default function App() {
               <h1>LLM</h1>
             </div>
             {!aiCollapsed && (
-              <div
-                className="ai-model-badge"
-                title={`模型类型：OpenAI 兼容 API；服务：${providerLabel(providerSettings.baseUrl)}；模型：${providerSettings.model || '未配置'}`}
-              >
-                <span className="model-dot" />
-                <span>API · {providerLabel(providerSettings.baseUrl)}</span>
-                <strong>{providerSettings.model || '未配置'}</strong>
+              <div className="ai-model-picker" ref={modelPickerRef}>
+                <button
+                  type="button"
+                  className="ai-model-badge ai-model-picker-trigger"
+                  aria-haspopup="dialog"
+                  aria-expanded={modelPickerOpen}
+                  aria-label={'选择 API 模型，当前为 ' + providerSettings.model}
+                  title="选择当前 API 提供的模型"
+                  onClick={toggleModelPicker}
+                >
+                  <span className="model-dot" />
+                  <span>API · {providerLabel(providerSettings.baseUrl)}</span>
+                  <strong>{providerSettings.model || '未配置'}</strong>
+                  <span className="ai-model-chevron" aria-hidden="true">
+                    ⌄
+                  </span>
+                </button>
+                {modelPickerOpen && (
+                  <div
+                    className="ai-model-menu"
+                    role="dialog"
+                    aria-label="选择 API 模型"
+                  >
+                    <div className="ai-model-menu-heading">
+                      <strong>选择 API 模型</strong>
+                      <button
+                        type="button"
+                        className="ai-model-refresh"
+                        disabled={providerModelsLoading}
+                        onClick={() => void loadProviderModels()}
+                      >
+                        {providerModelsLoading ? '读取中…' : '刷新列表'}
+                      </button>
+                    </div>
+                    <small className="ai-model-menu-endpoint">
+                      {providerSettings.baseUrl}
+                    </small>
+                    <input
+                      className="ai-model-search"
+                      type="search"
+                      value={providerModelQuery}
+                      onChange={(event) =>
+                        setProviderModelQuery(event.target.value)
+                      }
+                      placeholder="筛选模型"
+                      aria-label="筛选模型"
+                    />
+                    {providerModelsLoading && (
+                      <div className="ai-model-menu-status">
+                        正在读取 API 模型…
+                      </div>
+                    )}
+                    {!providerModelsLoading && providerModelsError && (
+                      <div className="ai-model-menu-error" role="status">
+                        {providerModelsError}
+                      </div>
+                    )}
+                    {!providerModelsLoading &&
+                      providerModels.length === 0 &&
+                      !providerModelsError && (
+                        <div className="ai-model-menu-status">
+                          API 尚未返回模型列表，可在下方手动输入。
+                        </div>
+                      )}
+                    <div
+                      className="ai-model-options"
+                      role="listbox"
+                      aria-label="API 可用模型"
+                    >
+                      {providerModels
+                        .filter((model) =>
+                          model
+                            .toLowerCase()
+                            .includes(providerModelQuery.trim().toLowerCase()),
+                        )
+                        .map((model) => (
+                          <button
+                            key={model}
+                            type="button"
+                            role="option"
+                            aria-selected={providerSettings.model === model}
+                            className={
+                              providerSettings.model === model
+                                ? 'is-selected'
+                                : ''
+                            }
+                            onClick={() => chooseProviderModel(model)}
+                          >
+                            {model}
+                          </button>
+                        ))}
+                    </div>
+                    {!providerModelsLoading &&
+                      providerModels.length > 0 &&
+                      !providerModels.some((model) =>
+                        model
+                          .toLowerCase()
+                          .includes(providerModelQuery.trim().toLowerCase()),
+                      ) && (
+                        <div className="ai-model-menu-status">
+                          没有匹配的模型。
+                        </div>
+                      )}
+                    <form
+                      className="ai-model-manual"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        chooseProviderModel(manualProviderModel);
+                      }}
+                    >
+                      <label htmlFor="manual-api-model">手动输入模型 ID</label>
+                      <div>
+                        <input
+                          id="manual-api-model"
+                          value={manualProviderModel}
+                          onChange={(event) =>
+                            setManualProviderModel(event.target.value)
+                          }
+                          maxLength={200}
+                          placeholder="例如 deepseek-chat"
+                        />
+                        <button
+                          type="submit"
+                          disabled={!manualProviderModel.trim()}
+                        >
+                          使用
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                )}
               </div>
             )}
             <button
@@ -3976,6 +4574,122 @@ export default function App() {
           >
             ×
           </button>
+        </div>
+      )}
+
+      {historyOpen && (
+        <div
+          className="settings-backdrop history-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !historyBusy)
+              closeDocumentHistory();
+          }}
+        >
+          <section
+            className="settings-dialog history-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="document-history-title"
+          >
+            <div className="settings-heading history-heading">
+              <div>
+                <span className="pane-kicker">DOCUMENT HISTORY</span>
+                <h2 id="document-history-title">版本回溯</h2>
+                <p>{editorDraft.title}</p>
+              </div>
+              <button
+                type="button"
+                className="dialog-close"
+                aria-label="关闭版本历史"
+                disabled={historyBusy}
+                onClick={closeDocumentHistory}
+              >
+                ×
+              </button>
+            </div>
+            <div className="history-layout">
+              <div className="history-version-list" aria-label="历史版本列表">
+                {historyVersions.length === 0 && !historyLoading && (
+                  <div className="history-empty">
+                    暂无历史版本。文件打开后会建立初始快照。
+                  </div>
+                )}
+                {historyVersions.map((version) => (
+                  <button
+                    type="button"
+                    key={version.versionId}
+                    className={`history-version-item${historyPreview?.versionId === version.versionId ? ' is-selected' : ''}`}
+                    aria-pressed={
+                      historyPreview?.versionId === version.versionId
+                    }
+                    onClick={() => void loadHistoryVersion(version.versionId)}
+                  >
+                    <strong>{formatHistoryTimestamp(version.createdAt)}</strong>
+                    <span>
+                      {historySourceLabel(version.source)} ·{' '}
+                      {formatHistoryBytes(version.markdownBytes)}
+                    </span>
+                    <small>{version.title}</small>
+                  </button>
+                ))}
+              </div>
+              <div className="history-preview-column">
+                <div className="history-preview-heading">
+                  <strong>
+                    {historyPreview
+                      ? `${historyPreview.title} · ${historySourceLabel(historyPreview.source)}`
+                      : '版本内容预览'}
+                  </strong>
+                  {historyPreview && (
+                    <span>
+                      {formatHistoryTimestamp(historyPreview.createdAt)}
+                    </span>
+                  )}
+                </div>
+                {historyLoading ? (
+                  <div className="history-preview-message" role="status">
+                    正在读取版本…
+                  </div>
+                ) : historyPreview ? (
+                  <div className="history-markdown-preview">
+                    <MarkdownPreview
+                      html={historyPreviewHtml}
+                      source={historyPreview.markdown}
+                      theme={theme}
+                    />
+                  </div>
+                ) : (
+                  <div className="history-preview-message">
+                    选择左侧版本查看当时保存的 Markdown。
+                  </div>
+                )}
+              </div>
+            </div>
+            {historyError && (
+              <div className="history-error" role="alert">
+                {historyError}
+              </div>
+            )}
+            <div className="settings-footer history-footer">
+              <span>恢复会保留当前版本，并新增一条恢复记录。</span>
+              <button
+                type="button"
+                className="text-button"
+                disabled={historyBusy}
+                onClick={closeDocumentHistory}
+              >
+                关闭
+              </button>
+              <button
+                type="button"
+                className="done-button"
+                disabled={!historyPreview || historyBusy || historyLoading}
+                onClick={() => void restoreHistoryVersion()}
+              >
+                {historyBusy ? '正在恢复…' : '恢复到此版本'}
+              </button>
+            </div>
+          </section>
         </div>
       )}
 

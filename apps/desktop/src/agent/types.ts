@@ -90,6 +90,13 @@ export interface AgentTurnUsage {
   contextTokensEstimate: number;
 }
 
+export interface ModelContextWindow {
+  tokens: number;
+  sourceLabel: string;
+  sourceUrl: string;
+  verifiedOn: string;
+}
+
 export interface AgentModelRequestEvent {
   id: string;
   kind: 'model';
@@ -143,6 +150,7 @@ export interface AgentTurnDetails {
   startedAt: number;
   endedAt?: number;
   durationMs?: number;
+  contextWindow: ModelContextWindow | null;
   usage: AgentTurnUsage;
   events: AgentCallEvent[];
 }

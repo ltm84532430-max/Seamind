@@ -28,4 +28,28 @@ export interface SaveDocumentInput {
   mapType: string;
   tags: string[];
   markdown: string;
+  historySource?: 'autosave' | 'manual' | 'restore';
+}
+
+export type DocumentVersionSource =
+  | 'baseline'
+  | 'autosave'
+  | 'manual'
+  | 'restore';
+
+export interface DocumentVersion {
+  versionId: string;
+  documentId: string;
+  relativePath: string;
+  title: string;
+  category: string;
+  mapType: string;
+  tags: string[];
+  source: DocumentVersionSource;
+  createdAt: number;
+  markdownBytes: number;
+}
+
+export interface DocumentVersionSnapshot extends DocumentVersion {
+  markdown: string;
 }

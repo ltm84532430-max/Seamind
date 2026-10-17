@@ -137,7 +137,7 @@ export const agentToolCatalog: AgentToolDescriptor[] = [
     version: 1,
     name: 'mindmap_propose_node_branch',
     description:
-      '在指定节点下生成一组 Markdown 标题层级作为子节点分支。analysisMode=drilldown 时按定义、起源、实际工程应用与意义、例子组织内容，理学主题按需包含推导，并提炼可迁移结构与元认知案例；analysisMode=visualization 时可用 Mermaid、echarts、python、svg、独立 html 代码块或 YouTube 链接，按主题选择适合的表达。必须基于 mindmap_get_current 的 revision 和目标 nodeId/nodePath。工具只返回预览提案，必须由用户确认后才会修改。',
+      '在指定节点下生成一组 Markdown 标题层级作为子节点分支。节点标题尽量不超过 20 个汉字（英文 40 个字符）；每个标题或列表项保持单行，禁止在单个节点文字中手动插入换行；长解释用简短父节点加必要子节点表达，一个节点只放一个要点，保留关键条件和公式。数学公式不得放进标题或列表项标签：行内用 $...$，独立公式单独成段使用 $$...$$，每个公式块只放一个完整表达式且不在 LaTeX 内手动换行；推导按假设/定义、代入/变形、结论拆成短节点，每步最多一个公式。较长公式按等价变形分步，不得省略数学内容；静态推导使用 KaTeX，只有绘图或交互时才使用 seamind-math。analysisMode=drilldown 时按定义、起源、实际工程应用与意义、例子组织内容，理学主题按需包含推导，并提炼可迁移结构与元认知案例；analysisMode=visualization 时可用 Mermaid、echarts、python、svg、独立 html 代码块或 YouTube 链接，按主题选择适合的表达。必须基于 mindmap_get_current 的 revision 和目标 nodeId/nodePath。工具只返回预览提案，必须由用户确认后才会修改。',
     permission: 'user_approval',
     inputSchema: schema(
       {
