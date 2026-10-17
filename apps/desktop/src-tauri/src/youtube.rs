@@ -40,7 +40,10 @@ pub async fn youtube_open_with_mpv(video_id: String, start_seconds: u64) -> Resu
         return Err("无效的 YouTube 视频编号。".to_string());
     }
 
-    tokio::task::spawn_blocking(move || launch_mpv(&video_id, start_seconds))
+    tokio::task::spawn_blocking(move || {
+        let resolution = resolve_youtube_playback(&video_id)?;
+        launch_resolved_media_with_mpv(resolution, start_seconds)
+    })
         .await
         .map_err(|error| format!("外部播放器启动任务失败：{error}"))?
 }
@@ -73,51 +76,37 @@ fn is_valid_video_id(video_id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
 }
 
-fn launch_mpv(video_id: &str, start_seconds: u64) -> Result<(), String> {
-    if !is_extractor_available() {
-        return Err(
-            "外部播放器需要已安装的 yt-dlp。请安装后加入系统 PATH，或设置 SEAMIND_YT_DLP_PATH。"
-                .to_string(),
-        );
-    }
-
-    let player = std::env::var_os("SEAMIND_MPV_PATH").unwrap_or_else(|| "mpv".into());
-    let video_url = format!("https://www.youtube.com/watch?v={video_id}");
-    let mut command = Command::new(player);
-    command
-        .arg("--force-window=immediate")
-        .arg("--ytdl=yes")
-        .arg("--ytdl-format=bestvideo*+bestaudio/best")
-        .arg("--no-terminal");
-    if start_seconds > 0 {
-        command.arg(format!("--start={start_seconds}"));
-    }
-    if let Some(extractor_path) = std::env::var_os("SEAMIND_YT_DLP_PATH") {
-        command.arg(format!(
-            "--script-opts=ytdl_hook-ytdl_path={}",
-            std::path::PathBuf::from(extractor_path).display()
-        ));
-    }
-    command
-        .arg("--")
-        .arg(video_url)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000);
-    }
-
-    command.spawn().map(|_| ()).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            "未找到 mpv。请安装 mpv 并加入系统 PATH，或设置 SEAMIND_MPV_PATH。".to_string()
-        } else {
-            format!("无法启动 mpv：{error}")
+fn launch_resolved_media_with_mpv(
+    resolution: PlaybackResolution,
+    start_seconds: u64,
+) -> Result<(), String> {
+    let (media_url, audio_url) = match resolution {
+        PlaybackResolution::Html5 { url, .. } => (url, None),
+        PlaybackResolution::Mpv {
+            media_url: Some(media_url),
+            audio_url,
+            ..
+        } => (media_url, audio_url),
+        PlaybackResolution::Mpv {
+            media_url: None,
+            reason,
+            ..
+        } => {
+            return Err(format!(
+                "解析器没有返回可交给外部播放器的媒体地址：{reason}"
+            ));
         }
-    })
+    };
+
+    if !is_allowed_media_url(&media_url)
+        || audio_url
+            .as_deref()
+            .is_some_and(|url| !is_allowed_media_url(url))
+    {
+        return Err("解析器返回的媒体地址不在允许的 YouTube 视频域名内。".to_string());
+    }
+
+    launch_mpv_media(&media_url, audio_url.as_deref(), start_seconds)
 }
 
 fn launch_mpv_media(
@@ -193,21 +182,6 @@ fn launch_ffplay_media(media_url: &str, start_seconds: u64) -> std::io::Result<(
     command.spawn().map(|_| ())
 }
 
-fn is_extractor_available() -> bool {
-    extractor_candidates()
-        .into_iter()
-        .any(|(program, prefix_args)| {
-            Command::new(program)
-                .args(prefix_args)
-                .arg("--version")
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .is_ok_and(|status| status.success())
-        })
-}
-
 #[derive(Debug, Deserialize)]
 struct YtDlpFormat {
     #[serde(default)]
@@ -231,7 +205,7 @@ struct YtDlpInfo {
 }
 
 fn resolve_youtube_playback(video_id: &str) -> Result<PlaybackResolution, String> {
-    if let Some(program) = std::env::var_os("SEAMIND_NEWPIPE_BRIDGE") {
+    if let Some(program) = newpipe_bridge_program() {
         match resolve_with_newpipe_bridge(&program, video_id) {
             Ok(resolution) => return Ok(resolution),
             Err(bridge_error) => {
@@ -245,6 +219,26 @@ fn resolve_youtube_playback(video_id: &str) -> Result<PlaybackResolution, String
     }
 
     resolve_youtube_playback_with_yt_dlp(video_id)
+}
+
+fn newpipe_bridge_program() -> Option<std::ffi::OsString> {
+    if let Some(program) = std::env::var_os("SEAMIND_NEWPIPE_BRIDGE") {
+        return Some(program);
+    }
+
+    #[cfg(windows)]
+    {
+        let profile = std::env::var_os("USERPROFILE")?;
+        let bridge = std::path::PathBuf::from(profile)
+            .join("Desktop")
+            .join("NewPipe")
+            .join("seamind-newpipe-bridge.ps1");
+        if bridge.is_file() {
+            return Some(bridge.into_os_string());
+        }
+    }
+
+    None
 }
 
 fn resolve_with_newpipe_bridge(
