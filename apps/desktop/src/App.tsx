@@ -25,6 +25,16 @@ import {
   nextYouTubeThumbnail,
   prepareYouTubeCards,
 } from './youtube';
+import {
+  canOfferAlternativePlayback,
+  loadYouTubeIframeApi,
+  youtubePlaybackStateLabels,
+  youtubePlayerErrorMessage,
+} from './youtube-player';
+import type {
+  YouTubeIframePlayer,
+  YouTubePlaybackState,
+} from './youtube-player';
 import 'katex/dist/katex.min.css';
 import LibraryPanel from './LibraryPanel';
 import AgentPanel from './AgentPanel';
@@ -159,7 +169,10 @@ interface YouTubePreviewSelection {
   id: string;
   title: string;
   src: string;
+  startSeconds: number;
 }
+
+type YouTubePlaybackMode = 'embed' | 'local';
 
 interface TerminalCommandRequest {
   id: string;
@@ -1386,8 +1399,27 @@ export default function App() {
   const [htmlPreviewError, setHtmlPreviewError] = useState('');
   const [youtubePreview, setYoutubePreview] =
     useState<YouTubePreviewSelection | null>(null);
+  const [youtubeFrameStatus, setYoutubeFrameStatus] =
+    useState<YouTubePlaybackState>('loading');
+  const [youtubePlaybackMode, setYoutubePlaybackMode] =
+    useState<YouTubePlaybackMode>('embed');
+  const [youtubeLocalSource, setYoutubeLocalSource] = useState('');
+  const [youtubeLocalPlaybackError, setYoutubeLocalPlaybackError] =
+    useState('');
+  const [youtubeLocalPlaybackBusy, setYoutubeLocalPlaybackBusy] =
+    useState(false);
+  const [youtubeNativePlaybackBusy, setYoutubeNativePlaybackBusy] =
+    useState(false);
+  const [youtubeNativePlaybackLaunched, setYoutubeNativePlaybackLaunched] =
+    useState(false);
+  const [youtubePlayerError, setYoutubePlayerError] = useState<number | null>(
+    null,
+  );
   const youtubeCardOpenerRef = useRef<HTMLElement | null>(null);
   const youtubeCloseButtonRef = useRef<HTMLButtonElement | null>(null);
+  const youtubeFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const youtubeVideoRef = useRef<HTMLVideoElement | null>(null);
+  const youtubePlayerRef = useRef<YouTubeIframePlayer | null>(null);
   const [htmlCanvasEmbed, setHtmlCanvasEmbed] =
     useState<HtmlCanvasEmbedding | null>(null);
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
@@ -2714,6 +2746,59 @@ export default function App() {
 
   const closeYouTubePreview = () => setYoutubePreview(null);
 
+  const canTryLocalYouTubePlayback = canOfferAlternativePlayback(
+    youtubeFrameStatus,
+    youtubePlayerError,
+  );
+
+  const tryLocalYouTubePlayback = async () => {
+    if (!youtubePreview || youtubeLocalPlaybackBusy) return;
+    setYoutubeLocalPlaybackBusy(true);
+    setYoutubeLocalPlaybackError('');
+    setYoutubeFrameStatus('loading');
+    try {
+      const source = await invoke<string>('youtube_local_playback_source', {
+        videoId: youtubePreview.id,
+      });
+      setYoutubeLocalSource(source);
+      setYoutubePlaybackMode('local');
+      setYoutubeFrameStatus('ready');
+    } catch (error) {
+      setYoutubeLocalPlaybackError(
+        errorMessage(error, '本地解析器无法提供兼容的播放流。'),
+      );
+      setYoutubeFrameStatus('error');
+    } finally {
+      setYoutubeLocalPlaybackBusy(false);
+    }
+  };
+
+  const tryNativeYouTubePlayback = async () => {
+    if (!youtubePreview || youtubeNativePlaybackBusy) return;
+    setYoutubeNativePlaybackBusy(true);
+    setYoutubeLocalPlaybackError('');
+    try {
+      await invoke('youtube_open_with_mpv', {
+        videoId: youtubePreview.id,
+        startSeconds: youtubePreview.startSeconds,
+      });
+      setYoutubeNativePlaybackLaunched(true);
+      setYoutubeLocalPlaybackError('mpv 已启动，正在外部窗口加载视频。');
+    } catch (error) {
+      setYoutubeLocalPlaybackError(errorMessage(error, '无法启动外部播放器。'));
+    } finally {
+      setYoutubeNativePlaybackBusy(false);
+    }
+  };
+
+  const returnToYouTubeEmbed = () => {
+    setYoutubeLocalPlaybackError('');
+    setYoutubeLocalSource('');
+    setYoutubePlaybackMode('embed');
+    setYoutubePlayerError(null);
+    setYoutubeFrameStatus('loading');
+  };
+
   const createCategory = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!categoryDraft.trim()) return;
@@ -3319,13 +3404,23 @@ export default function App() {
       event.preventDefault();
       event.stopPropagation();
       const id = card.dataset.seamindYoutubeId || '';
-      const src = buildYouTubeEmbedUrl(id);
+      const startSeconds = Number(card.dataset.seamindYoutubeStart || '0');
+      const src = buildYouTubeEmbedUrl(id, startSeconds);
       if (!src) return;
       youtubeCardOpenerRef.current = card;
+      setYoutubeFrameStatus('loading');
+      setYoutubePlayerError(null);
+      setYoutubePlaybackMode('embed');
+      setYoutubeLocalSource('');
+      setYoutubeLocalPlaybackError('');
+      setYoutubeLocalPlaybackBusy(false);
+      setYoutubeNativePlaybackBusy(false);
+      setYoutubeNativePlaybackLaunched(false);
       setYoutubePreview({
         id,
         src,
         title: card.dataset.seamindYoutubeTitle || 'YouTube 视频',
+        startSeconds: Number.isSafeInteger(startSeconds) ? startSeconds : 0,
       });
     };
 
@@ -3443,6 +3538,65 @@ export default function App() {
   }, [htmlPreview]);
 
   useEffect(() => {
+    if (!youtubePreview || youtubePlaybackMode === 'local') return;
+    let cancelled = false;
+    let player: YouTubeIframePlayer | null = null;
+
+    void loadYouTubeIframeApi()
+      .then((api) => {
+        const frame = youtubeFrameRef.current;
+        if (cancelled || !frame) return;
+        player = new api.Player(frame, {
+          events: {
+            onReady: () => {
+              if (!cancelled) setYoutubeFrameStatus('ready');
+            },
+            onStateChange: (event) => {
+              if (cancelled) return;
+              switch (event.data) {
+                case api.PlayerState.PLAYING:
+                  setYoutubeFrameStatus('playing');
+                  break;
+                case api.PlayerState.PAUSED:
+                  setYoutubeFrameStatus('paused');
+                  break;
+                case api.PlayerState.BUFFERING:
+                  setYoutubeFrameStatus('buffering');
+                  break;
+                case api.PlayerState.ENDED:
+                  setYoutubeFrameStatus('ended');
+                  break;
+                case api.PlayerState.UNSTARTED:
+                case api.PlayerState.CUED:
+                default:
+                  setYoutubeFrameStatus('ready');
+              }
+            },
+            onError: (event) => {
+              if (cancelled) return;
+              setYoutubePlayerError(event.data);
+              setYoutubeFrameStatus('error');
+            },
+          },
+        });
+        youtubePlayerRef.current = player;
+      })
+      .catch(() => {
+        if (!cancelled) setYoutubeFrameStatus('error');
+      });
+
+    return () => {
+      cancelled = true;
+      const activePlayer = player ?? youtubePlayerRef.current;
+      if (activePlayer) {
+        activePlayer.destroy();
+        if (youtubePlayerRef.current === activePlayer)
+          youtubePlayerRef.current = null;
+      }
+    };
+  }, [youtubePreview, youtubePlaybackMode]);
+
+  useEffect(() => {
     if (!youtubePreview) return;
     const opener = youtubeCardOpenerRef.current;
     youtubeCloseButtonRef.current?.focus();
@@ -3457,6 +3611,16 @@ export default function App() {
       document.removeEventListener('keydown', closeOnEscape);
       if (opener?.isConnected) opener.focus();
     };
+  }, [youtubePreview]);
+
+  useEffect(() => {
+    if (!youtubePreview) return;
+    const timeout = window.setTimeout(() => {
+      setYoutubeFrameStatus((status) =>
+        status === 'loading' ? 'timeout' : status,
+      );
+    }, 15000);
+    return () => window.clearTimeout(timeout);
   }, [youtubePreview]);
 
   useEffect(() => {
@@ -4788,16 +4952,159 @@ export default function App() {
               </button>
             </div>
             <div className="youtube-player-stage">
+              {youtubePlaybackMode === 'embed' &&
+                youtubeFrameStatus === 'loading' && (
+                  <div className="youtube-player-loading" role="status">
+                    {youtubeLocalPlaybackBusy
+                      ? '正在解析可播放的 MP4 媒体流…'
+                      : '正在连接 YouTube 播放器…'}
+                  </div>
+                )}
+              {youtubePlaybackMode === 'embed' &&
+                (youtubeFrameStatus === 'error' ||
+                  youtubeFrameStatus === 'timeout') && (
+                  <div className="youtube-player-notice" role="alert">
+                    {youtubeLocalPlaybackError ||
+                      (youtubeFrameStatus === 'timeout'
+                        ? 'YouTube 播放器连接超时，可以打开视频页面继续观看。'
+                        : `${youtubePlayerErrorMessage(youtubePlayerError)} 可以打开视频页面继续观看。`)}
+                  </div>
+                )}
               <iframe
+                key={youtubePreview.id}
+                ref={youtubeFrameRef}
                 title={`播放 ${youtubePreview.title}`}
                 src={youtubePreview.src}
                 allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; web-share"
                 referrerPolicy="strict-origin-when-cross-origin"
                 allowFullScreen
+                style={{
+                  display: youtubePlaybackMode === 'embed' ? 'block' : 'none',
+                }}
+                onError={() => setYoutubeFrameStatus('error')}
               />
+              {youtubePlaybackMode === 'embed' &&
+                canTryLocalYouTubePlayback && (
+                  <div className="youtube-player-actions">
+                    <button
+                      type="button"
+                      className="youtube-player-action"
+                      onClick={() => void tryLocalYouTubePlayback()}
+                      disabled={youtubeLocalPlaybackBusy}
+                    >
+                      {youtubeLocalPlaybackBusy
+                        ? '正在解析…'
+                        : '尝试本地 HTML5 播放'}
+                    </button>
+                    <button
+                      type="button"
+                      className="youtube-player-action"
+                      onClick={() => void tryNativeYouTubePlayback()}
+                      disabled={youtubeNativePlaybackBusy}
+                    >
+                      {youtubeNativePlaybackBusy
+                        ? '正在启动 mpv…'
+                        : '用 mpv 外部播放'}
+                    </button>
+                  </div>
+                )}
+              {youtubePlaybackMode === 'local' && youtubeLocalSource && (
+                <video
+                  ref={youtubeVideoRef}
+                  className="youtube-player-video"
+                  src={youtubeLocalSource}
+                  controls
+                  playsInline
+                  preload="metadata"
+                  onLoadedMetadata={(event) => {
+                    const video = event.currentTarget;
+                    if (
+                      youtubePreview.startSeconds > 0 &&
+                      Number.isFinite(video.duration) &&
+                      youtubePreview.startSeconds < video.duration
+                    )
+                      video.currentTime = youtubePreview.startSeconds;
+                    setYoutubeFrameStatus('ready');
+                  }}
+                  onPlay={() => setYoutubeFrameStatus('playing')}
+                  onPause={() => setYoutubeFrameStatus('paused')}
+                  onWaiting={() => setYoutubeFrameStatus('buffering')}
+                  onEnded={() => setYoutubeFrameStatus('ended')}
+                  onError={() => {
+                    setYoutubeLocalPlaybackError(
+                      '浏览器无法播放该媒体流，或者播放地址已过期。',
+                    );
+                    setYoutubeFrameStatus('error');
+                  }}
+                />
+              )}
+              {youtubePlaybackMode === 'local' &&
+                youtubeFrameStatus === 'error' && (
+                  <div className="youtube-player-notice" role="alert">
+                    <div className="youtube-player-notice-content">
+                      <span>
+                        {youtubeLocalPlaybackError ||
+                          '本地媒体流无法在当前 WebView 播放。'}
+                      </span>
+                      <button
+                        type="button"
+                        className="youtube-player-action"
+                        onClick={() => void tryNativeYouTubePlayback()}
+                        disabled={youtubeNativePlaybackBusy}
+                      >
+                        {youtubeNativePlaybackBusy
+                          ? '正在启动 mpv…'
+                          : '用 mpv 外部播放'}
+                      </button>
+                      <button
+                        type="button"
+                        className="youtube-player-action"
+                        onClick={returnToYouTubeEmbed}
+                      >
+                        返回 YouTube 内嵌播放
+                      </button>
+                    </div>
+                  </div>
+                )}
             </div>
             <div className="youtube-player-meta">
-              视频由 YouTube 提供 · 视频可用性和播放画质由视频源决定
+              <span
+                className="youtube-player-state"
+                data-state={
+                  youtubeNativePlaybackLaunched ? 'ready' : youtubeFrameStatus
+                }
+                aria-live="polite"
+              >
+                <span className="youtube-player-state-dot" aria-hidden="true" />
+                {youtubeNativePlaybackLaunched
+                  ? 'mpv 已启动'
+                  : youtubePlaybackStateLabels[youtubeFrameStatus]}
+              </span>
+              <span>
+                {youtubePlaybackMode === 'local'
+                  ? '本地 HTML5 媒体播放'
+                  : '视频由 YouTube 提供'}
+              </span>
+              {youtubePlaybackMode === 'local' && (
+                <button
+                  type="button"
+                  className="youtube-player-action youtube-player-return"
+                  onClick={returnToYouTubeEmbed}
+                >
+                  返回内嵌播放
+                </button>
+              )}
+              <a
+                href={`https://www.youtube.com/watch?v=${youtubePreview.id}${
+                  youtubePreview.startSeconds > 0
+                    ? `&t=${youtubePreview.startSeconds}s`
+                    : ''
+                }`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                在 YouTube 打开
+              </a>
             </div>
           </section>
         </div>

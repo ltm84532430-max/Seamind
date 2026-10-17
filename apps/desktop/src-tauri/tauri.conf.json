@@ -25,7 +25,7 @@
         "enable": true,
         "scope": []
       },
-      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; img-src 'self' asset: http://asset.localhost data: https://i.ytimg.com; frame-src asset: http://asset.localhost https://www.youtube.com; style-src 'self' 'unsafe-inline'; font-src 'self' data:;"
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://www.youtube.com; worker-src 'self'; connect-src 'self'; img-src 'self' asset: http://asset.localhost data: https://i.ytimg.com; media-src 'self' asset: http://asset.localhost https://*.googlevideo.com; frame-src asset: http://asset.localhost https://www.youtube.com; style-src 'self' 'unsafe-inline'; font-src 'self' data:;"
     }
   },
   "bundle": {

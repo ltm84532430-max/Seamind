@@ -17,9 +17,28 @@ const thumbnailQualities = ['maxresdefault', 'sddefault', 'hqdefault'] as const;
 interface YouTubeVideo {
   id: string;
   title: string;
+  startSeconds: number;
 }
 
-function parseYouTubeVideoUrl(value: string): string | null {
+function parseYouTubeStartTime(value: string | null): number {
+  if (!value) return 0;
+  const text = value.trim();
+  if (/^\d+$/.test(text)) {
+    const seconds = Number(text);
+    return Number.isSafeInteger(seconds) ? seconds : 0;
+  }
+  const match = text.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/i);
+  if (!match || !match.slice(1).some(Boolean)) return 0;
+  const seconds =
+    Number(match[1] || 0) * 3600 +
+    Number(match[2] || 0) * 60 +
+    Number(match[3] || 0);
+  return Number.isSafeInteger(seconds) ? seconds : 0;
+}
+
+function parseYouTubeVideoUrl(
+  value: string,
+): { id: string; startSeconds: number } | null {
   let candidate = value.trim();
   while (trailingUrlPunctuation.test(candidate))
     candidate = candidate.slice(0, -1);
@@ -39,7 +58,14 @@ function parseYouTubeVideoUrl(value: string): string | null {
       const match = url.pathname.match(/^\/(?:shorts|embed|live)\/([^/]+)/);
       id = match?.[1] ?? null;
     }
-    return id && videoIdPattern.test(id) ? id : null;
+    if (!id || !videoIdPattern.test(id)) return null;
+    const hashParams = new URLSearchParams(url.hash.replace(/^#/, ''));
+    const startSeconds = parseYouTubeStartTime(
+      url.searchParams.get('t') ||
+        url.searchParams.get('start') ||
+        hashParams.get('t'),
+    );
+    return { id, startSeconds };
   } catch {
     return null;
   }
@@ -47,31 +73,39 @@ function parseYouTubeVideoUrl(value: string): string | null {
 
 function findYouTubeVideo(content: string): YouTubeVideo | null {
   const document = new DOMParser().parseFromString(content, 'text/html');
-  const candidates = new Map<string, string>();
+  const candidates = new Map<string, { title: string; startSeconds: number }>();
 
   document.body
     .querySelectorAll<HTMLAnchorElement>('a[href]')
     .forEach((anchor) => {
-      const id = parseYouTubeVideoUrl(anchor.href);
-      if (id) candidates.set(id, anchor.textContent?.trim() || '');
+      const video = parseYouTubeVideoUrl(anchor.href);
+      if (video)
+        candidates.set(video.id, {
+          title: anchor.textContent?.trim() || '',
+          startSeconds: video.startSeconds,
+        });
     });
 
   const visibleText = document.body.textContent ?? '';
   for (const candidate of visibleText.match(urlPattern) ?? []) {
-    const id = parseYouTubeVideoUrl(candidate);
-    if (id && !candidates.has(id)) candidates.set(id, '');
+    const video = parseYouTubeVideoUrl(candidate);
+    if (video && !candidates.has(video.id))
+      candidates.set(video.id, { title: '', startSeconds: video.startSeconds });
   }
 
   if (candidates.size !== 1) return null;
   const entry = candidates.entries().next().value;
   if (!entry) return null;
-  const [id, linkTitle] = entry;
+  const [id, candidate] = entry;
   const titleFromText = visibleText
     .replace(urlPattern, ' ')
     .replace(/[\s|·•—–-]+/g, ' ')
     .trim();
-  const title = (titleFromText || linkTitle || 'YouTube 视频').slice(0, 120);
-  return { id, title };
+  const title = (titleFromText || candidate.title || 'YouTube 视频').slice(
+    0,
+    120,
+  );
+  return { id, title, startSeconds: candidate.startSeconds };
 }
 
 function escapeHtml(value: string): string {
@@ -86,7 +120,7 @@ function escapeHtml(value: string): string {
 function videoCardMarkup(video: YouTubeVideo): string {
   const title = escapeHtml(video.title);
   const initialThumbnail = thumbnailQualities[0];
-  return `<button type="button" class="seamind-youtube-card" data-seamind-youtube-card="true" data-seamind-youtube-id="${video.id}" data-seamind-youtube-title="${title}" aria-label="播放 YouTube 视频：${title}"><span class="seamind-youtube-thumbnail"><img class="seamind-youtube-thumbnail-image" data-seamind-youtube-thumbnail="true" data-seamind-youtube-id="${video.id}" data-seamind-youtube-quality="0" src="https://i.ytimg.com/vi/${video.id}/${initialThumbnail}.jpg" alt="" loading="lazy" referrerpolicy="no-referrer"><span class="seamind-youtube-play-icon" aria-hidden="true">▶</span></span><span class="seamind-youtube-details"><strong title="${title}">${title}</strong><span>点击打开播放器</span></span></button>`;
+  return `<button type="button" class="seamind-youtube-card" data-seamind-youtube-card="true" data-seamind-youtube-id="${video.id}" data-seamind-youtube-title="${title}" data-seamind-youtube-start="${video.startSeconds}" aria-label="播放 YouTube 视频：${title}"><span class="seamind-youtube-thumbnail"><img class="seamind-youtube-thumbnail-image" data-seamind-youtube-thumbnail="true" data-seamind-youtube-id="${video.id}" data-seamind-youtube-quality="0" src="https://i.ytimg.com/vi/${video.id}/${initialThumbnail}.jpg" alt="" loading="lazy" referrerpolicy="no-referrer"><span class="seamind-youtube-play-icon" aria-hidden="true">▶</span></span><span class="seamind-youtube-details"><strong title="${title}">${title}</strong><span>点击打开播放器</span></span></button>`;
 }
 
 export function prepareYouTubeCards(node: PureNode): PureNode {
@@ -120,10 +154,22 @@ export function nextYouTubeThumbnail(
   };
 }
 
-export function buildYouTubeEmbedUrl(videoId: string): string | null {
+export function buildYouTubeEmbedUrl(
+  videoId: string,
+  startSeconds = 0,
+): string | null {
   if (!videoIdPattern.test(videoId)) return null;
   const url = new URL(`https://www.youtube.com/embed/${videoId}`);
   url.searchParams.set('playsinline', '1');
   url.searchParams.set('rel', '0');
+  url.searchParams.set('enablejsapi', '1');
+  if (
+    typeof window !== 'undefined' &&
+    window.location.origin &&
+    window.location.origin !== 'null'
+  )
+    url.searchParams.set('origin', window.location.origin);
+  if (Number.isSafeInteger(startSeconds) && startSeconds > 0)
+    url.searchParams.set('start', String(Math.floor(startSeconds)));
   return url.toString();
 }
