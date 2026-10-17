@@ -1,5 +1,6 @@
 mod epub;
 mod library;
+mod media_resolver;
 mod terminal;
 mod youtube;
 
@@ -52,8 +53,9 @@ pub fn run() {
             terminal::terminal_remove_script,
             terminal::terminal_resize,
             terminal::terminal_close,
-            youtube::youtube_local_playback_source,
+            youtube::youtube_resolve_playback,
             youtube::youtube_open_with_mpv,
+            youtube::youtube_open_media_with_mpv,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Markmap Desktop");

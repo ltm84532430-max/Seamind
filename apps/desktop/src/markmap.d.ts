@@ -71,6 +71,7 @@ declare module 'markmap-view' {
     setOptions(options?: Record<string, unknown>): void;
     fit(): Promise<void>;
     rescale(scale: number): Promise<void>;
+    setViewAnchorPath(path?: string): void;
     destroy(): void;
   }
 }

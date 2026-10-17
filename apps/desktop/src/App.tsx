@@ -34,6 +34,7 @@ import {
 import type {
   YouTubeIframePlayer,
   YouTubePlaybackState,
+  YouTubePlaybackResolution,
 } from './youtube-player';
 import 'katex/dist/katex.min.css';
 import LibraryPanel from './LibraryPanel';
@@ -1406,6 +1407,8 @@ export default function App() {
   const [youtubeLocalSource, setYoutubeLocalSource] = useState('');
   const [youtubeLocalPlaybackError, setYoutubeLocalPlaybackError] =
     useState('');
+  const [youtubePlaybackRouteMessage, setYoutubePlaybackRouteMessage] =
+    useState('');
   const [youtubeLocalPlaybackBusy, setYoutubeLocalPlaybackBusy] =
     useState(false);
   const [youtubeNativePlaybackBusy, setYoutubeNativePlaybackBusy] =
@@ -1465,6 +1468,8 @@ export default function App() {
   const mindmapStylePickerRef = useRef<HTMLDivElement>(null);
   const modelPickerRef = useRef<HTMLDivElement>(null);
   const markmapRef = useRef<MarkmapInstance | null>(null);
+  // Fit only after a new document is rendered; ordinary edits keep the viewport.
+  const pendingInitialFitRef = useRef(true);
   const markdownNodeSourcesRef = useRef<Map<string, MarkdownNodeSource>>(
     new Map(),
   );
@@ -1584,6 +1589,8 @@ export default function App() {
   }, [markdownFullscreen]);
 
   const installDraft = (next: EditorDraft) => {
+    pendingInitialFitRef.current = true;
+    markmapRef.current?.setViewAnchorPath(undefined);
     draftRef.current = next;
     setEditorDraft(next);
     setMarkdownEditorSession((session) => session + 1);
@@ -2744,28 +2751,55 @@ export default function App() {
     closeHtmlPreview();
   };
 
-  const closeYouTubePreview = () => setYoutubePreview(null);
+  const closeYouTubePreview = () => {
+    setYoutubePreview(null);
+    setYoutubePlaybackRouteMessage('');
+    setYoutubeNativePlaybackLaunched(false);
+  };
 
-  const canTryLocalYouTubePlayback = canOfferAlternativePlayback(
-    youtubeFrameStatus,
-    youtubePlayerError,
-  );
+  const canOfferYouTubePlayback =
+    canOfferAlternativePlayback(youtubeFrameStatus);
 
-  const tryLocalYouTubePlayback = async () => {
+  const tryRecommendedYouTubePlayback = async () => {
     if (!youtubePreview || youtubeLocalPlaybackBusy) return;
     setYoutubeLocalPlaybackBusy(true);
     setYoutubeLocalPlaybackError('');
+    setYoutubePlaybackRouteMessage('');
+    setYoutubeNativePlaybackLaunched(false);
     setYoutubeFrameStatus('loading');
     try {
-      const source = await invoke<string>('youtube_local_playback_source', {
-        videoId: youtubePreview.id,
-      });
-      setYoutubeLocalSource(source);
-      setYoutubePlaybackMode('local');
-      setYoutubeFrameStatus('ready');
+      const resolution = await invoke<YouTubePlaybackResolution>(
+        'youtube_resolve_playback',
+        {
+          videoId: youtubePreview.id,
+        },
+      );
+      if (resolution.backend === 'html5') {
+        setYoutubeLocalSource(resolution.url);
+        setYoutubePlaybackMode('local');
+        setYoutubeFrameStatus('ready');
+      } else {
+        setYoutubeFrameStatus('ready');
+        if (resolution.mediaUrl) {
+          await invoke('youtube_open_media_with_mpv', {
+            mediaUrl: resolution.mediaUrl,
+            audioUrl: resolution.audioUrl ?? null,
+            startSeconds: youtubePreview.startSeconds,
+          });
+        } else {
+          await invoke('youtube_open_with_mpv', {
+            videoId: youtubePreview.id,
+            startSeconds: youtubePreview.startSeconds,
+          });
+        }
+        setYoutubeNativePlaybackLaunched(true);
+        setYoutubePlaybackRouteMessage(
+          `${resolution.reason} 已交由 mpv 外部播放。`,
+        );
+      }
     } catch (error) {
       setYoutubeLocalPlaybackError(
-        errorMessage(error, '本地解析器无法提供兼容的播放流。'),
+        errorMessage(error, '无法解析或启动兼容的播放方式。'),
       );
       setYoutubeFrameStatus('error');
     } finally {
@@ -2777,15 +2811,20 @@ export default function App() {
     if (!youtubePreview || youtubeNativePlaybackBusy) return;
     setYoutubeNativePlaybackBusy(true);
     setYoutubeLocalPlaybackError('');
+    setYoutubePlaybackRouteMessage('');
+    setYoutubeNativePlaybackLaunched(false);
+    setYoutubeFrameStatus('loading');
     try {
       await invoke('youtube_open_with_mpv', {
         videoId: youtubePreview.id,
         startSeconds: youtubePreview.startSeconds,
       });
       setYoutubeNativePlaybackLaunched(true);
-      setYoutubeLocalPlaybackError('mpv 已启动，正在外部窗口加载视频。');
+      setYoutubeFrameStatus('ready');
+      setYoutubePlaybackRouteMessage('mpv 已启动，正在外部窗口加载视频。');
     } catch (error) {
       setYoutubeLocalPlaybackError(errorMessage(error, '无法启动外部播放器。'));
+      setYoutubeFrameStatus('error');
     } finally {
       setYoutubeNativePlaybackBusy(false);
     }
@@ -2793,8 +2832,10 @@ export default function App() {
 
   const returnToYouTubeEmbed = () => {
     setYoutubeLocalPlaybackError('');
+    setYoutubePlaybackRouteMessage('');
     setYoutubeLocalSource('');
     setYoutubePlaybackMode('embed');
+    setYoutubeNativePlaybackLaunched(false);
     setYoutubePlayerError(null);
     setYoutubeFrameStatus('loading');
   };
@@ -3173,7 +3214,8 @@ export default function App() {
     if (!svgRef.current) return;
     const svg = svgRef.current;
     const map = Markmap.create(svgRef.current, {
-      autoFit: true,
+      // Explicit fitting is handled by the initial-document and toolbar paths.
+      autoFit: false,
       duration: 220,
       direction:
         mindmapStyles.find((s) => s.id === mindmapStyle)?.direction || 'both',
@@ -3413,6 +3455,7 @@ export default function App() {
       setYoutubePlaybackMode('embed');
       setYoutubeLocalSource('');
       setYoutubeLocalPlaybackError('');
+      setYoutubePlaybackRouteMessage('');
       setYoutubeLocalPlaybackBusy(false);
       setYoutubeNativePlaybackBusy(false);
       setYoutubeNativePlaybackLaunched(false);
@@ -3614,14 +3657,21 @@ export default function App() {
   }, [youtubePreview]);
 
   useEffect(() => {
-    if (!youtubePreview) return;
+    if (
+      !youtubePreview ||
+      youtubePlaybackMode === 'local' ||
+      (youtubeFrameStatus !== 'loading' && youtubeFrameStatus !== 'buffering')
+    )
+      return;
+    const waitingStatus = youtubeFrameStatus;
     const timeout = window.setTimeout(() => {
-      setYoutubeFrameStatus((status) =>
-        status === 'loading' ? 'timeout' : status,
-      );
+      setYoutubeFrameStatus((status) => {
+        if (status !== waitingStatus) return status;
+        return waitingStatus === 'buffering' ? 'stalled' : 'timeout';
+      });
     }, 15000);
     return () => window.clearTimeout(timeout);
-  }, [youtubePreview]);
+  }, [youtubePreview, youtubePlaybackMode, youtubeFrameStatus]);
 
   useEffect(() => {
     const timer = window.setTimeout(async () => {
@@ -3695,6 +3745,14 @@ export default function App() {
       else codeBlocksCleanupRef.current = cleanupCodeBlocks;
       if (embedding && !embeddingApplied.value) setHtmlCanvasEmbed(null);
       setLastUpdated('已同步');
+      if (pendingInitialFitRef.current) {
+        // Let the debounced ResizeObserver measure hydrated node content first.
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 120));
+        if (!codeBlocksAbort.signal.aborted && pendingInitialFitRef.current) {
+          pendingInitialFitRef.current = false;
+          await map.fit();
+        }
+      }
     }, 180);
     setLastUpdated('正在更新…');
     return () => {
@@ -3753,6 +3811,10 @@ export default function App() {
   const handleZoom = (factor: number) => {
     void markmapRef.current?.rescale(factor);
   };
+
+  useEffect(() => {
+    markmapRef.current?.setViewAnchorPath(activeMapPath || undefined);
+  }, [activeMapPath]);
 
   const selectedNodeSource = activeMapPath
     ? markdownNodeSourcesRef.current.get(activeMapPath)
@@ -4345,7 +4407,10 @@ export default function App() {
                   className="fit-button"
                   title="适应画布"
                   aria-label="适应画布"
-                  onClick={() => void markmapRef.current?.fit()}
+                  onClick={() => {
+                    pendingInitialFitRef.current = false;
+                    void markmapRef.current?.fit();
+                  }}
                 >
                   <Icon name="fit" />
                   <span>适应画布</span>
@@ -4956,7 +5021,7 @@ export default function App() {
                 youtubeFrameStatus === 'loading' && (
                   <div className="youtube-player-loading" role="status">
                     {youtubeLocalPlaybackBusy
-                      ? '正在解析可播放的 MP4 媒体流…'
+                      ? '正在解析播放格式…'
                       : '正在连接 YouTube 播放器…'}
                   </div>
                 )}
@@ -4983,31 +5048,6 @@ export default function App() {
                 }}
                 onError={() => setYoutubeFrameStatus('error')}
               />
-              {youtubePlaybackMode === 'embed' &&
-                canTryLocalYouTubePlayback && (
-                  <div className="youtube-player-actions">
-                    <button
-                      type="button"
-                      className="youtube-player-action"
-                      onClick={() => void tryLocalYouTubePlayback()}
-                      disabled={youtubeLocalPlaybackBusy}
-                    >
-                      {youtubeLocalPlaybackBusy
-                        ? '正在解析…'
-                        : '尝试本地 HTML5 播放'}
-                    </button>
-                    <button
-                      type="button"
-                      className="youtube-player-action"
-                      onClick={() => void tryNativeYouTubePlayback()}
-                      disabled={youtubeNativePlaybackBusy}
-                    >
-                      {youtubeNativePlaybackBusy
-                        ? '正在启动 mpv…'
-                        : '用 mpv 外部播放'}
-                    </button>
-                  </div>
-                )}
               {youtubePlaybackMode === 'local' && youtubeLocalSource && (
                 <video
                   ref={youtubeVideoRef}
@@ -5067,6 +5107,44 @@ export default function App() {
                   </div>
                 )}
             </div>
+            {youtubePlaybackMode === 'embed' && youtubePlaybackRouteMessage && (
+              <div className="youtube-player-route-message" role="status">
+                {youtubePlaybackRouteMessage}
+              </div>
+            )}
+            {youtubePlaybackMode === 'embed' &&
+              youtubeFrameStatus === 'stalled' &&
+              !youtubePlaybackRouteMessage && (
+                <div className="youtube-player-route-message" role="status">
+                  内嵌播放持续缓冲，可以切换到本地解析或 mpv。
+                </div>
+              )}
+            {youtubePlaybackMode === 'embed' && canOfferYouTubePlayback && (
+              <div className="youtube-player-actions">
+                <button
+                  type="button"
+                  className="youtube-player-action"
+                  onClick={() => void tryRecommendedYouTubePlayback()}
+                  disabled={youtubeLocalPlaybackBusy}
+                >
+                  {youtubeLocalPlaybackBusy
+                    ? '正在选择播放方式…'
+                    : '智能选择播放方式'}
+                </button>
+                <button
+                  type="button"
+                  className="youtube-player-action"
+                  onClick={() => void tryNativeYouTubePlayback()}
+                  disabled={
+                    youtubeNativePlaybackBusy || youtubeLocalPlaybackBusy
+                  }
+                >
+                  {youtubeNativePlaybackBusy
+                    ? '正在启动 mpv…'
+                    : '用 mpv 外部播放'}
+                </button>
+              </div>
+            )}
             <div className="youtube-player-meta">
               <span
                 className="youtube-player-state"

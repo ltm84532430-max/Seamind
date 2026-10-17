@@ -6,7 +6,25 @@ export type YouTubePlaybackState =
   | 'buffering'
   | 'ended'
   | 'error'
-  | 'timeout';
+  | 'timeout'
+  | 'stalled';
+
+export type YouTubePlaybackResolution =
+  | {
+      backend: 'html5';
+      provider: 'yt-dlp' | 'newpipe';
+      mediaType: 'progressiveMp4';
+      url: string;
+      mimeType: 'video/mp4';
+    }
+  | {
+      backend: 'mpv';
+      provider: 'yt-dlp' | 'newpipe';
+      mediaType: 'hls' | 'dash' | 'separateStreams' | 'unsupported';
+      mediaUrl?: string;
+      audioUrl?: string;
+      reason: string;
+    };
 
 export interface YouTubeIframePlayer {
   destroy(): void;
@@ -55,6 +73,7 @@ export const youtubePlaybackStateLabels: Record<YouTubePlaybackState, string> =
     ended: '播放结束',
     error: '播放错误',
     timeout: '连接超时',
+    stalled: '缓冲停滞',
   };
 
 export function youtubePlayerErrorMessage(code: number | null): string {
@@ -77,11 +96,14 @@ export function youtubePlayerErrorMessage(code: number | null): string {
 
 export function canOfferAlternativePlayback(
   state: YouTubePlaybackState,
-  errorCode: number | null,
 ): boolean {
   return (
-    (state === 'error' || state === 'timeout') &&
-    ![2, 100, 101, 150].includes(errorCode ?? -1)
+    state === 'ready' ||
+    state === 'paused' ||
+    state === 'ended' ||
+    state === 'error' ||
+    state === 'timeout' ||
+    state === 'stalled'
   );
 }
 

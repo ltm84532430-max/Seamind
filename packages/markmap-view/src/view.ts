@@ -190,6 +190,8 @@ export class Markmap {
 
   private _observer: ResizeObserver;
 
+  private viewAnchorPath?: string;
+
   private _disposeList: (() => void)[] = [];
 
   constructor(
@@ -251,6 +253,33 @@ export class Markmap {
     const { transform } = e;
     this.g.attr('transform', transform);
   };
+
+  setViewAnchorPath(path?: string): void {
+    this.viewAnchorPath = path || undefined;
+  }
+
+  private captureViewAnchorPoint(
+    path: string,
+  ): { x: number; y: number } | undefined {
+    const svgNode = this.svg.node() as SVGSVGElement | null;
+    const screenTransform = svgNode?.getScreenCTM();
+    if (!svgNode || !screenTransform) return undefined;
+
+    const nodeElement = this.g
+      .selectAll<SVGGElement, INode>(childSelector<SVGGElement>(SELECTOR_NODE))
+      .filter((node) => node.state.path === path)
+      .node();
+    if (!nodeElement) return undefined;
+
+    const rect = nodeElement.getBoundingClientRect();
+    const point = new DOMPoint(
+      rect.left + rect.width / 2,
+      rect.top + rect.height / 2,
+    ).matrixTransform(screenTransform.inverse());
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y))
+      return undefined;
+    return { x: point.x, y: point.y };
+  }
 
   handlePan = (e: WheelEvent) => {
     e.preventDefault();
@@ -569,6 +598,11 @@ export class Markmap {
     const rootNode = this.state.data;
     if (!rootNode) return;
 
+    const anchorPath = this.viewAnchorPath;
+    const anchorPoint = anchorPath
+      ? this.captureViewAnchorPoint(anchorPath)
+      : undefined;
+
     const nodeMap: Record<number, INode> = {};
     const parentMap: Record<number, number> = {};
     const nodes: INode[] = [];
@@ -774,6 +808,42 @@ export class Markmap {
     await new Promise(requestAnimationFrame);
     // Note: d.state.rect is only available after relayout
     this._relayout();
+
+    if (anchorPath && anchorPoint) {
+      const anchorNode = nodes.find((node) => node.state.path === anchorPath);
+      const svgNode = this.svg.node();
+      if (anchorNode && svgNode) {
+        const currentTransform = zoomTransform(svgNode);
+        const targetX =
+          anchorNode.state.rect.x + anchorNode.state.rect.width / 2;
+        const targetY =
+          anchorNode.state.rect.y + anchorNode.state.rect.height / 2;
+        const nextTransform = zoomIdentity
+          .translate(
+            anchorPoint.x - targetX * currentTransform.k,
+            anchorPoint.y - targetY * currentTransform.k,
+          )
+          .scale(currentTransform.k);
+        if (
+          Math.abs(nextTransform.x - currentTransform.x) > 0.5 ||
+          Math.abs(nextTransform.y - currentTransform.y) > 0.5
+        ) {
+          // Keep the selected node anchored while its layout transition runs;
+          // interpolate translation only so the user's zoom level stays fixed.
+          const startX = currentTransform.x;
+          const startY = currentTransform.y;
+          this.transition(this.svg).tween('anchor-pan', () => (progress) => {
+            const transform = zoomIdentity
+              .translate(
+                startX + (nextTransform.x - startX) * progress,
+                startY + (nextTransform.y - startY) * progress,
+              )
+              .scale(currentTransform.k);
+            this.svg.call(this.zoom.transform, transform);
+          });
+        }
+      }
+    }
 
     highlightNodes = highlightNodes
       .data(highlight ? [this._getHighlightRect(highlight)] : [])
