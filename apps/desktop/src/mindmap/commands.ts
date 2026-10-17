@@ -2,6 +2,7 @@ import { parseDocument } from 'yaml';
 import type { PureNode } from 'markmap-lib';
 
 export const MAX_MARKDOWN_NODE_NOTE_CHARS = 8_000;
+export const MAX_AGENT_BRANCH_CHARS = 40_000;
 
 export interface MarkdownNodeSource {
   kind: 'heading' | 'list' | 'block';
@@ -415,12 +416,22 @@ function withNodeMarker(line: string, nodeId: string): string {
   return `${line.replace(nodeIdInlinePattern, '').trimEnd()}${nodeMarker(nodeId)}`;
 }
 
+function encodeNodeLineBreaks(value: string): string {
+  return value
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .join('&#10;')
+    .trim();
+}
+
 function formatNewNode(
   source: MarkdownNodeSource,
   operation: 'add_child' | 'add_sibling',
   text: string,
 ): string {
   const nodeId = createNodeId();
+  text = encodeNodeLineBreaks(text);
   const label = text.trim() || '新主题';
   if (source.kind === 'heading' && source.level !== undefined) {
     const level = operation === 'add_child' ? source.level + 1 : source.level;
@@ -498,8 +509,9 @@ export function applyMarkdownNodeCommand(
   if (operation === 'rename') {
     if (currentSource.kind === 'block')
       throw new Error('目前只能改写标题或列表节点。');
+    const encodedLabel = encodeNodeLineBreaks(text);
     lines[currentSource.lineIndex] = withNodeMarker(
-      `${currentSource.prefix}${text.replace(/\s*\n+\s*/g, ' ').trim()}`,
+      `${currentSource.prefix}${encodedLabel}`,
       ensured.nodeId,
     );
     return {
@@ -521,6 +533,140 @@ export function applyMarkdownNodeCommand(
   return {
     markdown: lines.join('\n'),
     lineIndex: insertionIndex,
+    nodeId: ensured.nodeId,
+  };
+}
+
+function branchHeadings(markdown: string) {
+  const lines = markdown
+    .replace(/\r\n?/g, '\n')
+    .replace(/<!--\s*seamind:id=[\w-]{1,128}\s*-->/g, '')
+    .split('\n');
+  const headings: Array<{ index: number; level: number; text: string }> = [];
+  let fence: { marker: string; length: number } | null = null;
+  lines.forEach((line, index) => {
+    const fenceMatch = line.match(/^\s*(`{3,}|~{3,})/);
+    if (fence) {
+      if (
+        fenceMatch &&
+        fenceMatch[1][0] === fence.marker &&
+        fenceMatch[1].length >= fence.length
+      )
+        fence = null;
+      return;
+    }
+    if (fenceMatch) {
+      fence = { marker: fenceMatch[1][0], length: fenceMatch[1].length };
+      return;
+    }
+    const heading = line.match(/^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/);
+    if (heading)
+      headings.push({
+        index,
+        level: heading[1].length,
+        text: heading[2].trim(),
+      });
+  });
+  return { lines, headings };
+}
+
+/** Inserts a generated Markdown outline under a selected heading or list node. */
+export function applyMarkdownNodeBranch(
+  markdown: string,
+  source: MarkdownNodeSource,
+  branchMarkdown: string,
+): MarkdownCommandResult {
+  if (source.kind === 'block') {
+    throw new Error(
+      '代码或媒体节点暂不支持继续下探，请选择普通标题或列表节点。',
+    );
+  }
+  const normalized = branchMarkdown.trim();
+  if (!normalized || normalized.length > MAX_AGENT_BRANCH_CHARS) {
+    throw new Error(
+      `下探分支必须为 1 到 ${MAX_AGENT_BRANCH_CHARS.toLocaleString()} 个字符。`,
+    );
+  }
+  if (/^---\s*(?:\r?\n|$)/.test(normalized)) {
+    throw new Error('下探分支不能包含 Markdown YAML frontmatter。');
+  }
+  const parsed = branchHeadings(normalized);
+  if (!parsed.headings.length) {
+    throw new Error('下探结果必须包含 Markdown 标题层级，才能生成节点结构。');
+  }
+  const firstHeading = parsed.headings[0];
+  if (parsed.lines.slice(0, firstHeading.index).some((line) => line.trim())) {
+    throw new Error('下探内容必须从标题节点开始。');
+  }
+  const minimumLevel = Math.min(
+    ...parsed.headings.map((heading) => heading.level),
+  );
+  const ensured = ensureMarkdownNodeId(markdown, source);
+  const currentSource = {
+    ...source,
+    id: ensured.nodeId,
+    lineIndex: ensured.lineIndex,
+  };
+  const insertionIndex = markdownNodeInsertionIndex(
+    ensured.markdown,
+    currentSource,
+  );
+  const output: string[] = [];
+  let fence: { marker: string; length: number } | null = null;
+  let currentDepth = 0;
+
+  parsed.lines.forEach((line, index) => {
+    const fenceMatch = line.match(/^\s*(`{3,}|~{3,})/);
+    if (!fence) {
+      const heading = parsed.headings.find((item) => item.index === index);
+      if (heading) {
+        const depth = heading.level - minimumLevel;
+        const nodeId = createNodeId();
+        if (source.kind === 'heading') {
+          const level = (source.level || 1) + 1 + depth;
+          if (level > 6) {
+            throw new Error(
+              '下探分支层级超过 Markdown 六级标题上限，请减少层级后重试。',
+            );
+          }
+          output.push(
+            `${'#'.repeat(level)} ${heading.text}${nodeMarker(nodeId)}`,
+          );
+        } else {
+          const indent = `${source.indent || ''}  ${'  '.repeat(depth)}`;
+          output.push(`${indent}- ${heading.text}${nodeMarker(nodeId)}`);
+        }
+        currentDepth = depth;
+        return;
+      }
+      if (fenceMatch) {
+        fence = { marker: fenceMatch[1][0], length: fenceMatch[1].length };
+      }
+    } else if (
+      fenceMatch &&
+      fenceMatch[1][0] === fence.marker &&
+      fenceMatch[1].length >= fence.length
+    ) {
+      fence = null;
+    }
+
+    if (source.kind === 'list') {
+      const contentIndent = `${source.indent || ''}  ${'  '.repeat(currentDepth + 1)}`;
+      output.push(line.trim() ? `${contentIndent}${line.trimStart()}` : '');
+    } else {
+      output.push(line);
+    }
+  });
+
+  const lines = ensured.markdown.split(/\r?\n/);
+  const before =
+    source.kind === 'heading' && lines[insertionIndex - 1]?.trim() ? [''] : [];
+  const branch = [...before, ...output];
+  const insertionLineIndex = insertionIndex + before.length;
+  lines.splice(insertionIndex, 0, ...branch);
+  return {
+    markdown: lines.join('\n'),
+    lineIndex: insertionLineIndex,
     nodeId: ensured.nodeId,
   };
 }

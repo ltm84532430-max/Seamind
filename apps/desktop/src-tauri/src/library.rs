@@ -21,6 +21,8 @@ const MAX_DOCUMENT_BYTES: usize = 5 * 1024 * 1024;
 const MAX_HTML_ASSET_FILE_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_HTML_ASSET_BUNDLE_BYTES: u64 = 50 * 1024 * 1024;
 const MAX_HTML_ASSET_FILES: usize = 2_000;
+const MAX_GENERATED_HTML_ASSET_BYTES: usize = 256 * 1024;
+const MAX_GENERATED_HTML_ASSETS: usize = 8;
 const MAX_DOCUMENTS: usize = 50_000;
 const MAX_SEARCH_RESULTS: usize = 10_000;
 
@@ -69,6 +71,15 @@ pub struct ImportedHtmlAsset {
     pub asset_id: String,
     pub entry_path: String,
     pub title: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedHtmlAssetInput {
+    pub asset_id: String,
+    pub entry_path: String,
+    pub title: String,
+    pub html: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -445,6 +456,134 @@ pub fn import_html_asset(
         entry_path: path_to_relative_string(&entry_path),
         title,
     })
+}
+
+#[tauri::command]
+pub fn save_generated_html_assets(
+    app: AppHandle,
+    document_relative_path: String,
+    assets: Vec<GeneratedHtmlAssetInput>,
+) -> Result<Vec<ImportedHtmlAsset>, String> {
+    if assets.len() > MAX_GENERATED_HTML_ASSETS {
+        return Err("一次生成的 HTML 资源数量超过上限。".to_string());
+    }
+    if assets.is_empty() {
+        return Ok(Vec::new());
+    }
+    let root = require_root(&app)?;
+    let document_relative = validate_markdown_path(&document_relative_path)?;
+    let document_path = ensure_existing_inside_root(&root, &root.join(&document_relative))?;
+    let document_markdown = fs::read_to_string(&document_path)
+        .map_err(|error| format!("无法读取当前思维导图：{error}"))?;
+    let document_id = metadata_from_markdown(&document_markdown)
+        .map(|metadata| metadata.id)
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or_else(|| legacy_id(&path_to_relative_string(&document_relative)));
+    let owner = asset_owner_directory_name(&document_id);
+    let mut seen = HashSet::new();
+    let mut created_directories = Vec::<PathBuf>::new();
+    let mut saved = Vec::with_capacity(assets.len());
+
+    let result = (|| {
+        for asset in assets {
+            let asset_id = Uuid::parse_str(asset.asset_id.trim())
+                .map_err(|_| "生成的 HTML 资源编号无效。".to_string())?;
+            if !seen.insert(asset_id) {
+                return Err("生成的 HTML 资源编号重复。".to_string());
+            }
+            if asset.html.trim().is_empty()
+                || asset.html.as_bytes().len() > MAX_GENERATED_HTML_ASSET_BYTES
+            {
+                return Err(format!(
+                    "HTML「{}」内容为空或超过 {} KB。",
+                    asset.title,
+                    MAX_GENERATED_HTML_ASSET_BYTES / 1024
+                ));
+            }
+            if asset.title.trim().is_empty() || asset.title.chars().count() > 120 {
+                return Err("生成的 HTML 标题必须为 1 到 120 个字符。".to_string());
+            }
+            let entry_relative = validate_html_entry_path(&asset.entry_path)?;
+            if entry_relative.components().count() != 1
+                || !asset.entry_path.eq_ignore_ascii_case("index.html")
+            {
+                return Err("生成的 HTML 入口只能使用 index.html。".to_string());
+            }
+            let bundle_relative = Path::new("assets").join(&owner).join(asset_id.to_string());
+            if fs::symlink_metadata(root.join(&bundle_relative)).is_ok() {
+                return Err("生成的 HTML 资源编号已存在。".to_string());
+            }
+            let bundle_directory = create_directory_inside_root(&root, &bundle_relative)?;
+            created_directories.push(bundle_directory.clone());
+            write_atomically(
+                &bundle_directory.join(".seamind-generated"),
+                asset_id.to_string().as_bytes(),
+            )?;
+            write_atomically(
+                &bundle_directory.join(&entry_relative),
+                asset.html.as_bytes(),
+            )?;
+            saved.push(ImportedHtmlAsset {
+                asset_id: asset_id.to_string(),
+                entry_path: path_to_relative_string(&entry_relative),
+                title: asset.title.trim().to_string(),
+            });
+        }
+        Ok(saved)
+    })();
+
+    if result.is_err() {
+        for directory in created_directories.into_iter().rev() {
+            let _ = fs::remove_dir_all(directory);
+        }
+    }
+    result
+}
+
+#[tauri::command]
+pub fn discard_generated_html_assets(
+    app: AppHandle,
+    document_relative_path: String,
+    asset_ids: Vec<String>,
+) -> Result<(), String> {
+    if asset_ids.len() > MAX_GENERATED_HTML_ASSETS {
+        return Err("HTML 资源清理数量超过上限。".to_string());
+    }
+    if asset_ids.is_empty() {
+        return Ok(());
+    }
+    let root = require_root(&app)?;
+    let document_relative = validate_markdown_path(&document_relative_path)?;
+    let document_path = ensure_existing_inside_root(&root, &root.join(&document_relative))?;
+    let document_markdown = fs::read_to_string(&document_path)
+        .map_err(|error| format!("无法读取当前思维导图：{error}"))?;
+    let document_id = metadata_from_markdown(&document_markdown)
+        .map(|metadata| metadata.id)
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or_else(|| legacy_id(&path_to_relative_string(&document_relative)));
+    let owner = asset_owner_directory_name(&document_id);
+    let mut seen = HashSet::new();
+    for value in asset_ids {
+        let asset_id =
+            Uuid::parse_str(value.trim()).map_err(|_| "HTML 资源编号无效。".to_string())?;
+        if !seen.insert(asset_id) {
+            continue;
+        }
+        let relative = Path::new("assets").join(&owner).join(asset_id.to_string());
+        let path = root.join(relative);
+        let Ok(path) = ensure_existing_inside_root(&root, &path) else {
+            continue;
+        };
+        let marker = path.join(".seamind-generated");
+        let Ok(metadata) = fs::symlink_metadata(&marker) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            continue;
+        }
+        fs::remove_dir_all(path).map_err(|error| format!("无法清理未应用的 HTML 资源：{error}"))?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1100,16 +1239,14 @@ fn copy_html_bundle_directory(
             return Err("HTML 资源包总大小不能超过 50 MB。".to_string());
         }
 
-        let parent = destination_path
-            .parent()
-            .unwrap_or_else(|| Path::new(""));
+        let parent = destination_path.parent().unwrap_or_else(|| Path::new(""));
         let destination_directory = create_directory_inside_root(root, parent)?;
         let file_name = destination_path
             .file_name()
             .ok_or_else(|| "HTML 资源文件名无效。".to_string())?;
         let destination_file = destination_directory.join(file_name);
-        let content = fs::read(&source_path)
-            .map_err(|error| format!("无法复制 HTML 资源文件：{error}"))?;
+        let content =
+            fs::read(&source_path).map_err(|error| format!("无法复制 HTML 资源文件：{error}"))?;
         if relative_path == entry_relative {
             let html = String::from_utf8(content)
                 .map_err(|_| "HTML 入口文件必须使用 UTF-8 编码。".to_string())?;

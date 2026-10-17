@@ -1,6 +1,10 @@
 import type { MapDocument, OpenedDocument } from '../library';
-import { MAX_MARKDOWN_NODE_NOTE_CHARS } from '../mindmap/commands';
+import {
+  MAX_AGENT_BRANCH_CHARS,
+  MAX_MARKDOWN_NODE_NOTE_CHARS,
+} from '../mindmap/commands';
 import type {
+  AgentAnalysisMode,
   ActiveMindmapSnapshot,
   AgentToolDefinition,
   AgentToolDescriptor,
@@ -12,8 +16,17 @@ export interface ProposeNodeEditInput {
   baseRevision: number;
   nodeId?: string;
   nodePath?: string;
-  operation: NodeEditOperation;
+  operation: Exclude<NodeEditOperation, 'add_branch'>;
   text: string;
+  rationale: string;
+}
+
+export interface ProposeNodeBranchInput {
+  baseRevision: number;
+  nodeId?: string;
+  nodePath?: string;
+  analysisMode: AgentAnalysisMode;
+  branchMarkdown: string;
   rationale: string;
 }
 
@@ -22,6 +35,7 @@ export interface AgentCapabilities {
   searchLibrary(query: string, category?: string): Promise<MapDocument[]>;
   readDocument(relativePath: string): Promise<OpenedDocument>;
   proposeNodeEdit(input: ProposeNodeEditInput): NodeEditProposal;
+  proposeNodeBranch(input: ProposeNodeBranchInput): NodeEditProposal;
 }
 
 export interface AgentToolResult {
@@ -49,7 +63,7 @@ export const agentToolCatalog: AgentToolDescriptor[] = [
     version: 1,
     name: 'mindmap_get_current',
     description:
-      '读取当前打开的思维导图结构和节点 Markdown 备注。每个节点包含持久 nodeId（旧节点可能为空）、allowedOperations 和 noteTruncated；只对 allowedOperations 中列出的操作提出修改。节点路径只在返回的 revision 版本内有效；快照若 truncated 为 true，表示只返回了部分节点。修改前必须先调用此工具。',
+      '读取当前打开的思维导图结构和完整 Markdown 原文。每个节点包含持久 nodeId（旧节点可能为空）、allowedOperations 和 noteTruncated；只对 allowedOperations 中列出的操作提出修改。节点路径只在返回的 revision 版本内有效；树结构若 truncated 为 true 表示节点树只列出部分节点，markdown 字段仍是完整原文。修改前必须先调用此工具。',
     permission: 'read',
     inputSchema: schema({}),
   },
@@ -119,6 +133,30 @@ export const agentToolCatalog: AgentToolDescriptor[] = [
       ['baseRevision', 'operation', 'text', 'rationale'],
     ),
   },
+  {
+    version: 1,
+    name: 'mindmap_propose_node_branch',
+    description:
+      '在指定节点下生成一组 Markdown 标题层级作为子节点分支。analysisMode=drilldown 时按定义、起源、实际工程应用与意义、例子组织内容，理学主题按需包含推导，并提炼可迁移结构与元认知案例；analysisMode=visualization 时可用 Mermaid、echarts、python、svg、独立 html 代码块或 YouTube 链接，按主题选择适合的表达。必须基于 mindmap_get_current 的 revision 和目标 nodeId/nodePath。工具只返回预览提案，必须由用户确认后才会修改。',
+    permission: 'user_approval',
+    inputSchema: schema(
+      {
+        baseRevision: { type: 'integer', minimum: 0 },
+        nodeId: { type: 'string', minLength: 1, maxLength: 128 },
+        nodePath: { type: 'string', minLength: 1, maxLength: 200 },
+        analysisMode: { type: 'string', enum: ['drilldown', 'visualization'] },
+        branchMarkdown: {
+          type: 'string',
+          minLength: 1,
+          maxLength: MAX_AGENT_BRANCH_CHARS,
+          description:
+            '以 Markdown 标题开头的子树内容；可在标题下包含说明、数学公式和支持的可视化代码块。',
+        },
+        rationale: { type: 'string', maxLength: 500 },
+      },
+      ['baseRevision', 'analysisMode', 'branchMarkdown', 'rationale'],
+    ),
+  },
 ];
 
 export const agentTools: AgentToolDefinition[] = agentToolCatalog.map(
@@ -132,7 +170,7 @@ const MAX_TOOL_READ_CHARS = 12_000;
 const MAX_SEARCH_RESULTS = 8;
 
 function parseObject(raw: string): Record<string, unknown> {
-  if (raw.length > 20_000) throw new Error('工具参数过长。');
+  if (raw.length > 300_000) throw new Error('工具参数过长。');
   let value: unknown;
   try {
     value = JSON.parse(raw);
@@ -222,6 +260,11 @@ export async function executeAgentTool(
   if (name === 'mindmap_get_current') {
     assertOnlyKeys(input, []);
     const current = capabilities.getCurrentMindmap();
+    if (new TextEncoder().encode(current.markdown).byteLength > 250_000) {
+      throw new Error(
+        '当前导图超过 250 KB 的完整上下文上限；为避免静默截断，未返回部分导图。请拆分主题后重试。',
+      );
+    }
     return {
       version: 1,
       permission: 'read',
@@ -308,7 +351,7 @@ export async function executeAgentTool(
       baseRevision: requireInteger(input, 'baseRevision'),
       nodeId,
       nodePath,
-      operation: operation as NodeEditOperation,
+      operation: operation as Exclude<NodeEditOperation, 'add_branch'>,
       text: requireText(
         input,
         'text',
@@ -342,6 +385,62 @@ export async function executeAgentTool(
         previousNote: proposal.previousNote,
         nextNote: proposal.nextNote,
         rationale: proposal.rationale,
+      },
+      proposal,
+    };
+  }
+
+  if (name === 'mindmap_propose_node_branch') {
+    assertOnlyKeys(input, [
+      'baseRevision',
+      'nodeId',
+      'nodePath',
+      'analysisMode',
+      'branchMarkdown',
+      'rationale',
+    ]);
+    const analysisMode = input.analysisMode;
+    if (analysisMode !== 'drilldown' && analysisMode !== 'visualization') {
+      throw new Error('分析模式不受支持。');
+    }
+    const nodeId =
+      input.nodeId === undefined
+        ? undefined
+        : requireString(input, 'nodeId', 128);
+    const nodePath =
+      input.nodePath === undefined
+        ? undefined
+        : requireString(input, 'nodePath', 200);
+    if (!nodeId && !nodePath) throw new Error('必须提供 nodeId 或 nodePath。');
+    const proposal = await capabilities.proposeNodeBranch({
+      baseRevision: requireInteger(input, 'baseRevision'),
+      nodeId,
+      nodePath,
+      analysisMode,
+      branchMarkdown: requireText(
+        input,
+        'branchMarkdown',
+        MAX_AGENT_BRANCH_CHARS,
+        1,
+      ),
+      rationale: requireString(input, 'rationale', 500, 0),
+    });
+    const modeLabel = analysisMode === 'drilldown' ? '节点下探' : '可视化分析';
+    return {
+      version: 1,
+      permission: 'user_approval',
+      name,
+      label: `预览${modeLabel}分支`,
+      summary: `为「${proposal.previousLabel}」生成${modeLabel}分支，等待你确认。`,
+      result: {
+        status: 'awaiting_user_approval',
+        nodeId: proposal.nodeId,
+        nodePath: proposal.nodePath,
+        analysisMode,
+        previousLabel: proposal.previousLabel,
+        nextLabel: proposal.nextLabel,
+        rationale: proposal.rationale,
+        htmlAssetCount: proposal.htmlAssets?.length || 0,
       },
       proposal,
     };

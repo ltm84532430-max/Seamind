@@ -1,20 +1,29 @@
 import { useEffect, useRef } from 'react';
 import { hydrateCodeBlocks } from './code-blocks';
+import { createMarkdownPreviewMinimap } from './markdown-minimap';
 
 interface MarkdownPreviewProps {
   html: string;
+  source: string;
   theme: 'light' | 'dark';
 }
 
-export default function MarkdownPreview({ html, theme }: MarkdownPreviewProps) {
+export default function MarkdownPreview({
+  html,
+  source,
+  theme,
+}: MarkdownPreviewProps) {
   const rootRef = useRef<HTMLElement>(null);
+  const minimapHostRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const root = rootRef.current;
-    if (!root) return;
+    const minimapHost = minimapHostRef.current;
+    if (!root || !minimapHost) return;
     const controller = new AbortController();
     let disposed = false;
     let cleanup = () => {};
+    const minimap = createMarkdownPreviewMinimap(source, root, minimapHost);
     void hydrateCodeBlocks(
       root,
       theme,
@@ -29,15 +38,19 @@ export default function MarkdownPreview({ html, theme }: MarkdownPreviewProps) {
       disposed = true;
       controller.abort();
       cleanup();
+      minimap.destroy();
     };
-  }, [html, theme]);
+  }, [html, source, theme]);
 
   return (
-    <article
-      ref={rootRef}
-      className="markdown-rendered-preview"
-      aria-label="Markdown 渲染视图"
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    <div className="markdown-preview-frame">
+      <article
+        ref={rootRef}
+        className="markdown-rendered-preview"
+        aria-label="Markdown 渲染视图"
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+      <div ref={minimapHostRef} className="markdown-preview-minimap-host" />
+    </div>
   );
 }

@@ -1,26 +1,73 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
+import type { AgentAnalysisMode } from './agent/types';
 import type { AgentCapabilities } from './agent/capabilities';
-import { runAgentTurn } from './agent/runtime';
+import { estimateTokenCount, runAgentTurn } from './agent/runtime';
 import type {
+  AgentCallEvent,
   AgentChatMessage,
-  AgentToolAction,
+  AgentTurnDetails,
+  AgentTurnUsage,
   NodeEditProposal,
 } from './agent/types';
 
+interface AgentTarget {
+  nodeId: string | null;
+  nodePath: string;
+  label: string;
+}
+
 interface AgentPanelProps {
+  mode: AgentAnalysisMode;
   provider: { baseUrl: string; model: string };
+  providerLabel: string;
   capabilities: AgentCapabilities;
+  target: AgentTarget | null;
+  mapTitle: string;
+  mapMarkdown: string;
   currentRevision: number;
-  onApplyProposal(proposal: NodeEditProposal): number | null;
-  onUndoProposal(proposal: NodeEditProposal, appliedRevision: number): boolean;
+  onApplyProposal(proposal: NodeEditProposal): Promise<number | null>;
+  onUndoProposal(
+    proposal: NodeEditProposal,
+    appliedRevision: number,
+  ): Promise<boolean>;
 }
 
 interface DisplayMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  turnDetails?: AgentTurnDetails;
 }
+
+interface ActiveAgentTurn {
+  providerLabel: string;
+  model: string;
+  mode: AgentAnalysisMode;
+  targetLabel: string;
+  startedAt: number;
+  events: AgentCallEvent[];
+}
+
+interface AgentConversation {
+  messages: DisplayMessage[];
+  history: AgentChatMessage[];
+  activeTurn: ActiveAgentTurn | null;
+  proposal: NodeEditProposal | null;
+  lastApplied: { proposal: NodeEditProposal; revision: number } | null;
+  error: string;
+  lastUsage: AgentTurnUsage | null;
+}
+
+const emptyConversation = (): AgentConversation => ({
+  messages: [],
+  history: [],
+  activeTurn: null,
+  proposal: null,
+  lastApplied: null,
+  error: '',
+  lastUsage: null,
+});
 
 function makeId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -47,217 +94,606 @@ function markdownChange(before: string, after: string) {
     suffix += 1;
   }
   return {
-    removed: oldLines.slice(prefix, oldLines.length - suffix).slice(0, 12),
-    added: newLines.slice(prefix, newLines.length - suffix).slice(0, 12),
+    removed: oldLines.slice(prefix, oldLines.length - suffix).slice(0, 20),
+    added: newLines.slice(prefix, newLines.length - suffix).slice(0, 40),
   };
 }
 
+function reportedValue(
+  value: number,
+  reportedRequests: number,
+  requestCount: number,
+): string {
+  if (!reportedRequests) return '未返回';
+  const partial =
+    reportedRequests < requestCount
+      ? `（${reportedRequests}/${requestCount} 次）`
+      : '';
+  return `${value.toLocaleString()}${partial}`;
+}
+
+function usageLabel(usage: AgentTurnUsage): string {
+  if (!usage.reportedRequests) return 'Token 用量：服务未返回';
+  return [
+    `输入 ${reportedValue(usage.promptTokens, usage.promptReportedRequests, usage.requestCount)}`,
+    `输出 ${reportedValue(usage.completionTokens, usage.completionReportedRequests, usage.requestCount)}`,
+    `合计 ${reportedValue(usage.totalTokens, usage.totalReportedRequests, usage.requestCount)}`,
+  ].join(' · ');
+}
+
+function usageFromEvents(events: AgentCallEvent[]): AgentTurnUsage {
+  const requests = events.filter(
+    (event): event is Extract<AgentCallEvent, { kind: 'model' }> =>
+      event.kind === 'model',
+  );
+  const usage: AgentTurnUsage = {
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    reportedRequests: 0,
+    requestCount: requests.length,
+    promptReportedRequests: 0,
+    completionReportedRequests: 0,
+    totalReportedRequests: 0,
+    contextTokensEstimate:
+      requests[requests.length - 1]?.contextTokensEstimate ?? 0,
+  };
+  for (const request of requests) {
+    const reported = request.usage;
+    if (!reported) continue;
+    const values = [
+      reported.promptTokens,
+      reported.completionTokens,
+      reported.totalTokens,
+    ];
+    if (
+      values.some(
+        (value) => Number.isSafeInteger(value) && (value as number) >= 0,
+      )
+    )
+      usage.reportedRequests += 1;
+    if (
+      Number.isSafeInteger(reported.promptTokens) &&
+      (reported.promptTokens as number) >= 0
+    ) {
+      usage.promptTokens += reported.promptTokens as number;
+      usage.promptReportedRequests += 1;
+    }
+    if (
+      Number.isSafeInteger(reported.completionTokens) &&
+      (reported.completionTokens as number) >= 0
+    ) {
+      usage.completionTokens += reported.completionTokens as number;
+      usage.completionReportedRequests += 1;
+    }
+    if (
+      Number.isSafeInteger(reported.totalTokens) &&
+      (reported.totalTokens as number) >= 0
+    ) {
+      usage.totalTokens += reported.totalTokens as number;
+      usage.totalReportedRequests += 1;
+    }
+  }
+  return usage;
+}
+
+function completeTurn(
+  activeTurn: ActiveAgentTurn,
+  usage: AgentTurnUsage,
+  status: Exclude<AgentTurnDetails['status'], 'running'>,
+): AgentTurnDetails {
+  const endedAt = Date.now();
+  return {
+    providerLabel: activeTurn.providerLabel,
+    model: activeTurn.model,
+    mode: activeTurn.mode,
+    targetLabel: activeTurn.targetLabel,
+    status,
+    startedAt: activeTurn.startedAt,
+    endedAt,
+    durationMs: endedAt - activeTurn.startedAt,
+    usage,
+    events: activeTurn.events,
+  };
+}
+
+function durationLabel(durationMs?: number): string {
+  if (durationMs === undefined) return '计时中';
+  if (durationMs < 1000) return `${durationMs} ms`;
+  return `${(durationMs / 1000).toFixed(1)} 秒`;
+}
+
+function eventStatusLabel(status: AgentCallEvent['status']): string {
+  switch (status) {
+    case 'running':
+      return '进行中';
+    case 'done':
+      return '完成';
+    case 'approval':
+      return '等待确认';
+    case 'failed':
+      return '失败';
+  }
+}
+
+function turnStatusLabel(status: AgentTurnDetails['status']): string {
+  switch (status) {
+    case 'running':
+      return '进行中';
+    case 'completed':
+      return '已完成';
+    case 'proposal':
+      return '待确认';
+    case 'failed':
+      return '未完成';
+  }
+}
+
+function AgentCallDetails({ details }: { details: AgentTurnDetails }) {
+  const modeLabel = details.mode === 'drilldown' ? '节点下探' : '可视化分析';
+  const contextEstimate = details.usage.contextTokensEstimate;
+  return (
+    <details
+      className={`agent-call-details is-${details.status}`}
+      open={details.status === 'running' || details.status === 'failed'}
+    >
+      <summary>
+        <strong>调用详情</strong>
+        <span>
+          {details.providerLabel} · {details.model}
+        </span>
+        <span className="agent-call-status">
+          {turnStatusLabel(details.status)}
+        </span>
+        <span>
+          {details.usage.requestCount} 次请求 · {usageLabel(details.usage)}
+        </span>
+        <span>{durationLabel(details.durationMs)}</span>
+      </summary>
+      <div className="agent-call-body">
+        <div className="agent-call-meta">
+          <span>模式：{modeLabel}</span>
+          <span>目标：{details.targetLabel}</span>
+          <span>模型：{details.model || '未设置'}</span>
+        </div>
+        <div className="agent-call-metrics">
+          <div>
+            <span>输入 tokens</span>
+            <strong>
+              {reportedValue(
+                details.usage.promptTokens,
+                details.usage.promptReportedRequests,
+                details.usage.requestCount,
+              )}
+            </strong>
+          </div>
+          <div>
+            <span>输出 tokens</span>
+            <strong>
+              {reportedValue(
+                details.usage.completionTokens,
+                details.usage.completionReportedRequests,
+                details.usage.requestCount,
+              )}
+            </strong>
+          </div>
+          <div>
+            <span>合计 tokens</span>
+            <strong>
+              {reportedValue(
+                details.usage.totalTokens,
+                details.usage.totalReportedRequests,
+                details.usage.requestCount,
+              )}
+            </strong>
+          </div>
+        </div>
+        <div className="agent-call-context">
+          {contextEstimate
+            ? `最后一次请求上下文约 ${contextEstimate.toLocaleString()} tokens（本地估算）`
+            : '上下文估算不可用'}
+          {' · 容量上限未知'}
+        </div>
+        <ol className="agent-call-events">
+          {details.events.map((event) =>
+            event.kind === 'model' ? (
+              <li className={`is-${event.status}`} key={event.id}>
+                <span className="agent-call-event-marker" />
+                <div className="agent-call-event-main">
+                  <strong>
+                    第 {event.round} 次模型请求 ·{' '}
+                    {details.model || '模型未设置'}
+                  </strong>
+                  <span>
+                    {eventStatusLabel(event.status)} ·{' '}
+                    {durationLabel(event.durationMs)}
+                  </span>
+                  <small>
+                    上下文约 {event.contextTokensEstimate.toLocaleString()}{' '}
+                    tokens（本地估算）
+                    {' · '}
+                    {event.usage
+                      ? `输入 ${event.usage.promptTokens?.toLocaleString() ?? '未返回'} · 输出 ${event.usage.completionTokens?.toLocaleString() ?? '未返回'} · 合计 ${event.usage.totalTokens?.toLocaleString() ?? '未返回'}`
+                      : '服务未返回用量'}
+                  </small>
+                </div>
+              </li>
+            ) : (
+              <li className={`is-${event.status}`} key={event.id}>
+                <span className="agent-call-event-marker" />
+                <div className="agent-call-event-main">
+                  <strong>工具 · {event.label}</strong>
+                  <span>
+                    {eventStatusLabel(event.status)} ·{' '}
+                    {durationLabel(event.durationMs)}
+                  </span>
+                  <small>{event.summary}</small>
+                </div>
+              </li>
+            ),
+          )}
+        </ol>
+      </div>
+    </details>
+  );
+}
+
 export default function AgentPanel({
+  mode,
   provider,
+  providerLabel,
   capabilities,
+  target,
+  mapTitle,
+  mapMarkdown,
   currentRevision,
   onApplyProposal,
   onUndoProposal,
 }: AgentPanelProps) {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [messages, setMessages] = useState<DisplayMessage[]>([]);
-  const [history, setHistory] = useState<AgentChatMessage[]>([]);
-  const [actions, setActions] = useState<AgentToolAction[]>([]);
-  const [proposal, setProposal] = useState<NodeEditProposal | null>(null);
-  const [lastApplied, setLastApplied] = useState<{
-    proposal: NodeEditProposal;
-    revision: number;
-  } | null>(null);
+  const [conversations, setConversations] = useState<
+    Record<string, AgentConversation>
+  >({});
+  const scopeKey = target ? target.nodeId || target.nodePath : 'no-target';
+  const conversation = conversations[scopeKey] || emptyConversation();
+
+  const updateConversation = (
+    key: string,
+    update: (current: AgentConversation) => AgentConversation,
+  ) => {
+    setConversations((current) => ({
+      ...current,
+      [key]: update(current[key] || emptyConversation()),
+    }));
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const prompt = input.trim();
-    if (!prompt || busy || proposal) return;
-
+    if (!prompt || busy || conversation.proposal || !target) return;
+    const requestScope = scopeKey;
+    const startedAt = Date.now();
+    const activeTurn: ActiveAgentTurn = {
+      providerLabel,
+      model: provider.model,
+      mode,
+      targetLabel: target.label,
+      startedAt,
+      events: [],
+    };
     setInput('');
-    setError('');
     setBusy(true);
-    setMessages((current) => [
+    updateConversation(requestScope, (current) => ({
       ...current,
-      { id: makeId(), role: 'user', content: prompt },
-    ]);
+      error: '',
+      activeTurn,
+      messages: [
+        ...current.messages,
+        { id: makeId(), role: 'user', content: prompt },
+      ],
+    }));
 
     try {
       const result = await runAgentTurn({
-        history,
+        history: conversation.history,
         prompt,
         provider,
         capabilities,
-        onAction: (action) => {
-          setActions((current) => {
-            const existing = current.findIndex((item) => item.id === action.id);
-            if (existing < 0) return [...current, action].slice(-16);
-            const next = [...current];
-            next[existing] = action;
-            return next;
+        mode,
+        target,
+        mapTitle,
+        mapMarkdown,
+        onEvent: (callEvent) => {
+          updateConversation(requestScope, (current) => {
+            if (!current.activeTurn) return current;
+            const existing = current.activeTurn.events.findIndex(
+              (item) => item.id === callEvent.id,
+            );
+            const events = [...current.activeTurn.events];
+            if (existing < 0) events.push(callEvent);
+            else events[existing] = callEvent;
+            return {
+              ...current,
+              activeTurn: { ...current.activeTurn, events },
+            };
           });
         },
       });
-      setHistory(result.history);
-      setProposal(result.proposal);
-      setMessages((current) => [
+      updateConversation(requestScope, (current) => ({
         ...current,
-        { id: makeId(), role: 'assistant', content: result.reply },
-      ]);
+        history: result.history,
+        proposal: result.proposal,
+        lastUsage: result.usage,
+        activeTurn: null,
+        messages: [
+          ...current.messages,
+          {
+            id: makeId(),
+            role: 'assistant',
+            content: result.reply,
+            turnDetails: completeTurn(
+              current.activeTurn ?? activeTurn,
+              result.usage,
+              result.proposal ? 'proposal' : 'completed',
+            ),
+          },
+        ],
+      }));
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'AI 助手运行失败。');
-      setMessages((current) => [
-        ...current,
-        {
-          id: makeId(),
-          role: 'assistant',
-          content: '这轮没有完成。请查看下方错误并重试。',
-        },
-      ]);
+      const message =
+        caught instanceof Error ? caught.message : 'AI 助手运行失败。';
+      updateConversation(requestScope, (current) => {
+        const failedUsage = current.activeTurn
+          ? usageFromEvents(current.activeTurn.events)
+          : null;
+        return {
+          ...current,
+          error: message,
+          lastUsage: failedUsage?.requestCount
+            ? failedUsage
+            : current.lastUsage,
+          activeTurn: null,
+          messages: [
+            ...current.messages,
+            {
+              id: makeId(),
+              role: 'assistant',
+              content: '这轮没有完成，请检查错误后重试。',
+              ...(current.activeTurn && failedUsage
+                ? {
+                    turnDetails: completeTurn(
+                      current.activeTurn,
+                      failedUsage,
+                      'failed',
+                    ),
+                  }
+                : {}),
+            },
+          ],
+        };
+      });
     } finally {
       setBusy(false);
     }
   };
 
-  const applyProposal = () => {
+  const applyProposal = async () => {
+    const proposal = conversation.proposal;
     if (!proposal) return;
-    const revision = onApplyProposal(proposal);
-    if (revision === null) {
-      setError('导图在生成预览后发生了变化。请重新读取当前导图并生成提案。');
-      return;
-    }
-    setLastApplied({ proposal, revision });
-    setProposal(null);
-    setError('');
-    setMessages((current) => [
-      ...current,
-      {
-        id: makeId(),
-        role: 'assistant',
-        content: '修改已应用，文件库会按当前自动保存设置同步。',
-      },
-    ]);
-    setHistory((current) =>
-      [
+    try {
+      const revision = await onApplyProposal(proposal);
+      if (revision === null) {
+        updateConversation(scopeKey, (current) => ({
+          ...current,
+          error: '导图在生成预览后发生了变化。请重新生成提案。',
+        }));
+        return;
+      }
+      updateConversation(scopeKey, (current) => ({
         ...current,
-        { role: 'assistant' as const, content: '用户已确认并应用修改。' },
-      ].slice(-12),
-    );
+        lastApplied: { proposal, revision },
+        proposal: null,
+        error: '',
+        messages: [
+          ...current.messages,
+          {
+            id: makeId(),
+            role: 'assistant',
+            content: '分支已插入，文件库会按当前自动保存设置同步。',
+          },
+        ],
+        history: [
+          ...current.history,
+          { role: 'assistant' as const, content: '用户已确认并应用下探分支。' },
+        ].slice(-12),
+      }));
+    } catch (caught) {
+      updateConversation(scopeKey, (current) => ({
+        ...current,
+        error: caught instanceof Error ? caught.message : '无法应用该提案。',
+      }));
+    }
   };
 
-  const undoApplied = () => {
+  const undoApplied = async () => {
+    const lastApplied = conversation.lastApplied;
     if (!lastApplied) return;
-    if (!onUndoProposal(lastApplied.proposal, lastApplied.revision)) {
-      setError('导图已在应用修改后继续编辑，无法安全撤销这次 AI 修改。');
-      setLastApplied(null);
+    if (!(await onUndoProposal(lastApplied.proposal, lastApplied.revision))) {
+      updateConversation(scopeKey, (current) => ({
+        ...current,
+        error: '导图已在应用修改后继续编辑，无法安全撤销这次 AI 修改。',
+        lastApplied: null,
+      }));
       return;
     }
-    setLastApplied(null);
-    setError('');
-    setMessages((current) => [
+    updateConversation(scopeKey, (current) => ({
       ...current,
-      { id: makeId(), role: 'assistant', content: '已撤销上一次 AI 修改。' },
-    ]);
-    setHistory((current) =>
-      [
-        ...current,
-        { role: 'assistant' as const, content: '用户撤销了上一次 AI 修改。' },
+      lastApplied: null,
+      error: '',
+      messages: [
+        ...current.messages,
+        { id: makeId(), role: 'assistant', content: '已撤销上一次 AI 分支。' },
+      ],
+      history: [
+        ...current.history,
+        { role: 'assistant' as const, content: '用户撤销了上一次 AI 分支。' },
       ].slice(-12),
-    );
+    }));
   };
 
   const clearConversation = () => {
-    if (busy || proposal) return;
-    setMessages([]);
-    setHistory([]);
-    setActions([]);
-    setError('');
+    if (busy || conversation.proposal) return;
+    updateConversation(scopeKey, () => emptyConversation());
   };
 
+  const modeLabel = mode === 'drilldown' ? '节点下探' : '可视化分析';
+  const markdownSize = new TextEncoder().encode(mapMarkdown).byteLength;
+  const contextEstimate =
+    conversation.lastUsage?.contextTokensEstimate ??
+    estimateTokenCount(
+      JSON.stringify({ mapTitle, target, markdown: mapMarkdown }),
+    );
+
   return (
-    <section className="agent-panel" aria-label="Seamind AI 助手">
+    <section className="agent-panel" aria-label={`LLM ${modeLabel}`}>
       <div className="agent-panel-heading">
         <div>
-          <strong>Seamind 助手</strong>
-          <span>可读取导图和文件库；修改需你确认</span>
+          <strong>{modeLabel}</strong>
+          <span>
+            {target
+              ? `目标：${target.label}`
+              : '点击思维导图中的节点以设定分析目标'}
+          </span>
         </div>
         <button
           type="button"
           className="agent-clear-button"
-          disabled={busy || Boolean(proposal) || messages.length === 0}
+          disabled={
+            busy ||
+            Boolean(conversation.proposal) ||
+            conversation.messages.length === 0
+          }
           onClick={clearConversation}
         >
           新对话
         </button>
       </div>
 
+      <div className="agent-context-strip">
+        <span className="agent-context-model">
+          API · {providerLabel} · {provider.model || '未设置模型'}
+        </span>
+        <span title={`${markdownSize.toLocaleString()} 字节 Markdown 原文`}>
+          全图上下文 · 约 {contextEstimate.toLocaleString()} tokens（本地估算）
+          · 容量上限未知
+        </span>
+      </div>
+
       <div className="agent-transcript" aria-live="polite">
-        {messages.length === 0 ? (
+        {conversation.messages.length === 0 ? (
           <div className="agent-empty-state">
-            <strong>可以这样开始</strong>
-            <span>“读取当前导图，在「主题」下添加一个学习目标子节点。”</span>
-            <span>“在文件库中搜索机器学习笔记，概括它们的共同结构。”</span>
+            <strong>
+              {target ? `当前目标：${target.label}` : '先选择一个导图节点'}
+            </strong>
+            <span>
+              {mode === 'drilldown'
+                ? '下探会整理定义、起源、工程应用、例子及适用的推导，并提炼可迁移结构。'
+                : '可按主题生成图表、代码、SVG、HTML 组件或视频链接等可视化分支。'}
+            </span>
+            {target && (
+              <button
+                type="button"
+                className="agent-suggestion-button"
+                onClick={() =>
+                  setInput(
+                    mode === 'drilldown'
+                      ? '请按标准结构下探当前目标节点，适用时给出完整推导，并提炼可迁移的元认知结构案例。'
+                      : '请围绕当前目标做多维度可视化分析，根据内容选择最合适的项目内嵌格式。',
+                  )
+                }
+              >
+                填入标准请求
+              </button>
+            )}
           </div>
         ) : (
-          messages.map((message) => (
+          conversation.messages.map((message) => (
             <article
               className={`agent-message is-${message.role}`}
               key={message.id}
             >
-              <span>{message.role === 'user' ? '你' : '助手'}</span>
+              <div className="agent-message-heading">
+                <strong>{message.role === 'user' ? '你' : '模型'}</strong>
+                {message.role === 'assistant' && (
+                  <span>{message.turnDetails?.model || provider.model}</span>
+                )}
+              </div>
               <p>{message.content}</p>
+              {message.turnDetails && (
+                <AgentCallDetails details={message.turnDetails} />
+              )}
             </article>
           ))
         )}
-        {busy && <div className="agent-working">正在处理请求…</div>}
+        {conversation.activeTurn && (
+          <article className="agent-message is-assistant is-live">
+            <div className="agent-message-heading">
+              <strong>模型</strong>
+              <span>{conversation.activeTurn.model || '模型未设置'}</span>
+            </div>
+            <p>正在处理本轮请求…</p>
+            <AgentCallDetails
+              details={{
+                ...conversation.activeTurn,
+                status: 'running',
+                usage: usageFromEvents(conversation.activeTurn.events),
+                durationMs: Date.now() - conversation.activeTurn.startedAt,
+              }}
+            />
+          </article>
+        )}
+        {busy && !conversation.activeTurn && (
+          <div className="agent-working">模型正在分析整张导图…</div>
+        )}
       </div>
 
-      {actions.length > 0 && (
-        <details className="agent-actions" open>
-          <summary>工具执行记录（{actions.length}）</summary>
-          <ol>
-            {actions.map((action) => (
-              <li className={`is-${action.status}`} key={action.id}>
-                <span className="agent-action-status" />
-                <div>
-                  <strong>{action.label}</strong>
-                  <small>{action.summary}</small>
-                </div>
-              </li>
-            ))}
-          </ol>
-        </details>
-      )}
-
-      {proposal && (
-        <section className="agent-proposal" aria-label="待确认的导图修改">
+      {conversation.proposal && (
+        <section className="agent-proposal" aria-label="待确认的导图分支">
           <div className="agent-proposal-heading">
-            <strong>待确认修改</strong>
-            <span>不会在确认前写入当前导图</span>
+            <strong>待确认分支</strong>
+            <span>
+              版本 {conversation.proposal.baseRevision} · 尚未写入当前导图
+            </span>
           </div>
           <p>
-            {proposal.operation === 'rename'
-              ? `将「${proposal.previousLabel}」改为「${proposal.nextLabel}」`
-              : proposal.operation === 'add_child'
-                ? `在「${proposal.previousLabel}」下添加「${proposal.nextLabel}」`
-                : proposal.operation === 'add_sibling'
-                  ? `在「${proposal.previousLabel}」旁添加「${proposal.nextLabel}」`
-                  : proposal.operation === 'delete'
-                    ? `删除「${proposal.previousLabel}」及其子节点`
-                    : `更新「${proposal.previousLabel}」的备注`}
+            在「{conversation.proposal.previousLabel}」下插入
+            {conversation.proposal.analysisMode === 'visualization'
+              ? '可视化'
+              : '下探'}
+            分支「{conversation.proposal.nextLabel}」
           </p>
-          {proposal.rationale && <small>{proposal.rationale}</small>}
+          {conversation.proposal.rationale && (
+            <small>{conversation.proposal.rationale}</small>
+          )}
+          {conversation.proposal.htmlAssets?.length ? (
+            <small className="agent-proposal-assets">
+              确认后保存 {conversation.proposal.htmlAssets.length} 个隔离 HTML
+              组件。
+            </small>
+          ) : null}
           <details className="agent-diff">
-            <summary>查看 Markdown 变更</summary>
+            <summary>查看 Markdown 分支预览</summary>
             <pre>
-              {markdownChange(proposal.baseMarkdown, proposal.markdown)
+              {markdownChange(
+                conversation.proposal.baseMarkdown,
+                conversation.proposal.markdown,
+              )
                 .removed.map((line) => `− ${line}`)
                 .concat(
                   markdownChange(
-                    proposal.baseMarkdown,
-                    proposal.markdown,
+                    conversation.proposal.baseMarkdown,
+                    conversation.proposal.markdown,
                   ).added.map((line) => `+ ${line}`),
                 )
                 .join('\n') || '没有可显示的文本差异'}
@@ -267,31 +703,34 @@ export default function AgentPanel({
             <button
               type="button"
               className="agent-apply-button"
-              onClick={applyProposal}
+              onClick={() => void applyProposal()}
             >
-              应用并自动保存
+              确认插入并自动保存
             </button>
             <button
               type="button"
               className="agent-reject-button"
               onClick={() => {
-                setProposal(null);
-                setError('');
-                const rejection = '用户放弃了这条提案，导图没有变化。';
-                setHistory((current) =>
-                  [
-                    ...current,
-                    { role: 'assistant' as const, content: rejection },
-                  ].slice(-12),
-                );
-                setMessages((current) => [
+                updateConversation(scopeKey, (current) => ({
                   ...current,
-                  {
-                    id: makeId(),
-                    role: 'assistant',
-                    content: '提案已放弃，导图未变化。',
-                  },
-                ]);
+                  proposal: null,
+                  error: '',
+                  history: [
+                    ...current.history,
+                    {
+                      role: 'assistant' as const,
+                      content: '用户放弃了分支提案，导图没有变化。',
+                    },
+                  ].slice(-12),
+                  messages: [
+                    ...current.messages,
+                    {
+                      id: makeId(),
+                      role: 'assistant',
+                      content: '提案已放弃，导图未变化。',
+                    },
+                  ],
+                }));
               }}
             >
               放弃
@@ -300,25 +739,25 @@ export default function AgentPanel({
         </section>
       )}
 
-      {lastApplied && !proposal && (
+      {conversation.lastApplied && !conversation.proposal && (
         <button
           type="button"
           className="agent-undo-button"
-          disabled={currentRevision !== lastApplied.revision}
-          onClick={undoApplied}
+          disabled={currentRevision !== conversation.lastApplied.revision}
+          onClick={() => void undoApplied()}
           title={
-            currentRevision === lastApplied.revision
-              ? '撤销上次 AI 修改'
+            currentRevision === conversation.lastApplied.revision
+              ? '撤销上次 AI 分支'
               : '导图已继续编辑，撤销已禁用以免覆盖新修改'
           }
         >
-          撤销上次 AI 修改
+          撤销上次 AI 分支
         </button>
       )}
 
-      {error && (
+      {conversation.error && (
         <div className="agent-error" role="alert">
-          {error}
+          {conversation.error}
         </div>
       )}
 
@@ -334,18 +773,30 @@ export default function AgentPanel({
           }}
           maxLength={4000}
           rows={3}
-          placeholder="描述你要查询或调整的内容…"
-          aria-label="AI 助手消息"
-          disabled={busy || Boolean(proposal)}
+          placeholder={
+            target
+              ? `补充对「${target.label}」的${modeLabel}要求…`
+              : '请先在思维导图中点击一个节点…'
+          }
+          aria-label={`${modeLabel}消息`}
+          disabled={busy || Boolean(conversation.proposal) || !target}
         />
         <button
           className="ai-generate-button"
           type="submit"
-          disabled={busy || Boolean(proposal) || !input.trim()}
+          disabled={
+            busy || Boolean(conversation.proposal) || !input.trim() || !target
+          }
         >
-          {busy ? '处理中…' : '发送给助手'}
+          {busy
+            ? '处理中…'
+            : mode === 'drilldown'
+              ? '生成下探预览'
+              : '生成可视化预览'}
         </button>
-        <div className="ai-hint-footer">Ctrl + Enter 发送 · 修改需确认</div>
+        <div className="ai-hint-footer">
+          Ctrl + Enter 发送 · 整张导图作为上下文 · 插入前需确认
+        </div>
       </form>
     </section>
   );

@@ -21,7 +21,7 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-const MAX_MCP_BODY_BYTES: usize = 64 * 1024;
+const MAX_MCP_BODY_BYTES: usize = 512 * 1024;
 const MAX_MCP_TOOLS: usize = 16;
 const MCP_CALL_TIMEOUT: Duration = Duration::from_secs(180);
 

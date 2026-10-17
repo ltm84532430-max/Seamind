@@ -7,6 +7,14 @@ export interface MarkdownMinimapController {
   destroy(): void;
 }
 
+interface MarkdownMinimapModel {
+  getLineCount(): number;
+  getLineText(lineNumber: number): string;
+  getActiveLine(): number;
+  scrollElement: HTMLElement;
+  scrollToLine(lineIndex: number): void;
+}
+
 class MarkdownMinimapView implements MarkdownMinimapController {
   private readonly root: HTMLDivElement;
   private readonly canvas: HTMLCanvasElement;
@@ -16,7 +24,7 @@ class MarkdownMinimapView implements MarkdownMinimapController {
   private pointerId: number | null = null;
 
   constructor(
-    private readonly view: EditorView,
+    private readonly model: MarkdownMinimapModel,
     host: HTMLElement,
   ) {
     this.root = document.createElement('div');
@@ -41,7 +49,7 @@ class MarkdownMinimapView implements MarkdownMinimapController {
     this.root.addEventListener('pointerup', this.handlePointerEnd);
     this.root.addEventListener('pointercancel', this.handlePointerEnd);
     this.root.addEventListener('keydown', this.handleKeyDown);
-    this.view.scrollDOM.addEventListener('scroll', this.scheduleDraw, {
+    this.model.scrollElement.addEventListener('scroll', this.scheduleDraw, {
       passive: true,
     });
     this.resizeObserver = new ResizeObserver(this.scheduleDraw);
@@ -55,7 +63,7 @@ class MarkdownMinimapView implements MarkdownMinimapController {
 
   destroy() {
     this.resizeObserver.disconnect();
-    this.view.scrollDOM.removeEventListener('scroll', this.scheduleDraw);
+    this.model.scrollElement.removeEventListener('scroll', this.scheduleDraw);
     this.root.removeEventListener('pointerdown', this.handlePointerDown);
     this.root.removeEventListener('pointermove', this.handlePointerMove);
     this.root.removeEventListener('pointerup', this.handlePointerEnd);
@@ -77,6 +85,7 @@ class MarkdownMinimapView implements MarkdownMinimapController {
     if (event.button !== 0) return;
     this.pointerId = event.pointerId;
     this.root.setPointerCapture(event.pointerId);
+    this.root.classList.add('is-dragging');
     this.navigateTo(event.clientY);
     event.preventDefault();
   };
@@ -90,14 +99,14 @@ class MarkdownMinimapView implements MarkdownMinimapController {
     if (this.pointerId !== event.pointerId) return;
     if (this.root.hasPointerCapture(event.pointerId))
       this.root.releasePointerCapture(event.pointerId);
+    this.root.classList.remove('is-dragging');
     this.pointerId = null;
   };
 
   private readonly handleKeyDown = (event: KeyboardEvent) => {
-    const currentLine = this.view.state.doc.lineAt(
-      this.view.state.selection.main.head,
-    ).number;
-    const step = Math.max(1, Math.ceil(this.view.state.doc.lines / 20));
+    const lineCount = Math.max(1, this.model.getLineCount());
+    const currentLine = this.model.getActiveLine() + 1;
+    const step = Math.max(1, Math.ceil(lineCount / 20));
     const targetLine =
       event.key === 'ArrowUp'
         ? currentLine - step
@@ -110,16 +119,12 @@ class MarkdownMinimapView implements MarkdownMinimapController {
               : event.key === 'Home'
                 ? 1
                 : event.key === 'End'
-                  ? this.view.state.doc.lines
+                  ? lineCount
                   : 0;
     if (!targetLine) return;
     event.preventDefault();
-    const line = Math.max(1, Math.min(this.view.state.doc.lines, targetLine));
-    this.view.dispatch({
-      effects: EditorView.scrollIntoView(this.view.state.doc.line(line).from, {
-        y: 'center',
-      }),
-    });
+    const line = Math.max(1, Math.min(lineCount, targetLine));
+    this.model.scrollToLine(line - 1);
   };
 
   private navigateTo(clientY: number) {
@@ -129,19 +134,12 @@ class MarkdownMinimapView implements MarkdownMinimapController {
       0,
       Math.min(1, (clientY - bounds.top) / bounds.height),
     );
-    const lineNumber = Math.max(
-      1,
-      Math.min(
-        this.view.state.doc.lines,
-        Math.floor(ratio * this.view.state.doc.lines) + 1,
-      ),
+    const lineCount = Math.max(1, this.model.getLineCount());
+    const lineIndex = Math.max(
+      0,
+      Math.min(lineCount - 1, Math.floor(ratio * lineCount)),
     );
-    this.view.dispatch({
-      effects: EditorView.scrollIntoView(
-        this.view.state.doc.line(lineNumber).from,
-        { y: 'center' },
-      ),
-    });
+    this.model.scrollToLine(lineIndex);
   }
 
   private draw() {
@@ -161,7 +159,7 @@ class MarkdownMinimapView implements MarkdownMinimapController {
     const headingColor = style.getPropertyValue('--minimap-heading').trim();
     const codeColor = style.getPropertyValue('--minimap-code').trim();
     const accentColor = style.getPropertyValue('--minimap-active').trim();
-    const lineCount = this.view.state.doc.lines;
+    const lineCount = Math.max(1, this.model.getLineCount());
     const rowCount = Math.min(
       lineCount,
       Math.max(1, Math.floor(bounds.height * maximumRowsPerPixel)),
@@ -169,9 +167,10 @@ class MarkdownMinimapView implements MarkdownMinimapController {
     const rowHeight = bounds.height / rowCount;
     const xInset = 5;
     const availableWidth = Math.max(1, bounds.width - xInset * 2);
-    const activeLine =
-      this.view.state.doc.lineAt(this.view.state.selection.main.head).number -
-      1;
+    const activeLine = Math.max(
+      0,
+      Math.min(lineCount - 1, this.model.getActiveLine()),
+    );
     const activeRow = Math.min(
       rowCount - 1,
       Math.floor((activeLine * rowCount) / lineCount),
@@ -198,7 +197,7 @@ class MarkdownMinimapView implements MarkdownMinimapController {
         lineCount,
         Math.floor((row * lineCount) / rowCount) + 1,
       );
-      const content = this.view.state.doc.line(lineNumber).text;
+      const content = this.model.getLineText(lineNumber);
       const trimmed = content.trim();
       if (!trimmed) continue;
 
@@ -225,7 +224,7 @@ class MarkdownMinimapView implements MarkdownMinimapController {
     this.root.setAttribute('aria-valuemax', String(lineCount));
     this.root.setAttribute('aria-valuenow', String(activeLine + 1));
 
-    const scroll = this.view.scrollDOM;
+    const scroll = this.model.scrollElement;
     const scrollHeight = Math.max(scroll.scrollHeight, scroll.clientHeight);
     const viewportHeight = Math.min(
       bounds.height,
@@ -244,5 +243,56 @@ export function createMarkdownMinimap(
   view: EditorView,
   host: HTMLElement,
 ): MarkdownMinimapController {
-  return new MarkdownMinimapView(view, host);
+  return new MarkdownMinimapView(
+    {
+      getLineCount: () => view.state.doc.lines,
+      getLineText: (lineNumber) => view.state.doc.line(lineNumber).text,
+      getActiveLine: () =>
+        view.state.doc.lineAt(view.state.selection.main.head).number - 1,
+      scrollElement: view.scrollDOM,
+      scrollToLine: (lineIndex) => {
+        const line = Math.max(1, Math.min(view.state.doc.lines, lineIndex + 1));
+        view.dispatch({
+          effects: EditorView.scrollIntoView(view.state.doc.line(line).from, {
+            y: 'center',
+          }),
+        });
+      },
+    },
+    host,
+  );
+}
+
+export function createMarkdownPreviewMinimap(
+  source: string,
+  scrollElement: HTMLElement,
+  host: HTMLElement,
+): MarkdownMinimapController {
+  const lines = source.replace(/\r\n?/g, '\n').split('\n');
+  return new MarkdownMinimapView(
+    {
+      getLineCount: () => lines.length,
+      getLineText: (lineNumber) => lines[lineNumber - 1] ?? '',
+      getActiveLine: () => {
+        const scrollRange = Math.max(
+          0,
+          scrollElement.scrollHeight - scrollElement.clientHeight,
+        );
+        if (!scrollRange) return 0;
+        return Math.round(
+          (scrollElement.scrollTop / scrollRange) * (lines.length - 1),
+        );
+      },
+      scrollElement,
+      scrollToLine: (lineIndex) => {
+        const scrollRange = Math.max(
+          0,
+          scrollElement.scrollHeight - scrollElement.clientHeight,
+        );
+        const ratio = lines.length > 1 ? lineIndex / (lines.length - 1) : 0;
+        scrollElement.scrollTo({ top: ratio * scrollRange });
+      },
+    },
+    host,
+  );
 }

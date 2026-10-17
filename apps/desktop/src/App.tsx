@@ -35,16 +35,20 @@ import type {
 } from './agent/capabilities';
 import type {
   ActiveMindmapSnapshot,
+  AgentAnalysisMode,
+  GeneratedHtmlAsset,
   MindmapNodeSnapshot,
   NodeEditOperation,
   NodeEditProposal,
 } from './agent/types';
 import {
+  applyMarkdownNodeBranch,
   applyMarkdownNodeCommand,
   buildMarkdownNodeSourceMap,
   findSourcePathForLine,
   getMarkdownNodeNote,
   getMarkdownNodeNotes,
+  MAX_AGENT_BRANCH_CHARS,
   MAX_MARKDOWN_NODE_NOTE_CHARS,
   markdownBody,
   markdownForMindmap,
@@ -62,6 +66,7 @@ import type {
 type ProviderSettings = { baseUrl: string; model: string };
 type Theme = 'light' | 'dark';
 type MindmapStyle = 'gray' | 'roots' | 'cards' | 'warm';
+type NodeWrapMode = 'auto' | 'manual';
 interface MapColorNode {
   state: { depth: number; path?: string };
 }
@@ -110,7 +115,20 @@ interface EpubOutline {
   title: string;
   markdown: string;
   chapterCount: number;
+  sectionCount: number;
+  enrichedChapterCount: number;
+  skippedChapterCount: number;
+  warnings: string[];
   sourceFile: string;
+}
+
+interface EpubSummaryResult {
+  markdown: string;
+  summarizedChapterCount: number;
+  unavailableChapterCount: number;
+  omittedChapterCount: number;
+  truncatedChapterCount: number;
+  notSummarizedChapterCount: number;
 }
 
 interface ImportedHtmlAsset {
@@ -150,6 +168,7 @@ const isEpubPath = (path: string) =>
 const settingsStorageKey = 'markmap.desktop.provider-settings.v1';
 const themeStorageKey = 'seamind.theme.v1';
 const mindmapStyleStorageKey = 'seamind.map-style.v1';
+const nodeWrapStorageKey = 'seamind.node-wrap.v1';
 const aiCollapsedStorageKey = 'seamind.ai-collapsed.v1';
 const promptSuggestions = [
   '机器学习核心知识体系',
@@ -275,6 +294,16 @@ function readMindmapStyle(): MindmapStyle {
       : 'gray';
   } catch {
     return 'gray';
+  }
+}
+
+function readNodeWrapMode(): NodeWrapMode {
+  try {
+    return localStorage.getItem(nodeWrapStorageKey) === 'manual'
+      ? 'manual'
+      : 'auto';
+  } catch {
+    return 'auto';
   }
 }
 
@@ -747,6 +776,51 @@ function renderMarkdownToHtml(renderer: unknown, source: string): string {
   return (renderer as { render(markdown: string): string }).render(source);
 }
 
+function addMarkdownNodeNoteCards(
+  root: PureNode,
+  sources: Map<string, MarkdownNodeSource>,
+  markdown: string,
+  renderer: unknown,
+): PureNode {
+  const notes = getMarkdownNodeNotes(markdown);
+  if (!notes.size) return root;
+
+  let nodeId = 0;
+  let remainingNoteChars = 12_000;
+  const visit = (node: PureNode, parentPath = ''): PureNode => {
+    nodeId += 1;
+    const path = parentPath ? `${parentPath}.${nodeId}` : `${nodeId}`;
+    const source = sources.get(path);
+    const fullNote = source?.id ? notes.get(source.id)?.trim() || '' : '';
+    let noteMarkup = '';
+    if (fullNote && remainingNoteChars > 0) {
+      const note = fullNote.slice(0, Math.min(800, remainingNoteChars));
+      remainingNoteChars = Math.max(0, remainingNoteChars - note.length);
+      const rendered = renderMarkdownToHtml(renderer, note);
+      const safeNote = sanitizeNode({
+        content: rendered,
+        children: [],
+      }).content;
+      const ellipsisMarkup =
+        note.length < fullNote.length
+          ? '<span class="seamind-node-note-ellipsis">…</span>'
+          : '';
+      noteMarkup = [
+        '<div class="seamind-node-note">',
+        `<div class="seamind-node-note-content">${safeNote}${ellipsisMarkup}</div>`,
+        '</div>',
+      ].join('');
+    }
+    return {
+      ...node,
+      content: `${node.content}${noteMarkup}`,
+      children: node.children.map((child) => visit(child, path)),
+    };
+  };
+
+  return visit(root);
+}
+
 function sanitizeNode(
   node: PureNode,
   options: { allowMarkdownImages?: boolean } = {},
@@ -809,10 +883,59 @@ function sanitizeNode(
 }
 
 function markdownTitle(markdown: string): string {
-  const heading = markdownForMindmap(markdownBody(markdown))
+  const rawHeading = markdownForMindmap(markdownBody(markdown))
     .match(/^#{1,2}\s+(.+)\s*$/m)?.[1]
     ?.trim();
+  const heading = rawHeading
+    ?.replace(/&#10;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   return heading || '新建思维导图';
+}
+
+function prepareGeneratedBranchAssets(markdown: string): {
+  markdown: string;
+  assets: GeneratedHtmlAsset[];
+} {
+  if (/```\s*seamind-html-card\b/i.test(markdown)) {
+    throw new Error(
+      'AI 不能直接伪造 HTML 资源引用，请改为输出独立 HTML 代码块。',
+    );
+  }
+  const assets: GeneratedHtmlAsset[] = [];
+  const prepared = markdown.replace(
+    /```(?:html|htm)\s*\r?\n([\s\S]*?)\r?\n```/gi,
+    (_fence, rawHtml: string) => {
+      const html = rawHtml.trim();
+      if (!html) throw new Error('HTML 代码块不能为空。');
+      if (new TextEncoder().encode(html).byteLength > 256 * 1024) {
+        throw new Error('单个生成的 HTML 组件不能超过 256 KB。');
+      }
+      if (assets.length >= 8) throw new Error('一次最多生成 8 个 HTML 组件。');
+      const title =
+        html
+          .match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]
+          ?.replace(/<[^>]*>/g, '')
+          .trim()
+          .slice(0, 120) || `HTML 可视化 ${assets.length + 1}`;
+      const asset: GeneratedHtmlAsset = {
+        assetId: crypto.randomUUID(),
+        entryPath: 'index.html',
+        title,
+        html,
+      };
+      assets.push(asset);
+      const card: HtmlCardDefinition = {
+        assetId: asset.assetId,
+        entryPath: asset.entryPath,
+        title: asset.title,
+        width: 420,
+        height: 260,
+      };
+      return `\`\`\`seamind-html-card\n${JSON.stringify(card, null, 2)}\n\`\`\``;
+    },
+  );
+  return { markdown: prepared, assets };
 }
 
 function markdownTitleLineIndex(markdown: string): number {
@@ -853,6 +976,18 @@ function addFallbackMindmapTitle(
 
 function errorMessage(error: unknown, fallback: string): string {
   return typeof error === 'string' ? error : fallback;
+}
+
+function providerLabel(baseUrl: string): string {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    if (host.includes('deepseek')) return 'DeepSeek API';
+    if (host.includes('openai')) return 'OpenAI API';
+    if (host.includes('anthropic')) return 'Anthropic API';
+    return host || '兼容 API';
+  } catch {
+    return '兼容 API';
+  }
 }
 
 function normalizeKatexDelimiters(markdown: string): string {
@@ -993,7 +1128,12 @@ function buildAgentMindmapTree(
       !isYouTubeCard &&
       !containsKatex
     ) {
-      allowedOperations.unshift('rename', 'add_child', 'add_sibling');
+      allowedOperations.unshift(
+        'rename',
+        'add_child',
+        'add_sibling',
+        'add_branch',
+      );
     }
     return {
       path,
@@ -1082,6 +1222,8 @@ export default function App() {
   const [theme, setTheme] = useState<Theme>(readTheme);
   const [mindmapStyle, setMindmapStyle] =
     useState<MindmapStyle>(readMindmapStyle);
+  const [nodeWrapMode, setNodeWrapMode] =
+    useState<NodeWrapMode>(readNodeWrapMode);
   const [mindmapStyleMenuOpen, setMindmapStyleMenuOpen] = useState(false);
   const [sourceCollapsed, setSourceCollapsed] = useState(false);
   const [markdownPaneMode, setMarkdownPaneMode] = useState<'edit' | 'preview'>(
@@ -1104,6 +1246,7 @@ export default function App() {
   const [libraryQuery, setLibraryQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [libraryBusy, setLibraryBusy] = useState(false);
+  const [summarizeEpubOnImport, setSummarizeEpubOnImport] = useState(false);
   const [pendingEpubImport, setPendingEpubImport] = useState(false);
   const [epubDropActive, setEpubDropActive] = useState(false);
   const [libraryError, setLibraryError] = useState('');
@@ -1124,10 +1267,11 @@ export default function App() {
   const [categoryDraft, setCategoryDraft] = useState('');
   const [providerSettings, setProviderSettings] =
     useState<ProviderSettings>(readProviderSettings);
-  const [aiMode, setAiMode] = useState<'generate' | 'agent'>('generate');
+  const [aiMode, setAiMode] = useState<AgentAnalysisMode>('drilldown');
   const [prompt, setPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationError, setGenerationError] = useState('');
+  const [generationDialogOpen, setGenerationDialogOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [apiKeyDraft, setApiKeyDraft] = useState('');
   const [apiKeySaved, setApiKeySaved] = useState(false);
@@ -1211,15 +1355,19 @@ export default function App() {
     );
     return sanitizeNode({ content: rendered, children: [] }).content;
   }, [nodeNoteDialog?.markdown, transformer]);
+  const markdownPreviewSource = useMemo(
+    () => normalizeKatexDelimiters(markdownBody(editorDraft.markdown)),
+    [editorDraft.markdown],
+  );
   const markdownPreviewHtml = useMemo(() => {
-    const source = normalizeKatexDelimiters(markdownBody(editorDraft.markdown));
+    const source = markdownPreviewSource;
     if (!source.trim()) return '<p>暂无 Markdown 内容</p>';
     const rendered = renderMarkdownToHtml(transformer.md, source);
     return sanitizeNode(
       { content: rendered, children: [] },
       { allowMarkdownImages: true },
     ).content;
-  }, [editorDraft.markdown, transformer]);
+  }, [markdownPreviewSource, transformer]);
 
   useEffect(() => {
     if (!markdownFullscreen) return;
@@ -1397,6 +1545,7 @@ export default function App() {
       relativePath: current.relativePath,
       nodeCount: tree.nodeCount,
       truncated: tree.truncated,
+      markdown: current.markdown,
       root: tree.root,
     };
   };
@@ -1469,6 +1618,70 @@ export default function App() {
     };
   };
 
+  const proposeAgentNodeBranch = (input: {
+    baseRevision: number;
+    nodeId?: string;
+    nodePath?: string;
+    analysisMode: AgentAnalysisMode;
+    branchMarkdown: string;
+    rationale: string;
+  }): NodeEditProposal => {
+    const current = draftRef.current;
+    if (current.revision !== input.baseRevision) {
+      throw new Error('当前导图已变化，请重新读取后再生成下探分支。');
+    }
+    if (input.branchMarkdown.length > MAX_AGENT_BRANCH_CHARS) {
+      throw new Error('生成的下探分支超过字符上限，请缩小主题后重试。');
+    }
+    const root = transformer.transform(
+      markdownForMindmap(current.markdown),
+    ).root;
+    const sources = buildMarkdownNodeSourceMap(current.markdown, root);
+    const targetEntry = input.nodeId
+      ? [...sources.entries()].find(([, source]) => source.id === input.nodeId)
+      : input.nodePath
+        ? ([input.nodePath, sources.get(input.nodePath)] as const)
+        : undefined;
+    const [nodePath, source] = targetEntry || [];
+    if (!nodePath || !source) {
+      throw new Error('找不到目标节点的 Markdown 源位置，请重新选择节点。');
+    }
+    const target = findAgentMindmapNode(
+      buildAgentMindmapTree(root, sources, current.markdown).root,
+      nodePath,
+    );
+    if (!target?.allowedOperations.includes('add_branch')) {
+      throw new Error('该节点不支持添加下探分支，请选择普通标题或列表节点。');
+    }
+    const prepared = prepareGeneratedBranchAssets(input.branchMarkdown);
+    const command = applyMarkdownNodeBranch(
+      current.markdown,
+      source,
+      prepared.markdown,
+    );
+    const firstHeading = prepared.markdown.match(/^\s*#{1,6}\s+(.+)$/m)?.[1];
+    const nextLabel = firstHeading
+      ? normalizeMindmapText(firstHeading)
+      : '下探分支';
+    return {
+      baseRevision: current.revision,
+      baseRelativePath: current.relativePath,
+      baseMarkdown: current.markdown,
+      baseTitle: current.title,
+      markdown: command.markdown,
+      title: markdownTitle(command.markdown),
+      nodeId: command.nodeId || source.id || null,
+      nodePath,
+      operation: 'add_branch',
+      previousLabel: source.label,
+      nextLabel,
+      rationale: input.rationale,
+      analysisMode: input.analysisMode,
+      branchMarkdown: prepared.markdown,
+      ...(prepared.assets.length ? { htmlAssets: prepared.assets } : {}),
+    };
+  };
+
   const agentCapabilities: AgentCapabilities = {
     getCurrentMindmap: getAgentMindmap,
     searchLibrary: (query, category) =>
@@ -1479,6 +1692,7 @@ export default function App() {
     readDocument: (relativePath) =>
       invoke<OpenedDocument>('open_document', { relativePath }),
     proposeNodeEdit: proposeAgentNodeEdit,
+    proposeNodeBranch: proposeAgentNodeBranch,
   };
   agentCapabilitiesRef.current = agentCapabilities;
 
@@ -1579,7 +1793,9 @@ export default function App() {
     };
   }, []);
 
-  const applyAgentProposal = (proposal: NodeEditProposal): number | null => {
+  const applyAgentProposal = async (
+    proposal: NodeEditProposal,
+  ): Promise<number | null> => {
     const current = draftRef.current;
     if (
       current.revision !== proposal.baseRevision ||
@@ -1587,6 +1803,28 @@ export default function App() {
       current.markdown !== proposal.baseMarkdown
     ) {
       return null;
+    }
+    if (proposal.htmlAssets?.length) {
+      if (!current.relativePath) {
+        throw new Error('请先保存当前思维导图，再插入生成的 HTML 资源。');
+      }
+      const assetIds = proposal.htmlAssets.map((asset) => asset.assetId);
+      await invoke('save_generated_html_assets', {
+        documentRelativePath: current.relativePath,
+        assets: proposal.htmlAssets,
+      });
+      const latest = draftRef.current;
+      if (
+        latest.revision !== proposal.baseRevision ||
+        latest.relativePath !== proposal.baseRelativePath ||
+        latest.markdown !== proposal.baseMarkdown
+      ) {
+        await invoke('discard_generated_html_assets', {
+          documentRelativePath: current.relativePath,
+          assetIds,
+        }).catch(() => undefined);
+        return null;
+      }
     }
     applyMarkdownFromCanvas(proposal.markdown, { title: proposal.title });
     return draftRef.current.revision;
@@ -1605,7 +1843,17 @@ export default function App() {
       }).catch(() => undefined);
       return;
     }
-    const appliedRevision = applyAgentProposal(pending.proposal);
+    let appliedRevision: number | null;
+    try {
+      appliedRevision = await applyAgentProposal(pending.proposal);
+    } catch (error) {
+      await invoke('agent_bridge_resolve', {
+        requestId: pending.requestId,
+        result: {},
+        error: errorMessage(error, '无法保存下探分支资源。'),
+      }).catch(() => undefined);
+      return;
+    }
     if (appliedRevision === null) {
       await invoke('agent_bridge_resolve', {
         requestId: pending.requestId,
@@ -1631,10 +1879,10 @@ export default function App() {
     }).catch(() => undefined);
   };
 
-  const undoAgentProposal = (
+  const undoAgentProposal = async (
     proposal: NodeEditProposal,
     appliedRevision: number,
-  ): boolean => {
+  ): Promise<boolean> => {
     const current = draftRef.current;
     if (
       current.revision !== appliedRevision ||
@@ -1647,6 +1895,12 @@ export default function App() {
     applyMarkdownFromCanvas(proposal.baseMarkdown, {
       title: proposal.baseTitle,
     });
+    if (proposal.htmlAssets?.length && proposal.baseRelativePath) {
+      await invoke('discard_generated_html_assets', {
+        documentRelativePath: proposal.baseRelativePath,
+        assetIds: proposal.htmlAssets.map((asset) => asset.assetId),
+      }).catch(() => undefined);
+    }
     return true;
   };
 
@@ -1922,7 +2176,11 @@ export default function App() {
     return true;
   };
 
-  const importEpubPath = async (path: string, droppedEpubCount = 1) => {
+  const importEpubPath = async (
+    path: string,
+    droppedEpubCount = 1,
+    includeAiSummary = false,
+  ) => {
     if (epubImportInFlightRef.current) return;
     epubImportInFlightRef.current = true;
     setLibraryBusy(true);
@@ -1931,35 +2189,88 @@ export default function App() {
     try {
       const outline = await invoke<EpubOutline>('import_epub_toc', { path });
       const currentDraft = draftRef.current;
-      installDraft(
-        createDraft({
-          title: outline.title,
-          category: categoryFilter || '未分类',
-          mapType: 'EPUB 目录',
-          tags: 'EPUB, 目录',
-          markdown: outline.markdown,
-          dirty: true,
-          revision: currentDraft.revision + 1,
-        }),
-      );
+      const importedDraft = createDraft({
+        title: outline.title,
+        category: categoryFilter || '未分类',
+        mapType: 'EPUB 目录',
+        tags: 'EPUB, 目录',
+        markdown: outline.markdown,
+        dirty: true,
+        revision: currentDraft.revision + 1,
+      });
+      installDraft(importedDraft);
       setPendingEpubImport(true);
       const droppedNotice =
         droppedEpubCount > 1
           ? `（检测到 ${droppedEpubCount} 本 EPUB，本次先导入第一本）`
           : '';
-      setSaveMessage(
-        `已从 ${outline.sourceFile} 导入 ${outline.chapterCount} 个目录条目，请检查后保存${droppedNotice}`,
-      );
+      const sectionNotice =
+        outline.sectionCount > 0
+          ? `提取正文小节 ${outline.sectionCount} 个，覆盖 ${outline.enrichedChapterCount} 个目录项`
+          : '正文未检测到小节标题';
+      const skippedNotice =
+        outline.skippedChapterCount > 0
+          ? `；${outline.skippedChapterCount} 个目录项的小节未能解析`
+          : '';
+      const warningNotice = outline.warnings[0]
+        ? `；提示：${outline.warnings[0]}`
+        : '';
+      const importNotice = `已从 ${outline.sourceFile} 导入 ${outline.chapterCount} 个目录条目；${sectionNotice}${skippedNotice}${warningNotice}，请检查后保存${droppedNotice}`;
+      let aiSummaryNotice = '';
+      if (includeAiSummary) {
+        setSaveMessage('目录已导入，正在将章节正文发送到当前 AI 模型生成摘要…');
+        try {
+          const result = await invoke<EpubSummaryResult>(
+            'summarize_epub_chapters',
+            {
+              path,
+              baseUrl: providerSettings.baseUrl,
+              model: providerSettings.model,
+              markdown: outline.markdown,
+            },
+          );
+          if (draftRef.current === importedDraft) {
+            installDraft({
+              ...importedDraft,
+              markdown: result.markdown,
+              dirty: true,
+              revision: importedDraft.revision + 1,
+            });
+            aiSummaryNotice = `；AI 已生成 ${result.summarizedChapterCount} 章摘要`;
+            if (result.truncatedChapterCount > 0) {
+              aiSummaryNotice += `（${result.truncatedChapterCount} 章仅使用前约 4000 字）`;
+            }
+            if (result.unavailableChapterCount > 0) {
+              aiSummaryNotice += `；${result.unavailableChapterCount} 章正文未能提取`;
+            }
+            if (result.notSummarizedChapterCount > 0) {
+              aiSummaryNotice += `；${result.notSummarizedChapterCount} 章未获得摘要`;
+            }
+            if (result.omittedChapterCount > 0) {
+              aiSummaryNotice += `；为控制请求范围，跳过 ${result.omittedChapterCount} 章`;
+            }
+          } else {
+            aiSummaryNotice =
+              '；AI 摘要已返回，但导入后草稿发生了编辑，未覆盖你的修改';
+          }
+        } catch (error) {
+          aiSummaryNotice = `；AI 摘要失败，仍保留本地目录：${errorMessage(error, '摘要请求失败')}`;
+        }
+      }
+      setSaveMessage(`${importNotice}${aiSummaryNotice}`);
     } catch (error) {
       setLibraryError(errorMessage(error, '导入 EPUB 目录失败'));
       setSaveMessage('EPUB 导入失败');
     } finally {
       epubImportInFlightRef.current = false;
       setLibraryBusy(false);
+      setSummarizeEpubOnImport(false);
     }
   };
 
   const importDroppedEpubs = async (paths: string[]) => {
+    const includeAiSummary = summarizeEpubOnImport;
+    setSummarizeEpubOnImport(false);
     const epubPaths = paths.filter(isEpubPath);
     if (epubPaths.length === 0) {
       setLibraryError('请拖入 .epub 电子书文件以导入目录。');
@@ -1970,7 +2281,7 @@ export default function App() {
       return;
     }
     if (!(await prepareForEpubImport())) return;
-    await importEpubPath(epubPaths[0], epubPaths.length);
+    await importEpubPath(epubPaths[0], epubPaths.length, includeAiSummary);
   };
 
   epubDropHandlerRef.current = (paths) => {
@@ -1978,6 +2289,8 @@ export default function App() {
   };
 
   const importEpub = async () => {
+    const includeAiSummary = summarizeEpubOnImport;
+    setSummarizeEpubOnImport(false);
     if (!(await prepareForEpubImport())) return;
     try {
       const selected = await openDialog({
@@ -1986,7 +2299,7 @@ export default function App() {
         filters: [{ name: 'EPUB 电子书', extensions: ['epub'] }],
       });
       if (typeof selected !== 'string') return;
-      await importEpubPath(selected);
+      await importEpubPath(selected, 1, includeAiSummary);
     } catch (error) {
       setLibraryError(errorMessage(error, '导入 EPUB 目录失败'));
       setSaveMessage('EPUB 导入失败');
@@ -2164,6 +2477,7 @@ export default function App() {
         });
       }
       setLastUpdated('AI 已生成');
+      setGenerationDialogOpen(false);
     } catch (error) {
       setGenerationError(
         errorMessage(error, '生成失败，请检查模型设置后重试。'),
@@ -2228,6 +2542,14 @@ export default function App() {
       // Keep the selected map style for this session when storage is unavailable.
     }
   }, [mindmapStyle]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(nodeWrapStorageKey, nodeWrapMode);
+    } catch {
+      // Keep the selected node wrapping mode for this session.
+    }
+  }, [nodeWrapMode]);
 
   useEffect(() => {
     try {
@@ -2479,6 +2801,20 @@ export default function App() {
           keyEvent.preventDefault();
           keyEvent.stopPropagation();
           finish('cancel');
+        } else if (keyEvent.key === 'Enter' && keyEvent.shiftKey) {
+          keyEvent.preventDefault();
+          keyEvent.stopPropagation();
+          const selection = window.getSelection();
+          if (!selection || selection.rangeCount === 0) return;
+          const range = selection.getRangeAt(0);
+          if (!editor.contains(range.startContainer)) return;
+          range.deleteContents();
+          const lineBreak = document.createElement('br');
+          range.insertNode(lineBreak);
+          range.setStartAfter(lineBreak);
+          range.collapse(true);
+          selection.removeAllRanges();
+          selection.addRange(range);
         } else if (keyEvent.key === 'Enter') {
           keyEvent.preventDefault();
           keyEvent.stopPropagation();
@@ -2645,7 +2981,7 @@ export default function App() {
         linkAnchor: (node) => mapNodeLinkAnchor(mindmapStyle, node.state.depth),
       })
       .then(() => setSourceMapVersion((version) => version + 1));
-  }, [mindmapStyle, theme]);
+  }, [mindmapStyle, theme, nodeWrapMode]);
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -2751,7 +3087,13 @@ export default function App() {
         editorDraft.markdown,
         safeRoot,
       );
-      await map.setData(displayRoot);
+      const rootWithNoteCards = addMarkdownNodeNoteCards(
+        displayRoot,
+        nextMarkdownNodeSources,
+        editorDraft.markdown,
+        transformer.md,
+      );
+      await map.setData(rootWithNoteCards);
       if (codeBlocksAbort.signal.aborted) return;
       markdownNodeSourcesMarkdownRef.current = editorDraft.markdown;
       markdownNodeSourcesRef.current = nextMarkdownNodeSources;
@@ -2821,26 +3163,115 @@ export default function App() {
   const canEditSelectedNodeNote = Boolean(
     sourceMapIsCurrent && selectedNodeSource,
   );
+  const selectedAiTarget =
+    sourceMapIsCurrent &&
+    activeMapPath &&
+    selectedNodeSource &&
+    selectedNodeSource.kind !== 'block'
+      ? {
+          nodeId: selectedNodeSource.id || null,
+          nodePath: activeMapPath,
+          label: selectedNodeSource.label,
+        }
+      : null;
+  const isHtmlInteractiveCanvas =
+    htmlCanvasEmbed?.documentRelativePath === editorDraft.relativePath;
 
   return (
     <main
       className="app-shell"
       data-theme={theme}
       data-map-style={mindmapStyle}
+      data-node-wrap={nodeWrapMode}
     >
       <header className="topbar">
         <div className="brand-lockup">
           <div className="brand-mark" aria-hidden="true">
-            <svg viewBox="0 0 32 32">
-              <path d="M9 23c-3 0-4.5-2.2-4.5-4.4s1.6-3.8 4.7-3.8h4.4c3 0 4.7-1.6 4.7-3.8S16.8 7 13.8 7" />
-              <path d="M18.3 14.8h3.3c3 0 4.9 1.6 4.9 3.8s-1.7 4.4-4.9 4.4" />
-              <circle cx="9" cy="23" r="2" />
-              <circle cx="13.8" cy="7" r="2" />
-              <circle cx="21.6" cy="23" r="2" />
+            <svg viewBox="0 0 32 32" fill="none">
+              <path
+                d="M16 8V3.5M16 24v4.5M11.5 16H4M20.5 16h7.5M12 11.5L6.5 8M20 11.5l5.5-3.5M12 20.5l-5.5 3.5M20 20.5l5.5 3.5"
+                stroke="currentColor"
+                strokeWidth="1.1"
+                strokeLinecap="round"
+                opacity="0.45"
+              />
+              <circle
+                cx="16"
+                cy="3.5"
+                r="1.3"
+                fill="currentColor"
+                stroke="none"
+              />
+              <circle
+                cx="16"
+                cy="28.5"
+                r="1.3"
+                fill="currentColor"
+                stroke="none"
+              />
+              <circle
+                cx="4"
+                cy="16"
+                r="1.3"
+                fill="currentColor"
+                stroke="none"
+              />
+              <circle
+                cx="28"
+                cy="16"
+                r="1.3"
+                fill="currentColor"
+                stroke="none"
+              />
+              <circle cx="6.5" cy="8" r="1" fill="currentColor" stroke="none" />
+              <circle
+                cx="25.5"
+                cy="8"
+                r="1"
+                fill="currentColor"
+                stroke="none"
+              />
+              <circle
+                cx="6.5"
+                cy="24"
+                r="1"
+                fill="currentColor"
+                stroke="none"
+              />
+              <circle
+                cx="25.5"
+                cy="24"
+                r="1"
+                fill="currentColor"
+                stroke="none"
+              />
+              <circle
+                cx="16"
+                cy="16"
+                r="9.2"
+                stroke="currentColor"
+                strokeWidth="0.9"
+                strokeDasharray="2.5 2"
+                opacity="0.35"
+              />
+              <path
+                d="M21 10.5C21 7.8 18.8 6.2 16 6.2C12.8 6.2 10.8 8.2 10.8 11.2C10.8 15 15.2 16.2 17.2 17.6C19.8 19.4 21.2 20.8 21.2 23.2C21.2 26.2 18.8 27.2 16 27.2C12.8 27.2 10.8 25.4 10.8 22.8"
+                stroke="currentColor"
+                strokeWidth="2.3"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M14.2 8.6C12.8 10.2 13.2 13.2 16 16C18.6 18.6 19.2 21.8 17.6 24.5"
+                stroke="currentColor"
+                strokeWidth="1.2"
+                strokeLinecap="round"
+                opacity="0.75"
+              />
             </svg>
           </div>
           <div>
-            <div className="brand-name">seamind</div>
+            <div className="brand-name">Seamind</div>
             <div
               className="document-name"
               title={editorDraft.relativePath ?? ''}
@@ -2906,11 +3337,18 @@ export default function App() {
           categoryFilter={categoryFilter}
           query={libraryQuery}
           busy={libraryBusy}
+          summarizeEpubOnImport={summarizeEpubOnImport}
           onSearch={setLibraryQuery}
           onChooseRoot={() => void chooseLibraryRoot()}
           onRefresh={() => void loadLibrary(false)}
           onCreateDocument={createNewDocument}
+          onCreateWithAi={() => {
+            setPrompt('');
+            setGenerationError('');
+            setGenerationDialogOpen(true);
+          }}
           onImportEpub={() => void importEpub()}
+          onToggleEpubSummary={setSummarizeEpubOnImport}
           onCreateCategory={() => {
             setCategoryDraft('');
             setLibraryError('');
@@ -3089,7 +3527,11 @@ export default function App() {
               />
             </div>
             {markdownPaneMode === 'preview' && (
-              <MarkdownPreview html={markdownPreviewHtml} theme={theme} />
+              <MarkdownPreview
+                html={markdownPreviewHtml}
+                source={markdownPreviewSource}
+                theme={theme}
+              />
             )}
           </div>
           <div className="editor-footer">
@@ -3100,208 +3542,257 @@ export default function App() {
 
         <section className="preview-pane">
           <div className="pane-heading preview-heading">
-            <div>
+            <div className="preview-title">
               <span className="pane-kicker">02 / CANVAS</span>
               <h1>思维导图</h1>
             </div>
-            <div className="canvas-tools" aria-label="画布工具">
-              {htmlCanvasEmbed?.documentRelativePath ===
-                editorDraft.relativePath && (
-                <button
-                  type="button"
-                  className="html-canvas-mode-button"
-                  onClick={() => setHtmlCanvasEmbed(null)}
-                >
-                  退出 HTML 交互
-                </button>
-              )}
-              <button
-                type="button"
-                className="canvas-node-action"
-                title="添加子节点"
-                aria-label="添加子节点"
-                disabled={!canAddSelectedNode}
-                onClick={() => applySelectedNodeOperation('child')}
-              >
-                子级＋
-              </button>
-              <button
-                type="button"
-                className="canvas-node-action"
-                title="添加同级节点"
-                aria-label="添加同级节点"
-                disabled={!canAddSelectedNode}
-                onClick={() => applySelectedNodeOperation('sibling')}
-              >
-                同级＋
-              </button>
-              <button
-                type="button"
-                className="canvas-node-action"
-                title="删除所选节点及其子节点，可用撤销恢复"
-                aria-label="删除所选节点"
-                disabled={!canDeleteSelectedNode}
-                onClick={() => applySelectedNodeOperation('delete')}
-              >
-                删除
-              </button>
-              <button
-                type="button"
-                className="canvas-node-action"
-                title="编辑所选节点的 Markdown 备注"
-                aria-label="编辑节点备注"
-                disabled={!canEditSelectedNodeNote}
-                onClick={openSelectedNodeNote}
-              >
-                备注
-              </button>
-              <span className="tool-divider" />
-              <button
-                type="button"
-                className="canvas-node-action"
-                title="撤销"
-                aria-label="撤销"
-                onClick={() => markdownEditorRef.current?.undo()}
-              >
-                撤销
-              </button>
-              <button
-                type="button"
-                className="canvas-node-action"
-                title="重做"
-                aria-label="重做"
-                onClick={() => markdownEditorRef.current?.redo()}
-              >
-                重做
-              </button>
-              <div className="map-style-picker" ref={mindmapStylePickerRef}>
-                <button
-                  type="button"
-                  className="map-style-trigger"
-                  aria-haspopup="menu"
-                  aria-expanded={mindmapStyleMenuOpen}
-                  aria-label={`思维导图样式：${mindmapStyles.find((style) => style.id === mindmapStyle)?.label}，点击切换`}
-                  onClick={() => setMindmapStyleMenuOpen((open) => !open)}
-                >
-                  <span
-                    className={`map-style-trigger-swatch is-${mindmapStyle}`}
-                    aria-hidden="true"
+            <div className="canvas-tools" role="toolbar" aria-label="画布工具">
+              <div className="canvas-tool-actions">
+                {isHtmlInteractiveCanvas && (
+                  <button
+                    type="button"
+                    className="html-canvas-mode-button"
+                    onClick={() => setHtmlCanvasEmbed(null)}
                   >
-                    <i />
-                    <i />
-                    <i />
-                  </span>
-                  <span>样式</span>
-                  <span className="map-style-current">
-                    {
-                      mindmapStyles.find((style) => style.id === mindmapStyle)
-                        ?.label
+                    退出 HTML 交互
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="canvas-node-action"
+                  title="添加子节点"
+                  aria-label="添加子节点"
+                  disabled={!canAddSelectedNode}
+                  onClick={() => applySelectedNodeOperation('child')}
+                >
+                  子级＋
+                </button>
+                <button
+                  type="button"
+                  className="canvas-node-action"
+                  title="添加同级节点"
+                  aria-label="添加同级节点"
+                  disabled={!canAddSelectedNode}
+                  onClick={() => applySelectedNodeOperation('sibling')}
+                >
+                  同级＋
+                </button>
+                <button
+                  type="button"
+                  className="canvas-node-action"
+                  title="删除所选节点及其子节点，可用撤销恢复"
+                  aria-label="删除所选节点"
+                  disabled={!canDeleteSelectedNode}
+                  onClick={() => applySelectedNodeOperation('delete')}
+                >
+                  删除
+                </button>
+                <button
+                  type="button"
+                  className="canvas-node-action"
+                  title="编辑所选节点的 Markdown 备注"
+                  aria-label="编辑节点备注"
+                  disabled={!canEditSelectedNodeNote}
+                  onClick={openSelectedNodeNote}
+                >
+                  备注
+                </button>
+                <span className="tool-divider" aria-hidden="true" />
+                <button
+                  type="button"
+                  className="canvas-node-action"
+                  title="撤销"
+                  aria-label="撤销"
+                  onClick={() => markdownEditorRef.current?.undo()}
+                >
+                  撤销
+                </button>
+                <button
+                  type="button"
+                  className="canvas-node-action"
+                  title="重做"
+                  aria-label="重做"
+                  onClick={() => markdownEditorRef.current?.redo()}
+                >
+                  重做
+                </button>
+              </div>
+              <div className="canvas-tool-view">
+                <details className="canvas-help">
+                  <summary
+                    title="查看画布操作说明"
+                    aria-label={
+                      isHtmlInteractiveCanvas
+                        ? '查看 HTML 交互模式说明'
+                        : '查看画布操作说明'
                     }
-                  </span>
-                  <span className="map-style-caret" aria-hidden="true">
-                    ⌄
-                  </span>
-                </button>
-                {mindmapStyleMenuOpen && (
-                  <div
-                    className="map-style-menu"
-                    role="menu"
-                    aria-label="选择思维导图样式"
                   >
-                    {mindmapStyles.map((style) => (
-                      <button
-                        type="button"
-                        role="menuitemradio"
-                        aria-checked={mindmapStyle === style.id}
-                        className={`map-style-option${mindmapStyle === style.id ? ' is-selected' : ''}`}
-                        key={style.id}
-                        onClick={() => {
-                          setMindmapStyle(style.id);
-                          setMindmapStyleMenuOpen(false);
-                        }}
-                      >
-                        <span
-                          className={`map-style-preview is-${style.id}`}
-                          aria-hidden="true"
+                    <span
+                      className={`hint-dot${isHtmlInteractiveCanvas ? ' is-active' : ''}`}
+                      aria-hidden="true"
+                    />
+                    {isHtmlInteractiveCanvas ? 'HTML 交互' : '帮助'}
+                  </summary>
+                  <div
+                    className="canvas-help-popover"
+                    role="group"
+                    aria-label="画布操作说明"
+                  >
+                    <p>
+                      <strong>画布</strong>拖动平移 · 滚轮缩放 · 实时预览
+                    </p>
+                    <p>
+                      <strong>节点</strong>双击编辑 · Enter 添加同级 · Tab
+                      添加子级
+                    </p>
+                    <p>
+                      <strong>换行</strong>手动模式下使用 Shift+Enter 换行
+                    </p>
+                    <p>
+                      <strong>内容</strong>支持
+                      Markdown、数学公式、Mermaid、ECharts 和 Python 代码围栏
+                    </p>
+                    {isHtmlInteractiveCanvas && (
+                      <p className="canvas-help-active">
+                        <strong>HTML 交互</strong>
+                        组件区域接收鼠标操作；点击节点顶部或工具栏中的退出按钮可恢复画布操作。
+                      </p>
+                    )}
+                  </div>
+                </details>
+                <div
+                  className="node-wrap-picker"
+                  role="group"
+                  aria-label="节点换行方式"
+                >
+                  <button
+                    type="button"
+                    className={`node-wrap-option${nodeWrapMode === 'auto' ? ' is-selected' : ''}`}
+                    aria-pressed={nodeWrapMode === 'auto'}
+                    title="按约 10 个汉字宽度自动换行"
+                    onClick={() => setNodeWrapMode('auto')}
+                  >
+                    自动 10 字
+                  </button>
+                  <button
+                    type="button"
+                    className={`node-wrap-option${nodeWrapMode === 'manual' ? ' is-selected' : ''}`}
+                    aria-pressed={nodeWrapMode === 'manual'}
+                    title="双击节点编辑，按 Shift+Enter 插入换行"
+                    onClick={() => setNodeWrapMode('manual')}
+                  >
+                    手动换行
+                  </button>
+                </div>
+                <span className="tool-divider" aria-hidden="true" />
+                <button
+                  type="button"
+                  title="缩小"
+                  aria-label="缩小"
+                  onClick={() => handleZoom(0.82)}
+                >
+                  <Icon name="minus" />
+                </button>
+                <button
+                  type="button"
+                  title="放大"
+                  aria-label="放大"
+                  onClick={() => handleZoom(1.22)}
+                >
+                  <Icon name="plus" />
+                </button>
+                <span className="tool-divider" aria-hidden="true" />
+                <button
+                  type="button"
+                  className="fit-button"
+                  title="适应画布"
+                  aria-label="适应画布"
+                  onClick={() => void markmapRef.current?.fit()}
+                >
+                  <Icon name="fit" />
+                  <span>适应画布</span>
+                </button>
+                <div className="map-style-picker" ref={mindmapStylePickerRef}>
+                  <button
+                    type="button"
+                    className="map-style-trigger"
+                    aria-haspopup="menu"
+                    aria-expanded={mindmapStyleMenuOpen}
+                    aria-label={`思维导图样式：${mindmapStyles.find((style) => style.id === mindmapStyle)?.label}，点击切换`}
+                    onClick={() => setMindmapStyleMenuOpen((open) => !open)}
+                  >
+                    <span
+                      className={`map-style-trigger-swatch is-${mindmapStyle}`}
+                      aria-hidden="true"
+                    >
+                      <i />
+                      <i />
+                      <i />
+                    </span>
+                    <span>样式</span>
+                    <span className="map-style-current">
+                      {
+                        mindmapStyles.find((style) => style.id === mindmapStyle)
+                          ?.label
+                      }
+                    </span>
+                    <span className="map-style-caret" aria-hidden="true">
+                      ⌄
+                    </span>
+                  </button>
+                  {mindmapStyleMenuOpen && (
+                    <div
+                      className="map-style-menu"
+                      role="menu"
+                      aria-label="选择思维导图样式"
+                    >
+                      {mindmapStyles.map((style) => (
+                        <button
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={mindmapStyle === style.id}
+                          className={`map-style-option${mindmapStyle === style.id ? ' is-selected' : ''}`}
+                          key={style.id}
+                          onClick={() => {
+                            setMindmapStyle(style.id);
+                            setMindmapStyleMenuOpen(false);
+                          }}
                         >
-                          <i />
-                          <i />
-                          <i />
-                        </span>
-                        <span className="map-style-option-copy">
-                          <span className="map-style-title-row">
-                            <strong>{style.label}</strong>
-                            <span className="map-style-badge">
-                              {style.badge}
+                          <span
+                            className={`map-style-preview is-${style.id}`}
+                            aria-hidden="true"
+                          >
+                            <i />
+                            <i />
+                            <i />
+                          </span>
+                          <span className="map-style-option-copy">
+                            <span className="map-style-title-row">
+                              <strong>{style.label}</strong>
+                              <span className="map-style-badge">
+                                {style.badge}
+                              </span>
+                            </span>
+                            <span className="map-style-summary">
+                              {style.summary}
+                            </span>
+                            <span className="map-style-best-for">
+                              <em>适用：</em>
+                              {style.bestFor}
                             </span>
                           </span>
-                          <span className="map-style-summary">
-                            {style.summary}
+                          <span className="map-style-check" aria-hidden="true">
+                            {mindmapStyle === style.id ? '✓' : ''}
                           </span>
-                          <span className="map-style-best-for">
-                            <em>适用：</em>
-                            {style.bestFor}
-                          </span>
-                        </span>
-                        <span className="map-style-check" aria-hidden="true">
-                          {mindmapStyle === style.id ? '✓' : ''}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-              <span className="tool-divider" />
-              <button
-                type="button"
-                title="缩小"
-                aria-label="缩小"
-                onClick={() => handleZoom(0.82)}
-              >
-                <Icon name="minus" />
-              </button>
-              <button
-                type="button"
-                title="放大"
-                aria-label="放大"
-                onClick={() => handleZoom(1.22)}
-              >
-                <Icon name="plus" />
-              </button>
-              <span className="tool-divider" />
-              <button
-                type="button"
-                className="fit-button"
-                onClick={() => void markmapRef.current?.fit()}
-              >
-                <Icon name="fit" />
-                <span>适应画布</span>
-              </button>
             </div>
           </div>
           <div className="canvas-wrap">
-            <div
-              className={`canvas-hint${htmlCanvasEmbed?.documentRelativePath === editorDraft.relativePath ? ' is-html-interactive' : ''}`}
-            >
-              <span className="hint-dot" />
-              {htmlCanvasEmbed?.documentRelativePath ===
-              editorDraft.relativePath ? (
-                <>
-                  HTML 交互模式：组件区域接收鼠标操作{' '}
-                  <span className="hint-separator">·</span>{' '}
-                  点击节点顶部或工具栏“退出 HTML 交互”恢复画布操作
-                </>
-              ) : (
-                <>
-                  实时预览 <span className="hint-separator">·</span> 拖动平移{' '}
-                  <span className="hint-separator">·</span> 滚轮缩放{' '}
-                  <span className="hint-separator">·</span> 双击编辑{' '}
-                  <span className="hint-separator">·</span> Enter 同级 / Tab
-                  子级 <span className="hint-separator">·</span> Mermaid /
-                  ECharts / Python 代码围栏
-                </>
-              )}
-            </div>
             <svg
               ref={svgRef}
               className="mindmap-canvas"
@@ -3326,10 +3817,11 @@ export default function App() {
             {!aiCollapsed && (
               <div
                 className="ai-model-badge"
-                title={`当前连接模型：${providerSettings.model}`}
+                title={`模型类型：OpenAI 兼容 API；服务：${providerLabel(providerSettings.baseUrl)}；模型：${providerSettings.model || '未配置'}`}
               >
                 <span className="model-dot" />
-                <span>{providerSettings.model}</span>
+                <span>API · {providerLabel(providerSettings.baseUrl)}</span>
+                <strong>{providerSettings.model || '未配置'}</strong>
               </div>
             )}
             <button
@@ -3345,118 +3837,59 @@ export default function App() {
             </button>
           </div>
           <div className="ai-content">
-            <div className="ai-mode-switch" role="tablist" aria-label="AI 模式">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={aiMode === 'generate'}
-                className={aiMode === 'generate' ? 'is-active' : ''}
-                onClick={() => setAiMode('generate')}
-              >
-                生成新图
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={aiMode === 'agent'}
-                className={aiMode === 'agent' ? 'is-active' : ''}
-                onClick={() => setAiMode('agent')}
-              >
-                助手
-              </button>
-            </div>
             <div
-              className="ai-mode-content ai-generation-mode"
-              hidden={aiMode !== 'generate'}
+              className="ai-mode-switch"
+              role="tablist"
+              aria-label="LLM 分析模式"
             >
-              <div className="ai-intro">
-                <p>
-                  输入知识主题或长文资料，LLM
-                  将自动推理逻辑架构、梳理多层级关系并即刻呈现为工整的思维导图。
-                </p>
-              </div>
-              <form
-                className="ai-form"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void handleGenerate();
-                }}
+              <button
+                type="button"
+                role="tab"
+                aria-selected={aiMode === 'drilldown'}
+                className={aiMode === 'drilldown' ? 'is-active' : ''}
+                onClick={() => setAiMode('drilldown')}
               >
-                <label className="ai-prompt-label" htmlFor="ai-prompt">
-                  构想主题或内容梗概
-                </label>
-                <div className="ai-textarea-wrap">
-                  <textarea
-                    id="ai-prompt"
-                    className="ai-prompt-textarea"
-                    value={prompt}
-                    onChange={(event) => {
-                      setPrompt(event.target.value);
-                      setGenerationError('');
-                    }}
-                    onKeyDown={(event) => {
-                      if (
-                        (event.ctrlKey || event.metaKey) &&
-                        event.key === 'Enter'
-                      ) {
-                        event.preventDefault();
-                        void handleGenerate();
-                      }
-                    }}
-                    rows={4}
-                    maxLength={4000}
-                    placeholder="例如：梳理大语言模型 (LLM) 的预训练、指令微调、RLHF 对齐与推理优化全流程…"
-                    aria-label="LLM 提示词"
-                  />
-                  {generationError && (
-                    <div className="generation-error" role="alert">
-                      {generationError}
-                    </div>
-                  )}
-                </div>
-                <div className="ai-suggestions">
-                  <span className="suggestions-title">快速灵感主题</span>
-                  <div className="suggestion-tags">
-                    {promptSuggestions.map((suggestion) => (
-                      <button
-                        type="button"
-                        key={suggestion}
-                        onClick={() => {
-                          setPrompt(suggestion);
-                          setGenerationError('');
-                        }}
-                      >
-                        {suggestion}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <button
-                  className="ai-generate-button"
-                  type="submit"
-                  disabled={isGenerating || !prompt.trim()}
-                >
-                  {isGenerating ? (
-                    <>
-                      <span className="spinner" />
-                      正在构筑思维导图…
-                    </>
-                  ) : (
-                    '生成思维导图'
-                  )}
-                </button>
-                <div className="ai-hint-footer">
-                  Ctrl + Enter 快捷发送 · 自动保存入库
-                </div>
-              </form>
+                节点下探
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={aiMode === 'visualization'}
+                className={aiMode === 'visualization' ? 'is-active' : ''}
+                onClick={() => setAiMode('visualization')}
+              >
+                可视化分析
+              </button>
             </div>
             <div
               className="ai-mode-content ai-agent-mode"
-              hidden={aiMode !== 'agent'}
+              hidden={aiMode !== 'drilldown'}
             >
               <AgentPanel
+                mode="drilldown"
                 provider={providerSettings}
+                providerLabel={providerLabel(providerSettings.baseUrl)}
                 capabilities={agentCapabilities}
+                target={selectedAiTarget}
+                mapTitle={editorDraft.title}
+                mapMarkdown={editorDraft.markdown}
+                currentRevision={editorDraft.revision}
+                onApplyProposal={applyAgentProposal}
+                onUndoProposal={undoAgentProposal}
+              />
+            </div>
+            <div
+              className="ai-mode-content ai-agent-mode"
+              hidden={aiMode !== 'visualization'}
+            >
+              <AgentPanel
+                mode="visualization"
+                provider={providerSettings}
+                providerLabel={providerLabel(providerSettings.baseUrl)}
+                capabilities={agentCapabilities}
+                target={selectedAiTarget}
+                mapTitle={editorDraft.title}
+                mapMarkdown={editorDraft.markdown}
                 currentRevision={editorDraft.revision}
                 onApplyProposal={applyAgentProposal}
                 onUndoProposal={undoAgentProposal}
@@ -3653,6 +4086,108 @@ export default function App() {
               视频由 YouTube 提供 · 视频可用性和播放画质由视频源决定
             </div>
           </section>
+        </div>
+      )}
+
+      {generationDialogOpen && (
+        <div
+          className="settings-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !isGenerating)
+              setGenerationDialogOpen(false);
+          }}
+        >
+          <form
+            className="settings-dialog ai-create-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ai-create-title"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleGenerate();
+            }}
+          >
+            <div className="settings-heading">
+              <div>
+                <span className="pane-kicker">AI · NEW MAP</span>
+                <h2 id="ai-create-title">AI 新建思维导图</h2>
+              </div>
+              <button
+                type="button"
+                className="dialog-close"
+                aria-label="关闭 AI 新建窗口"
+                disabled={isGenerating}
+                onClick={() => setGenerationDialogOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+            <label className="settings-field" htmlFor="ai-prompt">
+              构想主题或内容梗概
+              <textarea
+                id="ai-prompt"
+                className="ai-prompt-textarea"
+                value={prompt}
+                onChange={(event) => {
+                  setPrompt(event.target.value);
+                  setGenerationError('');
+                }}
+                onKeyDown={(event) => {
+                  if (
+                    (event.ctrlKey || event.metaKey) &&
+                    event.key === 'Enter'
+                  ) {
+                    event.preventDefault();
+                    void handleGenerate();
+                  }
+                }}
+                rows={5}
+                maxLength={4000}
+                autoFocus
+                placeholder="例如：梳理大语言模型的预训练、指令微调、对齐与推理优化全流程…"
+              />
+            </label>
+            <div className="ai-suggestions">
+              <span className="suggestions-title">快速灵感主题</span>
+              <div className="suggestion-tags">
+                {promptSuggestions.map((suggestion) => (
+                  <button
+                    type="button"
+                    key={suggestion}
+                    onClick={() => {
+                      setPrompt(suggestion);
+                      setGenerationError('');
+                    }}
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {generationError && (
+              <p className="generation-error" role="alert">
+                {generationError}
+              </p>
+            )}
+            <div className="settings-footer">
+              <span>生成结果将创建为新的思维导图文件</span>
+              <button
+                type="button"
+                className="text-button"
+                disabled={isGenerating}
+                onClick={() => setGenerationDialogOpen(false)}
+              >
+                取消
+              </button>
+              <button
+                className="done-button"
+                type="submit"
+                disabled={isGenerating || !prompt.trim()}
+              >
+                {isGenerating ? '正在生成…' : '生成并保存'}
+              </button>
+            </div>
+          </form>
         </div>
       )}
 
@@ -3924,10 +4459,18 @@ export default function App() {
                   ? `在「${cliAgentProposal.proposal.previousLabel}」下添加「${cliAgentProposal.proposal.nextLabel}」`
                   : cliAgentProposal.proposal.operation === 'add_sibling'
                     ? `在「${cliAgentProposal.proposal.previousLabel}」旁添加「${cliAgentProposal.proposal.nextLabel}」`
-                    : cliAgentProposal.proposal.operation === 'delete'
-                      ? `删除「${cliAgentProposal.proposal.previousLabel}」及其子节点`
-                      : `更新「${cliAgentProposal.proposal.previousLabel}」的备注`}
+                    : cliAgentProposal.proposal.operation === 'add_branch'
+                      ? `在「${cliAgentProposal.proposal.previousLabel}」下插入${cliAgentProposal.proposal.analysisMode === 'visualization' ? '可视化' : '下探'}分支「${cliAgentProposal.proposal.nextLabel}」`
+                      : cliAgentProposal.proposal.operation === 'delete'
+                        ? `删除「${cliAgentProposal.proposal.previousLabel}」及其子节点`
+                        : `更新「${cliAgentProposal.proposal.previousLabel}」的备注`}
             </p>
+            {cliAgentProposal.proposal.htmlAssets?.length ? (
+              <p className="agent-cli-approval-rationale">
+                确认后保存 {cliAgentProposal.proposal.htmlAssets.length} 个隔离
+                HTML 组件。
+              </p>
+            ) : null}
             {cliAgentProposal.proposal.rationale && (
               <p className="agent-cli-approval-rationale">
                 {cliAgentProposal.proposal.rationale}
@@ -3936,11 +4479,13 @@ export default function App() {
             <details>
               <summary>查看修改内容</summary>
               <pre>
-                {cliAgentProposal.proposal.operation === 'set_note'
-                  ? `− ${cliAgentProposal.proposal.previousNote || '(空备注)'}\n+ ${cliAgentProposal.proposal.nextNote || '(空备注)'}`
-                  : cliAgentProposal.proposal.operation === 'delete'
-                    ? `− ${cliAgentProposal.proposal.previousLabel}（及其子节点）`
-                    : `− ${cliAgentProposal.proposal.previousLabel}\n+ ${cliAgentProposal.proposal.nextLabel}`}
+                {cliAgentProposal.proposal.operation === 'add_branch'
+                  ? cliAgentProposal.proposal.branchMarkdown || '(分支为空)'
+                  : cliAgentProposal.proposal.operation === 'set_note'
+                    ? `− ${cliAgentProposal.proposal.previousNote || '(空备注)'}\n+ ${cliAgentProposal.proposal.nextNote || '(空备注)'}`
+                    : cliAgentProposal.proposal.operation === 'delete'
+                      ? `− ${cliAgentProposal.proposal.previousLabel}（及其子节点）`
+                      : `− ${cliAgentProposal.proposal.previousLabel}\n+ ${cliAgentProposal.proposal.nextLabel}`}
               </pre>
             </details>
             <p className="agent-cli-approval-note">

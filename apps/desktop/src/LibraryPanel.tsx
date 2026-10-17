@@ -8,11 +8,14 @@ interface LibraryPanelProps {
   categoryFilter: string;
   query: string;
   busy: boolean;
+  summarizeEpubOnImport: boolean;
   onSearch: (value: string) => void;
   onChooseRoot: () => void;
   onRefresh: () => void;
   onCreateDocument: () => void;
+  onCreateWithAi: () => void;
   onImportEpub: () => void;
+  onToggleEpubSummary: (enabled: boolean) => void;
   onCreateCategory: () => void;
   onSelectCategory: (category: string) => void;
   onOpenDocument: (document: MapDocument) => void;
@@ -38,11 +41,14 @@ export default function LibraryPanel({
   categoryFilter,
   query,
   busy,
+  summarizeEpubOnImport,
   onSearch,
   onChooseRoot,
   onRefresh,
   onCreateDocument,
+  onCreateWithAi,
   onImportEpub,
+  onToggleEpubSummary,
   onCreateCategory,
   onSelectCategory,
   onOpenDocument,
@@ -55,12 +61,12 @@ export default function LibraryPanel({
   return (
     <aside
       className={`library-sidebar${collapsed ? ' is-collapsed' : ''}`}
-      aria-label="思维导图文件库"
+      aria-label="思维导图目录"
     >
       <div className="library-heading">
         <div className="library-heading-copy">
-          <span className="pane-kicker">LIBRARY</span>
-          <h1>文件库</h1>
+          <span className="pane-kicker">DIRECTORY</span>
+          <h1>目录</h1>
         </div>
         {!collapsed && (
           <span className="library-count">
@@ -70,8 +76,8 @@ export default function LibraryPanel({
         <button
           type="button"
           className="pane-collapse-button library-collapse-button"
-          title={collapsed ? '展开文件库' : '收起文件库'}
-          aria-label={collapsed ? '展开文件库' : '收起文件库'}
+          title={collapsed ? '展开目录' : '收起目录'}
+          aria-label={collapsed ? '展开目录' : '收起目录'}
           aria-expanded={!collapsed}
           aria-controls="library-sidebar-content"
           onClick={onToggleCollapse}
@@ -108,6 +114,14 @@ export default function LibraryPanel({
           >
             ＋ 分类
           </button>
+          <button
+            type="button"
+            className="quiet-button library-ai-create-button"
+            onClick={onCreateWithAi}
+            title="用 AI 新建思维导图"
+          >
+            AI 新建
+          </button>
         </div>
         <button
           type="button"
@@ -118,6 +132,20 @@ export default function LibraryPanel({
         >
           {busy ? '正在处理…' : '导入 EPUB 目录'}
         </button>
+        <label className="library-epub-ai-option">
+          <input
+            type="checkbox"
+            checked={summarizeEpubOnImport}
+            onChange={(event) => onToggleEpubSummary(event.target.checked)}
+            disabled={busy}
+          />
+          <span>
+            <strong>生成 AI 章节摘要</strong>
+            <small>
+              勾选后会将章节正文发送到当前配置的 AI 模型；默认关闭。
+            </small>
+          </span>
+        </label>
 
         <label className="library-search">
           <span aria-hidden="true">⌕</span>

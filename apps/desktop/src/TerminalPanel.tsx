@@ -337,7 +337,7 @@ export default function TerminalPanel({
         return;
       }
       setStatus(cwd || 'PowerShell');
-      terminal.writeln(`seamind terminal  ·  ${cwd || '默认工作目录'}`);
+      terminal.writeln(`Seamind terminal  ·  ${cwd || '默认工作目录'}`);
       pendingOutput.splice(0).forEach((data) => {
         terminal?.write(Uint8Array.from(data));
       });
