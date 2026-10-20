@@ -90,6 +90,16 @@ export default defineConfig({
         find: 'markmap-html-parser',
         replacement: sourcePath('markmap-html-parser'),
       },
+      {
+        find: '@pdfjs/pdf.min.mjs',
+        replacement: fileURLToPath(
+          new URL('./src/epub-only-reader-pdf.ts', import.meta.url),
+        ),
+      },
+      {
+        find: 'construct-style-sheets-polyfill',
+        replacement: require.resolve('construct-style-sheets-polyfill'),
+      },
     ],
   },
   define: {

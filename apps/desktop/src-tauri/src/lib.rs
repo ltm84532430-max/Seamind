@@ -36,6 +36,8 @@ pub fn run() {
             library::set_library_root,
             library::search_library,
             library::open_document,
+            library::open_epub_book,
+            library::import_epub_book,
             library::save_document,
             library::list_document_versions,
             library::load_document_version,

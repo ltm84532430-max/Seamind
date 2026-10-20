@@ -9,9 +9,18 @@ export interface MapDocument {
   updatedAt: number;
 }
 
+export interface EpubBookDocument {
+  relativePath: string;
+  title: string;
+  category: string;
+  fileSize: number;
+  updatedAt: number;
+}
+
 export interface LibrarySnapshot {
   rootPath: string | null;
   documents: MapDocument[];
+  books: EpubBookDocument[];
   categories: string[];
 }
 

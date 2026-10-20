@@ -110,6 +110,9 @@ importers:
       codemirror:
         specifier: 6.0.2
         version: 6.0.2
+      construct-style-sheets-polyfill:
+        specifier: 3.1.0
+        version: 3.1.0
       echarts:
         specifier: 6.1.0
         version: 6.1.0
@@ -3387,6 +3390,12 @@ packages:
     resolution:
       {
         integrity: sha512-ty/fTekppD2fIwRvnZAVdeOiGd1c7YXEixbgJTNzqcxJWKQnjJ/V1bNEEE6hygpM3WjwHFUVK6HTjWSzV4a8sQ==,
+      }
+
+  construct-style-sheets-polyfill@3.1.0:
+    resolution:
+      {
+        integrity: sha512-HBLKP0chz8BAY6rBdzda11c3wAZeCZ+kIG4weVC2NM3AXzxx09nhe8t0SQNdloAvg5GLuHwq/0SPOOSPvtCcKw==,
       }
 
   conventional-changelog-angular@7.0.0:
@@ -10477,6 +10486,8 @@ snapshots:
   consola@3.4.2: {}
 
   console-control-strings@1.1.0: {}
+
+  construct-style-sheets-polyfill@3.1.0: {}
 
   conventional-changelog-angular@7.0.0:
     dependencies:

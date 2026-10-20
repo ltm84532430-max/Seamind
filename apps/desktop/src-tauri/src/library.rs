@@ -25,6 +25,7 @@ const MAX_HTML_ASSET_FILES: usize = 2_000;
 const MAX_GENERATED_HTML_ASSET_BYTES: usize = 256 * 1024;
 const MAX_GENERATED_HTML_ASSETS: usize = 8;
 const MAX_DOCUMENTS: usize = 50_000;
+const MAX_EPUB_BOOKS: usize = 10_000;
 const MAX_SEARCH_RESULTS: usize = 10_000;
 
 #[derive(Default)]
@@ -53,9 +54,20 @@ pub struct MapDocument {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct EpubBookDocument {
+    pub relative_path: String,
+    pub title: String,
+    pub category: String,
+    pub file_size: u64,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LibrarySnapshot {
     pub root_path: Option<String>,
     pub documents: Vec<MapDocument>,
+    pub books: Vec<EpubBookDocument>,
     pub categories: Vec<String>,
 }
 
@@ -271,6 +283,80 @@ pub fn open_document(app: AppHandle, relative_path: String) -> Result<OpenedDocu
     let markdown = strip_metadata(&content).to_string();
     let _ = record_document_version(&app, &document, &markdown, "baseline");
     Ok(OpenedDocument { document, markdown })
+}
+
+#[tauri::command]
+pub fn open_epub_book(app: AppHandle, relative_path: String) -> Result<String, String> {
+    let root = require_root(&app)?;
+    let relative = validate_epub_path(&relative_path)?;
+    let path = ensure_existing_inside_root(&root, &root.join(&relative))?;
+    if !path.is_file() {
+        return Err("找不到 EPUB 电子书文件。".to_string());
+    }
+    app.asset_protocol_scope()
+        .allow_file(&path)
+        .map_err(|error| format!("无法授权读取 EPUB 文件：{error}"))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub fn import_epub_book(app: AppHandle, source_path: String) -> Result<EpubBookDocument, String> {
+    let root = require_root(&app)?;
+    let source = PathBuf::from(source_path);
+    if !source.is_file()
+        || !source
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("epub"))
+    {
+        return Err("请选择有效的 EPUB 电子书文件。".to_string());
+    }
+
+    let source_name = source
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("未命名电子书");
+    let title = safe_file_stem(source_name)?;
+    let books_directory = root.join("books");
+    fs::create_dir_all(&books_directory)
+        .map_err(|error| format!("无法创建电子书书架目录：{error}"))?;
+
+    let mut destination = books_directory.join(format!("{title}.epub"));
+    if destination.exists() {
+        let mut available = None;
+        for number in 2..=9_999 {
+            let candidate = books_directory.join(format!("{title} ({number}).epub"));
+            if !candidate.exists() {
+                available = Some(candidate);
+                break;
+            }
+        }
+        destination = available.ok_or_else(|| "同名电子书过多，无法导入。".to_string())?;
+    }
+
+    let temporary = books_directory.join(format!(".import-{}.tmp", Uuid::new_v4().simple()));
+    if let Err(error) = fs::copy(&source, &temporary) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!("无法复制 EPUB 到书架：{error}"));
+    }
+    if let Err(error) = fs::rename(&temporary, &destination) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!("无法完成 EPUB 导入：{error}"));
+    }
+    let relative = destination
+        .strip_prefix(&root)
+        .map_err(|_| "电子书保存位置超出了文件库。".to_string())?;
+    let relative_path = path_to_relative_string(relative);
+    let metadata = fs::metadata(&destination)
+        .map_err(|error| format!("无法读取已导入电子书的信息：{error}"))?;
+
+    Ok(EpubBookDocument {
+        relative_path,
+        title,
+        category: category_from_relative(relative),
+        file_size: metadata.len(),
+        updated_at: modified_timestamp(&destination),
+    })
 }
 
 #[tauri::command]
@@ -875,15 +961,17 @@ fn snapshot_for(app: &AppHandle, root: Option<PathBuf>) -> Result<LibrarySnapsho
         return Ok(LibrarySnapshot {
             root_path: None,
             documents: Vec::new(),
+            books: Vec::new(),
             categories: Vec::new(),
         });
     };
     fs::create_dir_all(&root).map_err(|error| format!("无法访问文件库目录：{error}"))?;
-    let (documents, categories) = scan_library(&root)?;
+    let (documents, books, categories) = scan_library(&root)?;
     replace_index(app, &documents, &root)?;
     Ok(LibrarySnapshot {
         root_path: Some(root.to_string_lossy().into_owned()),
         documents,
+        books,
         categories,
     })
 }
@@ -1190,10 +1278,13 @@ fn upsert_with_connection(
     Ok(())
 }
 
-fn scan_library(root: &Path) -> Result<(Vec<MapDocument>, Vec<String>), String> {
+fn scan_library(
+    root: &Path,
+) -> Result<(Vec<MapDocument>, Vec<EpubBookDocument>, Vec<String>), String> {
     let mut documents = Vec::new();
+    let mut books = Vec::new();
     let mut categories = Vec::new();
-    scan_directory(root, root, &mut documents, &mut categories)?;
+    scan_directory(root, root, &mut documents, &mut books, &mut categories)?;
     let mut ids = HashSet::new();
     for document in &mut documents {
         if ids.insert(document.id.clone()) {
@@ -1209,15 +1300,17 @@ fn scan_library(root: &Path) -> Result<(Vec<MapDocument>, Vec<String>), String> 
         document.id = candidate;
     }
     documents.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    books.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
     categories.sort_by_key(|category| category.to_lowercase());
     categories.dedup();
-    Ok((documents, categories))
+    Ok((documents, books, categories))
 }
 
 fn scan_directory(
     root: &Path,
     directory: &Path,
     documents: &mut Vec<MapDocument>,
+    books: &mut Vec<EpubBookDocument>,
     categories: &mut Vec<String>,
 ) -> Result<(), String> {
     let entries = fs::read_dir(directory).map_err(|error| format!("无法读取文件库：{error}"))?;
@@ -1237,7 +1330,7 @@ fn scan_directory(
                 .map_err(|_| "分类目录超出了文件库位置。".to_string())?;
             let category = path_to_relative_string(relative);
             categories.push(category);
-            scan_directory(root, &path, documents, categories)?;
+            scan_directory(root, &path, documents, books, categories)?;
         } else if file_type.is_file()
             && path
                 .extension()
@@ -1299,6 +1392,38 @@ fn scan_directory(
                 tags,
                 created_at,
                 updated_at,
+            });
+        } else if file_type.is_file()
+            && path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("epub"))
+        {
+            if books.len() >= MAX_EPUB_BOOKS {
+                return Err(format!(
+                    "文件库超过 {} 本 EPUB 电子书，已停止索引。",
+                    MAX_EPUB_BOOKS
+                ));
+            }
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|_| "EPUB 文件超出了文件库位置。".to_string())?;
+            let relative_path = path_to_relative_string(relative);
+            let title = path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or("未命名电子书")
+                .to_string();
+            let file_size = entry
+                .metadata()
+                .map_err(|error| format!("无法读取 EPUB 文件属性：{error}"))?
+                .len();
+            books.push(EpubBookDocument {
+                relative_path,
+                title,
+                category: category_from_relative(relative),
+                file_size,
+                updated_at: modified_timestamp(&path),
             });
         }
     }
@@ -1610,6 +1735,32 @@ fn validate_markdown_path(value: &str) -> Result<PathBuf, String> {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
     {
         return Err("文件库只支持 Markdown 思维导图文件。".to_string());
+    }
+    Ok(path.to_path_buf())
+}
+
+fn validate_epub_path(value: &str) -> Result<PathBuf, String> {
+    let path = Path::new(value);
+    if path.as_os_str().is_empty() || path.is_absolute() {
+        return Err("电子书路径无效。".to_string());
+    }
+    for component in path.components() {
+        match component {
+            Component::Normal(name) => {
+                let name = name
+                    .to_str()
+                    .ok_or_else(|| "电子书路径包含无效字符。".to_string())?;
+                validate_name(name)?;
+            }
+            _ => return Err("电子书路径不能离开文件库目录。".to_string()),
+        }
+    }
+    if !path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("epub"))
+    {
+        return Err("文件库只支持 EPUB 电子书阅读。".to_string());
     }
     Ok(path.to_path_buf())
 }

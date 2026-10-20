@@ -1,6 +1,7 @@
 packages:
   - "packages/*"
   - "apps/*"
+  - "!packages/foliate-js"
 allowBuilds:
   esbuild: true
   nx: true

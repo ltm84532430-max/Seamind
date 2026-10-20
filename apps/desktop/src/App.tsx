@@ -39,6 +39,10 @@ import type {
 } from './youtube-player';
 import 'katex/dist/katex.min.css';
 import LibraryPanel from './LibraryPanel';
+import EpubReader from './EpubReader';
+import EbookWorkspace from './EbookWorkspace';
+import './ebook-workspace.css';
+import type { EpubReaderSelection } from './EpubReader';
 import AgentPanel from './AgentPanel';
 import { agentToolCatalog, executeAgentTool } from './agent/capabilities';
 import type {
@@ -71,6 +75,7 @@ const TerminalPanel = lazy(() => import('./TerminalPanel'));
 import type {
   DocumentVersion,
   DocumentVersionSnapshot,
+  EpubBookDocument,
   LibrarySnapshot,
   MapDocument,
   OpenedDocument,
@@ -79,7 +84,21 @@ import type {
 
 type ProviderSettings = { baseUrl: string; model: string };
 type Theme = 'light' | 'dark';
-type MindmapStyle = 'gray' | 'roots' | 'cards' | 'warm';
+type ActiveWorkspace = 'mindmap' | 'reader';
+const ACTIVE_WORKSPACE_KEY = 'seamind:active-workspace:v1';
+const LAST_READER_BOOK_KEY = 'seamind:last-reader-book:v1';
+
+function readActiveWorkspace(): ActiveWorkspace {
+  try {
+    return localStorage.getItem(ACTIVE_WORKSPACE_KEY) === 'reader'
+      ? 'reader'
+      : 'mindmap';
+  } catch {
+    return 'mindmap';
+  }
+}
+
+type MindmapStyle = 'gray' | 'roots' | 'cards' | 'warm' | 'emerald' | 'cobalt';
 interface MapColorNode {
   state: { depth: number; path?: string };
 }
@@ -1351,6 +1370,8 @@ export default function App() {
   const [editorDraft, setEditorDraft] = useState<EditorDraft>(() =>
     createDraft(),
   );
+  const [activeWorkspace, setActiveWorkspace] =
+    useState<ActiveWorkspace>(readActiveWorkspace);
   const [theme, setTheme] = useState<Theme>(readTheme);
   const [mindmapStyle, setMindmapStyle] =
     useState<MindmapStyle>(readMindmapStyle);
@@ -1383,6 +1404,10 @@ export default function App() {
   const [libraryBusy, setLibraryBusy] = useState(false);
   const [summarizeEpubOnImport, setSummarizeEpubOnImport] = useState(false);
   const [pendingEpubImport, setPendingEpubImport] = useState(false);
+  const [epubReader, setEpubReader] = useState<EpubReaderSelection | null>(
+    null,
+  );
+  const epubRestoreAttemptedRef = useRef(false);
   const [epubDropActive, setEpubDropActive] = useState(false);
   const [libraryError, setLibraryError] = useState('');
   const [saveMessage, setSaveMessage] = useState('正在初始化文件库…');
@@ -1495,6 +1520,65 @@ export default function App() {
   const epubDropHandlerRef = useRef<(paths: string[]) => void>(() => {});
   const searchRequestRef = useRef(0);
   const markdownNodeSourcesMarkdownRef = useRef(editorDraft.markdown);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ACTIVE_WORKSPACE_KEY, activeWorkspace);
+    } catch {
+      // The active workspace remains available for this session.
+    }
+  }, [activeWorkspace]);
+
+  useEffect(() => {
+    if (activeWorkspace !== 'mindmap') return;
+    const frame = window.requestAnimationFrame(() => {
+      void markmapRef.current?.fit();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeWorkspace]);
+
+  useEffect(() => {
+    if (
+      activeWorkspace !== 'reader' ||
+      !librarySnapshot ||
+      !librarySnapshot.rootPath ||
+      epubRestoreAttemptedRef.current
+    ) {
+      return;
+    }
+
+    epubRestoreAttemptedRef.current = true;
+    let lastRelativePath = '';
+    try {
+      lastRelativePath = localStorage.getItem(LAST_READER_BOOK_KEY) ?? '';
+    } catch {
+      return;
+    }
+    if (!lastRelativePath) return;
+
+    const book = librarySnapshot.books.find(
+      (candidate) => candidate.relativePath === lastRelativePath,
+    );
+    if (!book) {
+      setLibraryError('上次阅读的 EPUB 已不在当前文件库中，请从书架重新导入。');
+      return;
+    }
+
+    void invoke<string>('open_epub_book', {
+      relativePath: book.relativePath,
+    })
+      .then((path) => {
+        setEpubReader({
+          source: convertFileSrc(path),
+          progressKey: `library:${book.relativePath}:${book.fileSize}:${book.updatedAt}`,
+          title: book.title,
+        });
+      })
+      .catch((error) => {
+        setLibraryError(errorMessage(error, '无法恢复上次阅读的电子书'));
+      });
+  }, [activeWorkspace, librarySnapshot]);
+
   const transformer = useMemo(() => {
     const instance = new Transformer([pluginFrontmatter, pluginSourceLines]);
     instance.md.set({ html: false });
@@ -2778,6 +2862,65 @@ export default function App() {
     }
   };
 
+  const openLibraryEpub = async (book: EpubBookDocument) => {
+    try {
+      const path = await invoke<string>('open_epub_book', {
+        relativePath: book.relativePath,
+      });
+      epubRestoreAttemptedRef.current = true;
+      try {
+        localStorage.setItem(LAST_READER_BOOK_KEY, book.relativePath);
+      } catch {
+        // The current book remains open when browser storage is unavailable.
+      }
+      setEpubReader({
+        source: convertFileSrc(path),
+        progressKey: `library:${book.relativePath}:${book.fileSize}:${book.updatedAt}`,
+        title: book.title,
+      });
+      setActiveWorkspace('reader');
+      setLibraryError('');
+    } catch (error) {
+      setLibraryError(errorMessage(error, '打开 EPUB 电子书失败'));
+    }
+  };
+
+  const importEpubBook = async () => {
+    if (!librarySnapshot?.rootPath) {
+      setLibraryError('请先选择文件库位置，再导入电子书。');
+      return;
+    }
+
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        title: '导入电子书到书架',
+        filters: [{ name: 'EPUB 电子书', extensions: ['epub'] }],
+      });
+      if (typeof selected !== 'string') return;
+
+      setLibraryBusy(true);
+      setLibraryError('');
+      setSaveMessage('正在保存 EPUB 到书架…');
+      const imported = await invoke<EpubBookDocument>('import_epub_book', {
+        sourcePath: selected,
+      });
+      const snapshot = await invoke<LibrarySnapshot>('library_status');
+      installLibrarySnapshot(snapshot);
+      const book =
+        snapshot.books.find(
+          (candidate) => candidate.relativePath === imported.relativePath,
+        ) ?? imported;
+      setSaveMessage('电子书已保存到书架');
+      await openLibraryEpub(book);
+    } catch (error) {
+      setLibraryError(errorMessage(error, '导入 EPUB 电子书失败'));
+      setSaveMessage('EPUB 导入失败');
+    } finally {
+      setLibraryBusy(false);
+    }
+  };
+
   const insertSvgTemplate = () => {
     const template = [
       '```svg',
@@ -4045,13 +4188,41 @@ export default function App() {
             <div className="brand-name">Seamind</div>
             <div
               className="document-name"
-              title={editorDraft.relativePath ?? ''}
+              title={
+                activeWorkspace === 'reader'
+                  ? (epubReader?.title ?? '电子书书架')
+                  : (editorDraft.relativePath ?? '')
+              }
             >
-              <span>{editorDraft.title || '未命名思维导图'}</span>
-              <i className={editorDraft.dirty ? 'is-dirty' : ''} />
+              <span>
+                {activeWorkspace === 'reader'
+                  ? (epubReader?.title ?? '电子书书架')
+                  : editorDraft.title || '未命名思维导图'}
+              </span>
+              {activeWorkspace === 'mindmap' && (
+                <i className={editorDraft.dirty ? 'is-dirty' : ''} />
+              )}
             </div>
           </div>
         </div>
+        <nav className="workspace-switcher" aria-label="工作区">
+          <button
+            type="button"
+            className={activeWorkspace === 'mindmap' ? 'is-active' : ''}
+            aria-pressed={activeWorkspace === 'mindmap'}
+            onClick={() => setActiveWorkspace('mindmap')}
+          >
+            导图
+          </button>
+          <button
+            type="button"
+            className={activeWorkspace === 'reader' ? 'is-active' : ''}
+            aria-pressed={activeWorkspace === 'reader'}
+            onClick={() => setActiveWorkspace('reader')}
+          >
+            电子书
+          </button>
+        </nav>
         <div className="topbar-actions">
           <span className="sync-state">
             <b />
@@ -4068,14 +4239,16 @@ export default function App() {
           >
             <Icon name={theme === 'light' ? 'moon' : 'sun'} />
           </button>
-          <button
-            type="button"
-            className="save-document-button"
-            onClick={() => void saveDraft(true)}
-            disabled={saveMessage === '正在保存…'}
-          >
-            保存
-          </button>
+          {activeWorkspace === 'mindmap' && (
+            <button
+              type="button"
+              className="save-document-button"
+              onClick={() => void saveDraft(true)}
+              disabled={saveMessage === '正在保存…'}
+            >
+              保存
+            </button>
+          )}
           <button
             type="button"
             className={`terminal-toggle-button${terminalOpen ? ' is-active' : ''}`}
@@ -4097,8 +4270,9 @@ export default function App() {
       </header>
 
       <section
-        className={`workspace${sourceCollapsed ? ' is-source-collapsed' : ''}${libraryCollapsed ? ' is-library-collapsed' : ''}${aiCollapsed ? ' is-ai-collapsed' : ''}${terminalOpen ? ' is-terminal-open' : ''}${markdownFullscreen ? ' is-markdown-fullscreen' : ''}`}
+        className={`workspace${sourceCollapsed ? ' is-source-collapsed' : ''}${libraryCollapsed ? ' is-library-collapsed' : ''}${aiCollapsed ? ' is-ai-collapsed' : ''}${terminalOpen ? ' is-terminal-open' : ''}${markdownFullscreen ? ' is-markdown-fullscreen' : ''}${activeWorkspace === 'reader' ? ' is-workspace-hidden' : ''}`}
         aria-label="Markdown 思维导图编辑器"
+        aria-hidden={activeWorkspace === 'reader'}
       >
         <LibraryPanel
           snapshot={librarySnapshot}
@@ -4881,6 +5055,30 @@ export default function App() {
               />
             </div>
           </Suspense>
+        )}
+      </section>
+
+      <section
+        className={`ebook-workspace-stage${activeWorkspace === 'mindmap' ? ' is-workspace-hidden' : ''}`}
+        aria-label="电子书工作区"
+        aria-hidden={activeWorkspace === 'mindmap'}
+      >
+        {epubReader ? (
+          <EpubReader
+            selection={epubReader}
+            theme={theme}
+            embedded
+            onClose={() => setEpubReader(null)}
+          />
+        ) : (
+          <EbookWorkspace
+            snapshot={librarySnapshot}
+            busy={libraryBusy}
+            onImport={() => void importEpubBook()}
+            onRefresh={() => void loadLibrary(false)}
+            onChooseRoot={() => void chooseLibraryRoot()}
+            onOpenBook={(book) => void openLibraryEpub(book)}
+          />
         )}
       </section>
 
