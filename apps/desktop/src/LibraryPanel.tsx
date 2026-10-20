@@ -1,4 +1,9 @@
+import { useMemo, useState } from 'react';
 import type { LibrarySnapshot, MapDocument } from './library';
+import {
+  buildLibraryFolderTree,
+  type LibraryFolderNode,
+} from './library-folder-tree';
 
 interface LibraryPanelProps {
   snapshot: LibrarySnapshot | null;
@@ -55,8 +60,67 @@ export default function LibraryPanel({
   onDeleteDocument,
   onToggleCollapse,
 }: LibraryPanelProps) {
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const folderTree = useMemo(
+    () => buildLibraryFolderTree(snapshot?.categories ?? [], documents),
+    [snapshot?.categories, documents],
+  );
   const rootName =
     snapshot?.rootPath?.split(/[\\/]/).filter(Boolean).at(-1) ?? '尚未设置';
+
+  const toggleFolder = (path: string) => {
+    setCollapsedFolders((previous) => {
+      const next = new Set(previous);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  const renderFolder = (folder: LibraryFolderNode) => {
+    const isCollapsed = collapsedFolders.has(folder.path);
+    const isFiltered = categoryFilter === folder.path;
+    const hasChildren = folder.children.length > 0;
+
+    return (
+      <div className="library-folder-group" key={folder.path}>
+        <div className="library-folder-header">
+          <button
+            type="button"
+            className={`folder-chevron library-folder-toggle${isCollapsed ? ' is-collapsed' : ''}`}
+            aria-label={`${isCollapsed ? '展开' : '收起'}文件夹 ${folder.name}`}
+            aria-expanded={!isCollapsed}
+            disabled={!hasChildren}
+            onClick={() => toggleFolder(folder.path)}
+          >
+            <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
+              <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className={`category-item library-folder-select${isFiltered ? ' is-active' : ''}`}
+            aria-current={isFiltered ? 'true' : undefined}
+            onClick={() => onSelectCategory(folder.path)}
+            title={`筛选文件夹及其子文件夹：${folder.path}`}
+          >
+            <span className="folder-icon" aria-hidden="true">▱</span>
+            <span className="folder-name">{folder.name}</span>
+          </button>
+          <span className="folder-count" title="包含子文件夹中的思维导图">
+            {folder.documentCount}
+          </span>
+        </div>
+        {!isCollapsed && hasChildren && (
+          <div className="library-folder-children">
+            {folder.children.map(renderFolder)}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <aside
@@ -177,21 +241,9 @@ export default function LibraryPanel({
             <span className="category-glyph">▦</span>
             <span>全部思维导图</span>
           </button>
-          {snapshot?.categories.map((category) => (
-            <button
-              type="button"
-              key={category}
-              className={`category-item${categoryFilter === category ? ' is-active' : ''}`}
-              style={{
-                paddingLeft: `${11 + Math.max(0, category.split('/').length - 1) * 12}px`,
-              }}
-              onClick={() => onSelectCategory(category)}
-              title={category}
-            >
-              <span className="category-glyph">▱</span>
-              <span>{category.split('/').at(-1)}</span>
-            </button>
-          ))}
+          <div className="library-folder-tree">
+            {folderTree.map(renderFolder)}
+          </div>
         </nav>
 
         <div className="library-section-label document-list-heading">

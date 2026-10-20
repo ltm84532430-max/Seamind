@@ -2624,6 +2624,61 @@ button {
 .category-item.is-active .category-glyph {
   color: #c45a42;
 }
+.library-folder-group {
+  margin-bottom: 1px;
+}
+.library-folder-header {
+  min-height: 27px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.library-folder-toggle {
+  flex: 0 0 13px;
+  width: 13px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  color: #94a3b8;
+  background: transparent;
+  cursor: pointer;
+}
+.library-folder-toggle.is-collapsed {
+  transform: rotate(-90deg);
+}
+.library-folder-toggle:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.library-folder-select.category-item {
+  width: auto;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 5px;
+  padding: 0 6px;
+  text-align: left;
+}
+.library-folder-select .folder-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-count {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  color: #94a3b8;
+  font: 10px var(--mono);
+}
+.library-folder-children {
+  margin-left: 11px;
+  padding-left: 8px;
+  border-left: 1px solid var(--line);
+}
+.library-folder-toggle:focus-visible,
+.library-folder-select:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
 .document-list-heading {
   min-height: 34px;
   border-top: 1px solid #eff0f1;
