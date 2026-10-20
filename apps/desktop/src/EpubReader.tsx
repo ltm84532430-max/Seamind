@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
+import {
+  loadEpubBookmarks,
+  saveEpubBookmarks,
+  saveEpubBookMetadata,
+} from './ebook-storage';
+import type { EpubBookmark } from './ebook-storage';
 
 export interface EpubReaderSelection {
   source: File | string;
@@ -51,7 +57,27 @@ type FoliateViewElement = HTMLElement & {
   close(): void;
   renderer?: FoliateRendererElement;
   isFixedLayout?: boolean;
-  book?: { metadata?: FoliateMetadata; toc?: FoliateTocItem[] };
+  search?: (options: { query: string }) => AsyncIterable<unknown>;
+  clearSearch?: () => void;
+  book?: {
+    metadata?: FoliateMetadata;
+    toc?: FoliateTocItem[];
+    getCover?: () => Promise<Blob | null>;
+  };
+};
+
+type FoliateSearchResult = {
+  progress?: number;
+  label?: string;
+  cfi?: string;
+  excerpt?: string;
+  subitems?: Array<{ cfi: string; excerpt?: string }>;
+};
+
+type ReaderSearchResult = {
+  cfi: string;
+  label: string;
+  excerpt: string;
 };
 
 const DEFAULT_READER_SETTINGS: ReaderSettings = {
@@ -89,6 +115,28 @@ function savedLocationKey(progressKey: string): string {
 
 function savedSettingsKey(progressKey: string): string {
   return `seamind:epub-settings:v1:${encodeURIComponent(progressKey)}`;
+}
+
+async function createCoverThumbnail(blob: Blob): Promise<string> {
+  if (!blob.type.startsWith('image/')) return '';
+  try {
+    const bitmap = await createImageBitmap(blob);
+    const scale = Math.min(1, 240 / bitmap.width, 340 / bitmap.height);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext('2d');
+    if (!context) {
+      bitmap.close();
+      return '';
+    }
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const thumbnail = canvas.toDataURL('image/jpeg', 0.78);
+    return thumbnail.length <= 220_000 ? thumbnail : '';
+  } catch {
+    return '';
+  }
 }
 
 function loadReaderSettings(
@@ -169,12 +217,25 @@ export default function EpubReader({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [fraction, setFraction] = useState(0);
+  const [currentCfi, setCurrentCfi] = useState('');
   const [locationText, setLocationText] = useState('正在载入…');
   const [chapterTitle, setChapterTitle] = useState('');
+  const [bookmarks, setBookmarks] = useState<EpubBookmark[]>(() =>
+    loadEpubBookmarks(selection.progressKey),
+  );
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<ReaderSearchResult[]>([]);
+  const [searchBusy, setSearchBusy] = useState(false);
+  const [searchProgress, setSearchProgress] = useState(0);
+  const [searchError, setSearchError] = useState('');
+  const [bookmarkMenuOpen, setBookmarkMenuOpen] = useState(false);
   const [readerSettings, setReaderSettings] = useState(() =>
     loadReaderSettings(selection.progressKey, theme),
   );
   const readerSettingsRef = useRef(readerSettings);
+  const metadataRef = useRef({ title: selection.title, author: '' });
+  const searchRequestRef = useRef(0);
   const [isFixedLayout, setIsFixedLayout] = useState(false);
 
   useEffect(() => {
@@ -190,6 +251,97 @@ export default function EpubReader({
   }, [readerSettings]);
 
   useEffect(() => {
+    saveEpubBookmarks(selection.progressKey, bookmarks);
+  }, [bookmarks, selection.progressKey]);
+
+  const searchBook = async (rawQuery: string) => {
+    const query = rawQuery.trim();
+    const view = viewRef.current;
+    const requestId = ++searchRequestRef.current;
+    setSearchError('');
+    if (!query) {
+      view?.clearSearch?.();
+      setSearchResults([]);
+      setSearchBusy(false);
+      return;
+    }
+    if (!view?.search) {
+      setSearchError('当前 EPUB 阅读引擎不支持全文查找。');
+      return;
+    }
+
+    setSearchBusy(true);
+    setSearchProgress(0);
+    setSearchResults([]);
+    const matches: ReaderSearchResult[] = [];
+    try {
+      for await (const value of view.search({ query })) {
+        if (requestId !== searchRequestRef.current) return;
+        if (value === 'done' || !value || typeof value !== 'object') continue;
+        const result = value as FoliateSearchResult;
+        if (typeof result.progress === 'number') {
+          setSearchProgress(Math.round(result.progress * 100));
+          continue;
+        }
+        if (result.subitems?.length) {
+          for (const item of result.subitems) {
+            if (matches.length < 200) {
+              matches.push({
+                cfi: item.cfi,
+                label: result.label ?? '',
+                excerpt: item.excerpt ?? '',
+              });
+            }
+          }
+        } else if (result.cfi && matches.length < 200) {
+          matches.push({
+            cfi: result.cfi,
+            label: result.label ?? '',
+            excerpt: result.excerpt ?? '',
+          });
+        }
+      }
+      if (requestId === searchRequestRef.current) {
+        setSearchResults(matches.slice(0, 200));
+        setSearchProgress(100);
+      }
+    } catch (cause) {
+      if (requestId === searchRequestRef.current) {
+        setSearchError(
+          cause instanceof Error ? cause.message : '全文查找失败。',
+        );
+      }
+    } finally {
+      if (requestId === searchRequestRef.current) setSearchBusy(false);
+    }
+  };
+
+  const addCurrentBookmark = () => {
+    if (
+      !currentCfi ||
+      bookmarks.some((bookmark) => bookmark.cfi === currentCfi)
+    )
+      return;
+    setBookmarks((previous) =>
+      [
+        {
+          cfi: currentCfi,
+          label: chapterTitle || locationText,
+          fraction,
+          createdAt: Date.now(),
+        },
+        ...previous,
+      ].slice(0, 200),
+    );
+  };
+
+  const removeBookmark = (cfi: string) => {
+    setBookmarks((previous) =>
+      previous.filter((bookmark) => bookmark.cfi !== cfi),
+    );
+  };
+
+  useEffect(() => {
     let cancelled = false;
     let view: FoliateViewElement | null = null;
     const progressKey = savedLocationKey(selection.progressKey);
@@ -200,6 +352,7 @@ export default function EpubReader({
         setFraction(Math.min(1, Math.max(0, detail.fraction)));
       }
       if (detail.cfi) {
+        setCurrentCfi(detail.cfi);
         try {
           localStorage.setItem(progressKey, detail.cfi);
         } catch {
@@ -219,6 +372,17 @@ export default function EpubReader({
       }
       const label = displayLabel(detail.tocItem?.label);
       if (label) setChapterTitle(label);
+      const metadataUpdate: {
+        title: string;
+        author: string;
+        progress?: number;
+        lastReadAt?: number;
+      } = { ...metadataRef.current };
+      if (typeof detail.fraction === 'number') {
+        metadataUpdate.progress = Math.min(1, Math.max(0, detail.fraction));
+        metadataUpdate.lastReadAt = Date.now();
+      }
+      saveEpubBookMetadata(selection.progressKey, metadataUpdate);
     };
     const blockExternalLink = (event: Event) => event.preventDefault();
 
@@ -252,9 +416,30 @@ export default function EpubReader({
         }
 
         const metadata = view.book?.metadata;
-        setTitle(displayLabel(metadata?.title) || selection.title);
-        setAuthor(displayLabel(metadata?.creator));
+        const bookTitle = displayLabel(metadata?.title) || selection.title;
+        const bookAuthor = displayLabel(metadata?.creator);
+        metadataRef.current = { title: bookTitle, author: bookAuthor };
+        setTitle(bookTitle);
+        setAuthor(bookAuthor);
         setToc(view.book?.toc ?? []);
+        saveEpubBookMetadata(selection.progressKey, {
+          title: bookTitle,
+          author: bookAuthor,
+        });
+        const book = view.book;
+        if (book?.getCover) {
+          void book
+            .getCover()
+            .then((cover) => (cover ? createCoverThumbnail(cover) : ''))
+            .then((coverDataUrl) => {
+              if (!cancelled && coverDataUrl) {
+                saveEpubBookMetadata(selection.progressKey, { coverDataUrl });
+              }
+            })
+            .catch(() => {
+              // Books without an extractable cover keep the generated cover tile.
+            });
+        }
 
         let savedCfi = '';
         try {
@@ -290,6 +475,7 @@ export default function EpubReader({
     return () => {
       cancelled = true;
       if (view) {
+        view.clearSearch?.();
         view.removeEventListener('relocate', onRelocate);
         view.removeEventListener('external-link', blockExternalLink);
         view.close();
@@ -450,6 +636,132 @@ export default function EpubReader({
               </button>
             </div>
           </details>
+          <button
+            type="button"
+            className={`epub-reader-tool${searchOpen ? ' is-active' : ''}`}
+            aria-expanded={searchOpen}
+            onClick={() => setSearchOpen((open) => !open)}
+          >
+            查找
+          </button>
+          {searchOpen && (
+            <div className="epub-reader-search-panel">
+              <form
+                className="epub-reader-search-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void searchBook(searchQuery);
+                }}
+              >
+                <label htmlFor="epub-reader-search-input">全文查找</label>
+                <div>
+                  <input
+                    id="epub-reader-search-input"
+                    value={searchQuery}
+                    maxLength={120}
+                    onChange={(event) => setSearchQuery(event.target.value)}
+                    placeholder="输入要查找的文字"
+                  />
+                  <button
+                    type="submit"
+                    disabled={searchBusy || !searchQuery.trim()}
+                  >
+                    查找
+                  </button>
+                </div>
+              </form>
+              {searchBusy && (
+                <p className="epub-reader-search-status" role="status">
+                  正在搜索全书… {searchProgress}%
+                </p>
+              )}
+              {searchError && (
+                <p className="epub-reader-search-error" role="alert">
+                  {searchError}
+                </p>
+              )}
+              {!searchBusy &&
+                searchQuery.trim() &&
+                searchResults.length === 0 &&
+                !searchError && (
+                  <p className="epub-reader-search-status">没有匹配内容</p>
+                )}
+              <div className="epub-reader-search-results" aria-label="查找结果">
+                {searchResults.map((result, index) => (
+                  <button
+                    type="button"
+                    key={`${result.cfi}-${index}`}
+                    onClick={() => {
+                      void viewRef.current
+                        ?.goTo(result.cfi)
+                        .then(() => setSearchOpen(false))
+                        .catch((cause) => {
+                          setSearchError(
+                            cause instanceof Error
+                              ? `无法跳转到查找结果：${cause.message}`
+                              : '无法跳转到查找结果。',
+                          );
+                        });
+                    }}
+                  >
+                    {result.label && <strong>{result.label}</strong>}
+                    <span>{result.excerpt || `匹配项 ${index + 1}`}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <button
+            type="button"
+            className={`epub-reader-tool${bookmarkMenuOpen ? ' is-active' : ''}`}
+            aria-expanded={bookmarkMenuOpen}
+            onClick={() => setBookmarkMenuOpen((open) => !open)}
+          >
+            书签 {bookmarks.length}
+          </button>
+          {bookmarkMenuOpen && (
+            <div className="epub-reader-bookmark-panel">
+              <button
+                type="button"
+                className="epub-reader-bookmark-add"
+                disabled={
+                  !currentCfi ||
+                  bookmarks.some((bookmark) => bookmark.cfi === currentCfi)
+                }
+                onClick={addCurrentBookmark}
+              >
+                添加当前位置
+              </button>
+              {bookmarks.length ? (
+                <div className="epub-reader-bookmark-list">
+                  {bookmarks.map((bookmark) => (
+                    <div
+                      className="epub-reader-bookmark-row"
+                      key={bookmark.cfi}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => void viewRef.current?.goTo(bookmark.cfi)}
+                      >
+                        <strong>{bookmark.label || '书签'}</strong>
+                        <small>{Math.round(bookmark.fraction * 100)}%</small>
+                      </button>
+                      <button
+                        type="button"
+                        className="epub-reader-bookmark-remove"
+                        aria-label={`删除书签 ${bookmark.label || ''}`}
+                        onClick={() => removeBookmark(bookmark.cfi)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="epub-reader-search-status">暂时没有书签</p>
+              )}
+            </div>
+          )}
           <button
             type="button"
             className={`epub-reader-tool${tocOpen ? ' is-active' : ''}`}

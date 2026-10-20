@@ -300,6 +300,21 @@ pub fn open_epub_book(app: AppHandle, relative_path: String) -> Result<String, S
 }
 
 #[tauri::command]
+pub fn delete_epub_book(app: AppHandle, relative_path: String) -> Result<(), String> {
+    let root = require_root(&app)?;
+    let relative = validate_epub_path(&relative_path)?;
+    if !relative.starts_with("books") {
+        return Err("只能删除书架中的 EPUB 文件。".to_string());
+    }
+    let path = ensure_existing_inside_root(&root, &root.join(&relative))?;
+    if !path.is_file() {
+        return Err("找不到要删除的 EPUB 文件。".to_string());
+    }
+    fs::remove_file(&path).map_err(|error| format!("无法删除 EPUB 文件：{error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn import_epub_book(app: AppHandle, source_path: String) -> Result<EpubBookDocument, String> {
     let root = require_root(&app)?;
     let source = PathBuf::from(source_path);

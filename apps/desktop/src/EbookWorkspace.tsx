@@ -1,4 +1,12 @@
+import { useMemo, useState } from 'react';
 import type { EpubBookDocument, LibrarySnapshot } from './library';
+import {
+  clearEpubReaderData,
+  epubProgressKey,
+  loadEpubBookMetadata,
+} from './ebook-storage';
+
+type ShelfSort = 'recent' | 'title' | 'added';
 
 export default function EbookWorkspace({
   snapshot,
@@ -7,6 +15,7 @@ export default function EbookWorkspace({
   onRefresh,
   onChooseRoot,
   onOpenBook,
+  onDeleteBook,
 }: {
   snapshot: LibrarySnapshot | null;
   busy: boolean;
@@ -14,8 +23,69 @@ export default function EbookWorkspace({
   onRefresh: () => void;
   onChooseRoot: () => void;
   onOpenBook: (book: EpubBookDocument) => void;
+  onDeleteBook: (book: EpubBookDocument) => Promise<void>;
 }) {
   const books = snapshot?.books ?? [];
+  const [query, setQuery] = useState('');
+  const [sortBy, setSortBy] = useState<ShelfSort>('recent');
+  const [deleteTarget, setDeleteTarget] = useState<EpubBookDocument | null>(
+    null,
+  );
+  const [deleteError, setDeleteError] = useState('');
+  const [deletingPath, setDeletingPath] = useState('');
+
+  const visibleBooks = useMemo(() => {
+    const search = query.trim().toLocaleLowerCase();
+    const rows = books
+      .map((book) => ({
+        book,
+        metadata: loadEpubBookMetadata(epubProgressKey(book)),
+      }))
+      .filter(({ book, metadata }) => {
+        if (!search) return true;
+        return [
+          book.title,
+          metadata?.title,
+          metadata?.author,
+          book.relativePath,
+          book.category,
+        ]
+          .filter(Boolean)
+          .some((value) => value!.toLocaleLowerCase().includes(search));
+      });
+
+    if (sortBy === 'title') {
+      return rows.sort((a, b) =>
+        (a.metadata?.title || a.book.title).localeCompare(
+          b.metadata?.title || b.book.title,
+          'zh-CN',
+        ),
+      );
+    }
+    if (sortBy === 'added') {
+      return rows.sort((a, b) => b.book.updatedAt - a.book.updatedAt);
+    }
+    return rows.sort(
+      (a, b) =>
+        (b.metadata?.lastReadAt ?? 0) - (a.metadata?.lastReadAt ?? 0) ||
+        b.book.updatedAt - a.book.updatedAt,
+    );
+  }, [books, query, sortBy]);
+
+  const confirmDelete = async () => {
+    if (!deleteTarget || deletingPath) return;
+    setDeletingPath(deleteTarget.relativePath);
+    setDeleteError('');
+    try {
+      await onDeleteBook(deleteTarget);
+      clearEpubReaderData(epubProgressKey(deleteTarget));
+      setDeleteTarget(null);
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setDeletingPath('');
+    }
+  };
 
   return (
     <main className="ebook-shelf" aria-label="电子书书架">
@@ -25,7 +95,7 @@ export default function EbookWorkspace({
           <h1>电子书</h1>
           <p>
             {books.length
-              ? `书架中有 ${books.length} 本 EPUB，阅读位置会自动保存。`
+              ? `书架中有 ${books.length} 本 EPUB，阅读位置和书签会自动保存。`
               : '导入 EPUB 后会保存在当前文件库，下次打开仍可继续阅读。'}
           </p>
         </div>
@@ -61,32 +131,113 @@ export default function EbookWorkspace({
           </button>
         </section>
       ) : books.length ? (
-        <section className="ebook-shelf-grid" aria-label="已导入的电子书">
-          {books.map((book, index) => (
-            <button
-              type="button"
-              className="ebook-book-card"
-              key={book.relativePath}
-              onClick={() => onOpenBook(book)}
-              title={`继续阅读 ${book.title}`}
-            >
-              <span
-                className={`ebook-book-cover cover-${index % 6}`}
-                aria-hidden="true"
+        <>
+          <div className="ebook-shelf-toolbar">
+            <label className="ebook-shelf-search">
+              <span aria-hidden="true">⌕</span>
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="搜索书名、作者或文件夹"
+                aria-label="搜索电子书"
+              />
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => setQuery('')}
+                  aria-label="清除搜索"
+                >
+                  ×
+                </button>
+              )}
+            </label>
+            <label className="ebook-shelf-sort">
+              <span>排序</span>
+              <select
+                value={sortBy}
+                onChange={(event) => setSortBy(event.target.value as ShelfSort)}
               >
-                <span className="ebook-book-cover-mark">S</span>
-                <span className="ebook-book-cover-rule" />
-                <strong>{book.title}</strong>
-                <small>EPUB · SEAMIND</small>
-              </span>
-              <span className="ebook-book-title">{book.title}</span>
-              <span className="ebook-book-meta">
-                {formatBookSize(book.fileSize)} ·{' '}
-                {formatBookDate(book.updatedAt)}
-              </span>
-            </button>
-          ))}
-        </section>
+                <option value="recent">最近阅读</option>
+                <option value="added">最近加入</option>
+                <option value="title">书名</option>
+              </select>
+            </label>
+          </div>
+
+          {visibleBooks.length ? (
+            <section className="ebook-shelf-grid" aria-label="已导入的电子书">
+              {visibleBooks.map(({ book, metadata }, index) => {
+                const title = metadata?.title || book.title;
+                const progress = metadata?.progress ?? 0;
+                return (
+                  <article className="ebook-book-card" key={book.relativePath}>
+                    <button
+                      type="button"
+                      className="ebook-book-open"
+                      onClick={() => onOpenBook(book)}
+                      title={`继续阅读 ${title}`}
+                    >
+                      <span
+                        className={`ebook-book-cover cover-${index % 6}`}
+                        aria-hidden="true"
+                      >
+                        {metadata?.coverDataUrl ? (
+                          <img src={metadata.coverDataUrl} alt="" />
+                        ) : (
+                          <>
+                            <span className="ebook-book-cover-mark">S</span>
+                            <span className="ebook-book-cover-rule" />
+                            <strong>{title}</strong>
+                            <small>EPUB · SEAMIND</small>
+                          </>
+                        )}
+                      </span>
+                      <span className="ebook-book-title">{title}</span>
+                      <span className="ebook-book-meta">
+                        {metadata?.author ||
+                          book.category ||
+                          formatBookSize(book.fileSize)}
+                      </span>
+                      <span
+                        className="ebook-book-progress"
+                        aria-label={`阅读进度 ${Math.round(progress * 100)}%`}
+                      >
+                        <i
+                          style={{ width: `${Math.round(progress * 100)}%` }}
+                        />
+                      </span>
+                      <span className="ebook-book-date">
+                        {metadata?.lastReadAt
+                          ? `读至 ${Math.round(progress * 100)}%`
+                          : `${formatBookSize(book.fileSize)} · ${formatBookDate(book.updatedAt)}`}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="ebook-book-delete"
+                      aria-label={`从书架删除 ${title}`}
+                      title="删除此电子书"
+                      onClick={() => {
+                        setDeleteError('');
+                        setDeleteTarget(book);
+                      }}
+                    >
+                      ×
+                    </button>
+                  </article>
+                );
+              })}
+            </section>
+          ) : (
+            <section className="ebook-shelf-empty ebook-shelf-no-results">
+              <h2>没有找到匹配的电子书</h2>
+              <p>试试书名、作者或文件夹名称。</p>
+              <button type="button" onClick={() => setQuery('')}>
+                清除搜索
+              </button>
+            </section>
+          )}
+        </>
       ) : (
         <section className="ebook-shelf-empty">
           <div className="ebook-shelf-empty-icon" aria-hidden="true">
@@ -98,6 +249,53 @@ export default function EbookWorkspace({
             导入第一本电子书
           </button>
         </section>
+      )}
+
+      {deleteTarget && (
+        <div
+          className="ebook-delete-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !deletingPath) {
+              setDeleteTarget(null);
+            }
+          }}
+        >
+          <section
+            className="ebook-delete-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="ebook-delete-title"
+          >
+            <h2 id="ebook-delete-title">删除这本电子书？</h2>
+            <p>
+              “{deleteTarget.title}
+              ”会从当前文件库中移除，已保存的阅读位置和书签也会清除。
+            </p>
+            {deleteError && (
+              <p className="ebook-delete-error" role="alert">
+                {deleteError}
+              </p>
+            )}
+            <div>
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                disabled={Boolean(deletingPath)}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="is-danger"
+                onClick={() => void confirmDelete()}
+                disabled={Boolean(deletingPath)}
+              >
+                {deletingPath ? '正在删除…' : '确认删除'}
+              </button>
+            </div>
+          </section>
+        </div>
       )}
     </main>
   );

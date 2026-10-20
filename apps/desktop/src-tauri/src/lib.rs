@@ -47,6 +47,7 @@ pub fn run() {
             library::discard_generated_html_assets,
             library::resolve_html_asset,
             library::delete_document,
+            library::delete_epub_book,
             library::create_category,
             library::rebuild_library_index,
             terminal::terminal_start,

@@ -43,6 +43,7 @@ import EpubReader from './EpubReader';
 import EbookWorkspace from './EbookWorkspace';
 import './ebook-workspace.css';
 import type { EpubReaderSelection } from './EpubReader';
+import { epubProgressKey } from './ebook-storage';
 import AgentPanel from './AgentPanel';
 import { agentToolCatalog, executeAgentTool } from './agent/capabilities';
 import type {
@@ -1570,7 +1571,7 @@ export default function App() {
       .then((path) => {
         setEpubReader({
           source: convertFileSrc(path),
-          progressKey: `library:${book.relativePath}:${book.fileSize}:${book.updatedAt}`,
+          progressKey: epubProgressKey(book),
           title: book.title,
         });
       })
@@ -2875,13 +2876,33 @@ export default function App() {
       }
       setEpubReader({
         source: convertFileSrc(path),
-        progressKey: `library:${book.relativePath}:${book.fileSize}:${book.updatedAt}`,
+        progressKey: epubProgressKey(book),
         title: book.title,
       });
       setActiveWorkspace('reader');
       setLibraryError('');
     } catch (error) {
       setLibraryError(errorMessage(error, '打开 EPUB 电子书失败'));
+    }
+  };
+
+  const deleteLibraryEpubBook = async (book: EpubBookDocument) => {
+    await invoke('delete_epub_book', { relativePath: book.relativePath });
+    const snapshot = librarySnapshotRef.current;
+    if (snapshot) {
+      installLibrarySnapshot({
+        ...snapshot,
+        books: snapshot.books.filter(
+          (candidate) => candidate.relativePath !== book.relativePath,
+        ),
+      });
+    }
+    try {
+      if (localStorage.getItem(LAST_READER_BOOK_KEY) === book.relativePath) {
+        localStorage.removeItem(LAST_READER_BOOK_KEY);
+      }
+    } catch {
+      // The EPUB file is already removed if browser storage is unavailable.
     }
   };
 
@@ -4302,6 +4323,8 @@ export default function App() {
           onSelectCategory={setCategoryFilter}
           onOpenDocument={(document) => void openMap(document)}
           onDeleteDocument={(document) => void deleteMap(document)}
+          onImportBook={() => void importEpubBook()}
+          onOpenBook={(book) => void openLibraryEpub(book)}
           onToggleCollapse={() =>
             setLibraryCollapsed((collapsed) => !collapsed)
           }
@@ -5065,6 +5088,7 @@ export default function App() {
       >
         {epubReader ? (
           <EpubReader
+            key={epubReader.progressKey}
             selection={epubReader}
             theme={theme}
             embedded
@@ -5078,6 +5102,7 @@ export default function App() {
             onRefresh={() => void loadLibrary(false)}
             onChooseRoot={() => void chooseLibraryRoot()}
             onOpenBook={(book) => void openLibraryEpub(book)}
+            onDeleteBook={deleteLibraryEpubBook}
           />
         )}
       </section>
