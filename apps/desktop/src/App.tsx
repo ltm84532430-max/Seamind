@@ -17,9 +17,15 @@ import {
   updateMarkdownCodeFence,
   updateMarkdownCodeFenceAtRange,
 } from './code-blocks';
+import type { CodeBlockSourceRange } from './code-blocks';
 import MarkdownEditor from './MarkdownEditor';
 import type { MarkdownEditorHandle, MarkdownSelection } from './MarkdownEditor';
 import MarkdownPreview from './MarkdownPreview';
+import PlantUmlWorkspace, {
+  openPlantUmlWorkspace,
+  plantUmlWorkspaceEventName,
+} from './PlantUmlWorkspace';
+import type { PlantUmlEditorRequest } from './PlantUmlWorkspace';
 import {
   buildYouTubeEmbedUrl,
   nextYouTubeThumbnail,
@@ -135,6 +141,12 @@ interface EditorDraft {
   markdown: string;
   dirty: boolean;
   revision: number;
+}
+
+interface PlantUmlCanvasSession {
+  request: PlantUmlEditorRequest;
+  source: string;
+  savedSource: string;
 }
 
 interface CliAgentToolRequest {
@@ -1452,6 +1464,9 @@ export default function App() {
   const youtubePlayerRef = useRef<YouTubeIframePlayer | null>(null);
   const [htmlCanvasEmbed, setHtmlCanvasEmbed] =
     useState<HtmlCanvasEmbedding | null>(null);
+  const [plantUmlSession, setPlantUmlSession] =
+    useState<PlantUmlCanvasSession | null>(null);
+  const plantUmlSessionRef = useRef<PlantUmlCanvasSession | null>(null);
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
   const [categoryDraft, setCategoryDraft] = useState('');
   const [providerSettings, setProviderSettings] =
@@ -1515,8 +1530,13 @@ export default function App() {
   const categoryFilterRef = useRef('');
   const activeSaveRef = useRef<Promise<boolean> | null>(null);
   const codeBlockEditHandlerRef = useRef<
-    (language: string, previous: string, next: string) => void
-  >(() => {});
+    (
+      language: string,
+      previous: string,
+      next: string,
+      sourceRange?: CodeBlockSourceRange,
+    ) => boolean
+  >(() => false);
   const epubImportInFlightRef = useRef(false);
   const epubDropHandlerRef = useRef<(paths: string[]) => void>(() => {});
   const searchRequestRef = useRef(0);
@@ -1531,12 +1551,44 @@ export default function App() {
   }, [activeWorkspace]);
 
   useEffect(() => {
-    if (activeWorkspace !== 'mindmap') return;
+    const openPlantUml = (event: Event) => {
+      const request = (event as CustomEvent<PlantUmlEditorRequest>).detail;
+      if (!request) return;
+      const current = plantUmlSessionRef.current;
+      if (
+        current &&
+        current.source !== current.savedSource &&
+        !window.confirm(
+          current.request.saveTarget === 'file'
+            ? '当前 PUML 文件还有未保存的修改，仍要切换到另一个图表吗？'
+            : '当前 PUML 修改还未同步到 Markdown，仍要切换到另一个图表吗？',
+        )
+      )
+        return;
+      const nextSession = {
+        request,
+        source: request.source,
+        savedSource: request.source,
+      };
+      plantUmlSessionRef.current = nextSession;
+      setPlantUmlSession(nextSession);
+      setSourceCollapsed(false);
+      setActiveWorkspace('mindmap');
+    };
+    const eventName = plantUmlWorkspaceEventName();
+    window.addEventListener(eventName, openPlantUml);
+    return () => window.removeEventListener(eventName, openPlantUml);
+  }, []);
+
+  useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
-      void markmapRef.current?.fit();
+      window.dispatchEvent(new Event('resize'));
+      if (!plantUmlSession && activeWorkspace === 'mindmap') {
+        void markmapRef.current?.fit();
+      }
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [activeWorkspace]);
+  }, [activeWorkspace, Boolean(plantUmlSession)]);
 
   useEffect(() => {
     if (
@@ -2317,15 +2369,22 @@ export default function App() {
     language: string,
     previous: string,
     next: string,
-  ) => {
+    sourceRange?: CodeBlockSourceRange,
+  ): boolean => {
     const activeDraft = draftRef.current;
-    const markdown = updateMarkdownCodeFence(
-      activeDraft.markdown,
-      language,
-      previous,
-      next,
-    );
-    if (markdown !== activeDraft.markdown) applyMarkdownFromCanvas(markdown);
+    const markdown = sourceRange
+      ? updateMarkdownCodeFenceAtRange(
+          activeDraft.markdown,
+          language,
+          sourceRange.lineIndex,
+          sourceRange.endLineIndex,
+          previous,
+          next,
+        )
+      : updateMarkdownCodeFence(activeDraft.markdown, language, previous, next);
+    if (markdown === activeDraft.markdown) return false;
+    applyMarkdownFromCanvas(markdown);
+    return true;
   };
 
   const handleMathVisualizationChange = (
@@ -2627,7 +2686,26 @@ export default function App() {
     return saved;
   };
 
+  const leavePlantUmlSession = () => {
+    const current = plantUmlSessionRef.current;
+    if (!current) return true;
+    if (
+      current.source !== current.savedSource &&
+      !window.confirm(
+        current.request.saveTarget === 'file'
+          ? '当前 PUML 文件有未保存的修改，仍要切换到其他文件吗？'
+          : '当前 PUML 修改尚未同步到 Markdown，仍要切换到其他文件吗？',
+      )
+    ) {
+      return false;
+    }
+    plantUmlSessionRef.current = null;
+    setPlantUmlSession(null);
+    return true;
+  };
+
   const openMap = async (document: MapDocument) => {
+    if (!leavePlantUmlSession()) return;
     if (draftRef.current.dirty && !(await saveDraft())) return;
     setSaveMessage('正在打开思维导图…');
     try {
@@ -2678,6 +2756,7 @@ export default function App() {
         title: '选择 Markmap 思维导图库',
       });
       if (typeof selected !== 'string') return;
+      if (!leavePlantUmlSession()) return;
       setLibraryBusy(true);
       const snapshot = await invoke<LibrarySnapshot>('set_library_root', {
         path: selected,
@@ -2706,6 +2785,7 @@ export default function App() {
   };
 
   const createNewDocument = async () => {
+    if (!leavePlantUmlSession()) return;
     if (draftRef.current.dirty && !(await saveDraft())) return;
     const revision = draftRef.current.revision + 1;
     const category = categoryFilter || '未分类';
@@ -2730,7 +2810,7 @@ export default function App() {
     } else if (draftRef.current.dirty && !(await saveDraft())) {
       return false;
     }
-    return true;
+    return leavePlantUmlSession();
   };
 
   const importEpubPath = async (
@@ -2864,6 +2944,7 @@ export default function App() {
   };
 
   const openLibraryEpub = async (book: EpubBookDocument) => {
+    if (!leavePlantUmlSession()) return;
     try {
       const path = await invoke<string>('open_epub_book', {
         relativePath: book.relativePath,
@@ -3997,8 +4078,15 @@ export default function App() {
         theme,
         codeBlocksAbort.signal,
         {
-          onCodeChange: (language, previous, next) =>
-            codeBlockEditHandlerRef.current(language, previous, next),
+          onCodeChange: (language, previous, next, sourceRange) =>
+            codeBlockEditHandlerRef.current(
+              language,
+              previous,
+              next,
+              sourceRange,
+            ),
+          onOpenPlantUmlEditor: (source, language, onSave) =>
+            openPlantUmlWorkspace({ source, language, onSave }),
           onMathVisualizationChange: (language, previous, next, nodePath) =>
             handleMathVisualizationChange(language, previous, next, nodePath),
           onTerminalCommand: (language, source, onResult) => {
@@ -4212,15 +4300,19 @@ export default function App() {
               title={
                 activeWorkspace === 'reader'
                   ? (epubReader?.title ?? '电子书书架')
-                  : (editorDraft.relativePath ?? '')
+                  : (plantUmlSession?.request.documentTitle ??
+                    editorDraft.relativePath ??
+                    '')
               }
             >
               <span>
                 {activeWorkspace === 'reader'
                   ? (epubReader?.title ?? '电子书书架')
-                  : editorDraft.title || '未命名思维导图'}
+                  : (plantUmlSession?.request.documentTitle ??
+                      editorDraft.title) ||
+                    '未命名思维导图'}
               </span>
-              {activeWorkspace === 'mindmap' && (
+              {activeWorkspace === 'mindmap' && !plantUmlSession && (
                 <i className={editorDraft.dirty ? 'is-dirty' : ''} />
               )}
             </div>
@@ -4260,7 +4352,7 @@ export default function App() {
           >
             <Icon name={theme === 'light' ? 'moon' : 'sun'} />
           </button>
-          {activeWorkspace === 'mindmap' && (
+          {activeWorkspace === 'mindmap' && !plantUmlSession && (
             <button
               type="button"
               className="save-document-button"
@@ -4509,6 +4601,17 @@ export default function App() {
                 html={markdownPreviewHtml}
                 source={markdownPreviewSource}
                 theme={theme}
+                onCodeChange={(language, previous, next, sourceRange) =>
+                  codeBlockEditHandlerRef.current(
+                    language,
+                    previous,
+                    next,
+                    sourceRange,
+                  )
+                }
+                onOpenPlantUmlEditor={(source, language, onSave) =>
+                  openPlantUmlWorkspace({ source, language, onSave })
+                }
               />
             )}
           </div>
@@ -4522,298 +4625,345 @@ export default function App() {
           <div className="pane-heading preview-heading">
             <div className="preview-title">
               <span className="pane-kicker">02 / CANVAS</span>
-              <h1>思维导图</h1>
+              <h1>
+                {plantUmlSession
+                  ? (plantUmlSession.request.documentTitle ?? 'PlantUML')
+                  : '思维导图'}
+              </h1>
             </div>
-            <div className="canvas-tools" role="toolbar" aria-label="画布工具">
-              <div className="canvas-tool-actions">
-                {isHtmlInteractiveCanvas && (
+            {!plantUmlSession && (
+              <div
+                className="canvas-tools"
+                role="toolbar"
+                aria-label="画布工具"
+              >
+                <div className="canvas-tool-actions">
+                  {isHtmlInteractiveCanvas && (
+                    <button
+                      type="button"
+                      className="html-canvas-mode-button"
+                      onClick={() => setHtmlCanvasEmbed(null)}
+                    >
+                      退出 HTML 交互
+                    </button>
+                  )}
                   <button
                     type="button"
-                    className="html-canvas-mode-button"
-                    onClick={() => setHtmlCanvasEmbed(null)}
+                    className="canvas-node-action"
+                    title="添加子节点"
+                    aria-label="添加子节点"
+                    disabled={!canAddSelectedNode}
+                    onClick={() => applySelectedNodeOperation('child')}
                   >
-                    退出 HTML 交互
+                    子级＋
                   </button>
-                )}
-                <button
-                  type="button"
-                  className="canvas-node-action"
-                  title="添加子节点"
-                  aria-label="添加子节点"
-                  disabled={!canAddSelectedNode}
-                  onClick={() => applySelectedNodeOperation('child')}
-                >
-                  子级＋
-                </button>
-                <button
-                  type="button"
-                  className="canvas-node-action"
-                  title="添加同级节点"
-                  aria-label="添加同级节点"
-                  disabled={!canAddSelectedNode}
-                  onClick={() => applySelectedNodeOperation('sibling')}
-                >
-                  同级＋
-                </button>
-                <button
-                  type="button"
-                  className="canvas-node-action"
-                  title="删除所选节点及其子节点，可用撤销恢复"
-                  aria-label="删除所选节点"
-                  disabled={!canDeleteSelectedNode}
-                  onClick={() => applySelectedNodeOperation('delete')}
-                >
-                  删除
-                </button>
-                <button
-                  type="button"
-                  className="canvas-node-action"
-                  title="编辑所选节点的 Markdown 备注"
-                  aria-label="编辑节点备注"
-                  disabled={!canEditSelectedNodeNote}
-                  onClick={openSelectedNodeNote}
-                >
-                  备注
-                </button>
-                <button
-                  type="button"
-                  className="canvas-node-action"
-                  title="粘贴 YouTube 链接或 iframe，并添加为所选节点的子节点"
-                  aria-label="为所选节点嵌入 YouTube 视频"
-                  disabled={!canAddSelectedNode}
-                  onClick={openVideoEmbedDialog}
-                >
-                  视频
-                </button>
-                <span className="tool-divider" aria-hidden="true" />
-                <button
-                  type="button"
-                  className="canvas-node-action"
-                  title="撤销"
-                  aria-label="撤销"
-                  onClick={() => markdownEditorRef.current?.undo()}
-                >
-                  撤销
-                </button>
-                <button
-                  type="button"
-                  className="canvas-node-action"
-                  title="重做"
-                  aria-label="重做"
-                  onClick={() => markdownEditorRef.current?.redo()}
-                >
-                  重做
-                </button>
-              </div>
-              <div className="canvas-tool-view">
-                <details className="canvas-help">
-                  <summary
-                    title="查看画布操作说明"
-                    aria-label={
-                      isHtmlInteractiveCanvas
-                        ? '查看 HTML 交互模式说明'
-                        : '查看画布操作说明'
-                    }
+                  <button
+                    type="button"
+                    className="canvas-node-action"
+                    title="添加同级节点"
+                    aria-label="添加同级节点"
+                    disabled={!canAddSelectedNode}
+                    onClick={() => applySelectedNodeOperation('sibling')}
                   >
-                    <span
-                      className={`hint-dot${isHtmlInteractiveCanvas ? ' is-active' : ''}`}
-                      aria-hidden="true"
-                    />
-                    {isHtmlInteractiveCanvas ? 'HTML 交互' : '帮助'}
-                  </summary>
-                  <div
-                    className="canvas-help-popover"
-                    role="group"
-                    aria-label="画布操作说明"
+                    同级＋
+                  </button>
+                  <button
+                    type="button"
+                    className="canvas-node-action"
+                    title="删除所选节点及其子节点，可用撤销恢复"
+                    aria-label="删除所选节点"
+                    disabled={!canDeleteSelectedNode}
+                    onClick={() => applySelectedNodeOperation('delete')}
                   >
-                    <p>
-                      <strong>画布</strong>拖动平移 · 滚轮缩放 · 实时预览
-                    </p>
-                    <p>
-                      <strong>节点</strong>
-                      双击编辑 · Enter 换行 · Ctrl+Enter 添加同级 · Tab 添加子级
-                    </p>
-                    <p>
-                      <strong>自动换行</strong>约 20
-                      个汉字；短文本按内容宽度显示
-                    </p>
-                    <p>
-                      <strong>内容</strong>支持
-                      Markdown、数学公式、Mermaid、ECharts 和 Python 代码围栏
-                    </p>
-                    {isHtmlInteractiveCanvas && (
-                      <p className="canvas-help-active">
-                        <strong>HTML 交互</strong>
-                        组件区域接收鼠标操作；点击节点顶部或工具栏中的退出按钮可恢复画布操作。
-                      </p>
-                    )}
-                  </div>
-                </details>
-                <div
-                  className="canvas-spacing-control"
-                  role="group"
-                  aria-label="节点水平和垂直间距"
-                  title="分别调整水平和垂直间距；默认值为 56 和 14"
-                >
-                  <label className="canvas-spacing-axis" title="水平节点间距">
-                    <span>横</span>
-                    <input
-                      type="range"
-                      min={28}
-                      max={112}
-                      step={4}
-                      value={activeNodeSpacing.horizontal}
-                      aria-label="水平节点距离"
-                      aria-valuetext={`${activeNodeSpacing.horizontal}`}
-                      onChange={(event) =>
-                        setNodeSpacing({
-                          ...activeNodeSpacing,
-                          horizontal: Number(event.target.value),
-                        })
-                      }
-                    />
-                    <output>{activeNodeSpacing.horizontal}</output>
-                  </label>
-                  <label className="canvas-spacing-axis" title="垂直节点间距">
-                    <span>竖</span>
-                    <input
-                      type="range"
-                      min={7}
-                      max={28}
-                      step={1}
-                      value={activeNodeSpacing.vertical}
-                      aria-label="垂直节点距离"
-                      aria-valuetext={`${activeNodeSpacing.vertical}`}
-                      onChange={(event) =>
-                        setNodeSpacing({
-                          ...activeNodeSpacing,
-                          vertical: Number(event.target.value),
-                        })
-                      }
-                    />
-                    <output>{activeNodeSpacing.vertical}</output>
-                  </label>
+                    删除
+                  </button>
+                  <button
+                    type="button"
+                    className="canvas-node-action"
+                    title="编辑所选节点的 Markdown 备注"
+                    aria-label="编辑节点备注"
+                    disabled={!canEditSelectedNodeNote}
+                    onClick={openSelectedNodeNote}
+                  >
+                    备注
+                  </button>
+                  <button
+                    type="button"
+                    className="canvas-node-action"
+                    title="粘贴 YouTube 链接或 iframe，并添加为所选节点的子节点"
+                    aria-label="为所选节点嵌入 YouTube 视频"
+                    disabled={!canAddSelectedNode}
+                    onClick={openVideoEmbedDialog}
+                  >
+                    视频
+                  </button>
+                  <span className="tool-divider" aria-hidden="true" />
+                  <button
+                    type="button"
+                    className="canvas-node-action"
+                    title="撤销"
+                    aria-label="撤销"
+                    onClick={() => markdownEditorRef.current?.undo()}
+                  >
+                    撤销
+                  </button>
+                  <button
+                    type="button"
+                    className="canvas-node-action"
+                    title="重做"
+                    aria-label="重做"
+                    onClick={() => markdownEditorRef.current?.redo()}
+                  >
+                    重做
+                  </button>
                 </div>
-                <span className="tool-divider" aria-hidden="true" />
-                <button
-                  type="button"
-                  title="缩小"
-                  aria-label="缩小"
-                  onClick={() => handleZoom(0.82)}
-                >
-                  <Icon name="minus" />
-                </button>
-                <button
-                  type="button"
-                  title="放大"
-                  aria-label="放大"
-                  onClick={() => handleZoom(1.22)}
-                >
-                  <Icon name="plus" />
-                </button>
-                <span className="tool-divider" aria-hidden="true" />
-                <button
-                  type="button"
-                  className="fit-button"
-                  title="适应画布"
-                  aria-label="适应画布"
-                  onClick={() => {
-                    pendingInitialFitRef.current = false;
-                    void markmapRef.current?.fit();
-                  }}
-                >
-                  <Icon name="fit" />
-                  <span>适应画布</span>
-                </button>
-                <div className="map-style-picker" ref={mindmapStylePickerRef}>
+                <div className="canvas-tool-view">
+                  <details className="canvas-help">
+                    <summary
+                      title="查看画布操作说明"
+                      aria-label={
+                        isHtmlInteractiveCanvas
+                          ? '查看 HTML 交互模式说明'
+                          : '查看画布操作说明'
+                      }
+                    >
+                      <span
+                        className={`hint-dot${isHtmlInteractiveCanvas ? ' is-active' : ''}`}
+                        aria-hidden="true"
+                      />
+                      {isHtmlInteractiveCanvas ? 'HTML 交互' : '帮助'}
+                    </summary>
+                    <div
+                      className="canvas-help-popover"
+                      role="group"
+                      aria-label="画布操作说明"
+                    >
+                      <p>
+                        <strong>画布</strong>拖动平移 · 滚轮缩放 · 实时预览
+                      </p>
+                      <p>
+                        <strong>节点</strong>
+                        双击编辑 · Enter 换行 · Ctrl+Enter 添加同级 · Tab
+                        添加子级
+                      </p>
+                      <p>
+                        <strong>自动换行</strong>约 20
+                        个汉字；短文本按内容宽度显示
+                      </p>
+                      <p>
+                        <strong>内容</strong>支持
+                        Markdown、数学公式、Mermaid、ECharts 和 Python 代码围栏
+                      </p>
+                      {isHtmlInteractiveCanvas && (
+                        <p className="canvas-help-active">
+                          <strong>HTML 交互</strong>
+                          组件区域接收鼠标操作；点击节点顶部或工具栏中的退出按钮可恢复画布操作。
+                        </p>
+                      )}
+                    </div>
+                  </details>
+                  <div
+                    className="canvas-spacing-control"
+                    role="group"
+                    aria-label="节点水平和垂直间距"
+                    title="分别调整水平和垂直间距；默认值为 56 和 14"
+                  >
+                    <label className="canvas-spacing-axis" title="水平节点间距">
+                      <span>横</span>
+                      <input
+                        type="range"
+                        min={28}
+                        max={112}
+                        step={4}
+                        value={activeNodeSpacing.horizontal}
+                        aria-label="水平节点距离"
+                        aria-valuetext={`${activeNodeSpacing.horizontal}`}
+                        onChange={(event) =>
+                          setNodeSpacing({
+                            ...activeNodeSpacing,
+                            horizontal: Number(event.target.value),
+                          })
+                        }
+                      />
+                      <output>{activeNodeSpacing.horizontal}</output>
+                    </label>
+                    <label className="canvas-spacing-axis" title="垂直节点间距">
+                      <span>竖</span>
+                      <input
+                        type="range"
+                        min={7}
+                        max={28}
+                        step={1}
+                        value={activeNodeSpacing.vertical}
+                        aria-label="垂直节点距离"
+                        aria-valuetext={`${activeNodeSpacing.vertical}`}
+                        onChange={(event) =>
+                          setNodeSpacing({
+                            ...activeNodeSpacing,
+                            vertical: Number(event.target.value),
+                          })
+                        }
+                      />
+                      <output>{activeNodeSpacing.vertical}</output>
+                    </label>
+                  </div>
+                  <span className="tool-divider" aria-hidden="true" />
                   <button
                     type="button"
-                    className="map-style-trigger"
-                    aria-haspopup="menu"
-                    aria-expanded={mindmapStyleMenuOpen}
-                    aria-label={`思维导图样式：${mindmapStyles.find((style) => style.id === mindmapStyle)?.label}，点击切换`}
-                    onClick={() => setMindmapStyleMenuOpen((open) => !open)}
+                    title="缩小"
+                    aria-label="缩小"
+                    onClick={() => handleZoom(0.82)}
                   >
-                    <span
-                      className={`map-style-trigger-swatch is-${mindmapStyle}`}
-                      aria-hidden="true"
-                    >
-                      <i />
-                      <i />
-                      <i />
-                    </span>
-                    <span>样式</span>
-                    <span className="map-style-current">
-                      {
-                        mindmapStyles.find((style) => style.id === mindmapStyle)
-                          ?.label
-                      }
-                    </span>
-                    <span className="map-style-caret" aria-hidden="true">
-                      ⌄
-                    </span>
+                    <Icon name="minus" />
                   </button>
-                  {mindmapStyleMenuOpen && (
-                    <div
-                      className="map-style-menu"
-                      role="menu"
-                      aria-label="选择思维导图样式"
+                  <button
+                    type="button"
+                    title="放大"
+                    aria-label="放大"
+                    onClick={() => handleZoom(1.22)}
+                  >
+                    <Icon name="plus" />
+                  </button>
+                  <span className="tool-divider" aria-hidden="true" />
+                  <button
+                    type="button"
+                    className="fit-button"
+                    title="适应画布"
+                    aria-label="适应画布"
+                    onClick={() => {
+                      pendingInitialFitRef.current = false;
+                      void markmapRef.current?.fit();
+                    }}
+                  >
+                    <Icon name="fit" />
+                    <span>适应画布</span>
+                  </button>
+                  <div className="map-style-picker" ref={mindmapStylePickerRef}>
+                    <button
+                      type="button"
+                      className="map-style-trigger"
+                      aria-haspopup="menu"
+                      aria-expanded={mindmapStyleMenuOpen}
+                      aria-label={`思维导图样式：${mindmapStyles.find((style) => style.id === mindmapStyle)?.label}，点击切换`}
+                      onClick={() => setMindmapStyleMenuOpen((open) => !open)}
                     >
-                      {mindmapStyles.map((style) => (
-                        <button
-                          type="button"
-                          role="menuitemradio"
-                          aria-checked={mindmapStyle === style.id}
-                          className={`map-style-option${mindmapStyle === style.id ? ' is-selected' : ''}`}
-                          key={style.id}
-                          onClick={() => {
-                            setMindmapStyle(style.id);
-                            setMindmapStyleMenuOpen(false);
-                          }}
-                        >
-                          <span
-                            className={`map-style-preview is-${style.id}`}
-                            aria-hidden="true"
+                      <span
+                        className={`map-style-trigger-swatch is-${mindmapStyle}`}
+                        aria-hidden="true"
+                      >
+                        <i />
+                        <i />
+                        <i />
+                      </span>
+                      <span>样式</span>
+                      <span className="map-style-current">
+                        {
+                          mindmapStyles.find(
+                            (style) => style.id === mindmapStyle,
+                          )?.label
+                        }
+                      </span>
+                      <span className="map-style-caret" aria-hidden="true">
+                        ⌄
+                      </span>
+                    </button>
+                    {mindmapStyleMenuOpen && (
+                      <div
+                        className="map-style-menu"
+                        role="menu"
+                        aria-label="选择思维导图样式"
+                      >
+                        {mindmapStyles.map((style) => (
+                          <button
+                            type="button"
+                            role="menuitemradio"
+                            aria-checked={mindmapStyle === style.id}
+                            className={`map-style-option${mindmapStyle === style.id ? ' is-selected' : ''}`}
+                            key={style.id}
+                            onClick={() => {
+                              setMindmapStyle(style.id);
+                              setMindmapStyleMenuOpen(false);
+                            }}
                           >
-                            <i />
-                            <i />
-                            <i />
-                          </span>
-                          <span className="map-style-option-copy">
-                            <span className="map-style-title-row">
-                              <strong>{style.label}</strong>
-                              <span className="map-style-badge">
-                                {style.badge}
+                            <span
+                              className={`map-style-preview is-${style.id}`}
+                              aria-hidden="true"
+                            >
+                              <i />
+                              <i />
+                              <i />
+                            </span>
+                            <span className="map-style-option-copy">
+                              <span className="map-style-title-row">
+                                <strong>{style.label}</strong>
+                                <span className="map-style-badge">
+                                  {style.badge}
+                                </span>
+                              </span>
+                              <span className="map-style-summary">
+                                {style.summary}
+                              </span>
+                              <span className="map-style-best-for">
+                                <em>适用：</em>
+                                {style.bestFor}
                               </span>
                             </span>
-                            <span className="map-style-summary">
-                              {style.summary}
+                            <span
+                              className="map-style-check"
+                              aria-hidden="true"
+                            >
+                              {mindmapStyle === style.id ? '✓' : ''}
                             </span>
-                            <span className="map-style-best-for">
-                              <em>适用：</em>
-                              {style.bestFor}
-                            </span>
-                          </span>
-                          <span className="map-style-check" aria-hidden="true">
-                            {mindmapStyle === style.id ? '✓' : ''}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
           <div className="canvas-wrap">
             <svg
               ref={svgRef}
               className="mindmap-canvas"
               aria-label="Markdown 思维导图预览"
+              style={{ display: plantUmlSession ? 'none' : 'block' }}
             />
-            <div className="canvas-corner">
-              MARKMAP <span>0.18</span>
-            </div>
+            {plantUmlSession ? (
+              <PlantUmlWorkspace
+                request={plantUmlSession.request}
+                source={plantUmlSession.source}
+                theme={theme}
+                onSourceChange={(source) => {
+                  const current = plantUmlSessionRef.current;
+                  if (!current) return;
+                  const nextSession = { ...current, source };
+                  plantUmlSessionRef.current = nextSession;
+                  setPlantUmlSession(nextSession);
+                }}
+                onSourceSaved={(savedSource) => {
+                  const current = plantUmlSessionRef.current;
+                  if (!current) return;
+                  const nextSession = {
+                    ...current,
+                    source: savedSource,
+                    savedSource,
+                    request: { ...current.request, source: savedSource },
+                  };
+                  plantUmlSessionRef.current = nextSession;
+                  setPlantUmlSession(nextSession);
+                }}
+                onClose={() => {
+                  plantUmlSessionRef.current = null;
+                  setPlantUmlSession(null);
+                }}
+              />
+            ) : (
+              <div className="canvas-corner">
+                MARKMAP <span>0.18</span>
+              </div>
+            )}
           </div>
         </section>
 

@@ -1,6 +1,7 @@
 mod epub;
 mod library;
 mod media_resolver;
+mod plantuml;
 mod terminal;
 mod youtube;
 
@@ -27,6 +28,7 @@ pub fn run() {
             delete_api_key,
             list_provider_models,
             generate_mindmap,
+            plantuml::render_plantuml,
             summarize_epub_chapters,
             agent_completion,
             agent_bridge::agent_bridge_set_tools,

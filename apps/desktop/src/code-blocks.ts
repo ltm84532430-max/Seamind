@@ -1,4 +1,5 @@
 import type { EditorView as CodeMirrorEditorView } from 'codemirror';
+import { invoke } from '@tauri-apps/api/core';
 import {
   createMathVisualizationOption,
   parseMathVisualizationSpec,
@@ -29,7 +30,18 @@ type PythonWorkerMessage = {
 };
 
 export interface CodeBlockHandlers {
-  onCodeChange?: (language: string, previous: string, next: string) => void;
+  onCodeChange?: (
+    language: string,
+    previous: string,
+    next: string,
+    sourceRange?: CodeBlockSourceRange,
+  ) => void | boolean;
+  onOpenPlantUmlEditor?: (
+    source: string,
+    language: 'plantuml' | 'puml',
+    onSave: (nextSource: string) => void,
+    sourceRange?: CodeBlockSourceRange,
+  ) => void;
   onMathVisualizationChange?: (
     language: string,
     previous: string,
@@ -41,6 +53,11 @@ export interface CodeBlockHandlers {
     source: string,
     onResult: (output: string) => void,
   ) => void;
+}
+
+export interface CodeBlockSourceRange {
+  lineIndex: number;
+  endLineIndex: number;
 }
 
 export interface CodeBlockHydrationOptions {
@@ -289,6 +306,9 @@ function isSafeSvgStyle(value: string): boolean {
   );
 }
 
+const safeSvgPathData = /^[MmLlHhVvCcSsQqTtAaZz0-9.,+\-\s]+$/;
+const safeSvgPoints = /^[-+\d.eE,\s]+$/;
+
 function sanitizeMermaidSvg(source: string): SVGSVGElement | null {
   if (source.length > 300_000 || /<!doctype|<!entity/i.test(source))
     return null;
@@ -318,6 +338,16 @@ function sanitizeMermaidSvg(source: string): SVGSVGElement | null {
       const valid =
         (key === 'xmlns' && value === 'http://www.w3.org/2000/svg') ||
         (key === 'viewbox' && /^[-+\d.eE,\s]+$/.test(value)) ||
+        (key === 'd' &&
+          value.length <= 200_000 &&
+          safeSvgPathData.test(value)) ||
+        (key === 'points' &&
+          value.length <= 100_000 &&
+          safeSvgPoints.test(value)) ||
+        (key === 'preserveaspectratio' &&
+          /^(?:none|x(?:Min|Mid|Max)Y(?:Min|Mid|Max)(?:\s+(?:meet|slice))?)$/i.test(
+            value,
+          )) ||
         (key === 'id' && /^[\w-]{1,120}$/.test(value)) ||
         (key === 'class' && /^[\w\s-]{0,300}$/.test(value)) ||
         (key === 'style' && isSafeSvgStyle(value)) ||
@@ -364,6 +394,8 @@ function parseEChartsOption(source: string): Record<string, unknown> {
   const option = candidate as Record<string, unknown>;
   if (Array.isArray(option.tooltip))
     throw new Error('tooltip 请使用单个对象，以保留安全的富文本渲染。');
+  export const sanitizeDiagramSvg = sanitizeMermaidSvg;
+
   const series = option.series;
   if (series !== undefined) {
     if (!Array.isArray(series)) throw new Error('series 必须是数组。');
@@ -445,6 +477,34 @@ async function renderMermaid(
   diagram.setAttribute('aria-label', 'Mermaid 思维图');
   diagram.classList.add('seamind-diagram-svg');
   output.replaceChildren(diagram);
+}
+
+async function renderPlantUml(
+  source: string,
+  output: HTMLElement,
+  theme: AppTheme,
+  signal: AbortSignal,
+): Promise<void> {
+  if (source.length > maxVisualizationSource)
+    throw new Error('PlantUML 源码超过 50 KB。');
+  if (signal.aborted || !output.isConnected) return;
+  const result = await invoke<{ svg: string; diagnostics: string[] }>(
+    'render_plantuml',
+    { source, dark: theme === 'dark', authorizedIncludeDirectory: null },
+  );
+  if (signal.aborted || !output.isConnected) return;
+  const diagram = sanitizeMermaidSvg(result.svg);
+  if (!diagram) throw new Error('PlantUML 输出未通过 SVG 安全检查。');
+  diagram.setAttribute('role', 'img');
+  diagram.setAttribute('aria-label', 'PlantUML 图表');
+  diagram.classList.add('seamind-diagram-svg');
+  output.replaceChildren(diagram);
+  if (result.diagnostics?.length) {
+    const status = document.createElement('small');
+    status.className = 'seamind-plantuml-diagnostics';
+    status.textContent = result.diagnostics.join(' · ');
+    output.append(status);
+  }
 }
 
 async function renderEChartsOption(
@@ -1192,16 +1252,59 @@ export async function hydrateCodeBlocks(
     }
 
     const isMermaid = language === 'mermaid';
+    const isPlantUml = language === 'plantuml' || language === 'puml';
     const isMathVisualization =
       language === 'seamind-math' || language === 'seamind-viz';
     const panel = createPanel(
       isMermaid
         ? 'MERMAID'
-        : isMathVisualization
-          ? '数学可视化'
-          : 'ECharts 图表',
-      isMermaid ? 'mermaid' : isMathVisualization ? 'math' : 'echarts',
+        : isPlantUml
+          ? 'PLANTUML'
+          : isMathVisualization
+            ? '数学可视化'
+            : 'ECharts 图表',
+      isMermaid
+        ? 'mermaid'
+        : isPlantUml
+          ? 'plantuml'
+          : isMathVisualization
+            ? 'math'
+            : 'echarts',
     );
+    if (isPlantUml && handlers.onOpenPlantUmlEditor) {
+      const editButton = document.createElement('button');
+      editButton.type = 'button';
+      editButton.className = 'seamind-plantuml-edit';
+      editButton.textContent = '在画布中编辑';
+      editButton.setAttribute('aria-label', '在思维导图画布中编辑 PlantUML');
+      let persistedSource = source;
+      const lineRange = pre.dataset.lines?.split(',').map(Number);
+      const sourceRange =
+        lineRange?.length === 2 && lineRange.every(Number.isFinite)
+          ? { lineIndex: lineRange[0]! + 1, endLineIndex: lineRange[1]! }
+          : undefined;
+      const openEditor = () => {
+        handlers.onOpenPlantUmlEditor?.(
+          persistedSource,
+          language as 'plantuml' | 'puml',
+          (nextSource) => {
+            const updated = handlers.onCodeChange?.(
+              language,
+              persistedSource,
+              nextSource,
+              sourceRange,
+            );
+            if (updated === false)
+              throw new Error('无法定位原 PlantUML 围栏，Markdown 未更新。');
+            persistedSource = nextSource;
+          },
+          sourceRange,
+        );
+      };
+      editButton.addEventListener('click', openEditor);
+      panel.querySelector('.seamind-code-panel-heading')?.append(editButton);
+      dispose(() => editButton.removeEventListener('click', openEditor));
+    }
     const output = document.createElement('div');
     output.className = 'seamind-viz-output';
     panel.append(output);
@@ -1215,6 +1318,16 @@ export async function hydrateCodeBlocks(
           showError(
             output,
             error instanceof Error ? error.message : 'Mermaid 渲染失败。',
+          );
+      }
+    } else if (isPlantUml) {
+      try {
+        await renderPlantUml(source, output, theme, signal);
+      } catch (error) {
+        if (!signal.aborted)
+          showError(
+            output,
+            error instanceof Error ? error.message : 'PlantUML 渲染失败。',
           );
       }
     } else if (isMathVisualization) {

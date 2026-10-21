@@ -30,6 +30,10 @@
   },
   "bundle": {
     "active": true,
+    "resources": {
+      "resources/plantuml/plantuml-mit-1.2026.8.jar": "plantuml/plantuml-mit-1.2026.8.jar",
+      "resources/plantuml/LICENSE.txt": "plantuml/LICENSE.txt"
+    },
     "icon": ["icons/icon.ico"],
     "category": "Productivity",
     "shortDescription": "Markdown mind maps on your desktop",

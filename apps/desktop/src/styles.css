@@ -6632,3 +6632,403 @@ button {
     padding: 14px;
   }
 }
+
+.plantuml-canvas-mode {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: 36px minmax(0, 1fr);
+  color: var(--ink);
+  background: var(--panel);
+}
+.plantuml-canvas-mode.is-fullscreen {
+  position: fixed;
+  z-index: 10000;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  max-width: 100vw;
+  max-height: 100vh;
+}
+.plantuml-toolbar {
+  position: relative;
+  z-index: 4;
+  display: flex;
+  min-width: 0;
+  height: 36px;
+  align-items: center;
+  gap: 3px;
+  overflow-x: auto;
+  padding: 0 7px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  white-space: nowrap;
+}
+.plantuml-toolbar button,
+.plantuml-tool-popover button,
+.plantuml-tool-popover input,
+.plantuml-tool-popover select {
+  box-sizing: border-box;
+  min-height: 26px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  color: var(--ink);
+  background: var(--panel);
+  font: inherit;
+}
+.plantuml-toolbar button {
+  flex: 0 0 auto;
+  padding: 0 7px;
+  color: var(--muted);
+  font-size: 9px;
+  cursor: pointer;
+}
+.plantuml-toolbar button:hover,
+.plantuml-toolbar button[aria-expanded='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.plantuml-toolbar button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.plantuml-toolbar-overflow {
+  display: none;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+}
+.plantuml-toolbar-overflow > summary {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 9px;
+  cursor: pointer;
+  list-style: none;
+}
+.plantuml-toolbar-overflow > summary::-webkit-details-marker {
+  display: none;
+}
+.plantuml-toolbar-overflow > div {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.plantuml-toolbar-overflow > div > button {
+  min-height: 26px;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: var(--panel);
+  font-size: 9px;
+  cursor: pointer;
+}
+.plantuml-toolbar button.is-primary,
+.plantuml-tool-popover button.is-primary {
+  border-color: var(--accent);
+  color: #fff;
+  background: var(--accent);
+}
+.plantuml-toolbar-type {
+  flex: 0 0 auto;
+  padding-right: 7px;
+  color: var(--muted);
+  font-size: 9px;
+}
+.plantuml-toolbar-spacer {
+  flex: 1 1 auto;
+}
+.plantuml-zoom-label {
+  min-width: 34px;
+  color: var(--muted);
+  font: 9px var(--mono);
+  text-align: center;
+}
+.plantuml-save-state {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  color: #638b70;
+  font-size: 9px;
+}
+.plantuml-save-state.is-dirty {
+  color: var(--accent);
+}
+.plantuml-canvas-stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--panel);
+}
+.plantuml-canvas-viewport {
+  position: absolute;
+  inset: 0 0 23px;
+  overflow: hidden;
+  overscroll-behavior: contain;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: grab;
+}
+.plantuml-canvas-viewport:active {
+  cursor: grabbing;
+}
+.plantuml-canvas-svg {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.plantuml-canvas-svg * {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.plantuml-canvas-svg .seamind-diagram-svg {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  transform-origin: center center;
+}
+.plantuml-canvas-error {
+  position: absolute;
+  z-index: 2;
+  top: 12px;
+  right: 12px;
+  left: 12px;
+  max-height: 35%;
+  overflow: auto;
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid #d08b78;
+  color: #963f30;
+  background: #fff7f4;
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+.plantuml-canvas-error.is-save-error {
+  top: auto;
+  bottom: 34px;
+}
+.plantuml-canvas-status {
+  position: absolute;
+  z-index: 1;
+  top: 12px;
+  left: 12px;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: var(--panel);
+  font-size: 9px;
+  pointer-events: none;
+}
+.plantuml-canvas-footer {
+  position: absolute;
+  z-index: 3;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  height: 22px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 9px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  font-size: 8px;
+  pointer-events: none;
+}
+.plantuml-tool-popover {
+  position: absolute;
+  z-index: 8;
+  top: 8px;
+  left: 8px;
+  display: grid;
+  width: min(410px, calc(100% - 16px));
+  max-height: calc(100% - 42px);
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  background: var(--panel);
+}
+.plantuml-popover-heading {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--line);
+  font-size: 10px;
+}
+.plantuml-tool-popover .plantuml-popover-close {
+  width: 24px;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  color: var(--muted);
+  font-size: 16px;
+}
+.plantuml-popover-content {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+}
+.plantuml-element-list,
+.plantuml-relation-list {
+  display: grid;
+  max-height: 170px;
+  gap: 3px;
+  overflow: auto;
+}
+.plantuml-element-list button,
+.plantuml-relation-list button {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px;
+  text-align: left;
+  font-size: 10px;
+}
+.plantuml-element-list button.is-selected,
+.plantuml-relation-list button.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+}
+.plantuml-element-list button > span,
+.plantuml-relation-list button > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plantuml-element-list small,
+.plantuml-relation-list small {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 8px;
+}
+.plantuml-empty-list,
+.plantuml-popover-content > small,
+.plantuml-preservation-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.5;
+}
+.plantuml-inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.plantuml-inline-form input,
+.plantuml-inline-form select {
+  min-width: 84px;
+  min-height: 28px;
+  flex: 1 1 110px;
+  padding: 3px 6px;
+  font-size: 9px;
+}
+.plantuml-inline-form input:focus,
+.plantuml-inline-form select:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: 0;
+}
+.plantuml-inline-form button {
+  min-height: 28px;
+  padding: 3px 7px;
+  font-size: 9px;
+  cursor: pointer;
+}
+.plantuml-inline-form button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.plantuml-inline-form button.is-danger {
+  color: #a83f31;
+}
+.plantuml-editor-notice {
+  margin: 0;
+  padding: 7px;
+  border: 1px solid #e4c6bd;
+  color: #865042;
+  background: #fff7f4;
+  font-size: 9px;
+  line-height: 1.45;
+}
+.plantuml-diagnostics {
+  color: var(--muted);
+  font-size: 9px;
+}
+.plantuml-diagnostics p {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+}
+.plantuml-include-path {
+  overflow-wrap: anywhere;
+}
+.app-shell[data-theme='dark'] .plantuml-toolbar,
+.app-shell[data-theme='dark'] .plantuml-canvas-mode,
+.app-shell[data-theme='dark'] .plantuml-tool-popover {
+  color: var(--ink);
+  background: var(--panel);
+}
+.app-shell[data-theme='dark'] .plantuml-canvas-error {
+  border-color: #815144;
+  color: #e0a391;
+  background: #312622;
+}
+.app-shell[data-theme='dark'] .plantuml-editor-notice {
+  border-color: #815144;
+  color: #e0a391;
+  background: #312622;
+}
+@container canvas-pane (max-width: 760px) {
+  .plantuml-toolbar-type,
+  .plantuml-save-state,
+  .plantuml-toolbar-secondary {
+    display: none;
+  }
+  .plantuml-toolbar {
+    justify-content: flex-start;
+  }
+  .plantuml-toolbar-overflow {
+    display: flex;
+  }
+  .plantuml-toolbar-overflow:not([open]) > div {
+    display: none;
+  }
+}
+
+.seamind-plantuml-edit {
+  border: 1px solid var(--line);
+  border-radius: 0;
+  padding: 2px 6px;
+  color: var(--muted);
+  background: var(--panel);
+  cursor: pointer;
+}
+.seamind-plantuml-diagnostics {
+  display: block;
+  padding-top: 6px;
+  color: var(--muted);
+  font-size: 10px;
+}

@@ -1,17 +1,22 @@
 import { useEffect, useRef } from 'react';
 import { hydrateCodeBlocks } from './code-blocks';
+import type { CodeBlockHandlers } from './code-blocks';
 import { createMarkdownPreviewMinimap } from './markdown-minimap';
 
 interface MarkdownPreviewProps {
   html: string;
   source: string;
   theme: 'light' | 'dark';
+  onCodeChange?: CodeBlockHandlers['onCodeChange'];
+  onOpenPlantUmlEditor?: CodeBlockHandlers['onOpenPlantUmlEditor'];
 }
 
 export default function MarkdownPreview({
   html,
   source,
   theme,
+  onCodeChange,
+  onOpenPlantUmlEditor,
 }: MarkdownPreviewProps) {
   const rootRef = useRef<HTMLElement>(null);
   const minimapHostRef = useRef<HTMLDivElement>(null);
@@ -28,7 +33,7 @@ export default function MarkdownPreview({
       root,
       theme,
       controller.signal,
-      {},
+      { onCodeChange, onOpenPlantUmlEditor },
       { mode: 'markdown-preview' },
     ).then((release) => {
       if (disposed) release();
