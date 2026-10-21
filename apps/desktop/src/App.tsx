@@ -5241,6 +5241,7 @@ export default function App() {
             key={epubReader.progressKey}
             selection={epubReader}
             theme={theme}
+            provider={providerSettings}
             embedded
             onClose={() => setEpubReader(null)}
           />
