@@ -2,6 +2,7 @@ import type {
   EpubBookDocument,
   MapDocument,
   PlantUmlDocument,
+  TextDocument,
 } from './library';
 
 export interface LibraryFolderNode {
@@ -11,6 +12,7 @@ export interface LibraryFolderNode {
   documents: MapDocument[];
   books: EpubBookDocument[];
   plantumlFiles: PlantUmlDocument[];
+  textDocuments: TextDocument[];
   documentCount: number;
 }
 
@@ -21,6 +23,7 @@ interface MutableLibraryFolderNode {
   documents: MapDocument[];
   books: EpubBookDocument[];
   plantumlFiles: PlantUmlDocument[];
+  textDocuments: TextDocument[];
 }
 
 function normalizeFolderPath(value: string): string {
@@ -37,6 +40,7 @@ export function buildLibraryFolderTree(
   documents: MapDocument[],
   books: EpubBookDocument[] = [],
   plantumlFiles: PlantUmlDocument[] = [],
+  textDocuments: TextDocument[] = [],
 ): LibraryFolderNode[] {
   const roots = new Map<string, MutableLibraryFolderNode>();
 
@@ -59,6 +63,7 @@ export function buildLibraryFolderTree(
           documents: [],
           books: [],
           plantumlFiles: [],
+          textDocuments: [],
         };
         children.set(name, node);
       }
@@ -89,6 +94,12 @@ export function buildLibraryFolderTree(
     folder?.plantumlFiles.push(diagram);
   }
 
+  for (const diagram of textDocuments) {
+    const category = normalizeFolderPath(diagram.category || '未分类');
+    const folder = ensureFolder(category);
+    folder?.textDocuments.push(diagram);
+  }
+
   const compareFolders = (left: LibraryFolderNode, right: LibraryFolderNode) =>
     left.name.localeCompare(right.name, 'zh-CN', {
       numeric: true,
@@ -102,6 +113,7 @@ export function buildLibraryFolderTree(
     const folderDocuments = [...node.documents];
     const folderBooks = [...node.books];
     const folderPlantUmlFiles = [...node.plantumlFiles];
+    const folderTextDocuments = [...node.textDocuments];
 
     return {
       path: node.path,
@@ -110,10 +122,12 @@ export function buildLibraryFolderTree(
       documents: folderDocuments,
       books: folderBooks,
       plantumlFiles: folderPlantUmlFiles,
+      textDocuments: folderTextDocuments,
       documentCount:
         folderDocuments.length +
         folderBooks.length +
         folderPlantUmlFiles.length +
+        folderTextDocuments.length +
         children.reduce((total, child) => total + child.documentCount, 0),
     };
   };

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     fs,
-    io::Write,
+    io::{Read, Write},
     path::{Component, Path, PathBuf},
     sync::{mpsc, Mutex},
     thread,
@@ -18,6 +18,12 @@ const SETTINGS_FILE: &str = "library.json";
 const DATABASE_FILE: &str = "library-index.sqlite3";
 const HISTORY_DATABASE_FILE: &str = "document-history.sqlite3";
 const META_PREFIX: &str = "<!-- markmap-desktop: ";
+/// First line of a Mermaid/Pele diagram file. It is a Mermaid comment, so the file stays valid
+/// Mermaid in any other tool.
+const TEXT_META_PREFIX: &str = "%% seamind: ";
+const KIND_MINDMAP: &str = "mindmap";
+const KIND_DOC: &str = "doc";
+const TEXT_KIND_MERMAID: &str = "mermaid";
 const MAX_DOCUMENT_BYTES: usize = 5 * 1024 * 1024;
 const MAX_HTML_ASSET_FILE_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_HTML_ASSET_BUNDLE_BYTES: u64 = 50 * 1024 * 1024;
@@ -28,6 +34,9 @@ const MAX_DOCUMENTS: usize = 50_000;
 const MAX_EPUB_BOOKS: usize = 10_000;
 const MAX_PLANTUML_FILES: usize = 10_000;
 const MAX_PLANTUML_BYTES: u64 = 50_000;
+const MAX_TEXT_DOCUMENTS: usize = 10_000;
+/// Same cap as a Pele fence inside Markdown, so a diagram file renders wherever a fence would.
+const MAX_DIAGRAM_SOURCE_BYTES: u64 = 50_000;
 const MAX_SEARCH_RESULTS: usize = 10_000;
 
 #[derive(Default)]
@@ -52,6 +61,13 @@ pub struct MapDocument {
     pub tags: Vec<String>,
     pub created_at: u64,
     pub updated_at: u64,
+    /// "mindmap" for a mind map, "doc" for a plain Markdown document.
+    #[serde(default = "default_document_kind")]
+    pub kind: String,
+}
+
+fn default_document_kind() -> String {
+    KIND_MINDMAP.to_string()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -74,6 +90,26 @@ pub struct PlantUmlDocument {
     pub updated_at: u64,
 }
 
+/// A plain-text document that is not Markdown (today: Mermaid/Pele diagrams, `.mmd`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextDocument {
+    pub id: String,
+    pub relative_path: String,
+    pub title: String,
+    pub category: String,
+    pub kind: String,
+    pub file_size: u64,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenedTextDocument {
+    pub document: TextDocument,
+    pub source: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LibrarySnapshot {
@@ -81,6 +117,7 @@ pub struct LibrarySnapshot {
     pub documents: Vec<MapDocument>,
     pub books: Vec<EpubBookDocument>,
     pub plantuml_files: Vec<PlantUmlDocument>,
+    pub text_documents: Vec<TextDocument>,
     pub categories: Vec<String>,
 }
 
@@ -119,6 +156,9 @@ pub struct SaveDocumentInput {
     pub tags: Vec<String>,
     pub markdown: String,
     pub history_source: Option<String>,
+    /// "mindmap" or "doc". Left out, an existing file keeps its kind and a new one is a mind map.
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -153,6 +193,30 @@ struct DocumentMetadata {
     tags: Vec<String>,
     created_at: u64,
     updated_at: u64,
+    /// Written only for documents ("doc"), so existing mind map files keep their exact header.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kind: Option<String>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TextMetadata {
+    id: String,
+    title: String,
+    #[serde(default)]
+    tags: Vec<String>,
+    created_at: u64,
+    updated_at: u64,
+}
+
+/// A Markdown file without the app's header was never saved as a mind map, so it is a document.
+fn document_kind(metadata: Option<&DocumentMetadata>) -> String {
+    match metadata {
+        None => KIND_DOC,
+        Some(meta) if meta.kind.as_deref() == Some(KIND_DOC) => KIND_DOC,
+        Some(_) => KIND_MINDMAP,
+    }
+    .to_string()
 }
 
 #[tauri::command]
@@ -204,7 +268,7 @@ pub fn search_library(
     let category = category.unwrap_or_default();
     let mut statement = connection
         .prepare(
-            "SELECT id, relative_path, title, category, map_type, tags, created_at, updated_at
+            "SELECT id, relative_path, title, category, map_type, tags, created_at, updated_at, kind
              FROM maps
              WHERE (?1 = '' OR instr(lower(title), ?1) > 0 OR instr(lower(category), ?1) > 0
                     OR instr(lower(map_type), ?1) > 0 OR instr(lower(tags), ?1) > 0
@@ -227,6 +291,7 @@ pub fn search_library(
                 tags,
                 created_at: row.get(6)?,
                 updated_at: row.get(7)?,
+                kind: row.get(8)?,
             })
         })
         .map_err(db_error)?;
@@ -292,6 +357,7 @@ pub fn open_document(app: AppHandle, relative_path: String) -> Result<OpenedDocu
         tags,
         created_at,
         updated_at,
+        kind: document_kind(metadata.as_ref()),
     };
     let markdown = strip_metadata(&content).to_string();
     let _ = record_document_version(&app, &document, &markdown, "baseline");
@@ -397,6 +463,323 @@ pub fn delete_plantuml_document(app: AppHandle, relative_path: String) -> Result
 }
 
 #[tauri::command]
+pub fn create_plantuml_document(
+    app: AppHandle,
+    category: String,
+    title: String,
+    source: String,
+) -> Result<PlantUmlDocument, String> {
+    create_plantuml_document_in(&require_root(&app)?, &category, &title, &source)
+}
+
+#[tauri::command]
+pub fn create_text_document(
+    app: AppHandle,
+    kind: String,
+    category: String,
+    title: String,
+    source: String,
+) -> Result<OpenedTextDocument, String> {
+    create_text_document_in(&require_root(&app)?, &kind, &category, &title, &source)
+}
+
+#[tauri::command]
+pub fn open_text_document(
+    app: AppHandle,
+    relative_path: String,
+) -> Result<OpenedTextDocument, String> {
+    open_text_document_in(&require_root(&app)?, &relative_path)
+}
+
+/// Saves the source of a diagram file. A `title` that differs from the stored one also renames the
+/// file, so the result may live at a new relative path.
+#[tauri::command]
+pub fn save_text_document(
+    app: AppHandle,
+    relative_path: String,
+    source: String,
+    title: Option<String>,
+) -> Result<TextDocument, String> {
+    save_text_document_in(
+        &require_root(&app)?,
+        &relative_path,
+        &source,
+        title.as_deref(),
+    )
+}
+
+#[tauri::command]
+pub fn delete_text_document(app: AppHandle, relative_path: String) -> Result<(), String> {
+    delete_text_document_in(&require_root(&app)?, &relative_path)
+}
+
+fn is_mermaid_extension(extension: &str) -> bool {
+    extension.eq_ignore_ascii_case("mmd") || extension.eq_ignore_ascii_case("mermaid")
+}
+
+/// Splits a diagram file into its metadata line and the Mermaid source that follows it. A first
+/// line that is not valid metadata stays part of the source.
+fn split_text_metadata(content: &str) -> (Option<TextMetadata>, &str) {
+    let normalized = content.trim_start_matches('\u{feff}');
+    let (first_line, rest) = normalized.split_once('\n').unwrap_or((normalized, ""));
+    let metadata = first_line
+        .trim()
+        .strip_prefix(TEXT_META_PREFIX)
+        .and_then(|json| serde_json::from_str::<TextMetadata>(json).ok());
+    match metadata {
+        Some(metadata) => (Some(metadata), rest.trim_start_matches(['\r', '\n'])),
+        None => (None, normalized),
+    }
+}
+
+fn compose_text_document(metadata: &TextMetadata, source: &str) -> Result<String, String> {
+    let json = serde_json::to_string(metadata).map_err(|error| error.to_string())?;
+    let body = source.replace("\r\n", "\n");
+    Ok(format!(
+        "{TEXT_META_PREFIX}{json}\n{}\n",
+        body.trim_end_matches('\n')
+    ))
+}
+
+fn text_document_from_file(path: &Path, relative: &Path, file_size: u64) -> TextDocument {
+    let relative_path = path_to_relative_string(relative);
+    // Only the first line matters, so a large file is not read in full for the listing.
+    let head = fs::File::open(path)
+        .map(|file| {
+            let mut buffer = Vec::new();
+            let _ = file.take(4096).read_to_end(&mut buffer);
+            String::from_utf8_lossy(&buffer).into_owned()
+        })
+        .unwrap_or_default();
+    let (metadata, _) = split_text_metadata(&head);
+    let file_stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("未命名图表")
+        .to_string();
+    TextDocument {
+        id: metadata
+            .as_ref()
+            .map(|meta| meta.id.clone())
+            .filter(|id| !id.is_empty())
+            .unwrap_or_else(|| legacy_id(&relative_path)),
+        title: metadata
+            .as_ref()
+            .map(|meta| meta.title.clone())
+            .filter(|title| !title.is_empty())
+            .unwrap_or(file_stem),
+        category: category_from_relative(relative),
+        kind: TEXT_KIND_MERMAID.to_string(),
+        file_size,
+        updated_at: modified_timestamp(path)
+            .max(metadata.as_ref().map(|meta| meta.updated_at).unwrap_or(0)),
+        relative_path,
+    }
+}
+
+/// Creates `<category>/<title>.<extension>`, numbering the name when it is taken, and returns the
+/// path relative to the library.
+fn write_new_library_file(
+    root: &Path,
+    category: &str,
+    title: &str,
+    extension: &str,
+    contents: &[u8],
+) -> Result<PathBuf, String> {
+    let title = title.trim();
+    if title.is_empty() || title.chars().count() > 120 {
+        return Err("标题不能为空，且最多 120 个字符。".to_string());
+    }
+    let category = normalize_category(category)?;
+    let requested = category_path(&category)?.join(format!("{}.{extension}", safe_file_stem(title)?));
+    let relative = unique_path(root, requested)?;
+    let parent = create_directory_inside_root(
+        root,
+        relative.parent().unwrap_or_else(|| Path::new("")),
+    )?;
+    let file_name = relative
+        .file_name()
+        .ok_or_else(|| "文件名无效。".to_string())?;
+    write_atomically(&parent.join(file_name), contents)?;
+    Ok(relative)
+}
+
+fn create_plantuml_document_in(
+    root: &Path,
+    category: &str,
+    title: &str,
+    source: &str,
+) -> Result<PlantUmlDocument, String> {
+    if source.len() as u64 > MAX_PLANTUML_BYTES {
+        return Err("PUML 源码超过 50 KB 上限。".to_string());
+    }
+    let contents = format!("{}\n", source.replace("\r\n", "\n").trim_end_matches('\n'));
+    let relative = write_new_library_file(root, category, title, "puml", contents.as_bytes())?;
+    let path = root.join(&relative);
+    let metadata =
+        fs::metadata(&path).map_err(|error| format!("无法读取 PUML 文件属性：{error}"))?;
+    Ok(PlantUmlDocument {
+        relative_path: path_to_relative_string(&relative),
+        title: path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("未命名 PUML 图表")
+            .to_string(),
+        category: category_from_relative(&relative),
+        file_size: metadata.len(),
+        updated_at: modified_timestamp(&path),
+    })
+}
+
+fn create_text_document_in(
+    root: &Path,
+    kind: &str,
+    category: &str,
+    title: &str,
+    source: &str,
+) -> Result<OpenedTextDocument, String> {
+    if kind != TEXT_KIND_MERMAID {
+        return Err("暂不支持这种文本文档类型。".to_string());
+    }
+    if source.len() as u64 > MAX_DIAGRAM_SOURCE_BYTES {
+        return Err("图表源码超过 50 KB 上限。".to_string());
+    }
+    let now = timestamp_now();
+    let metadata = TextMetadata {
+        id: Uuid::new_v4().to_string(),
+        title: title.trim().to_string(),
+        tags: Vec::new(),
+        created_at: now,
+        updated_at: now,
+    };
+    let contents = compose_text_document(&metadata, source)?;
+    let relative = write_new_library_file(root, category, title, "mmd", contents.as_bytes())?;
+    open_text_document_in(root, &path_to_relative_string(&relative))
+}
+
+fn open_text_document_in(root: &Path, relative_path: &str) -> Result<OpenedTextDocument, String> {
+    let relative = validate_text_document_path(relative_path)?;
+    let path = ensure_existing_inside_root(root, &root.join(&relative))?;
+    let file_size = fs::metadata(&path)
+        .map_err(|error| format!("无法读取图表文件属性：{error}"))?
+        .len();
+    // The metadata line comes on top of the source limit.
+    if file_size > MAX_DIAGRAM_SOURCE_BYTES + 1024 {
+        return Err("图表源码超过 50 KB 上限，暂不能在工作区编辑。".to_string());
+    }
+    let content =
+        fs::read_to_string(&path).map_err(|error| format!("无法读取图表文件：{error}"))?;
+    let (_, source) = split_text_metadata(&content);
+    Ok(OpenedTextDocument {
+        document: text_document_from_file(&path, &relative, file_size),
+        source: source.to_string(),
+    })
+}
+
+fn save_text_document_in(
+    root: &Path,
+    relative_path: &str,
+    source: &str,
+    new_title: Option<&str>,
+) -> Result<TextDocument, String> {
+    if source.len() as u64 > MAX_DIAGRAM_SOURCE_BYTES {
+        return Err("图表源码超过 50 KB 上限，无法保存。".to_string());
+    }
+    let relative = validate_text_document_path(relative_path)?;
+    let path = ensure_existing_inside_root(root, &root.join(&relative))?;
+    if !path.is_file() {
+        return Err("找不到要保存的图表文件。".to_string());
+    }
+    let previous = fs::read_to_string(&path).unwrap_or_default();
+    let (previous_metadata, _) = split_text_metadata(&previous);
+    let now = timestamp_now();
+    let previous_title = previous_metadata
+        .as_ref()
+        .map(|meta| meta.title.clone())
+        .filter(|title| !title.is_empty())
+        .unwrap_or_else(|| {
+            path.file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or("未命名图表")
+                .to_string()
+        });
+    let title = match new_title.map(str::trim) {
+        Some(title) if title.is_empty() || title.chars().count() > 120 => {
+            return Err("标题不能为空，且最多 120 个字符。".to_string());
+        }
+        Some(title) => title.to_string(),
+        None => previous_title.clone(),
+    };
+    let metadata = TextMetadata {
+        id: previous_metadata
+            .as_ref()
+            .map(|meta| meta.id.clone())
+            .filter(|id| !id.is_empty())
+            .unwrap_or_else(|| Uuid::new_v4().to_string()),
+        title: title.clone(),
+        tags: previous_metadata
+            .as_ref()
+            .map(|meta| meta.tags.clone())
+            .unwrap_or_default(),
+        created_at: previous_metadata
+            .as_ref()
+            .map(|meta| meta.created_at)
+            .unwrap_or(now),
+        updated_at: now,
+    };
+    let contents = compose_text_document(&metadata, source)?;
+
+    // A new title moves the file next to where it was, under the name the title makes.
+    let (destination, destination_relative) = if title == previous_title {
+        (path.clone(), relative.clone())
+    } else {
+        let extension = relative
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("mmd");
+        let renamed = relative.with_file_name(format!("{}.{extension}", safe_file_stem(&title)?));
+        (root.join(&renamed), renamed)
+    };
+    if destination != path && destination.exists() {
+        let same_file = matches!(
+            (fs::canonicalize(&destination), fs::canonicalize(&path)),
+            (Ok(left), Ok(right)) if left == right
+        );
+        if !same_file {
+            return Err("这个文件夹里已有同名图表，请换一个标题。".to_string());
+        }
+    }
+    write_atomically(&destination, contents.as_bytes())?;
+    if destination != path && path.exists() && destination.exists() {
+        let replaced_itself = matches!(
+            (fs::canonicalize(&destination), fs::canonicalize(&path)),
+            (Ok(left), Ok(right)) if left == right
+        );
+        if !replaced_itself {
+            fs::remove_file(&path)
+                .map_err(|error| format!("已保存新文件，但无法移除旧文件：{error}"))?;
+        }
+    }
+    let file_size = fs::metadata(&destination)
+        .map_err(|error| format!("无法读取图表文件属性：{error}"))?
+        .len();
+    Ok(text_document_from_file(
+        &destination,
+        &destination_relative,
+        file_size,
+    ))
+}
+
+fn delete_text_document_in(root: &Path, relative_path: &str) -> Result<(), String> {
+    let relative = validate_text_document_path(relative_path)?;
+    let path = ensure_existing_inside_root(root, &root.join(&relative))?;
+    if !path.is_file() {
+        return Err("找不到要删除的图表文件。".to_string());
+    }
+    fs::remove_file(&path).map_err(|error| format!("无法删除图表文件：{error}"))
+}
+
+#[tauri::command]
 pub fn import_epub_book(app: AppHandle, source_path: String) -> Result<EpubBookDocument, String> {
     let root = require_root(&app)?;
     let source = PathBuf::from(source_path);
@@ -459,11 +842,11 @@ pub fn import_epub_book(app: AppHandle, source_path: String) -> Result<EpubBookD
 #[tauri::command]
 pub fn save_document(app: AppHandle, input: SaveDocumentInput) -> Result<MapDocument, String> {
     if input.markdown.len() > MAX_DOCUMENT_BYTES {
-        return Err("思维导图超过 5 MB，无法保存。".to_string());
+        return Err("内容超过 5 MB，无法保存。".to_string());
     }
     let markdown = input.markdown.trim().replace("\r\n", "\n");
     if markdown.is_empty() {
-        return Err("思维导图内容不能为空。".to_string());
+        return Err("内容不能为空，无法保存。".to_string());
     }
     let title = input.title.trim();
     if title.is_empty() || title.chars().count() > 120 {
@@ -523,7 +906,7 @@ pub fn save_document(app: AppHandle, input: SaveDocumentInput) -> Result<MapDocu
         .as_ref()
         .is_some_and(|destination| old_absolute.as_ref() == Some(destination));
     if existing_destination.is_some() && !same_existing_file {
-        return Err("目标分类中已存在同名思维导图，请修改标题或分类。".to_string());
+        return Err("目标分类中已存在同名文件，请修改标题或分类。".to_string());
     }
     let parent_relative = destination_relative
         .parent()
@@ -537,6 +920,16 @@ pub fn save_document(app: AppHandle, input: SaveDocumentInput) -> Result<MapDocu
         ensure_existing_inside_root(&root, &destination)?;
     }
 
+    // Without an explicit kind an existing file keeps the one it has and a new file is a mind map.
+    let kind = match input.kind.as_deref().map(str::trim) {
+        Some(KIND_DOC) => KIND_DOC,
+        Some(KIND_MINDMAP) => KIND_MINDMAP,
+        Some(_) => return Err("未知的文档类型。".to_string()),
+        None => match previous_meta.as_ref().and_then(|meta| meta.kind.as_deref()) {
+            Some(KIND_DOC) => KIND_DOC,
+            _ => KIND_MINDMAP,
+        },
+    };
     let document = MapDocument {
         id: id.clone(),
         relative_path: path_to_relative_string(&destination_relative),
@@ -546,6 +939,7 @@ pub fn save_document(app: AppHandle, input: SaveDocumentInput) -> Result<MapDocu
         tags: tags.clone(),
         created_at,
         updated_at: now,
+        kind: kind.to_string(),
     };
     let metadata = DocumentMetadata {
         id,
@@ -554,6 +948,7 @@ pub fn save_document(app: AppHandle, input: SaveDocumentInput) -> Result<MapDocu
         tags: tags.clone(),
         created_at,
         updated_at: now,
+        kind: (kind == KIND_DOC).then(|| KIND_DOC.to_string()),
     };
     let metadata_json = serde_json::to_string(&metadata)
         .map_err(|error| error.to_string())?
@@ -695,6 +1090,7 @@ pub fn restore_document_version(
             tags: snapshot.version.tags,
             markdown: snapshot.markdown,
             history_source: Some("restore".to_string()),
+            kind: None,
         },
     )?;
     open_document(app, restored.relative_path)
@@ -1128,17 +1524,19 @@ fn snapshot_for(app: &AppHandle, root: Option<PathBuf>) -> Result<LibrarySnapsho
             documents: Vec::new(),
             books: Vec::new(),
             plantuml_files: Vec::new(),
+            text_documents: Vec::new(),
             categories: Vec::new(),
         });
     };
     fs::create_dir_all(&root).map_err(|error| format!("无法访问文件库目录：{error}"))?;
-    let (documents, books, plantuml_files, categories) = scan_library(&root)?;
+    let (documents, books, plantuml_files, text_documents, categories) = scan_library(&root)?;
     replace_index(app, &documents, &root)?;
     Ok(LibrarySnapshot {
         root_path: Some(root.to_string_lossy().into_owned()),
         documents,
         books,
         plantuml_files,
+        text_documents,
         categories,
     })
 }
@@ -1388,7 +1786,31 @@ fn open_database(app: &AppHandle) -> Result<Connection, String> {
              CREATE INDEX IF NOT EXISTS idx_maps_type ON maps(map_type);",
         )
         .map_err(db_error)?;
+    ensure_maps_kind_column(&connection)?;
     Ok(connection)
+}
+
+/// Indexes written before documents existed have no `kind` column. The index is rebuilt from the
+/// files on every scan, so the default only has to hold until then.
+fn ensure_maps_kind_column(connection: &Connection) -> Result<(), String> {
+    let mut statement = connection
+        .prepare("PRAGMA table_info(maps)")
+        .map_err(db_error)?;
+    let has_kind = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(db_error)?
+        .filter_map(Result::ok)
+        .any(|name| name == "kind");
+    drop(statement);
+    if !has_kind {
+        connection
+            .execute(
+                "ALTER TABLE maps ADD COLUMN kind TEXT NOT NULL DEFAULT 'mindmap'",
+                [],
+            )
+            .map_err(db_error)?;
+    }
+    Ok(())
 }
 
 fn replace_index(app: &AppHandle, documents: &[MapDocument], root: &Path) -> Result<(), String> {
@@ -1419,8 +1841,8 @@ fn upsert_with_connection(
     let tags = serde_json::to_string(&document.tags).map_err(|error| error.to_string())?;
     connection
         .execute(
-            "INSERT INTO maps (id, relative_path, title, category, map_type, tags, content, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            "INSERT INTO maps (id, relative_path, title, category, map_type, tags, content, created_at, updated_at, kind)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(id) DO UPDATE SET
                relative_path = excluded.relative_path,
                title = excluded.title,
@@ -1428,7 +1850,8 @@ fn upsert_with_connection(
                map_type = excluded.map_type,
                tags = excluded.tags,
                content = excluded.content,
-               updated_at = excluded.updated_at",
+               updated_at = excluded.updated_at,
+               kind = excluded.kind",
             params![
                 document.id,
                 document.relative_path,
@@ -1439,26 +1862,26 @@ fn upsert_with_connection(
                 markdown,
                 document.created_at,
                 document.updated_at,
+                document.kind,
             ],
         )
         .map_err(db_error)?;
     Ok(())
 }
 
-fn scan_library(
-    root: &Path,
-) -> Result<
-    (
-        Vec<MapDocument>,
-        Vec<EpubBookDocument>,
-        Vec<PlantUmlDocument>,
-        Vec<String>,
-    ),
-    String,
-> {
+type ScannedLibrary = (
+    Vec<MapDocument>,
+    Vec<EpubBookDocument>,
+    Vec<PlantUmlDocument>,
+    Vec<TextDocument>,
+    Vec<String>,
+);
+
+fn scan_library(root: &Path) -> Result<ScannedLibrary, String> {
     let mut documents = Vec::new();
     let mut books = Vec::new();
     let mut plantuml_files = Vec::new();
+    let mut text_documents = Vec::new();
     let mut categories = Vec::new();
     scan_directory(
         root,
@@ -1466,6 +1889,7 @@ fn scan_library(
         &mut documents,
         &mut books,
         &mut plantuml_files,
+        &mut text_documents,
         &mut categories,
     )?;
     let mut ids = HashSet::new();
@@ -1485,9 +1909,10 @@ fn scan_library(
     documents.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
     books.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
     plantuml_files.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    text_documents.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
     categories.sort_by_key(|category| category.to_lowercase());
     categories.dedup();
-    Ok((documents, books, plantuml_files, categories))
+    Ok((documents, books, plantuml_files, text_documents, categories))
 }
 
 fn scan_directory(
@@ -1496,6 +1921,7 @@ fn scan_directory(
     documents: &mut Vec<MapDocument>,
     books: &mut Vec<EpubBookDocument>,
     plantuml_files: &mut Vec<PlantUmlDocument>,
+    text_documents: &mut Vec<TextDocument>,
     categories: &mut Vec<String>,
 ) -> Result<(), String> {
     let entries = fs::read_dir(directory).map_err(|error| format!("无法读取文件库：{error}"))?;
@@ -1515,7 +1941,15 @@ fn scan_directory(
                 .map_err(|_| "分类目录超出了文件库位置。".to_string())?;
             let category = path_to_relative_string(relative);
             categories.push(category);
-            scan_directory(root, &path, documents, books, plantuml_files, categories)?;
+            scan_directory(
+                root,
+                &path,
+                documents,
+                books,
+                plantuml_files,
+                text_documents,
+                categories,
+            )?;
         } else if file_type.is_file()
             && path
                 .extension()
@@ -1577,7 +2011,28 @@ fn scan_directory(
                 tags,
                 created_at,
                 updated_at,
+                kind: document_kind(metadata.as_ref()),
             });
+        } else if file_type.is_file()
+            && path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(is_mermaid_extension)
+        {
+            if text_documents.len() >= MAX_TEXT_DOCUMENTS {
+                return Err(format!(
+                    "文件库超过 {} 个图表文件，已停止索引。",
+                    MAX_TEXT_DOCUMENTS
+                ));
+            }
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|_| "图表文件超出了文件库位置。".to_string())?;
+            let file_size = entry
+                .metadata()
+                .map_err(|error| format!("无法读取图表文件属性：{error}"))?
+                .len();
+            text_documents.push(text_document_from_file(&path, relative, file_size));
         } else if file_type.is_file()
             && path
                 .extension()
@@ -1954,6 +2409,32 @@ fn validate_markdown_path(value: &str) -> Result<PathBuf, String> {
     Ok(path.to_path_buf())
 }
 
+fn validate_text_document_path(value: &str) -> Result<PathBuf, String> {
+    let path = Path::new(value);
+    if path.as_os_str().is_empty() || path.is_absolute() {
+        return Err("图表文件路径无效。".to_string());
+    }
+    for component in path.components() {
+        match component {
+            Component::Normal(name) => {
+                let name = name
+                    .to_str()
+                    .ok_or_else(|| "图表文件路径包含无效字符。".to_string())?;
+                validate_name(name)?;
+            }
+            _ => return Err("图表文件路径不能离开文件库目录。".to_string()),
+        }
+    }
+    if !path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(is_mermaid_extension)
+    {
+        return Err("文件库图表必须使用 .mmd 扩展名。".to_string());
+    }
+    Ok(path.to_path_buf())
+}
+
 fn validate_plantuml_path(value: &str) -> Result<PathBuf, String> {
     let path = Path::new(value);
     if path.as_os_str().is_empty() || path.is_absolute() {
@@ -2064,8 +2545,12 @@ fn unique_path(root: &Path, requested: PathBuf) -> Result<PathBuf, String> {
         .file_stem()
         .and_then(|value| value.to_str())
         .unwrap_or("思维导图");
+    let extension = requested
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("md");
     for number in 2..=9_999 {
-        let candidate = parent.join(format!("{stem} ({number}).md"));
+        let candidate = parent.join(format!("{stem} ({number}).{extension}"));
         if !root.join(&candidate).exists() {
             return Ok(candidate);
         }
@@ -2182,4 +2667,417 @@ fn db_error(error: rusqlite::Error) -> String {
 
 fn history_db_error(error: rusqlite::Error) -> String {
     format!("SQLite 历史版本错误：{error}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A throw-away library root that removes itself.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new() -> Self {
+            let path = std::env::temp_dir()
+                .join(format!("seamind-library-test-{}", Uuid::new_v4().simple()));
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+
+        fn write(&self, relative: &str, contents: &str) {
+            let path = self.0.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, contents).unwrap();
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    const MAP_HEADER: &str = r#"<!-- markmap-desktop: {"id":"map-1","title":"地图","mapType":"通用","tags":[],"createdAt":1,"updatedAt":2} -->"#;
+    const DOC_HEADER: &str = r#"<!-- markmap-desktop: {"id":"doc-1","title":"说明","mapType":"文档","tags":[],"createdAt":1,"updatedAt":2,"kind":"doc"} -->"#;
+
+    #[test]
+    fn diagram_metadata_round_trips_and_stays_a_mermaid_comment() {
+        let metadata = TextMetadata {
+            id: "id-1".into(),
+            title: "订单流".into(),
+            tags: vec!["a".into()],
+            created_at: 10,
+            updated_at: 20,
+        };
+        let file = compose_text_document(&metadata, "flowchart LR\r\n  A --> B\r\n\r\n").unwrap();
+        assert!(file.starts_with("%% seamind: {"));
+        assert!(file.ends_with("A --> B\n"));
+        let (parsed, source) = split_text_metadata(&file);
+        assert_eq!(parsed.unwrap().id, "id-1");
+        assert_eq!(source, "flowchart LR\n  A --> B\n");
+    }
+
+    #[test]
+    fn a_first_line_that_is_not_metadata_stays_in_the_source() {
+        for content in [
+            "%% my own comment\nflowchart LR\n",
+            "%% seamind: {not json}\nflowchart LR\n",
+            "flowchart LR\n",
+        ] {
+            let (metadata, source) = split_text_metadata(content);
+            assert!(metadata.is_none(), "{content}");
+            assert_eq!(source, content);
+        }
+    }
+
+    #[test]
+    fn diagram_files_are_created_opened_saved_and_deleted() {
+        let scratch = Scratch::new();
+        let root = &scratch.0;
+        let created =
+            create_text_document_in(root, "mermaid", "图表/订单流", "订单流", "flowchart LR\n  A --> B")
+                .unwrap();
+        assert_eq!(created.document.relative_path, "图表/订单流/订单流.mmd");
+        assert_eq!(created.document.title, "订单流");
+        assert_eq!(created.document.category, "图表/订单流");
+        assert_eq!(created.document.kind, "mermaid");
+        assert_eq!(created.source, "flowchart LR\n  A --> B\n");
+
+        let second =
+            create_text_document_in(root, "mermaid", "图表/订单流", "订单流", "flowchart LR").unwrap();
+        assert_eq!(second.document.relative_path, "图表/订单流/订单流 (2).mmd");
+        assert_ne!(second.document.id, created.document.id);
+
+        let saved = save_text_document_in(
+            root,
+            &created.document.relative_path,
+            "flowchart TD\r\n  X --> Y",
+            None,
+        )
+        .unwrap();
+        assert_eq!(saved.id, created.document.id);
+        let reopened = open_text_document_in(root, &saved.relative_path).unwrap();
+        assert_eq!(reopened.source, "flowchart TD\n  X --> Y\n");
+
+        delete_text_document_in(root, &saved.relative_path).unwrap();
+        assert!(!root.join("图表/订单流/订单流.mmd").exists());
+        assert!(delete_text_document_in(root, &saved.relative_path).is_err());
+    }
+
+    #[test]
+    fn saving_keeps_the_id_and_the_creation_time() {
+        let scratch = Scratch::new();
+        scratch.write(
+            "图表/旧图.mmd",
+            "%% seamind: {\"id\":\"keep-me\",\"title\":\"旧图\",\"tags\":[\"t\"],\"createdAt\":5,\"updatedAt\":6}\nflowchart LR\n",
+        );
+        save_text_document_in(&scratch.0, "图表/旧图.mmd", "flowchart TD\n", None).unwrap();
+        let written = fs::read_to_string(scratch.0.join("图表/旧图.mmd")).unwrap();
+        let (metadata, source) = split_text_metadata(&written);
+        let metadata = metadata.unwrap();
+        assert_eq!(metadata.id, "keep-me");
+        assert_eq!(metadata.created_at, 5);
+        assert_eq!(metadata.tags, vec!["t".to_string()]);
+        assert!(metadata.updated_at > 6);
+        assert_eq!(source, "flowchart TD\n");
+    }
+
+    #[test]
+    fn a_new_title_renames_the_diagram_file() {
+        let scratch = Scratch::new();
+        let created = create_text_document_in(
+            &scratch.0,
+            "mermaid",
+            "图表",
+            "旧名",
+            "flowchart LR\n  A --> B",
+        )
+        .unwrap();
+
+        let renamed = save_text_document_in(
+            &scratch.0,
+            &created.document.relative_path,
+            "flowchart TD\n  X --> Y",
+            Some("  新名 "),
+        )
+        .unwrap();
+        assert_eq!(renamed.relative_path, "图表/新名.mmd");
+        assert_eq!(renamed.title, "新名");
+        assert_eq!(renamed.id, created.document.id);
+        assert!(!scratch.0.join("图表/旧名.mmd").exists());
+        let reopened = open_text_document_in(&scratch.0, &renamed.relative_path).unwrap();
+        assert_eq!(reopened.source, "flowchart TD\n  X --> Y\n");
+        assert_eq!(reopened.document.title, "新名");
+
+        let again =
+            save_text_document_in(&scratch.0, &renamed.relative_path, "flowchart TD", Some("新名"))
+                .unwrap();
+        assert_eq!(again.relative_path, "图表/新名.mmd");
+    }
+
+    #[test]
+    fn a_rename_never_overwrites_another_diagram_or_accepts_a_bad_title() {
+        let scratch = Scratch::new();
+        let first =
+            create_text_document_in(&scratch.0, "mermaid", "图表", "甲", "flowchart LR").unwrap();
+        let second =
+            create_text_document_in(&scratch.0, "mermaid", "图表", "乙", "flowchart TD").unwrap();
+        let second_path = second.document.relative_path.as_str();
+
+        let clash = save_text_document_in(&scratch.0, second_path, "flowchart TD", Some("甲"));
+        assert!(clash.is_err());
+        assert_eq!(
+            open_text_document_in(&scratch.0, &first.document.relative_path)
+                .unwrap()
+                .source,
+            "flowchart LR\n"
+        );
+        assert!(scratch.0.join("图表/乙.mmd").exists());
+
+        let too_long = "长".repeat(121);
+        for bad in ["", "   ", too_long.as_str()] {
+            assert!(
+                save_text_document_in(&scratch.0, second_path, "flowchart TD", Some(bad)).is_err()
+            );
+        }
+
+        // A title that is not a legal file name still gets a safe one.
+        let odd =
+            save_text_document_in(&scratch.0, second_path, "flowchart TD", Some("a/b:c")).unwrap();
+        assert_eq!(odd.title, "a/b:c");
+        assert_eq!(odd.relative_path, "图表/a b c.mmd");
+    }
+
+    #[test]
+    fn a_hand_made_diagram_file_gets_metadata_on_its_first_save() {
+        let scratch = Scratch::new();
+        scratch.write("手写.mmd", "flowchart LR\n  A --> B\n");
+        let opened = open_text_document_in(&scratch.0, "手写.mmd").unwrap();
+        assert_eq!(opened.source, "flowchart LR\n  A --> B\n");
+        assert_eq!(opened.document.title, "手写");
+        assert_eq!(opened.document.id, "legacy:手写.mmd");
+        let saved = save_text_document_in(&scratch.0, "手写.mmd", &opened.source, None).unwrap();
+        assert_ne!(saved.id, "legacy:手写.mmd");
+        assert_eq!(saved.title, "手写");
+    }
+
+    #[test]
+    fn diagram_paths_must_stay_inside_the_library() {
+        let scratch = Scratch::new();
+        let outside = std::env::temp_dir().join("x.mmd");
+        for path in [
+            "../x.mmd",
+            "a/../b.mmd",
+            "folder/x.txt",
+            "",
+            outside.to_str().unwrap(),
+        ] {
+            assert!(open_text_document_in(&scratch.0, path).is_err(), "{path}");
+            assert!(
+                save_text_document_in(&scratch.0, path, "flowchart LR", None).is_err(),
+                "{path}"
+            );
+            assert!(delete_text_document_in(&scratch.0, path).is_err(), "{path}");
+        }
+        assert!(create_text_document_in(&scratch.0, "mermaid", "../escape", "t", "s").is_err());
+    }
+
+    #[test]
+    fn unknown_kinds_and_oversized_sources_are_refused() {
+        let scratch = Scratch::new();
+        assert!(create_text_document_in(&scratch.0, "markdown", "x", "t", "s").is_err());
+        assert!(create_text_document_in(&scratch.0, "mermaid", "x", "  ", "s").is_err());
+        let big = "a".repeat(MAX_DIAGRAM_SOURCE_BYTES as usize + 1);
+        assert!(create_text_document_in(&scratch.0, "mermaid", "x", "t", &big).is_err());
+        let created = create_text_document_in(&scratch.0, "mermaid", "x", "t", "flowchart LR").unwrap();
+        assert!(
+            save_text_document_in(&scratch.0, &created.document.relative_path, &big, None)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn puml_files_can_be_created_and_get_unique_names() {
+        let scratch = Scratch::new();
+        let source = "@startuml\r\nA -> B\r\n@enduml";
+        let first = create_plantuml_document_in(&scratch.0, "图表", "时序图", source).unwrap();
+        assert_eq!(first.relative_path, "图表/时序图.puml");
+        assert_eq!(first.title, "时序图");
+        assert_eq!(first.category, "图表");
+        let second = create_plantuml_document_in(&scratch.0, "图表", "时序图", source).unwrap();
+        assert_eq!(second.relative_path, "图表/时序图 (2).puml");
+        assert_eq!(
+            fs::read_to_string(scratch.0.join(&first.relative_path)).unwrap(),
+            "@startuml\nA -> B\n@enduml\n"
+        );
+        let big = "a".repeat(MAX_PLANTUML_BYTES as usize + 1);
+        assert!(create_plantuml_document_in(&scratch.0, "图表", "太大", &big).is_err());
+    }
+
+    #[test]
+    fn the_front_end_and_the_backend_agree_on_names() {
+        // What the front end sends to save a document, with and without a kind.
+        let with_kind: SaveDocumentInput = serde_json::from_str(
+            r##"{"id":null,"relativePath":null,"title":"t","category":"c","mapType":"文档",
+                "tags":[],"markdown":"# t","historySource":"manual","kind":"doc"}"##,
+        )
+        .unwrap();
+        assert_eq!(with_kind.kind.as_deref(), Some("doc"));
+        assert_eq!(with_kind.history_source.as_deref(), Some("manual"));
+        let without_kind: SaveDocumentInput = serde_json::from_str(
+            r##"{"id":"1","relativePath":"a.md","title":"t","category":"c","mapType":"通用",
+                "tags":["x"],"markdown":"# t"}"##,
+        )
+        .unwrap();
+        assert!(without_kind.kind.is_none());
+
+        // What it reads back.
+        let diagram = TextDocument {
+            id: "d".into(),
+            relative_path: "a.mmd".into(),
+            title: "t".into(),
+            category: "c".into(),
+            kind: "mermaid".into(),
+            file_size: 3,
+            updated_at: 4,
+        };
+        let snapshot = serde_json::to_value(LibrarySnapshot {
+            root_path: Some("/library".into()),
+            documents: Vec::new(),
+            books: Vec::new(),
+            plantuml_files: Vec::new(),
+            text_documents: vec![diagram.clone()],
+            categories: Vec::new(),
+        })
+        .unwrap();
+        for key in ["id", "relativePath", "title", "category", "kind", "fileSize", "updatedAt"] {
+            assert!(snapshot["textDocuments"][0].get(key).is_some(), "{key}");
+        }
+        let opened = serde_json::to_value(OpenedTextDocument {
+            document: diagram,
+            source: "s".into(),
+        })
+        .unwrap();
+        assert_eq!(opened["source"], "s");
+        assert!(opened["document"].get("relativePath").is_some());
+        let map = serde_json::to_value(MapDocument {
+            id: "m".into(),
+            relative_path: "m.md".into(),
+            title: "t".into(),
+            category: "c".into(),
+            map_type: "文档".into(),
+            tags: Vec::new(),
+            created_at: 1,
+            updated_at: 2,
+            kind: "doc".into(),
+        })
+        .unwrap();
+        assert_eq!(map["kind"], "doc");
+        assert_eq!(map["mapType"], "文档");
+    }
+
+    #[test]
+    fn a_markdown_files_kind_follows_its_header() {
+        let parse = |json: &str| {
+            metadata_from_markdown(&format!("<!-- markmap-desktop: {json} -->\n\n# T\n"))
+        };
+        assert_eq!(document_kind(None), "doc");
+        let plain = parse(r#"{"id":"1","title":"t","mapType":"通用","tags":[],"createdAt":1,"updatedAt":2}"#);
+        assert_eq!(document_kind(plain.as_ref()), "mindmap");
+        let doc = parse(r#"{"id":"1","title":"t","mapType":"文档","tags":[],"createdAt":1,"updatedAt":2,"kind":"doc"}"#);
+        assert_eq!(document_kind(doc.as_ref()), "doc");
+        let other = parse(r#"{"id":"1","title":"t","mapType":"通用","tags":[],"createdAt":1,"updatedAt":2,"kind":"whatever"}"#);
+        assert_eq!(document_kind(other.as_ref()), "mindmap");
+    }
+
+    #[test]
+    fn mind_map_headers_do_not_gain_a_kind_field() {
+        let mut metadata = DocumentMetadata {
+            id: "1".into(),
+            title: "t".into(),
+            map_type: "通用".into(),
+            tags: Vec::new(),
+            created_at: 1,
+            updated_at: 2,
+            kind: None,
+        };
+        assert!(!serde_json::to_string(&metadata).unwrap().contains("kind"));
+        metadata.kind = Some(KIND_DOC.into());
+        assert!(serde_json::to_string(&metadata).unwrap().contains(r#""kind":"doc""#));
+    }
+
+    #[test]
+    fn the_scan_lists_every_kind_of_file() {
+        let scratch = Scratch::new();
+        scratch.write("导图/地图.md", &format!("{MAP_HEADER}\n\n# 地图\n"));
+        scratch.write("文档/说明.md", &format!("{DOC_HEADER}\n\n# 说明\n"));
+        scratch.write("文档/无头.md", "# 无头\n\n正文\n");
+        scratch.write(
+            "图表/流程.mmd",
+            "%% seamind: {\"id\":\"d1\",\"title\":\"流程\",\"tags\":[],\"createdAt\":1,\"updatedAt\":2}\nflowchart LR\n",
+        );
+        scratch.write("图表/手写.mmd", "flowchart LR\n  A --> B\n");
+        scratch.write("图表/时序.puml", "@startuml\n@enduml\n");
+        scratch.write("书/书.epub", "x");
+
+        let (documents, books, plantuml_files, text_documents, categories) =
+            scan_library(&scratch.0).unwrap();
+        let kind_of = |title: &str| {
+            documents
+                .iter()
+                .find(|document| document.title == title)
+                .map(|document| document.kind.clone())
+        };
+        assert_eq!(documents.len(), 3);
+        assert_eq!(kind_of("地图").as_deref(), Some("mindmap"));
+        assert_eq!(kind_of("说明").as_deref(), Some("doc"));
+        assert_eq!(kind_of("无头").as_deref(), Some("doc"));
+        assert_eq!(books.len(), 1);
+        assert_eq!(plantuml_files.len(), 1);
+        let mut titles: Vec<_> = text_documents.iter().map(|d| d.title.clone()).collect();
+        titles.sort();
+        assert_eq!(titles, vec!["手写".to_string(), "流程".to_string()]);
+        assert!(text_documents.iter().all(|document| document.kind == "mermaid"));
+        for category in ["导图", "文档", "图表", "书"] {
+            assert!(categories.contains(&category.to_string()), "{category}");
+        }
+    }
+
+    #[test]
+    fn the_index_gains_the_kind_column_without_losing_rows() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE maps (
+                     id TEXT PRIMARY KEY NOT NULL, relative_path TEXT NOT NULL UNIQUE,
+                     title TEXT NOT NULL, category TEXT NOT NULL, map_type TEXT NOT NULL,
+                     tags TEXT NOT NULL, content TEXT NOT NULL,
+                     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+                 INSERT INTO maps VALUES ('a', 'a.md', 't', 'c', 'm', '[]', 'x', 1, 2);",
+            )
+            .unwrap();
+        ensure_maps_kind_column(&connection).unwrap();
+        ensure_maps_kind_column(&connection).unwrap();
+        let kind: String = connection
+            .query_row("SELECT kind FROM maps WHERE id = 'a'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(kind, "mindmap");
+
+        let document = MapDocument {
+            id: "b".into(),
+            relative_path: "b.md".into(),
+            title: "t".into(),
+            category: "c".into(),
+            map_type: "文档".into(),
+            tags: Vec::new(),
+            created_at: 1,
+            updated_at: 2,
+            kind: "doc".into(),
+        };
+        upsert_with_connection(&connection, &document, "body").unwrap();
+        let kind: String = connection
+            .query_row("SELECT kind FROM maps WHERE id = 'b'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(kind, "doc");
+    }
 }
