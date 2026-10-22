@@ -1805,6 +1805,18 @@ button {
   align-items: center;
   gap: 7px;
 }
+.status-recover-draft {
+  max-width: 35%;
+  overflow: hidden;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  color: var(--accent);
+  background: #fff;
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
 .status-indicator {
   width: 5px;
   height: 5px;

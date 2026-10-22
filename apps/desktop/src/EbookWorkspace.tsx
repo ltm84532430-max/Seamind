@@ -234,6 +234,9 @@ export default function EbookWorkspace({
           setDashboardCollapsed((collapsed) => !collapsed)
         }
         onCancelPlan={cancelReadingPlan}
+        rootPath={snapshot?.rootPath ?? ''}
+        libraryBooks={books}
+        onOpenBook={onOpenBook}
       />
       <div className="ebook-shelf-content">
         <header className="ebook-shelf-header">
@@ -466,7 +469,7 @@ export default function EbookWorkspace({
               <h2 id="ebook-delete-title">删除这本电子书？</h2>
               <p>
                 “{deleteTarget.title}
-                ”会从当前文件库中移除，阅读位置、书签、标注、热力图记录和阅读计划也会清除。
+                ”会从当前文件库中移除，阅读位置、书签、标注、热力图记录和单书阅读计划也会清除。技能阅读路径中会保留这本书的位置并标记为已移出书架。
               </p>
               {deleteError && (
                 <p className="ebook-delete-error" role="alert">

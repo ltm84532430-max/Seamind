@@ -56,6 +56,7 @@ import type {
   EpubReaderSelection,
 } from './EpubReader';
 import { epubProgressKey } from './ebook-storage';
+import { resolveBookMindmapTarget as resolveBookMindmapTargetFromLibrary } from './book-mindmap-target';
 import AgentPanel from './AgentPanel';
 import { agentToolCatalog, executeAgentTool } from './agent/capabilities';
 import type {
@@ -102,6 +103,7 @@ type Theme = 'light' | 'dark';
 type ActiveWorkspace = 'mindmap' | 'reader';
 const ACTIVE_WORKSPACE_KEY = 'seamind:active-workspace:v1';
 const LAST_READER_BOOK_KEY = 'seamind:last-reader-book:v1';
+const RECOVERABLE_DRAFT_KEY = 'seamind:recoverable-mindmap-draft:v1';
 
 function readActiveWorkspace(): ActiveWorkspace {
   try {
@@ -260,6 +262,29 @@ interface EditorDraft {
   revision: number;
 }
 
+interface RecoverableDraft {
+  rootPath: string;
+  draft: EditorDraft;
+}
+
+function readRecoverableDraft(): RecoverableDraft | null {
+  try {
+    const value = localStorage.getItem(RECOVERABLE_DRAFT_KEY);
+    if (!value) return null;
+    const parsed = JSON.parse(value) as RecoverableDraft;
+    if (
+      typeof parsed.rootPath === 'string' &&
+      typeof parsed.draft?.title === 'string' &&
+      typeof parsed.draft?.markdown === 'string' &&
+      typeof parsed.draft?.category === 'string'
+    )
+      return parsed;
+  } catch {
+    // Recovery remains available in memory when browser storage is unavailable.
+  }
+  return null;
+}
+
 interface PlantUmlCanvasSession {
   request: PlantUmlEditorRequest;
   source: string;
@@ -356,68 +381,15 @@ const saveEpubMindmapPath = (
   }
 };
 
-const stablePathHash = (value: string) => {
-  let hash = 0x811c9dc5;
-  for (const character of normalizeLibraryPath(value)) {
-    hash ^= character.charCodeAt(0);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(16).padStart(8, '0');
-};
-
-const safeBookMapName = (value: string) => {
-  let name = value
-    // Windows file names cannot contain control characters.
-    // eslint-disable-next-line no-control-regex
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
-    .replace(/\s+/g, ' ')
-    .replace(/[. ]+$/g, '')
-    .trim()
-    .slice(0, 100);
-  if (!name || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(name)) {
-    name = `电子书-${name || '导图'}`;
-  }
-  return name;
-};
-
 const resolveBookMindmapTarget = (
   snapshot: LibrarySnapshot,
   book: Pick<EpubBookDocument, 'relativePath' | 'title'>,
-) => {
-  const documents = snapshot.documents;
-  const findDocument = (path: string) =>
-    documents.find(
-      (document) =>
-        normalizeLibraryPath(document.relativePath) ===
-        normalizeLibraryPath(path),
-    ) ?? null;
-  const savedPath = snapshot.rootPath
-    ? loadEpubMindmapPath(snapshot.rootPath, book.relativePath)
-    : null;
-  if (savedPath) {
-    return { relativePath: savedPath, document: findDocument(savedPath) };
-  }
-
-  const preferredPath = `books/${safeBookMapName(book.title)}.md`;
-  const preferredDocument = findDocument(preferredPath);
-  const claimedByAnotherBook = snapshot.rootPath
-    ? snapshot.books.some(
-        (candidate) =>
-          normalizeLibraryPath(candidate.relativePath) !==
-            normalizeLibraryPath(book.relativePath) &&
-          loadEpubMindmapPath(
-            snapshot.rootPath!,
-            candidate.relativePath,
-          )?.toLowerCase() === preferredPath.toLowerCase(),
-      )
-    : false;
-  if (!claimedByAnotherBook) {
-    return { relativePath: preferredPath, document: preferredDocument };
-  }
-
-  const uniquePath = `books/${safeBookMapName(book.title)}-${stablePathHash(book.relativePath)}.md`;
-  return { relativePath: uniquePath, document: findDocument(uniquePath) };
-};
+) =>
+  resolveBookMindmapTargetFromLibrary(snapshot, book, (epubRelativePath) =>
+    snapshot.rootPath
+      ? loadEpubMindmapPath(snapshot.rootPath, epubRelativePath)
+      : null,
+  );
 
 const settingsStorageKey = 'markmap.desktop.provider-settings.v1';
 const themeStorageKey = 'seamind.theme.v1';
@@ -1654,6 +1626,8 @@ export default function App() {
   const [epubDropActive, setEpubDropActive] = useState(false);
   const [libraryError, setLibraryError] = useState('');
   const [saveMessage, setSaveMessage] = useState('正在初始化文件库…');
+  const [recoverableDraft, setRecoverableDraft] =
+    useState<RecoverableDraft | null>(readRecoverableDraft);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyVersions, setHistoryVersions] = useState<DocumentVersion[]>([]);
   const [historyPreview, setHistoryPreview] =
@@ -1743,6 +1717,7 @@ export default function App() {
   const libraryQueryRef = useRef('');
   const categoryFilterRef = useRef('');
   const activeSaveRef = useRef<Promise<boolean> | null>(null);
+  const lastSaveErrorRef = useRef('');
   const codeBlockEditHandlerRef = useRef<
     (
       language: string,
@@ -2946,6 +2921,7 @@ export default function App() {
         setEditorDraft(next);
         setPendingEpubImport(false);
         setSaveMessage(unchanged ? '已保存到本机' : '正在保存后续修改…');
+        lastSaveErrorRef.current = '';
         setLibraryError('');
 
         const currentLibrary = librarySnapshotRef.current;
@@ -2975,7 +2951,8 @@ export default function App() {
         );
         return true;
       } catch (error) {
-        setSaveMessage(errorMessage(error, '保存失败'));
+        lastSaveErrorRef.current = errorMessage(error, '保存失败');
+        setSaveMessage(lastSaveErrorRef.current);
         return false;
       }
     })();
@@ -3010,19 +2987,79 @@ export default function App() {
     return true;
   };
 
+  const parkUnsavedDraft = () => {
+    const rootPath = librarySnapshotRef.current?.rootPath ?? '';
+    if (
+      recoverableDraft &&
+      (recoverableDraft.rootPath !== rootPath ||
+        recoverableDraft.draft.revision !== draftRef.current.revision ||
+        recoverableDraft.draft.relativePath !== draftRef.current.relativePath)
+    ) {
+      setLibraryError(
+        '已有一份未保存草稿，请先恢复并处理，再切换另一份保存失败的导图。',
+      );
+      return false;
+    }
+    if (
+      !window.confirm(
+        `${lastSaveErrorRef.current || '保存失败'}\n\n当前导图未能保存。继续切换会暂存这份草稿，之后可在底部点击“恢复草稿”返回。是否继续？`,
+      )
+    )
+      return false;
+    const recovery = { rootPath, draft: draftRef.current };
+    setRecoverableDraft(recovery);
+    try {
+      localStorage.setItem(RECOVERABLE_DRAFT_KEY, JSON.stringify(recovery));
+    } catch {
+      // Keep the draft in memory for this app session.
+    }
+    const parked = { ...draftRef.current, dirty: false };
+    draftRef.current = parked;
+    setEditorDraft(parked);
+    setSaveMessage('未保存草稿已暂存');
+    return true;
+  };
+
+  const canLeaveMindmapDraft = async () =>
+    !draftRef.current.dirty || (await saveDraft()) || parkUnsavedDraft();
+
+  const restoreRecoverableDraft = async () => {
+    const recovery = recoverableDraft;
+    if (!recovery) return;
+    if (recovery.rootPath !== librarySnapshotRef.current?.rootPath) {
+      setLibraryError('这份草稿属于另一个文件库，请先切回原文件库。');
+      return;
+    }
+    if (draftRef.current.dirty && !(await saveDraft())) {
+      setLibraryError('当前导图尚未保存，请先处理后再恢复草稿。');
+      return;
+    }
+    if (!leavePlantUmlSession() || !(await workbench.controller.leave()))
+      return;
+    installDraft({ ...recovery.draft, dirty: true });
+    setActiveWorkspace('mindmap');
+    setRecoverableDraft(null);
+    try {
+      localStorage.removeItem(RECOVERABLE_DRAFT_KEY);
+    } catch {
+      // The restored draft is already open.
+    }
+    setSaveMessage('已恢复未保存草稿，请修改标题或分类后保存');
+  };
+
   const openMap = async (
     document: Pick<MapDocument, 'relativePath' | 'kind'>,
     options: { asMindmap?: boolean } = {},
   ) => {
     if (!leavePlantUmlSession()) return;
     if (document.kind === 'doc' && !options.asMindmap) {
-      if (draftRef.current.dirty && !(await saveDraft())) return;
+      if (!(await canLeaveMindmapDraft())) return;
       if (await workbench.controller.openMarkdown(document))
         setActiveWorkspace('mindmap');
       return;
     }
     if (!(await workbench.controller.leave())) return;
-    if (draftRef.current.dirty && !(await saveDraft())) return;
+    if (!(await canLeaveMindmapDraft())) return;
     setSaveMessage('正在打开思维导图…');
     try {
       const opened = await invoke<OpenedDocument>('open_document', {
@@ -3354,7 +3391,7 @@ export default function App() {
 
   const openLibraryTextDocument = async (file: TextDocument) => {
     if (!leavePlantUmlSession()) return;
-    if (draftRef.current.dirty && !(await saveDraft())) return;
+    if (!(await canLeaveMindmapDraft())) return;
     if (await workbench.controller.openDiagram(file))
       setActiveWorkspace('mindmap');
   };
@@ -3476,7 +3513,7 @@ export default function App() {
         saveEpubMindmapPath(
           snapshot.rootPath,
           book.relativePath,
-          target.relativePath,
+          draftRef.current.relativePath ?? target.relativePath,
         );
         setMarkdownFullscreen(false);
         setReaderSplitOpen(true);
@@ -3502,7 +3539,7 @@ export default function App() {
           relativePath: book.relativePath,
         });
         const outline = await invoke<EpubOutline>('import_epub_toc', { path });
-        const title = book.title || outline.title || '电子书';
+        const title = target.title;
         const markdown = outline.markdown.trim() || `# ${title}\n`;
         const next = createDraft({
           id: null,
@@ -3527,7 +3564,7 @@ export default function App() {
           saveEpubMindmapPath(
             snapshot.rootPath,
             book.relativePath,
-            target.relativePath,
+            draftRef.current.relativePath ?? target.relativePath,
           );
         }
       }
@@ -6169,6 +6206,16 @@ export default function App() {
           <i className="status-indicator" />
           阶段 4 · 本地文件库
         </span>
+        {recoverableDraft && (
+          <button
+            type="button"
+            className="status-recover-draft"
+            title={recoverableDraft.draft.title}
+            onClick={() => void restoreRecoverableDraft()}
+          >
+            恢复草稿：{recoverableDraft.draft.title}
+          </button>
+        )}
         <span
           className="status-library-path"
           title={librarySnapshot?.rootPath ?? ''}

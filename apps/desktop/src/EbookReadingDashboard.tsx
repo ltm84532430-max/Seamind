@@ -1,4 +1,6 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
+import type { EpubBookDocument } from './library';
+import EbookLearningPaths from './EbookLearningPaths';
 import type {
   EpubBookMetadata,
   EpubReadingActivity,
@@ -21,6 +23,9 @@ export default function EbookReadingDashboard({
   onClose,
   onToggleCollapsed,
   onCancelPlan,
+  rootPath,
+  libraryBooks,
+  onOpenBook,
 }: {
   books: EbookDashboardBook[];
   open: boolean;
@@ -28,7 +33,29 @@ export default function EbookReadingDashboard({
   onClose: () => void;
   onToggleCollapsed: () => void;
   onCancelPlan: (progressKey: string) => void;
+  rootPath: string;
+  libraryBooks: EpubBookDocument[];
+  onOpenBook: (book: EpubBookDocument) => void;
 }) {
+  const [page, setPage] = useState<'books' | 'paths'>(() => {
+    try {
+      return sessionStorage.getItem('seamind:reading-dashboard-page:v1') ===
+        'paths'
+        ? 'paths'
+        : 'books';
+    } catch {
+      return 'books';
+    }
+  });
+  const selectPage = (next: 'books' | 'paths') => {
+    setPage(next);
+    try {
+      sessionStorage.setItem('seamind:reading-dashboard-page:v1', next);
+    } catch {
+      // Switching pages still works when session storage is unavailable.
+    }
+  };
+  const activePage = rootPath ? page : 'books';
   const todayKey = localDateKey(new Date());
   const plans = useMemo(
     () =>
@@ -77,9 +104,53 @@ export default function EbookReadingDashboard({
           </button>
         </header>
 
+        <div
+          className="ebook-dashboard-pages"
+          role="tablist"
+          aria-label="阅读计划视图"
+          onKeyDown={(event) => {
+            if (
+              !rootPath ||
+              (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')
+            )
+              return;
+            event.preventDefault();
+            const next = activePage === 'books' ? 'paths' : 'books';
+            selectPage(next);
+            document.getElementById(`ebook-dashboard-${next}-tab`)?.focus();
+          }}
+        >
+          <button
+            id="ebook-dashboard-books-tab"
+            type="button"
+            role="tab"
+            aria-controls="ebook-dashboard-books-page"
+            aria-selected={activePage === 'books'}
+            className={activePage === 'books' ? 'is-active' : ''}
+            onClick={() => selectPage('books')}
+          >
+            单书计划
+          </button>
+          <button
+            id="ebook-dashboard-paths-tab"
+            type="button"
+            role="tab"
+            aria-controls="ebook-dashboard-paths-page"
+            aria-selected={activePage === 'paths'}
+            className={activePage === 'paths' ? 'is-active' : ''}
+            onClick={() => selectPage('paths')}
+            disabled={!rootPath}
+          >
+            技能路径
+          </button>
+        </div>
+
         <section
           className="ebook-dashboard-plans"
-          aria-labelledby="ebook-plans-title"
+          id="ebook-dashboard-books-page"
+          role="tabpanel"
+          aria-labelledby="ebook-dashboard-books-tab"
+          hidden={activePage !== 'books'}
         >
           <div className="ebook-dashboard-section-heading">
             <div>
@@ -165,6 +236,21 @@ export default function EbookReadingDashboard({
             </div>
           )}
         </section>
+        {rootPath && (
+          <div
+            id="ebook-dashboard-paths-page"
+            className="ebook-dashboard-path-page"
+            role="tabpanel"
+            aria-labelledby="ebook-dashboard-paths-tab"
+            hidden={activePage !== 'paths'}
+          >
+            <EbookLearningPaths
+              rootPath={rootPath}
+              books={libraryBooks}
+              onOpenBook={onOpenBook}
+            />
+          </div>
+        )}
       </aside>
     </>
   );
