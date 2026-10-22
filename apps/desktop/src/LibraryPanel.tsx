@@ -16,6 +16,8 @@ export interface LibraryPanelProps {
   snapshot: LibrarySnapshot | null;
   documents: MapDocument[];
   selectedPath: string | null;
+  /** The .puml file open in the PlantUML canvas, if any. */
+  selectedPlantUmlPath?: string | null;
   collapsed: boolean;
   categoryFilter: string;
   query: string;
@@ -152,6 +154,7 @@ export default function LibraryPanel({
   snapshot,
   documents,
   selectedPath,
+  selectedPlantUmlPath = null,
   collapsed,
   categoryFilter,
   query,
@@ -197,6 +200,7 @@ export default function LibraryPanel({
 
   const menuRef = useRef<HTMLDivElement>(null);
   const folderContextMenuRef = useRef<HTMLDivElement>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
 
   // Close create menu when clicking outside
   useEffect(() => {
@@ -227,6 +231,33 @@ export default function LibraryPanel({
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [folderContextMenu]);
+
+  // Reveal the PUML file that was opened: expand its folders and bring its row into view. Only a
+  // change of the open file does this, so a later library refresh does not reopen folders the user
+  // closed.
+  useEffect(() => {
+    if (!selectedPlantUmlPath) return undefined;
+    const file = snapshot?.plantumlFiles.find(
+      (candidate) => candidate.relativePath === selectedPlantUmlPath,
+    );
+    const folder =
+      file?.category ?? selectedPlantUmlPath.split('/').slice(0, -1).join('/');
+    const ancestors = folder
+      .split('/')
+      .filter(Boolean)
+      .map((_, index, parts) => parts.slice(0, index + 1).join('/'));
+    setCollapsedFolders((previous) =>
+      ancestors.some((path) => previous.has(path))
+        ? new Set([...previous].filter((path) => !ancestors.includes(path)))
+        : previous,
+    );
+    const frame = window.requestAnimationFrame(() =>
+      sidebarRef.current
+        ?.querySelector('.library-puml-row.is-selected')
+        ?.scrollIntoView({ block: 'nearest' }),
+    );
+    return () => window.cancelAnimationFrame(frame);
+  }, [selectedPlantUmlPath]);
 
   // Root folder label
   const rootName =
@@ -454,8 +485,12 @@ export default function LibraryPanel({
             )}
             {folder.books.map((book) => renderEpubRow(book, onOpenBook))}
             {folder.plantumlFiles.map((file) =>
-              renderPlantUmlRow(file, onOpenPlantUmlFile, (document) =>
-                setDeleteConfirmation({ kind: 'plantuml', document }),
+              renderPlantUmlRow(
+                file,
+                selectedPlantUmlPath,
+                onOpenPlantUmlFile,
+                (document) =>
+                  setDeleteConfirmation({ kind: 'plantuml', document }),
               ),
             )}
             {folder.children.length === 0 &&
@@ -472,6 +507,7 @@ export default function LibraryPanel({
 
   return (
     <aside
+      ref={sidebarRef}
       className={`library-sidebar${collapsed ? ' is-collapsed' : ''}`}
       aria-label="思维导图导航与目录"
     >
@@ -763,8 +799,12 @@ export default function LibraryPanel({
                   </div>
                   {visibleBooks.map((book) => renderEpubRow(book, onOpenBook))}
                   {visiblePlantUmlFiles.map((file) =>
-                    renderPlantUmlRow(file, onOpenPlantUmlFile, (document) =>
-                      setDeleteConfirmation({ kind: 'plantuml', document }),
+                    renderPlantUmlRow(
+                      file,
+                      selectedPlantUmlPath,
+                      onOpenPlantUmlFile,
+                      (document) =>
+                        setDeleteConfirmation({ kind: 'plantuml', document }),
                     ),
                   )}
                   {sortedDocuments.map((doc) =>
@@ -1052,9 +1092,11 @@ export default function LibraryPanel({
 
 function renderPlantUmlRow(
   file: PlantUmlDocument,
+  selectedPlantUmlPath: string | null,
   onOpen: (file: PlantUmlDocument) => void,
   onDeleteRequest: (file: PlantUmlDocument) => void,
 ) {
+  const isSelected = selectedPlantUmlPath === file.relativePath;
   const sizeLabel =
     file.fileSize >= 1024 * 1024
       ? `${(file.fileSize / (1024 * 1024)).toFixed(1)} MB`
@@ -1062,10 +1104,11 @@ function renderPlantUmlRow(
 
   return (
     <div
-      className="library-doc-row library-puml-row"
+      className={`library-doc-row library-puml-row${isSelected ? ' is-selected' : ''}`}
       key={`puml:${file.relativePath}`}
       onClick={() => onOpen(file)}
       role="treeitem"
+      aria-selected={isSelected}
       title={`打开 PUML 图表 ${file.relativePath}`}
     >
       <div className="doc-active-bar" aria-hidden="true" />

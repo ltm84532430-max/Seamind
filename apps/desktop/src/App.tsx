@@ -1670,6 +1670,12 @@ export default function App() {
     useState<PlantUmlCanvasSession | null>(null);
   const plantUmlSessionRef = useRef<PlantUmlCanvasSession | null>(null);
   const isStandalonePlantUml = plantUmlSession?.request.saveTarget === 'file';
+  // The library file open in the PlantUML canvas; its cache key is "file:<relative path>".
+  const openPlantUmlPath =
+    isStandalonePlantUml &&
+    plantUmlSession?.request.cacheKey?.startsWith('file:')
+      ? plantUmlSession.request.cacheKey.slice('file:'.length)
+      : null;
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
   const [categoryDraft, setCategoryDraft] = useState('');
   const [providerSettings, setProviderSettings] =
@@ -4983,7 +4989,8 @@ export default function App() {
         <LibraryPanel
           snapshot={librarySnapshot}
           documents={libraryDocuments}
-          selectedPath={editorDraft.relativePath}
+          selectedPath={openPlantUmlPath ? null : editorDraft.relativePath}
+          selectedPlantUmlPath={openPlantUmlPath}
           collapsed={libraryCollapsed}
           categoryFilter={categoryFilter}
           query={libraryQuery}
