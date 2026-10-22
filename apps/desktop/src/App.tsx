@@ -1,5 +1,10 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import type { FormEvent } from 'react';
+import type {
+  CSSProperties,
+  FormEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  PointerEvent as ReactPointerEvent,
+} from 'react';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
@@ -32,23 +37,20 @@ import {
   parseYouTubeEmbedInput,
   prepareYouTubeCards,
 } from './youtube';
-import {
-  canOfferAlternativePlayback,
-  loadYouTubeIframeApi,
-  youtubePlaybackStateLabels,
-  youtubePlayerErrorMessage,
-} from './youtube-player';
-import type {
-  YouTubeIframePlayer,
-  YouTubePlaybackState,
-  YouTubePlaybackResolution,
-} from './youtube-player';
+import YouTubePlayerDialog from './YouTubePlayerDialog';
+import type { YouTubePreviewSelection } from './YouTubePlayerDialog';
+import { installYouTubeDebugHook } from './youtube-debug';
 import 'katex/dist/katex.min.css';
 import LibraryPanel from './LibraryPanel';
 import EpubReader from './EpubReader';
 import EbookWorkspace from './EbookWorkspace';
+import MindmapMiniTree from './MindmapMiniTree';
+import type { MindmapMiniTreeNode } from './MindmapMiniTree';
 import './ebook-workspace.css';
-import type { EpubReaderSelection } from './EpubReader';
+import type {
+  EpubChapterNavigationRequest,
+  EpubReaderSelection,
+} from './EpubReader';
 import { epubProgressKey } from './ebook-storage';
 import AgentPanel from './AgentPanel';
 import { agentToolCatalog, executeAgentTool } from './agent/capabilities';
@@ -86,6 +88,7 @@ import type {
   LibrarySnapshot,
   MapDocument,
   OpenedDocument,
+  PlantUmlDocument,
   SaveDocumentInput,
 } from './library';
 
@@ -109,6 +112,112 @@ type MindmapStyle = 'gray' | 'roots' | 'cards' | 'warm' | 'emerald' | 'cobalt';
 interface MapColorNode {
   state: { depth: number; path?: string };
 }
+
+interface PreparedMindmapTree {
+  root: PureNode;
+  navigation: MindmapMiniTreeNode;
+}
+
+interface ReaderSplitLayout {
+  wideRatio: number;
+  narrowRatio: number;
+}
+
+const DEFAULT_READER_SPLIT_LAYOUT: ReaderSplitLayout = {
+  wideRatio: 0.45,
+  narrowRatio: 0.42,
+};
+
+function readerSplitLayoutKey(progressKey: string): string {
+  return `seamind:reader-split:v1:${progressKey}`;
+}
+
+function readReaderSplitLayout(progressKey: string): ReaderSplitLayout {
+  try {
+    const value = JSON.parse(
+      localStorage.getItem(readerSplitLayoutKey(progressKey)) || 'null',
+    ) as Partial<ReaderSplitLayout> | null;
+    return {
+      wideRatio:
+        typeof value?.wideRatio === 'number' &&
+        value.wideRatio >= 0.32 &&
+        value.wideRatio <= 0.65
+          ? value.wideRatio
+          : DEFAULT_READER_SPLIT_LAYOUT.wideRatio,
+      narrowRatio:
+        typeof value?.narrowRatio === 'number' &&
+        value.narrowRatio >= 0.25 &&
+        value.narrowRatio <= 0.65
+          ? value.narrowRatio
+          : DEFAULT_READER_SPLIT_LAYOUT.narrowRatio,
+    };
+  } catch {
+    return DEFAULT_READER_SPLIT_LAYOUT;
+  }
+}
+
+function prepareMindmapTree(
+  root: PureNode,
+  sources: Map<string, MarkdownNodeSource>,
+): PreparedMindmapTree {
+  let nodeId = 0;
+  const visit = (node: PureNode, parentPath = ''): PreparedMindmapTree => {
+    nodeId += 1;
+    const path = parentPath ? `${parentPath}.${nodeId}` : `${nodeId}`;
+    const children = node.children.map((child) => visit(child, path));
+    const payload = { ...node.payload, seamindSourcePath: path };
+    return {
+      root: {
+        ...node,
+        payload,
+        children: children.map((child) => child.root),
+      },
+      navigation: {
+        path,
+        label:
+          sources.get(path)?.label || normalizeMindmapText(node.content) || '',
+        children: children.map((child) => child.navigation),
+      },
+    };
+  };
+  return visit(root);
+}
+
+function findPureNodeBySourcePath(
+  root: PureNode | null,
+  path: string,
+): PureNode | null {
+  if (!root) return null;
+  if (root.payload?.seamindSourcePath === path) return root;
+  for (const child of root.children) {
+    const match = findPureNodeBySourcePath(child, path);
+    if (match) return match;
+  }
+  return null;
+}
+
+function clonePureNode(node: PureNode): PureNode {
+  return {
+    ...node,
+    payload: node.payload ? { ...node.payload } : undefined,
+    children: node.children.map(clonePureNode),
+  };
+}
+
+function findNavigationPath(
+  root: MindmapMiniTreeNode | null,
+  targetPath: string,
+  ancestors: MindmapMiniTreeNode[] = [],
+): MindmapMiniTreeNode[] {
+  if (!root) return [];
+  const next = [...ancestors, root];
+  if (root.path === targetPath) return next;
+  for (const child of root.children) {
+    const match = findNavigationPath(child, targetPath, next);
+    if (match.length) return match;
+  }
+  return [];
+}
 type StylableMarkmap = Omit<MarkmapInstance, 'setData'> & {
   options: {
     color: (node: MapColorNode) => string;
@@ -129,6 +238,9 @@ type StylableMarkmap = Omit<MarkmapInstance, 'setData'> & {
       linkRadius?: number;
     },
   ): Promise<void>;
+};
+type CenterableMarkmap = MarkmapInstance & {
+  centerNode(node: unknown): Promise<void>;
 };
 
 interface EditorDraft {
@@ -199,15 +311,6 @@ interface HtmlCanvasEmbedding extends HtmlPreviewSelection {
   src: string;
 }
 
-interface YouTubePreviewSelection {
-  id: string;
-  title: string;
-  src: string;
-  startSeconds: number;
-}
-
-type YouTubePlaybackMode = 'embed' | 'local';
-
 interface TerminalCommandRequest {
   id: string;
   language: string;
@@ -216,6 +319,100 @@ interface TerminalCommandRequest {
 
 const isEpubPath = (path: string) =>
   path.trim().toLowerCase().endsWith('.epub');
+
+const normalizeLibraryPath = (path: string) =>
+  path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+
+const epubMindmapStorageKey = (rootPath: string, epubRelativePath: string) =>
+  `seamind:epub-mindmap:v1:${encodeURIComponent(normalizeLibraryPath(rootPath))}:${encodeURIComponent(normalizeLibraryPath(epubRelativePath))}`;
+
+const loadEpubMindmapPath = (rootPath: string, epubRelativePath: string) => {
+  try {
+    return localStorage.getItem(
+      epubMindmapStorageKey(rootPath, epubRelativePath),
+    );
+  } catch {
+    return null;
+  }
+};
+
+const saveEpubMindmapPath = (
+  rootPath: string,
+  epubRelativePath: string,
+  mindmapRelativePath: string,
+) => {
+  try {
+    localStorage.setItem(
+      epubMindmapStorageKey(rootPath, epubRelativePath),
+      mindmapRelativePath,
+    );
+  } catch {
+    // The map stays available in the current library when browser storage is full.
+  }
+};
+
+const stablePathHash = (value: string) => {
+  let hash = 0x811c9dc5;
+  for (const character of normalizeLibraryPath(value)) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+};
+
+const safeBookMapName = (value: string) => {
+  let name = value
+    // Windows file names cannot contain control characters.
+    // eslint-disable-next-line no-control-regex
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_')
+    .replace(/\s+/g, ' ')
+    .replace(/[. ]+$/g, '')
+    .trim()
+    .slice(0, 100);
+  if (!name || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(name)) {
+    name = `电子书-${name || '导图'}`;
+  }
+  return name;
+};
+
+const resolveBookMindmapTarget = (
+  snapshot: LibrarySnapshot,
+  book: Pick<EpubBookDocument, 'relativePath' | 'title'>,
+) => {
+  const documents = snapshot.documents;
+  const findDocument = (path: string) =>
+    documents.find(
+      (document) =>
+        normalizeLibraryPath(document.relativePath) ===
+        normalizeLibraryPath(path),
+    ) ?? null;
+  const savedPath = snapshot.rootPath
+    ? loadEpubMindmapPath(snapshot.rootPath, book.relativePath)
+    : null;
+  if (savedPath) {
+    return { relativePath: savedPath, document: findDocument(savedPath) };
+  }
+
+  const preferredPath = `books/${safeBookMapName(book.title)}.md`;
+  const preferredDocument = findDocument(preferredPath);
+  const claimedByAnotherBook = snapshot.rootPath
+    ? snapshot.books.some(
+        (candidate) =>
+          normalizeLibraryPath(candidate.relativePath) !==
+            normalizeLibraryPath(book.relativePath) &&
+          loadEpubMindmapPath(
+            snapshot.rootPath!,
+            candidate.relativePath,
+          )?.toLowerCase() === preferredPath.toLowerCase(),
+      )
+    : false;
+  if (!claimedByAnotherBook) {
+    return { relativePath: preferredPath, document: preferredDocument };
+  }
+
+  const uniquePath = `books/${safeBookMapName(book.title)}-${stablePathHash(book.relativePath)}.md`;
+  return { relativePath: uniquePath, document: findDocument(uniquePath) };
+};
 
 const settingsStorageKey = 'markmap.desktop.provider-settings.v1';
 const themeStorageKey = 'seamind.theme.v1';
@@ -1420,6 +1617,34 @@ export default function App() {
   const [epubReader, setEpubReader] = useState<EpubReaderSelection | null>(
     null,
   );
+  const [readerSplitOpen, setReaderSplitOpen] = useState(false);
+  const [readerSplitLayout, setReaderSplitLayout] = useState<ReaderSplitLayout>(
+    DEFAULT_READER_SPLIT_LAYOUT,
+  );
+  const [readerSplitLayoutLoadedFor, setReaderSplitLayoutLoadedFor] =
+    useState('');
+  const [epubChapterNavigation, setEpubChapterNavigation] =
+    useState<EpubChapterNavigationRequest | null>(null);
+  const [focusedMapPath, setFocusedMapPath] = useState<string | null>(null);
+  const [canvasNodeContextMenu, setCanvasNodeContextMenu] = useState<{
+    path: string;
+    left: number;
+    top: number;
+  } | null>(null);
+  const [mindmapNavigationTree, setMindmapNavigationTree] =
+    useState<MindmapMiniTreeNode | null>(null);
+  const [bookMindmapBusy, setBookMindmapBusy] = useState(false);
+  const readerSplitActive =
+    activeWorkspace === 'reader' && readerSplitOpen && Boolean(epubReader);
+  const readerSplitActiveRef = useRef(readerSplitActive);
+  readerSplitActiveRef.current = readerSplitActive;
+  const epubReaderRef = useRef(epubReader);
+  epubReaderRef.current = epubReader;
+  const epubChapterNavigationIdRef = useRef(0);
+  const fullMindmapRootRef = useRef<PureNode | null>(null);
+  const pendingMindmapCenterPathRef = useRef<string | null>(null);
+  const splitLayoutDragRef = useRef<'wide' | 'narrow' | null>(null);
+  const appShellRef = useRef<HTMLDivElement>(null);
   const epubRestoreAttemptedRef = useRef(false);
   const [epubDropActive, setEpubDropActive] = useState(false);
   const [libraryError, setLibraryError] = useState('');
@@ -1439,34 +1664,12 @@ export default function App() {
   const [htmlPreviewError, setHtmlPreviewError] = useState('');
   const [youtubePreview, setYoutubePreview] =
     useState<YouTubePreviewSelection | null>(null);
-  const [youtubeFrameStatus, setYoutubeFrameStatus] =
-    useState<YouTubePlaybackState>('loading');
-  const [youtubePlaybackMode, setYoutubePlaybackMode] =
-    useState<YouTubePlaybackMode>('embed');
-  const [youtubeLocalSource, setYoutubeLocalSource] = useState('');
-  const [youtubeLocalPlaybackError, setYoutubeLocalPlaybackError] =
-    useState('');
-  const [youtubePlaybackRouteMessage, setYoutubePlaybackRouteMessage] =
-    useState('');
-  const [youtubeLocalPlaybackBusy, setYoutubeLocalPlaybackBusy] =
-    useState(false);
-  const [youtubeNativePlaybackBusy, setYoutubeNativePlaybackBusy] =
-    useState(false);
-  const [youtubeNativePlaybackLaunched, setYoutubeNativePlaybackLaunched] =
-    useState(false);
-  const [youtubePlayerError, setYoutubePlayerError] = useState<number | null>(
-    null,
-  );
-  const youtubeCardOpenerRef = useRef<HTMLElement | null>(null);
-  const youtubeCloseButtonRef = useRef<HTMLButtonElement | null>(null);
-  const youtubeFrameRef = useRef<HTMLIFrameElement | null>(null);
-  const youtubeVideoRef = useRef<HTMLVideoElement | null>(null);
-  const youtubePlayerRef = useRef<YouTubeIframePlayer | null>(null);
   const [htmlCanvasEmbed, setHtmlCanvasEmbed] =
     useState<HtmlCanvasEmbedding | null>(null);
   const [plantUmlSession, setPlantUmlSession] =
     useState<PlantUmlCanvasSession | null>(null);
   const plantUmlSessionRef = useRef<PlantUmlCanvasSession | null>(null);
+  const isStandalonePlantUml = plantUmlSession?.request.saveTarget === 'file';
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
   const [categoryDraft, setCategoryDraft] = useState('');
   const [providerSettings, setProviderSettings] =
@@ -1551,6 +1754,49 @@ export default function App() {
   }, [activeWorkspace]);
 
   useEffect(() => {
+    if (!epubReader?.progressKey) {
+      setReaderSplitLayoutLoadedFor('');
+      return;
+    }
+    setReaderSplitLayout(readReaderSplitLayout(epubReader.progressKey));
+    setReaderSplitLayoutLoadedFor(epubReader.progressKey);
+  }, [epubReader?.progressKey]);
+
+  useEffect(() => {
+    const progressKey = epubReader?.progressKey;
+    if (!progressKey || readerSplitLayoutLoadedFor !== progressKey) return;
+    try {
+      localStorage.setItem(
+        readerSplitLayoutKey(progressKey),
+        JSON.stringify(readerSplitLayout),
+      );
+    } catch {
+      // The adjustable split remains available for this session.
+    }
+  }, [epubReader?.progressKey, readerSplitLayout, readerSplitLayoutLoadedFor]);
+
+  useEffect(() => {
+    if (!canvasNodeContextMenu) return;
+    const closeOnPointerDown = (event: PointerEvent) => {
+      if (
+        event.target instanceof Element &&
+        event.target.closest('.canvas-node-context-menu')
+      )
+        return;
+      setCanvasNodeContextMenu(null);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setCanvasNodeContextMenu(null);
+    };
+    document.addEventListener('pointerdown', closeOnPointerDown);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnPointerDown);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [canvasNodeContextMenu]);
+
+  useEffect(() => {
     const openPlantUml = (event: Event) => {
       const request = (event as CustomEvent<PlantUmlEditorRequest>).detail;
       if (!request) return;
@@ -1583,12 +1829,15 @@ export default function App() {
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       window.dispatchEvent(new Event('resize'));
-      if (!plantUmlSession && activeWorkspace === 'mindmap') {
+      if (
+        !plantUmlSession &&
+        (activeWorkspace === 'mindmap' || readerSplitActive)
+      ) {
         void markmapRef.current?.fit();
       }
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [activeWorkspace, Boolean(plantUmlSession)]);
+  }, [activeWorkspace, readerSplitActive, Boolean(plantUmlSession)]);
 
   useEffect(() => {
     if (
@@ -1624,6 +1873,7 @@ export default function App() {
         setEpubReader({
           source: convertFileSrc(path),
           progressKey: epubProgressKey(book),
+          relativePath: book.relativePath,
           title: book.title,
         });
       })
@@ -1734,6 +1984,15 @@ export default function App() {
   }, [markdownFullscreen]);
 
   const installDraft = (next: EditorDraft) => {
+    const current = draftRef.current;
+    if (
+      current.relativePath !== next.relativePath ||
+      current.title !== next.title
+    ) {
+      setFocusedMapPath(null);
+      setCanvasNodeContextMenu(null);
+      setMindmapNavigationTree(null);
+    }
     pendingInitialFitRef.current = true;
     markmapRef.current?.setViewAnchorPath(undefined);
     draftRef.current = next;
@@ -2804,9 +3063,12 @@ export default function App() {
 
   const prepareForEpubImport = async () => {
     if (pendingEpubImport) {
-      return window.confirm(
-        '当前 EPUB 目录草稿还没有保存。继续导入会替换这份草稿，是否继续？',
-      );
+      if (
+        !window.confirm(
+          '当前 EPUB 目录草稿还没有保存。继续导入会替换这份草稿，是否继续？',
+        )
+      )
+        return false;
     } else if (draftRef.current.dirty && !(await saveDraft())) {
       return false;
     }
@@ -2958,12 +3220,173 @@ export default function App() {
       setEpubReader({
         source: convertFileSrc(path),
         progressKey: epubProgressKey(book),
+        relativePath: book.relativePath,
         title: book.title,
       });
+      setEpubChapterNavigation(null);
       setActiveWorkspace('reader');
       setLibraryError('');
     } catch (error) {
       setLibraryError(errorMessage(error, '打开 EPUB 电子书失败'));
+    }
+  };
+
+  const openLibraryPlantUml = async (file: PlantUmlDocument) => {
+    try {
+      const source = await invoke<string>('open_plantuml_document', {
+        relativePath: file.relativePath,
+      });
+      openPlantUmlWorkspace({
+        source,
+        language: 'puml',
+        saveTarget: 'file',
+        cacheKey: `file:${file.relativePath}`,
+        documentTitle: file.title,
+        onSave: async (nextSource) => {
+          const saved = await invoke<PlantUmlDocument>(
+            'save_plantuml_document',
+            {
+              relativePath: file.relativePath,
+              source: nextSource,
+            },
+          );
+          const snapshot = librarySnapshotRef.current;
+          if (snapshot) {
+            installLibrarySnapshot({
+              ...snapshot,
+              plantumlFiles: snapshot.plantumlFiles.map((candidate) =>
+                candidate.relativePath === saved.relativePath
+                  ? saved
+                  : candidate,
+              ),
+            });
+          }
+          setLibraryError('');
+          setSaveMessage('PUML 文件已保存');
+        },
+      });
+      setLibraryError('');
+    } catch (error) {
+      setLibraryError(errorMessage(error, '打开 PUML 文件失败'));
+    }
+  };
+
+  const deleteLibraryPlantUmlFile = async (file: PlantUmlDocument) => {
+    try {
+      await invoke('delete_plantuml_document', {
+        relativePath: file.relativePath,
+      });
+      const snapshot = librarySnapshotRef.current;
+      if (snapshot) {
+        installLibrarySnapshot({
+          ...snapshot,
+          plantumlFiles: snapshot.plantumlFiles.filter(
+            (candidate) => candidate.relativePath !== file.relativePath,
+          ),
+        });
+      }
+      setLibraryError('');
+      setSaveMessage('PUML 文件已删除');
+    } catch (error) {
+      setLibraryError(errorMessage(error, '删除 PUML 文件失败'));
+    }
+  };
+
+  const toggleBookMindmap = async () => {
+    if (readerSplitOpen) {
+      setReaderSplitOpen(false);
+      return;
+    }
+
+    const selection = epubReader;
+    const snapshot = librarySnapshotRef.current;
+    if (!selection || !snapshot?.rootPath) {
+      setLibraryError('请先打开文件库中的电子书，再生成书籍导图。');
+      return;
+    }
+    const book = snapshot.books.find(
+      (candidate) =>
+        normalizeLibraryPath(candidate.relativePath) ===
+        normalizeLibraryPath(selection.relativePath),
+    );
+    if (!book) {
+      setLibraryError('当前 EPUB 已不在文件库中，请从书架重新打开。');
+      return;
+    }
+
+    setBookMindmapBusy(true);
+    setLibraryError('');
+    try {
+      const target = resolveBookMindmapTarget(snapshot, book);
+      if (
+        !target.document &&
+        normalizeLibraryPath(draftRef.current.relativePath ?? '') ===
+          normalizeLibraryPath(target.relativePath)
+      ) {
+        if (draftRef.current.dirty && !(await saveDraft())) return;
+        saveEpubMindmapPath(
+          snapshot.rootPath,
+          book.relativePath,
+          target.relativePath,
+        );
+        setMarkdownFullscreen(false);
+        setReaderSplitOpen(true);
+        setActiveWorkspace('reader');
+        return;
+      }
+      if (target.document) {
+        await openMap(target.document);
+        if (
+          normalizeLibraryPath(draftRef.current.relativePath ?? '') !==
+          normalizeLibraryPath(target.document.relativePath)
+        ) {
+          return;
+        }
+        saveEpubMindmapPath(
+          snapshot.rootPath,
+          book.relativePath,
+          target.document.relativePath,
+        );
+      } else {
+        if (draftRef.current.dirty && !(await saveDraft())) return;
+        const path = await invoke<string>('open_epub_book', {
+          relativePath: book.relativePath,
+        });
+        const outline = await invoke<EpubOutline>('import_epub_toc', { path });
+        const title = book.title || outline.title || '电子书';
+        const markdown = outline.markdown.trim() || `# ${title}\n`;
+        const next = createDraft({
+          id: null,
+          relativePath: target.relativePath,
+          title,
+          category: 'books',
+          mapType: '电子书导图',
+          tags: 'EPUB, 书籍导图',
+          markdown,
+          dirty: true,
+          revision: draftRef.current.revision + 1,
+        });
+        installDraft(next);
+      }
+
+      setMarkdownFullscreen(false);
+      setReaderSplitOpen(true);
+      setActiveWorkspace('reader');
+      if (!target.document) {
+        const saved = await saveDraft(true);
+        if (saved) {
+          saveEpubMindmapPath(
+            snapshot.rootPath,
+            book.relativePath,
+            target.relativePath,
+          );
+        }
+      }
+    } catch (error) {
+      setLibraryError(errorMessage(error, '生成书籍思维导图失败'));
+      setSaveMessage('生成书籍导图失败');
+    } finally {
+      setBookMindmapBusy(false);
     }
   };
 
@@ -3099,94 +3522,8 @@ export default function App() {
     closeHtmlPreview();
   };
 
-  const closeYouTubePreview = () => {
-    setYoutubePreview(null);
-    setYoutubePlaybackRouteMessage('');
-    setYoutubeNativePlaybackLaunched(false);
-  };
-
-  const canOfferYouTubePlayback =
-    canOfferAlternativePlayback(youtubeFrameStatus);
-
-  const tryRecommendedYouTubePlayback = async () => {
-    if (!youtubePreview || youtubeLocalPlaybackBusy) return;
-    setYoutubeLocalPlaybackBusy(true);
-    setYoutubeLocalPlaybackError('');
-    setYoutubePlaybackRouteMessage('');
-    setYoutubeNativePlaybackLaunched(false);
-    setYoutubeFrameStatus('loading');
-    try {
-      const resolution = await invoke<YouTubePlaybackResolution>(
-        'youtube_resolve_playback',
-        {
-          videoId: youtubePreview.id,
-        },
-      );
-      if (resolution.backend === 'html5') {
-        setYoutubeLocalSource(resolution.url);
-        setYoutubePlaybackMode('local');
-        setYoutubeFrameStatus('ready');
-      } else {
-        setYoutubeFrameStatus('ready');
-        if (resolution.mediaUrl) {
-          await invoke('youtube_open_media_with_mpv', {
-            mediaUrl: resolution.mediaUrl,
-            audioUrl: resolution.audioUrl ?? null,
-            startSeconds: youtubePreview.startSeconds,
-          });
-        } else {
-          await invoke('youtube_open_with_mpv', {
-            videoId: youtubePreview.id,
-            startSeconds: youtubePreview.startSeconds,
-          });
-        }
-        setYoutubeNativePlaybackLaunched(true);
-        setYoutubePlaybackRouteMessage(
-          `${resolution.reason} 已交由 mpv 外部播放。`,
-        );
-      }
-    } catch (error) {
-      setYoutubeLocalPlaybackError(
-        errorMessage(error, '无法解析或启动兼容的播放方式。'),
-      );
-      setYoutubeFrameStatus('error');
-    } finally {
-      setYoutubeLocalPlaybackBusy(false);
-    }
-  };
-
-  const tryNativeYouTubePlayback = async () => {
-    if (!youtubePreview || youtubeNativePlaybackBusy) return;
-    setYoutubeNativePlaybackBusy(true);
-    setYoutubeLocalPlaybackError('');
-    setYoutubePlaybackRouteMessage('');
-    setYoutubeNativePlaybackLaunched(false);
-    setYoutubeFrameStatus('loading');
-    try {
-      await invoke('youtube_open_with_mpv', {
-        videoId: youtubePreview.id,
-        startSeconds: youtubePreview.startSeconds,
-      });
-      setYoutubeNativePlaybackLaunched(true);
-      setYoutubeFrameStatus('ready');
-      setYoutubePlaybackRouteMessage('mpv 已启动，正在外部窗口加载视频。');
-    } catch (error) {
-      setYoutubeLocalPlaybackError(errorMessage(error, '无法启动外部播放器。'));
-      setYoutubeFrameStatus('error');
-    } finally {
-      setYoutubeNativePlaybackBusy(false);
-    }
-  };
-
-  const returnToYouTubeEmbed = () => {
-    setYoutubeLocalPlaybackError('');
-    setYoutubePlaybackRouteMessage('');
-    setYoutubeLocalSource('');
-    setYoutubePlaybackMode('embed');
-    setYoutubeNativePlaybackLaunched(false);
-    setYoutubePlayerError(null);
-    setYoutubeFrameStatus('loading');
-  };
+  const closeYouTubePreview = () => setYoutubePreview(null);
+  useEffect(() => installYouTubeDebugHook(setYoutubePreview), []);
 
   const createCategory = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -3208,6 +3545,106 @@ export default function App() {
       setLibraryError('');
     } catch (error) {
       setLibraryError(errorMessage(error, '创建分类失败'));
+    }
+  };
+
+  const renameLibraryFolder = async (relativePath: string, newName: string) => {
+    try {
+      const activeSave = activeSaveRef.current;
+      if (activeSave && !(await activeSave)) {
+        throw new Error('当前导图保存失败，请处理保存错误后再重命名文件夹。');
+      }
+
+      const snapshot = await invoke<LibrarySnapshot>('rename_library_folder', {
+        relativePath,
+        newName,
+      });
+      installLibrarySnapshot(snapshot);
+
+      const oldFolderPath = relativePath
+        .replace(/\\/g, '/')
+        .replace(/^\/+|\/+$/g, '');
+      const normalizedName = newName.trim().replace(/\.+$/, '').trimEnd();
+      const parent = oldFolderPath.includes('/')
+        ? oldFolderPath.slice(0, oldFolderPath.lastIndexOf('/'))
+        : '';
+      const newFolderPath = parent
+        ? `${parent}/${normalizedName}`
+        : normalizedName;
+      const remapFolderPath = (path: string | null) => {
+        if (!path) return path;
+        const normalizedPath = path.replace(/\\/g, '/');
+        if (normalizedPath === oldFolderPath) return newFolderPath;
+        if (normalizedPath.startsWith(`${oldFolderPath}/`)) {
+          return `${newFolderPath}${normalizedPath.slice(oldFolderPath.length)}`;
+        }
+        return path;
+      };
+
+      setCategoryFilter((current) => remapFolderPath(current) ?? '');
+      const currentDraft = draftRef.current;
+      const nextRelativePath = remapFolderPath(currentDraft.relativePath);
+      if (nextRelativePath !== currentDraft.relativePath) {
+        const nextDraft = {
+          ...currentDraft,
+          relativePath: nextRelativePath,
+          category:
+            remapFolderPath(currentDraft.category) ?? currentDraft.category,
+        };
+        draftRef.current = nextDraft;
+        setEditorDraft(nextDraft);
+      }
+
+      const currentPlantUml = plantUmlSessionRef.current;
+      const currentPlantUmlPath = currentPlantUml?.request.cacheKey?.startsWith(
+        'file:',
+      )
+        ? currentPlantUml.request.cacheKey.slice('file:'.length)
+        : null;
+      const nextPlantUmlPath = remapFolderPath(currentPlantUmlPath);
+      if (
+        currentPlantUml &&
+        currentPlantUmlPath &&
+        nextPlantUmlPath &&
+        nextPlantUmlPath !== currentPlantUmlPath
+      ) {
+        const nextRequest: PlantUmlEditorRequest = {
+          ...currentPlantUml.request,
+          cacheKey: `file:${nextPlantUmlPath}`,
+          onSave: async (nextSource) => {
+            const saved = await invoke<PlantUmlDocument>(
+              'save_plantuml_document',
+              {
+                relativePath: nextPlantUmlPath,
+                source: nextSource,
+              },
+            );
+            const currentLibrary = librarySnapshotRef.current;
+            if (currentLibrary) {
+              installLibrarySnapshot({
+                ...currentLibrary,
+                plantumlFiles: [
+                  saved,
+                  ...currentLibrary.plantumlFiles.filter(
+                    (candidate) =>
+                      candidate.relativePath !== saved.relativePath,
+                  ),
+                ],
+              });
+            }
+            setLibraryError('');
+            setSaveMessage('PUML 文件已保存');
+          },
+        };
+        const nextPlantUml = { ...currentPlantUml, request: nextRequest };
+        plantUmlSessionRef.current = nextPlantUml;
+        setPlantUmlSession(nextPlantUml);
+      }
+      setLibraryError('');
+    } catch (error) {
+      const message = errorMessage(error, '重命名文件夹失败');
+      setLibraryError(message);
+      throw new Error(message);
     }
   };
 
@@ -3762,10 +4199,11 @@ export default function App() {
         return;
       if (markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown)
         return;
-      if (!target.closest('foreignObject')) return;
       const nodeGroup = target.closest<SVGGElement>('g.markmap-node');
       const path = nodeGroup?.getAttribute('data-path');
       if (!nodeGroup || !path) return;
+      if (target.closest('.markmap-node-add-sibling')) return;
+      setCanvasNodeContextMenu(null);
       setActiveMapPath(path);
       const source = markdownNodeSourcesRef.current.get(path);
       if (source) {
@@ -3782,6 +4220,39 @@ export default function App() {
           selectSource();
         }
       }
+      const reader = epubReaderRef.current;
+      if (readerSplitActiveRef.current && reader) {
+        const label =
+          source?.label ||
+          normalizeMindmapText(
+            nodeGroup.querySelector('foreignObject')?.textContent || '',
+          );
+        if (label || source?.epubHref) {
+          setEpubChapterNavigation({
+            id: ++epubChapterNavigationIdRef.current,
+            progressKey: reader.progressKey,
+            href: source?.epubHref,
+            label,
+          });
+        }
+      }
+    };
+
+    const handleMapNodeContextMenu = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const nodeGroup = target.closest<SVGGElement>('g.markmap-node');
+      const path = nodeGroup?.getAttribute('data-path');
+      if (!nodeGroup || !path || path.split('.').length < 2) return;
+      event.preventDefault();
+      setActiveMapPath(path);
+      const menuWidth = 228;
+      const menuHeight = 42;
+      setCanvasNodeContextMenu({
+        path,
+        left: Math.min(event.clientX, window.innerWidth - menuWidth - 8),
+        top: Math.min(event.clientY, window.innerHeight - menuHeight - 8),
+      });
     };
 
     const handleYouTubeCardClick = (event: MouseEvent) => {
@@ -3795,21 +4266,9 @@ export default function App() {
       event.stopPropagation();
       const id = card.dataset.seamindYoutubeId || '';
       const startSeconds = Number(card.dataset.seamindYoutubeStart || '0');
-      const src = buildYouTubeEmbedUrl(id, startSeconds);
-      if (!src) return;
-      youtubeCardOpenerRef.current = card;
-      setYoutubeFrameStatus('loading');
-      setYoutubePlayerError(null);
-      setYoutubePlaybackMode('embed');
-      setYoutubeLocalSource('');
-      setYoutubeLocalPlaybackError('');
-      setYoutubePlaybackRouteMessage('');
-      setYoutubeLocalPlaybackBusy(false);
-      setYoutubeNativePlaybackBusy(false);
-      setYoutubeNativePlaybackLaunched(false);
+      if (!buildYouTubeEmbedUrl(id, startSeconds)) return;
       setYoutubePreview({
         id,
-        src,
         title: card.dataset.seamindYoutubeTitle || 'YouTube 视频',
         startSeconds: Number.isSafeInteger(startSeconds) ? startSeconds : 0,
       });
@@ -3837,12 +4296,14 @@ export default function App() {
     };
 
     svg.addEventListener('click', handleMapNodeClick, true);
+    svg.addEventListener('contextmenu', handleMapNodeContextMenu, true);
     svg.addEventListener('click', handleHtmlCardClick, true);
     svg.addEventListener('click', handleYouTubeCardClick, true);
     svg.addEventListener('error', handleYouTubeThumbnailError, true);
     svg.addEventListener('dblclick', handleCanvasDoubleClick, true);
     return () => {
       svg.removeEventListener('click', handleMapNodeClick, true);
+      svg.removeEventListener('contextmenu', handleMapNodeContextMenu, true);
       svg.removeEventListener('click', handleHtmlCardClick, true);
       svg.removeEventListener('click', handleYouTubeCardClick, true);
       svg.removeEventListener('error', handleYouTubeThumbnailError, true);
@@ -3929,99 +4390,7 @@ export default function App() {
   }, [htmlPreview]);
 
   useEffect(() => {
-    if (!youtubePreview || youtubePlaybackMode === 'local') return;
-    let cancelled = false;
-    let player: YouTubeIframePlayer | null = null;
-
-    void loadYouTubeIframeApi()
-      .then((api) => {
-        const frame = youtubeFrameRef.current;
-        if (cancelled || !frame) return;
-        player = new api.Player(frame, {
-          events: {
-            onReady: () => {
-              if (!cancelled) setYoutubeFrameStatus('ready');
-            },
-            onStateChange: (event) => {
-              if (cancelled) return;
-              switch (event.data) {
-                case api.PlayerState.PLAYING:
-                  setYoutubeFrameStatus('playing');
-                  break;
-                case api.PlayerState.PAUSED:
-                  setYoutubeFrameStatus('paused');
-                  break;
-                case api.PlayerState.BUFFERING:
-                  setYoutubeFrameStatus('buffering');
-                  break;
-                case api.PlayerState.ENDED:
-                  setYoutubeFrameStatus('ended');
-                  break;
-                case api.PlayerState.UNSTARTED:
-                case api.PlayerState.CUED:
-                default:
-                  setYoutubeFrameStatus('ready');
-              }
-            },
-            onError: (event) => {
-              if (cancelled) return;
-              setYoutubePlayerError(event.data);
-              setYoutubeFrameStatus('error');
-            },
-          },
-        });
-        youtubePlayerRef.current = player;
-      })
-      .catch(() => {
-        if (!cancelled) setYoutubeFrameStatus('error');
-      });
-
-    return () => {
-      cancelled = true;
-      const activePlayer = player ?? youtubePlayerRef.current;
-      if (activePlayer) {
-        activePlayer.destroy();
-        if (youtubePlayerRef.current === activePlayer)
-          youtubePlayerRef.current = null;
-      }
-    };
-  }, [youtubePreview, youtubePlaybackMode]);
-
-  useEffect(() => {
-    if (!youtubePreview) return;
-    const opener = youtubeCardOpenerRef.current;
-    youtubeCloseButtonRef.current?.focus();
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        closeYouTubePreview();
-      }
-    };
-    document.addEventListener('keydown', closeOnEscape);
-    return () => {
-      document.removeEventListener('keydown', closeOnEscape);
-      if (opener?.isConnected) opener.focus();
-    };
-  }, [youtubePreview]);
-
-  useEffect(() => {
-    if (
-      !youtubePreview ||
-      youtubePlaybackMode === 'local' ||
-      (youtubeFrameStatus !== 'loading' && youtubeFrameStatus !== 'buffering')
-    )
-      return;
-    const waitingStatus = youtubeFrameStatus;
-    const timeout = window.setTimeout(() => {
-      setYoutubeFrameStatus((status) => {
-        if (status !== waitingStatus) return status;
-        return waitingStatus === 'buffering' ? 'stalled' : 'timeout';
-      });
-    }, 15000);
-    return () => window.clearTimeout(timeout);
-  }, [youtubePreview, youtubePlaybackMode, youtubeFrameStatus]);
-
-  useEffect(() => {
+    let visibilityRecoveryTimer = 0;
     const timer = window.setTimeout(async () => {
       const map = markmapRef.current;
       const svg = svgRef.current;
@@ -4060,12 +4429,39 @@ export default function App() {
         editorDraft.markdown,
         transformer.md,
       );
-      await map.setData(rootWithNoteCards);
+      const prepared = prepareMindmapTree(
+        rootWithNoteCards,
+        nextMarkdownNodeSources,
+      );
+      fullMindmapRootRef.current = prepared.root;
+      setMindmapNavigationTree(prepared.navigation);
+      let visibleRoot = prepared.root;
+      if (focusedMapPath) {
+        const branch = findPureNodeBySourcePath(prepared.root, focusedMapPath);
+        if (branch) visibleRoot = branch;
+        else setFocusedMapPath(null);
+      }
+      await map.setData(clonePureNode(visibleRoot));
       if (codeBlocksAbort.signal.aborted) return;
       markdownNodeSourcesMarkdownRef.current = editorDraft.markdown;
       markdownNodeSourcesRef.current = nextMarkdownNodeSources;
       const selection = markdownEditorRef.current?.getSelection();
-      if (selection)
+      const pendingCenterPath = pendingMindmapCenterPathRef.current;
+      if (pendingCenterPath) {
+        pendingMindmapCenterPathRef.current = null;
+        setActiveMapPath(pendingCenterPath);
+        window.requestAnimationFrame(() => {
+          const nodeGroup = [
+            ...svg.querySelectorAll<SVGGElement>('g.markmap-node[data-path]'),
+          ].find(
+            (item) => item.getAttribute('data-path') === pendingCenterPath,
+          );
+          const datum = (
+            nodeGroup as (SVGGElement & { __data__?: unknown }) | undefined
+          )?.__data__;
+          if (datum) void (map as CenterableMarkmap).centerNode(datum);
+        });
+      } else if (selection && !focusedMapPath)
         setActiveMapPath(
           findSourcePathForLine(
             selection.lineIndex,
@@ -4108,10 +4504,33 @@ export default function App() {
           await map.fit();
         }
       }
+      visibilityRecoveryTimer = window.setTimeout(() => {
+        if (codeBlocksAbort.signal.aborted) return;
+        const viewport = svg.getBoundingClientRect();
+        if (viewport.width < 10 || viewport.height < 10) return;
+        const nodes = [...svg.querySelectorAll<SVGGElement>('g.markmap-node')];
+        const hasVisibleNode = nodes.some((node) => {
+          const bounds = node.getBoundingClientRect();
+          return (
+            bounds.width > 0 &&
+            bounds.height > 0 &&
+            bounds.right > viewport.left &&
+            bounds.left < viewport.right &&
+            bounds.bottom > viewport.top &&
+            bounds.top < viewport.bottom
+          );
+        });
+        if (!nodes.length) {
+          void map.setData(clonePureNode(visibleRoot)).then(() => map.fit());
+        } else if (!hasVisibleNode) {
+          void map.fit();
+        }
+      }, 260);
     }, 180);
     setLastUpdated('正在更新…');
     return () => {
       window.clearTimeout(timer);
+      window.clearTimeout(visibilityRecoveryTimer);
       codeBlocksAbortRef.current?.abort();
       codeBlocksCleanupRef.current?.();
       codeBlocksAbortRef.current = null;
@@ -4120,6 +4539,7 @@ export default function App() {
   }, [
     editorDraft.markdown,
     editorDraft.relativePath,
+    focusedMapPath,
     htmlCanvasEmbed,
     theme,
     transformer,
@@ -4167,6 +4587,167 @@ export default function App() {
     void markmapRef.current?.rescale(factor);
   };
 
+  const centerMapNodePath = (path: string) => {
+    const svg = svgRef.current;
+    const map = markmapRef.current;
+    if (!svg || !map) return;
+    const nodeGroup = [
+      ...svg.querySelectorAll<SVGGElement>('g.markmap-node[data-path]'),
+    ].find((item) => item.getAttribute('data-path') === path);
+    const datum = (
+      nodeGroup as (SVGGElement & { __data__?: unknown }) | undefined
+    )?.__data__;
+    if (datum) void (map as CenterableMarkmap).centerNode(datum);
+  };
+
+  const requestEpubChapterNavigation = (path: string) => {
+    if (!readerSplitActive || !epubReader) return;
+    const source = markdownNodeSourcesRef.current.get(path);
+    const navigationPath = findNavigationPath(mindmapNavigationTree, path);
+    const navigationNode = navigationPath[navigationPath.length - 1];
+    const label = source?.label || navigationNode?.label || '';
+    if (!source?.epubHref && !label) return;
+    setEpubChapterNavigation({
+      id: ++epubChapterNavigationIdRef.current,
+      progressKey: epubReader.progressKey,
+      href: source?.epubHref,
+      label,
+    });
+  };
+
+  const selectMindmapNode = (path: string) => {
+    const focusPath = focusedMapPath;
+    const visibleInFocusedBranch =
+      !focusPath || path === focusPath || path.startsWith(`${focusPath}.`);
+    if (!visibleInFocusedBranch) {
+      pendingMindmapCenterPathRef.current = path;
+      setFocusedMapPath(null);
+    } else {
+      centerMapNodePath(path);
+    }
+    setCanvasNodeContextMenu(null);
+    setActiveMapPath(path);
+    const source = markdownNodeSourcesRef.current.get(path);
+    if (source) {
+      const selectSource = () =>
+        markdownEditorRef.current?.selectLines(
+          source.lineIndex,
+          source.endLineIndex,
+          true,
+        );
+      if (markdownPaneModeRef.current === 'preview') {
+        setMarkdownPaneMode('edit');
+        window.requestAnimationFrame(selectSource);
+      } else {
+        selectSource();
+      }
+    }
+    requestEpubChapterNavigation(path);
+  };
+
+  const focusMapBranch = (path: string) => {
+    setCanvasNodeContextMenu(null);
+    setActiveMapPath(path);
+    pendingInitialFitRef.current = true;
+    setFocusedMapPath(path);
+    const source = markdownNodeSourcesRef.current.get(path);
+    if (source) {
+      const selectSource = () =>
+        markdownEditorRef.current?.selectLines(
+          source.lineIndex,
+          source.endLineIndex,
+          true,
+        );
+      if (markdownPaneModeRef.current === 'preview') {
+        setMarkdownPaneMode('edit');
+        window.requestAnimationFrame(selectSource);
+      } else {
+        selectSource();
+      }
+    }
+  };
+
+  const restoreFullMindmap = () => {
+    if (focusedMapPath) pendingMindmapCenterPathRef.current = focusedMapPath;
+    pendingInitialFitRef.current = true;
+    setFocusedMapPath(null);
+    setCanvasNodeContextMenu(null);
+  };
+
+  const onReaderSplitPointerDown = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    event.preventDefault();
+    splitLayoutDragRef.current = window.innerWidth > 1100 ? 'wide' : 'narrow';
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const onReaderSplitPointerMove = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    const mode = splitLayoutDragRef.current;
+    const bounds = appShellRef.current?.getBoundingClientRect();
+    if (!mode || !bounds) return;
+    if (mode === 'wide') {
+      const ratio = Math.min(
+        0.65,
+        Math.max(0.32, (event.clientX - bounds.left) / bounds.width),
+      );
+      setReaderSplitLayout((current) => ({ ...current, wideRatio: ratio }));
+      return;
+    }
+    const available = Math.max(1, bounds.height - 52 - 29 - 8);
+    const ratio = Math.min(
+      0.65,
+      Math.max(0.25, (event.clientY - bounds.top - 52) / available),
+    );
+    setReaderSplitLayout((current) => ({ ...current, narrowRatio: ratio }));
+  };
+
+  const onReaderSplitPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    splitLayoutDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  const onReaderSplitKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const isWide = window.innerWidth > 1100;
+    const key = event.key;
+    const allowedArrows = isWide
+      ? ['ArrowLeft', 'ArrowRight']
+      : ['ArrowUp', 'ArrowDown'];
+    if (key !== 'Home' && !allowedArrows.includes(key)) return;
+    event.preventDefault();
+    if (key === 'Home') {
+      setReaderSplitLayout(DEFAULT_READER_SPLIT_LAYOUT);
+      return;
+    }
+    const increase = isWide ? key === 'ArrowRight' : key === 'ArrowDown';
+    const delta = increase ? 0.02 : -0.02;
+    setReaderSplitLayout((current) =>
+      isWide
+        ? {
+            ...current,
+            wideRatio: Math.min(
+              0.65,
+              Math.max(0.32, current.wideRatio + delta),
+            ),
+          }
+        : {
+            ...current,
+            narrowRatio: Math.min(
+              0.65,
+              Math.max(0.25, current.narrowRatio + delta),
+            ),
+          },
+    );
+  };
+
+  const readerSplitStyle = {
+    '--reader-split-wide-ratio': String(readerSplitLayout.wideRatio),
+    '--reader-split-narrow-size': `${readerSplitLayout.narrowRatio * 100}%`,
+  } as CSSProperties;
+
   useEffect(() => {
     markmapRef.current?.setViewAnchorPath(activeMapPath || undefined);
   }, [activeMapPath]);
@@ -4200,12 +4781,24 @@ export default function App() {
       : null;
   const isHtmlInteractiveCanvas =
     htmlCanvasEmbed?.documentRelativePath === editorDraft.relativePath;
+  const activeBookMindmapTarget =
+    epubReader && librarySnapshot?.rootPath
+      ? resolveBookMindmapTarget(librarySnapshot, {
+          relativePath: epubReader.relativePath,
+          title: epubReader.title,
+        })
+      : null;
+  const focusedMindmapPath = focusedMapPath
+    ? findNavigationPath(mindmapNavigationTree, focusedMapPath)
+    : [];
 
   return (
     <main
-      className="app-shell"
+      ref={appShellRef}
+      className={`app-shell${readerSplitActive ? ' is-reader-split' : ''}`}
       data-theme={theme}
       data-map-style={mindmapStyle}
+      style={readerSplitStyle}
     >
       <header className="topbar">
         <div className="brand-lockup">
@@ -4383,9 +4976,9 @@ export default function App() {
       </header>
 
       <section
-        className={`workspace${sourceCollapsed ? ' is-source-collapsed' : ''}${libraryCollapsed ? ' is-library-collapsed' : ''}${aiCollapsed ? ' is-ai-collapsed' : ''}${terminalOpen ? ' is-terminal-open' : ''}${markdownFullscreen ? ' is-markdown-fullscreen' : ''}${activeWorkspace === 'reader' ? ' is-workspace-hidden' : ''}`}
+        className={`workspace${sourceCollapsed ? ' is-source-collapsed' : ''}${libraryCollapsed ? ' is-library-collapsed' : ''}${aiCollapsed ? ' is-ai-collapsed' : ''}${terminalOpen ? ' is-terminal-open' : ''}${markdownFullscreen ? ' is-markdown-fullscreen' : ''}${activeWorkspace === 'reader' && !readerSplitActive ? ' is-workspace-hidden' : ''}`}
         aria-label="Markdown 思维导图编辑器"
-        aria-hidden={activeWorkspace === 'reader'}
+        aria-hidden={activeWorkspace === 'reader' && !readerSplitActive}
       >
         <LibraryPanel
           snapshot={librarySnapshot}
@@ -4412,23 +5005,28 @@ export default function App() {
             setLibraryError('');
             setCategoryDialogOpen(true);
           }}
+          onRenameFolder={renameLibraryFolder}
           onSelectCategory={setCategoryFilter}
           onOpenDocument={(document) => void openMap(document)}
           onDeleteDocument={(document) => void deleteMap(document)}
-          onImportBook={() => void importEpubBook()}
           onOpenBook={(book) => void openLibraryEpub(book)}
+          onOpenPlantUmlFile={(file) => void openLibraryPlantUml(file)}
+          onDeletePlantUmlFile={(file) => void deleteLibraryPlantUmlFile(file)}
           onToggleCollapse={() =>
             setLibraryCollapsed((collapsed) => !collapsed)
           }
         />
 
         <section
-          className={`editor-pane${sourceCollapsed ? ' is-collapsed' : ''}`}
+          className={`editor-pane${sourceCollapsed ? ' is-collapsed' : ''}${isStandalonePlantUml ? ' is-plantuml-file' : ''}`}
         >
           <div className="pane-heading">
             <div>
               <span className="pane-kicker">01 / SOURCE</span>
-              <h1>Markdown</h1>
+              <h1>{isStandalonePlantUml ? 'PUML' : 'Markdown'}</h1>
+              {isStandalonePlantUml && (
+                <span className="plantuml-source-format">.puml</span>
+              )}
             </div>
             {!sourceCollapsed && (
               <div className="source-header-actions">
@@ -4524,7 +5122,7 @@ export default function App() {
               <Icon name={sourceCollapsed ? 'expand' : 'collapse'} />
             </button>
           </div>
-          <div className="document-metadata">
+          <div className="document-metadata" hidden={isStandalonePlantUml}>
             <label className="metadata-title-field">
               标题
               <input
@@ -4575,7 +5173,28 @@ export default function App() {
               />
             </label>
           </div>
-          <div id="markdown-pane-content" className="markdown-pane-content">
+          {isStandalonePlantUml && (
+            <div className="plantuml-source-editor-pane">
+              <label htmlFor="plantuml-source-editor">PUML 源码</label>
+              <textarea
+                id="plantuml-source-editor"
+                value={plantUmlSession?.source ?? ''}
+                onChange={(event) => {
+                  const source = event.target.value;
+                  setPlantUmlSession((current) =>
+                    current ? { ...current, source } : current,
+                  );
+                }}
+                spellCheck={false}
+                aria-label="PUML 源码编辑器"
+              />
+            </div>
+          )}
+          <div
+            id="markdown-pane-content"
+            className="markdown-pane-content"
+            hidden={isStandalonePlantUml}
+          >
             <label
               className="editor-label"
               htmlFor="markdown-editor"
@@ -4616,8 +5235,17 @@ export default function App() {
             )}
           </div>
           <div className="editor-footer">
-            <span>{saveMessage}</span>
-            <span>{editorDraft.markdown.length} 字符</span>
+            {isStandalonePlantUml ? (
+              <>
+                <span>PUML 源码</span>
+                <span>{plantUmlSession?.source.length ?? 0} 字符</span>
+              </>
+            ) : (
+              <>
+                <span>{saveMessage}</span>
+                <span>{editorDraft.markdown.length} 字符</span>
+              </>
+            )}
           </div>
         </section>
 
@@ -4923,6 +5551,21 @@ export default function App() {
               </div>
             )}
           </div>
+          {focusedMapPath && !plantUmlSession && (
+            <div className="mindmap-focus-banner" aria-label="当前分支路径">
+              <div className="mindmap-focus-breadcrumb">
+                {focusedMindmapPath.map((node, index) => (
+                  <span key={node.path}>
+                    {index > 0 && <i aria-hidden="true">/</i>}
+                    {node.label || '（无标题）'}
+                  </span>
+                ))}
+              </div>
+              <button type="button" onClick={restoreFullMindmap}>
+                返回完整图
+              </button>
+            </div>
+          )}
           <div className="canvas-wrap">
             <svg
               ref={svgRef}
@@ -4930,6 +5573,32 @@ export default function App() {
               aria-label="Markdown 思维导图预览"
               style={{ display: plantUmlSession ? 'none' : 'block' }}
             />
+            {!plantUmlSession && (
+              <MindmapMiniTree
+                root={mindmapNavigationTree}
+                selectedPath={activeMapPath}
+                onSelect={selectMindmapNode}
+              />
+            )}
+            {!plantUmlSession && canvasNodeContextMenu && (
+              <div
+                className="canvas-node-context-menu"
+                role="menu"
+                aria-label="节点操作"
+                style={{
+                  left: canvasNodeContextMenu.left,
+                  top: canvasNodeContextMenu.top,
+                }}
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => focusMapBranch(canvasNodeContextMenu.path)}
+                >
+                  以此节点聚焦
+                </button>
+              </div>
+            )}
             {plantUmlSession ? (
               <PlantUmlWorkspace
                 request={plantUmlSession.request}
@@ -5243,7 +5912,16 @@ export default function App() {
             theme={theme}
             provider={providerSettings}
             embedded
-            onClose={() => setEpubReader(null)}
+            mindmapOpen={readerSplitActive}
+            mindmapExists={Boolean(activeBookMindmapTarget?.document)}
+            mindmapBusy={bookMindmapBusy}
+            chapterNavigationRequest={epubChapterNavigation}
+            onToggleMindmap={() => void toggleBookMindmap()}
+            onClose={() => {
+              setReaderSplitOpen(false);
+              setEpubChapterNavigation(null);
+              setEpubReader(null);
+            }}
           />
         ) : (
           <EbookWorkspace
@@ -5257,6 +5935,36 @@ export default function App() {
           />
         )}
       </section>
+
+      {readerSplitActive && (
+        <div
+          className="reader-split-divider"
+          role="separator"
+          aria-label="调整电子书与思维导图的分栏比例"
+          aria-orientation={
+            window.innerWidth > 1100 ? 'vertical' : 'horizontal'
+          }
+          aria-valuemin={Math.round(
+            (window.innerWidth > 1100 ? 0.32 : 0.25) * 100,
+          )}
+          aria-valuemax={65}
+          aria-valuenow={Math.round(
+            (window.innerWidth > 1100
+              ? readerSplitLayout.wideRatio
+              : readerSplitLayout.narrowRatio) * 100,
+          )}
+          tabIndex={0}
+          title="拖动调整分栏；双击恢复默认比例；方向键微调，Home 恢复默认"
+          onPointerDown={onReaderSplitPointerDown}
+          onPointerMove={onReaderSplitPointerMove}
+          onPointerUp={onReaderSplitPointerUp}
+          onPointerCancel={onReaderSplitPointerUp}
+          onKeyDown={onReaderSplitKeyDown}
+          onDoubleClick={() =>
+            setReaderSplitLayout(DEFAULT_READER_SPLIT_LAYOUT)
+          }
+        />
+      )}
 
       <footer className="statusbar">
         <span>
@@ -5476,203 +6184,10 @@ export default function App() {
       )}
 
       {youtubePreview && (
-        <div
-          className="youtube-player-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) closeYouTubePreview();
-          }}
-        >
-          <section
-            className="youtube-player-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="youtube-player-title"
-          >
-            <div className="youtube-player-heading">
-              <div>
-                <span className="pane-kicker">YOUTUBE PLAYER</span>
-                <h2 id="youtube-player-title">{youtubePreview.title}</h2>
-              </div>
-              <button
-                ref={youtubeCloseButtonRef}
-                type="button"
-                className="dialog-close youtube-player-close"
-                aria-label="关闭 YouTube 播放器"
-                onClick={closeYouTubePreview}
-              >
-                ×
-              </button>
-            </div>
-            <div className="youtube-player-stage">
-              {youtubePlaybackMode === 'embed' &&
-                youtubeFrameStatus === 'loading' && (
-                  <div className="youtube-player-loading" role="status">
-                    {youtubeLocalPlaybackBusy
-                      ? '正在解析播放格式…'
-                      : '正在连接 YouTube 播放器…'}
-                  </div>
-                )}
-              {youtubePlaybackMode === 'embed' &&
-                (youtubeFrameStatus === 'error' ||
-                  youtubeFrameStatus === 'timeout') && (
-                  <div className="youtube-player-notice" role="alert">
-                    {youtubeLocalPlaybackError ||
-                      (youtubeFrameStatus === 'timeout'
-                        ? 'YouTube 播放器连接超时，可以打开视频页面继续观看。'
-                        : `${youtubePlayerErrorMessage(youtubePlayerError)} 可以打开视频页面继续观看。`)}
-                  </div>
-                )}
-              <iframe
-                key={youtubePreview.id}
-                ref={youtubeFrameRef}
-                title={`播放 ${youtubePreview.title}`}
-                src={youtubePreview.src}
-                allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; web-share"
-                referrerPolicy="strict-origin-when-cross-origin"
-                allowFullScreen
-                style={{
-                  display: youtubePlaybackMode === 'embed' ? 'block' : 'none',
-                }}
-                onError={() => setYoutubeFrameStatus('error')}
-              />
-              {youtubePlaybackMode === 'local' && youtubeLocalSource && (
-                <video
-                  ref={youtubeVideoRef}
-                  className="youtube-player-video"
-                  src={youtubeLocalSource}
-                  controls
-                  playsInline
-                  preload="metadata"
-                  onLoadedMetadata={(event) => {
-                    const video = event.currentTarget;
-                    if (
-                      youtubePreview.startSeconds > 0 &&
-                      Number.isFinite(video.duration) &&
-                      youtubePreview.startSeconds < video.duration
-                    )
-                      video.currentTime = youtubePreview.startSeconds;
-                    setYoutubeFrameStatus('ready');
-                  }}
-                  onPlay={() => setYoutubeFrameStatus('playing')}
-                  onPause={() => setYoutubeFrameStatus('paused')}
-                  onWaiting={() => setYoutubeFrameStatus('buffering')}
-                  onEnded={() => setYoutubeFrameStatus('ended')}
-                  onError={() => {
-                    setYoutubeLocalPlaybackError(
-                      '浏览器无法播放该媒体流，或者播放地址已过期。',
-                    );
-                    setYoutubeFrameStatus('error');
-                  }}
-                />
-              )}
-              {youtubePlaybackMode === 'local' &&
-                youtubeFrameStatus === 'error' && (
-                  <div className="youtube-player-notice" role="alert">
-                    <div className="youtube-player-notice-content">
-                      <span>
-                        {youtubeLocalPlaybackError ||
-                          '本地媒体流无法在当前 WebView 播放。'}
-                      </span>
-                      <button
-                        type="button"
-                        className="youtube-player-action"
-                        onClick={() => void tryNativeYouTubePlayback()}
-                        disabled={youtubeNativePlaybackBusy}
-                      >
-                        {youtubeNativePlaybackBusy
-                          ? '正在启动 mpv…'
-                          : '用 mpv 外部播放'}
-                      </button>
-                      <button
-                        type="button"
-                        className="youtube-player-action"
-                        onClick={returnToYouTubeEmbed}
-                      >
-                        返回 YouTube 内嵌播放
-                      </button>
-                    </div>
-                  </div>
-                )}
-            </div>
-            {youtubePlaybackMode === 'embed' && youtubePlaybackRouteMessage && (
-              <div className="youtube-player-route-message" role="status">
-                {youtubePlaybackRouteMessage}
-              </div>
-            )}
-            {youtubePlaybackMode === 'embed' &&
-              youtubeFrameStatus === 'stalled' &&
-              !youtubePlaybackRouteMessage && (
-                <div className="youtube-player-route-message" role="status">
-                  内嵌播放持续缓冲，可以切换到本地解析或 mpv。
-                </div>
-              )}
-            {youtubePlaybackMode === 'embed' && canOfferYouTubePlayback && (
-              <div className="youtube-player-actions">
-                <button
-                  type="button"
-                  className="youtube-player-action"
-                  onClick={() => void tryRecommendedYouTubePlayback()}
-                  disabled={youtubeLocalPlaybackBusy}
-                >
-                  {youtubeLocalPlaybackBusy
-                    ? '正在选择播放方式…'
-                    : '智能选择播放方式'}
-                </button>
-                <button
-                  type="button"
-                  className="youtube-player-action"
-                  onClick={() => void tryNativeYouTubePlayback()}
-                  disabled={
-                    youtubeNativePlaybackBusy || youtubeLocalPlaybackBusy
-                  }
-                >
-                  {youtubeNativePlaybackBusy
-                    ? '正在启动 mpv…'
-                    : '用 mpv 外部播放'}
-                </button>
-              </div>
-            )}
-            <div className="youtube-player-meta">
-              <span
-                className="youtube-player-state"
-                data-state={
-                  youtubeNativePlaybackLaunched ? 'ready' : youtubeFrameStatus
-                }
-                aria-live="polite"
-              >
-                <span className="youtube-player-state-dot" aria-hidden="true" />
-                {youtubeNativePlaybackLaunched
-                  ? 'mpv 已启动'
-                  : youtubePlaybackStateLabels[youtubeFrameStatus]}
-              </span>
-              <span>
-                {youtubePlaybackMode === 'local'
-                  ? '本地 HTML5 媒体播放'
-                  : '视频由 YouTube 提供'}
-              </span>
-              {youtubePlaybackMode === 'local' && (
-                <button
-                  type="button"
-                  className="youtube-player-action youtube-player-return"
-                  onClick={returnToYouTubeEmbed}
-                >
-                  返回内嵌播放
-                </button>
-              )}
-              <a
-                href={`https://www.youtube.com/watch?v=${youtubePreview.id}${
-                  youtubePreview.startSeconds > 0
-                    ? `&t=${youtubePreview.startSeconds}s`
-                    : ''
-                }`}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                在 YouTube 打开
-              </a>
-            </div>
-          </section>
-        </div>
+        <YouTubePlayerDialog
+          selection={youtubePreview}
+          onClose={closeYouTubePreview}
+        />
       )}
 
       {generationDialogOpen && (

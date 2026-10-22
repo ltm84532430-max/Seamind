@@ -76,6 +76,7 @@ export function updateMarkdownCodeFence(
 ): string {
   const lineEnding = markdown.includes('\r\n') ? '\r\n' : '\n';
   const lines = markdown.split(/\r?\n/);
+  let match: [number, number] | null = null;
   for (let start = 0; start < lines.length; start += 1) {
     const opening = lines[start].match(/^ {0,3}(`{3,}|~{3,})[ \t]*(.*)$/);
     if (!opening) continue;
@@ -104,11 +105,14 @@ export function updateMarkdownCodeFence(
       continue;
     }
 
-    const replacement = normalizeFenceSource(nextSource).split('\n');
-    lines.splice(start + 1, end - start - 1, ...replacement);
-    return lines.join(lineEnding);
+    if (match) return markdown;
+    match = [start, end];
   }
-  return markdown;
+  if (!match) return markdown;
+  const [start, end] = match;
+  const replacement = normalizeFenceSource(nextSource).split('\n');
+  lines.splice(start + 1, end - start - 1, ...replacement);
+  return lines.join(lineEnding);
 }
 
 export function updateMarkdownCodeFenceAtRange(
@@ -290,7 +294,15 @@ const safeSvgAttributes = new Set([
   'marker-start',
   'marker-mid',
   'marker-end',
+  'markerwidth',
+  'markerheight',
+  'markerunits',
+  'refx',
+  'refy',
+  'orient',
   'clip-path',
+  'stroke-dasharray',
+  'font-style',
   'role',
   'aria-label',
   'aria-hidden',
@@ -359,6 +371,17 @@ function sanitizeMermaidSvg(source: string): SVGSVGElement | null {
           /^(?:none|currentcolor|transparent|#[\da-f]{3,8}|[a-z]{1,20}|rgba?\([\d.,%\s]+\))$/i.test(
             value,
           )) ||
+        (key === 'transform' &&
+          /^(?:(?:matrix|translate|scale|rotate|skewX|skewY)\([-+\d.eE,\s]+\)\s*)+$/i.test(
+            value,
+          )) ||
+        (key === 'orient' &&
+          /^(?:auto|auto-start-reverse|[-+\d.eE]+)$/i.test(value)) ||
+        (key === 'markerunits' &&
+          /^(?:strokewidth|userspaceonuse)$/i.test(value)) ||
+        (key === 'font-style' && /^(?:normal|italic|oblique)$/i.test(value)) ||
+        (key === 'stroke-dasharray' &&
+          /^(?:none|[-+\d.eE,\s]+)$/i.test(value)) ||
         (key === 'font-family' && /^[\w\s,'-]{1,100}$/.test(value)) ||
         (key === 'font-weight' && /^(?:normal|bold|[1-9]00)$/i.test(value)) ||
         (key === 'text-anchor' && ['start', 'middle', 'end'].includes(value)) ||
@@ -377,6 +400,8 @@ function sanitizeMermaidSvg(source: string): SVGSVGElement | null {
   return root as unknown as SVGSVGElement;
 }
 
+export const sanitizeDiagramSvg = sanitizeMermaidSvg;
+
 function showError(container: HTMLElement, message: string): void {
   const error = document.createElement('p');
   error.className = 'seamind-code-error';
@@ -394,8 +419,6 @@ function parseEChartsOption(source: string): Record<string, unknown> {
   const option = candidate as Record<string, unknown>;
   if (Array.isArray(option.tooltip))
     throw new Error('tooltip 请使用单个对象，以保留安全的富文本渲染。');
-  export const sanitizeDiagramSvg = sanitizeMermaidSvg;
-
   const series = option.series;
   if (series !== undefined) {
     if (!Array.isArray(series)) throw new Error('series 必须是数组。');
@@ -490,7 +513,12 @@ async function renderPlantUml(
   if (signal.aborted || !output.isConnected) return;
   const result = await invoke<{ svg: string; diagnostics: string[] }>(
     'render_plantuml',
-    { source, dark: theme === 'dark', authorizedIncludeDirectory: null },
+    {
+      source,
+      dark: theme === 'dark',
+      authorizedIncludeDirectory: null,
+      cacheKey: null,
+    },
   );
   if (signal.aborted || !output.isConnected) return;
   const diagram = sanitizeMermaidSvg(result.svg);
@@ -505,6 +533,48 @@ async function renderPlantUml(
     status.textContent = result.diagnostics.join(' · ');
     output.append(status);
   }
+}
+
+async function renderPele(
+  source: string,
+  output: HTMLElement,
+  signal: AbortSignal,
+  dispose: (callback: () => void) => void,
+): Promise<void> {
+  if (source.length > maxVisualizationSource)
+    throw new Error('Pele 代码块超过 50 KB。');
+
+  const { mountAsync } = await import('pele/lazy');
+  if (signal.aborted || !output.isConnected) return;
+
+  const mounted = await mountAsync(output, source, {
+    zoom: 'auto',
+    responsive: true,
+    autoDirection: true,
+    links: false,
+    images: false,
+    limit: maxVisualizationSource,
+    outputLimit: 300_000,
+    maxEdges: 500,
+    sanitize: (svg) => {
+      const diagram = sanitizeMermaidSvg(svg);
+      if (!diagram) throw new Error('Pele 输出未通过 SVG 安全检查。');
+      return diagram;
+    },
+    onError: (error) => {
+      if (!signal.aborted)
+        showError(
+          output,
+          error instanceof Error ? error.message : 'Pele 图表渲染失败。',
+        );
+    },
+  });
+
+  if (signal.aborted || !output.isConnected) {
+    mounted.destroy();
+    return;
+  }
+  dispose(() => mounted.destroy());
 }
 
 async function renderEChartsOption(
@@ -1212,6 +1282,9 @@ export async function hydrateCodeBlocks(
       !language ||
       ![
         'mermaid',
+        'pele',
+        'plantuml',
+        'puml',
         'echarts',
         'echart',
         'seamind-math',
@@ -1252,6 +1325,7 @@ export async function hydrateCodeBlocks(
     }
 
     const isMermaid = language === 'mermaid';
+    const isPele = language === 'pele';
     const isPlantUml = language === 'plantuml' || language === 'puml';
     const isMathVisualization =
       language === 'seamind-math' || language === 'seamind-viz';
@@ -1271,6 +1345,12 @@ export async function hydrateCodeBlocks(
             ? 'math'
             : 'echarts',
     );
+    if (isPele) {
+      panel.classList.remove('seamind-echarts-panel');
+      panel.classList.add('seamind-pele-panel');
+      const label = panel.querySelector('.seamind-code-panel-heading strong');
+      if (label) label.textContent = 'PELE · MERMAID SVG';
+    }
     if (isPlantUml && handlers.onOpenPlantUmlEditor) {
       const editButton = document.createElement('button');
       editButton.type = 'button';
@@ -1310,7 +1390,17 @@ export async function hydrateCodeBlocks(
     panel.append(output);
     replacePre(pre, panel, source, language, dispose);
 
-    if (isMermaid) {
+    if (isPele) {
+      try {
+        await renderPele(source, output, signal, dispose);
+      } catch (error) {
+        if (!signal.aborted)
+          showError(
+            output,
+            error instanceof Error ? error.message : 'Pele 图表渲染失败。',
+          );
+      }
+    } else if (isMermaid) {
       try {
         await renderMermaid(source, output, theme, signal);
       } catch (error) {

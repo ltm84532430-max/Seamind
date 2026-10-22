@@ -342,9 +342,11 @@ export class Markmap {
       item.state.key =
         [parent?.state?.id, item.state.id].filter(Boolean).join('.') +
         simpleHash(item.content);
-      item.state.path = [parent?.state?.path, item.state.id]
-        .filter(Boolean)
-        .join('.');
+      const sourcePath = item.payload?.seamindSourcePath;
+      item.state.path =
+        typeof sourcePath === 'string' && sourcePath
+          ? sourcePath
+          : [parent?.state?.path, item.state.id].filter(Boolean).join('.');
       color(item); // preload colors
 
       const isFoldRecursively = item.payload?.fold === 2;
@@ -753,6 +755,44 @@ export class Markmap {
     });
     const mmFoMerge = mmFoEnter.merge(mmFo);
 
+    const mmAddSibling = mmGMerge
+      .selectAll<
+        SVGGElement,
+        INode
+      >(childSelector<SVGGElement>('g.markmap-node-add-sibling'))
+      .data(
+        (d) =>
+          this.options.onNodeAddSibling &&
+          this.options.isNodeAddSiblingAvailable?.(d) !== false
+            ? [d]
+            : [],
+        (d) => d.state.key,
+      );
+    const mmAddSiblingEnter = mmAddSibling
+      .enter()
+      .append('g')
+      .attr('class', 'markmap-node-add-sibling')
+      .attr('role', 'button')
+      .attr('tabindex', 0)
+      .attr('aria-label', '添加同级节点')
+      .attr('aria-keyshortcuts', 'Enter Space')
+      .on('click', (event, d) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.options.onNodeAddSibling?.(d);
+      })
+      .on('keydown', (event: KeyboardEvent, d) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        event.stopPropagation();
+        this.options.onNodeAddSibling?.(d);
+      })
+      .on('mousedown', stopPropagation);
+    mmAddSiblingEnter.append('circle').attr('r', 6.5);
+    mmAddSiblingEnter.append('path').attr('d', 'M-3,0H3M0,-3V3');
+    mmAddSiblingEnter.append('title').text('添加同级节点');
+    const mmAddSiblingMerge = mmAddSiblingEnter.merge(mmAddSibling);
+
     // Update the links
     const links = nodes.flatMap((node) =>
       node.payload?.fold
@@ -938,6 +978,23 @@ export class Markmap {
         );
       });
     this.transition(mmCircleMerge).attr('r', 5).attr('stroke-width', '1.5');
+
+    mmAddSiblingMerge
+      .attr('transform', (d) => {
+        if (isVertical) {
+          return `translate(${d.state.rect.width / 2},-10)`;
+        }
+        const isLeft =
+          rootNode && d !== rootNode && d.state.rect.x < rootNode.state.rect.x;
+        const x = isLeft ? d.state.rect.width + 10 : -10;
+        const y =
+          getNodeLinkY(d, d.state.rect, lineWidth, linkAnchor) - d.state.rect.y;
+        return `translate(${x},${y})`;
+      })
+      .select('circle')
+      .attr('fill', 'var(--markmap-circle-open-bg)')
+      .attr('stroke', (d) => color(d));
+    mmAddSiblingMerge.select('path').attr('stroke', (d) => color(d));
 
     this.transition(mmFoExit).style('opacity', 0);
     mmFoMerge

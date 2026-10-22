@@ -7,6 +7,7 @@ export const MAX_AGENT_BRANCH_CHARS = 40_000;
 export interface MarkdownNodeSource {
   kind: 'heading' | 'list' | 'block';
   id?: string;
+  epubHref?: string;
   lineIndex: number;
   endLineIndex: number;
   prefix: string;
@@ -34,6 +35,10 @@ const frontmatterPattern = /^---\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)/;
 const nodeIdInlinePattern = /<!--\s*seamind:id=([\w-]{1,128})\s*-->\s*$/;
 const nodeIdLinePattern = /^\s*<!--\s*seamind:id=([\w-]{1,128})\s*-->\s*$/;
 const nodeIdAnywherePattern = /<!--\s*seamind:id=[\w-]{1,128}\s*-->/g;
+const epubHrefInlinePattern =
+  /<!--\s*seamind:epub-href=([A-Za-z0-9%._~-]{1,4096})\s*-->/;
+const epubHrefAnywherePattern =
+  /<!--\s*seamind:epub-href=[A-Za-z0-9%._~-]{1,4096}\s*-->/g;
 
 function frontmatterMatch(markdown: string): RegExpExecArray | null {
   return frontmatterPattern.exec(markdown);
@@ -73,9 +78,11 @@ function maskNodeIdMarkers(markdown: string): string {
     }
     if (nodeIdLinePattern.test(line)) return ' '.repeat(line.length);
     if (/^\s{0,3}#{1,6}\s/.test(line) || /^\s*(?:[-+*]|\d+[.)])\s/.test(line)) {
-      return line.replace(nodeIdAnywherePattern, (marker) =>
-        ' '.repeat(marker.length),
-      );
+      return line
+        .replace(nodeIdAnywherePattern, (marker) => ' '.repeat(marker.length))
+        .replace(epubHrefAnywherePattern, (marker) =>
+          ' '.repeat(marker.length),
+        );
     }
     return line;
   });
@@ -108,12 +115,25 @@ export function parseMarkdownNodeSource(
   id?: string,
 ): MarkdownNodeSource | null {
   const cleanLine = line.replace(nodeIdInlinePattern, '').trimEnd();
+  const epubHref = (() => {
+    const encoded = line.match(epubHrefInlinePattern)?.[1];
+    if (!encoded) return undefined;
+    try {
+      const value = decodeURIComponent(encoded);
+      // An address with control characters or backslashes is never a valid EPUB path.
+      // eslint-disable-next-line no-control-regex
+      return value && !/[\u0000-\u001f\\]/.test(value) ? value : undefined;
+    } catch {
+      return undefined;
+    }
+  })();
   const heading = cleanLine.match(/^(\s*)(#{1,6})(\s+)(.*)$/);
   if (heading) {
     const content = heading[4].replace(/\s+#+\s*$/, '');
     return {
       kind: 'heading',
       ...(id ? { id } : {}),
+      ...(epubHref ? { epubHref } : {}),
       lineIndex,
       endLineIndex,
       prefix: `${heading[1]}${heading[2]}${heading[3]}`,
@@ -133,6 +153,7 @@ export function parseMarkdownNodeSource(
   return {
     kind: 'list',
     ...(id ? { id } : {}),
+    ...(epubHref ? { epubHref } : {}),
     lineIndex,
     endLineIndex,
     prefix: `${indent}${marker}${spacing}${taskPrefix}`,
@@ -412,8 +433,26 @@ function nodeMarker(nodeId: string): string {
   return ` <!-- seamind:id=${nodeId} -->`;
 }
 
-function withNodeMarker(line: string, nodeId: string): string {
-  return `${line.replace(nodeIdInlinePattern, '').trimEnd()}${nodeMarker(nodeId)}`;
+function encodeNodeMetadata(value: string): string {
+  return encodeURIComponent(value).replace(
+    /[!'()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
+function withNodeMarker(
+  line: string,
+  nodeId: string,
+  epubHref?: string,
+): string {
+  const cleanLine = line
+    .replace(nodeIdInlinePattern, '')
+    .replace(epubHrefAnywherePattern, '')
+    .trimEnd();
+  const chapterMarker = epubHref
+    ? ` <!-- seamind:epub-href=${encodeNodeMetadata(epubHref)} -->`
+    : '';
+  return `${cleanLine}${chapterMarker}${nodeMarker(nodeId)}`;
 }
 
 function encodeNodeLineBreaks(value: string): string {
@@ -513,6 +552,7 @@ export function applyMarkdownNodeCommand(
     lines[currentSource.lineIndex] = withNodeMarker(
       `${currentSource.prefix}${encodedLabel}`,
       ensured.nodeId,
+      currentSource.epubHref,
     );
     return {
       markdown: lines.join('\n'),

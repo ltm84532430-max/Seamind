@@ -1,5 +1,12 @@
 use serde::Serialize;
-use std::{collections::HashSet, env, path::PathBuf, process::Stdio, time::Duration};
+use std::{
+    collections::{hash_map::DefaultHasher, HashSet},
+    env, fs,
+    hash::{Hash, Hasher},
+    path::{Path, PathBuf},
+    process::Stdio,
+    time::Duration,
+};
 use tauri::{AppHandle, Manager};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
@@ -32,6 +39,7 @@ pub async fn render_plantuml(
     source: String,
     dark: bool,
     authorized_include_directory: Option<String>,
+    cache_key: Option<String>,
 ) -> Result<PlantUmlRenderResult, String> {
     if source.len() > MAX_SOURCE_BYTES {
         return Err("PlantUML 源码超过 50 KB 上限。".into());
@@ -41,6 +49,32 @@ pub async fn render_plantuml(
     }
 
     let include_directory = canonical_include_directory(authorized_include_directory)?;
+    let snapshot_path = if has_include_directive(&source) {
+        None
+    } else {
+        snapshot_path(
+            &app,
+            cache_key.as_deref(),
+            &source,
+            dark,
+            include_directory.as_deref(),
+        )
+    };
+    if let Some(path) = snapshot_path.as_ref() {
+        if fs::metadata(path)
+            .is_ok_and(|metadata| metadata.len() <= MAX_SVG_BYTES as u64)
+        {
+            if let Ok(svg) = fs::read_to_string(path) {
+                if svg.contains("<svg") {
+                    return Ok(PlantUmlRenderResult {
+                        svg,
+                        diagnostics: vec!["使用本地 SVG 快照".to_string()],
+                    });
+                }
+            }
+        }
+        let _ = fs::remove_file(path);
+    }
     let jar_path = resolve_jar_path(&app)?;
     let java = find_supported_java().await?;
     let mut command = Command::new(&java.executable);
@@ -152,7 +186,120 @@ pub async fn render_plantuml(
     }
     diagnostics.push(format!("使用 Java {}。", java.version_text));
 
+    if let Some(path) = snapshot_path {
+        let _ = write_snapshot(&path, svg.as_bytes());
+    }
+
     Ok(PlantUmlRenderResult { svg, diagnostics })
+}
+
+pub(crate) fn retain_plantuml_snapshot_for_source(
+    app: &AppHandle,
+    cache_key: &str,
+    source: &str,
+) {
+    let Some(directory) = snapshot_directory(app, cache_key) else {
+        return;
+    };
+    let keep_prefix = format!("{}-", cache_hash(source));
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        if path.is_file()
+            && file_name.ends_with(".svg")
+            && !file_name.starts_with(&keep_prefix)
+        {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+pub(crate) fn delete_plantuml_snapshot_cache(app: &AppHandle, cache_key: &str) {
+    if let Some(directory) = snapshot_directory(app, cache_key) {
+        let _ = fs::remove_dir_all(directory);
+    }
+}
+
+fn snapshot_directory(app: &AppHandle, cache_key: &str) -> Option<PathBuf> {
+    app.path()
+        .app_cache_dir()
+        .ok()
+        .map(|directory| {
+            directory
+                .join("plantuml-snapshots")
+                .join("v1")
+                .join(cache_hash(cache_key))
+        })
+}
+
+fn snapshot_path(
+    app: &AppHandle,
+    cache_key: Option<&str>,
+    source: &str,
+    dark: bool,
+    include_directory: Option<&std::path::Path>,
+) -> Option<PathBuf> {
+    let owner = cache_key.unwrap_or("content-addressed");
+    let source_hash = cache_hash(source);
+    let include_path = include_directory
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let render_key = format!("{PLANTUML_JAR}\0{source}\0{dark}\0{include_path}");
+    snapshot_directory(app, owner).map(|directory| {
+        directory.join(format!("{source_hash}-{}.svg", cache_hash(&render_key)))
+    })
+}
+
+fn cache_hash(value: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn has_include_directive(source: &str) -> bool {
+    source.lines().any(|line| {
+        line.trim_start()
+            .to_ascii_lowercase()
+            .starts_with("!include")
+    })
+}
+
+fn write_snapshot(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SNAPSHOT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    let Some(directory) = path.parent() else {
+        return Ok(());
+    };
+    fs::create_dir_all(directory)?;
+    let sequence = SNAPSHOT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temporary = path.with_extension(format!("tmp-{}-{sequence}", std::process::id()));
+    fs::write(&temporary, contents)?;
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            let _ = fs::remove_file(&temporary);
+            return Err(error);
+        }
+    }
+    match fs::rename(&temporary, path) {
+        Ok(()) => Ok(()),
+        Err(_error) if path.is_file() => {
+            let _ = fs::remove_file(&temporary);
+            Ok(())
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&temporary);
+            Err(error)
+        }
+    }
 }
 
 fn resolve_jar_path(app: &AppHandle) -> Result<PathBuf, String> {

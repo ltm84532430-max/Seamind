@@ -8,6 +8,7 @@
   --markmap-table-border: 1px solid currentColor;
   --markmap-font: 300 16px/20px sans-serif;
   --markmap-circle-open-bg: #fff;
+  --markmap-node-action-hover-bg: #eef4f1;
   --markmap-text-color: #333;
   --markmap-highlight-node-bg: #ff02;
 
@@ -102,5 +103,39 @@
   --markmap-code-bg: #1a1b26;
   --markmap-code-color: #ddd;
   --markmap-circle-open-bg: #444;
+  --markmap-node-action-hover-bg: #28342f;
   --markmap-text-color: #eee;
+}
+
+.markmap-node-add-sibling {
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.markmap-node-add-sibling > circle {
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+}
+
+.markmap-node-add-sibling > path {
+  fill: none;
+  stroke-linecap: round;
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.markmap-node-add-sibling:hover > circle,
+.markmap-node-add-sibling:focus-visible > circle {
+  fill: var(--markmap-node-action-hover-bg);
+  stroke-width: 2px;
+}
+
+.markmap-node:hover > .markmap-node-add-sibling,
+.markmap-node:focus-within > .markmap-node-add-sibling,
+.markmap-node[data-active='true'] > .markmap-node-add-sibling {
+  opacity: 1;
+  pointer-events: auto;
 }

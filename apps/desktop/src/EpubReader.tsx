@@ -2,8 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
+  loadEpubBookMetadata,
+  loadEpubReadingActivity,
   loadEpubAnnotations,
   loadEpubBookmarks,
+  recordEpubChapterProgress,
+  recordEpubReadingProgress,
+  saveEpubReadingWordEstimate,
   saveEpubAnnotations,
   saveEpubBookmarks,
   saveEpubBookMetadata,
@@ -19,13 +24,22 @@ import { Overlayer } from '../../../packages/foliate-js/overlayer.js';
 export interface EpubReaderSelection {
   source: File | string;
   progressKey: string;
+  relativePath: string;
   title: string;
+}
+
+export interface EpubChapterNavigationRequest {
+  id: number;
+  progressKey: string;
+  href?: string;
+  label: string;
 }
 
 type FoliateTocItem = {
   href: string;
   label: string | Record<string, string>;
   subitems?: FoliateTocItem[];
+  id?: number;
 };
 
 type FoliateMetadata = {
@@ -40,7 +54,12 @@ type FoliateLocation = {
   cfi?: string;
   fraction?: number;
   location?: { current?: number; total?: number };
-  tocItem?: { href?: string; label?: string | Record<string, string> };
+  section?: { current?: number; total?: number };
+  tocItem?: {
+    href?: string;
+    label?: string | Record<string, string>;
+    id?: number;
+  };
 };
 
 type ReaderPalette = 'light' | 'sepia' | 'dark';
@@ -59,7 +78,7 @@ type FoliateRendererElement = HTMLElement & {
 
 type FoliateViewElement = HTMLElement & {
   open(book: File | string): Promise<void>;
-  goTo(destination: string): Promise<void>;
+  goTo(destination: string): Promise<unknown>;
   goToFraction(fraction: number): Promise<void>;
   next(): Promise<void>;
   prev(): Promise<void>;
@@ -80,6 +99,9 @@ type FoliateViewElement = HTMLElement & {
   book?: {
     metadata?: FoliateMetadata;
     toc?: FoliateTocItem[];
+    sections?: Array<{
+      loadText?: () => Promise<string | null | undefined>;
+    }>;
     getCover?: () => Promise<Blob | null>;
   };
 };
@@ -300,6 +322,90 @@ function displayLabel(value: unknown): string {
   return '';
 }
 
+function flattenTocItems(items: FoliateTocItem[]): FoliateTocItem[] {
+  return items.flatMap((item) => [
+    item,
+    ...flattenTocItems(item.subitems ?? []),
+  ]);
+}
+
+function countReadableWords(source: string) {
+  const cjk =
+    source.match(
+      /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu,
+    )?.length ?? 0;
+  const nonCjk =
+    source
+      .replace(
+        /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu,
+        ' ',
+      )
+      .match(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu)?.length ?? 0;
+  return cjk + nonCjk;
+}
+
+async function estimateBookWordCount(
+  sections: Array<{ loadText?: () => Promise<string | null | undefined> }>,
+) {
+  let total = 0;
+  for (const [index, section] of sections.entries()) {
+    if (!section.loadText) continue;
+    try {
+      const source = await section.loadText();
+      if (source) {
+        const document = new DOMParser().parseFromString(source, 'text/html');
+        document
+          .querySelectorAll('script,style,noscript')
+          .forEach((node) => node.remove());
+        total += countReadableWords(
+          document.body?.textContent ||
+            document.documentElement?.textContent ||
+            '',
+        );
+      }
+    } catch {
+      // A malformed or image-only section does not prevent the rest of the book from being counted.
+    }
+    if (index > 0 && index % 8 === 0) {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+    }
+  }
+  return total;
+}
+
+function normalizeTocHref(href: string) {
+  try {
+    return decodeURIComponent(href.split('#')[0]).replaceAll('\\', '/');
+  } catch {
+    return href.split('#')[0].replaceAll('\\', '/');
+  }
+}
+
+function normalizeTocLabel(value: string): string {
+  return value
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(
+      /^\s*(?:(?:第\s*[0-9一二三四五六七八九十百零]+\s*(?:章|节|篇|部分))|(?:(?:chapter|chap\.?|part|section)\s+\d+(?:\.\d+)*))\s*[.、:：-]?\s*/iu,
+      '',
+    )
+    .replace(/^\s*\d+(?:\.\d+)*\s*[.、:：-]?\s*/u, '')
+    .replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+function safeEpubDestination(value: string): string {
+  const href = value.trim();
+  if (
+    !href ||
+    /^(?:[a-z][a-z\d+.-]*:|\/\/)/iu.test(href) ||
+    // Backslashes and control characters never belong in an EPUB link target.
+    // eslint-disable-next-line no-control-regex
+    /[\\\u0000-\u001f]/u.test(href)
+  )
+    return '';
+  return href;
+}
+
 function savedLocationKey(progressKey: string): string {
   return `seamind:epub-progress:v1:${encodeURIComponent(progressKey)}`;
 }
@@ -393,12 +499,22 @@ export default function EpubReader({
   theme,
   provider,
   embedded = false,
+  mindmapOpen,
+  mindmapExists,
+  mindmapBusy,
+  chapterNavigationRequest,
+  onToggleMindmap,
   onClose,
 }: {
   selection: EpubReaderSelection;
   theme: 'light' | 'dark';
   provider: EpubReaderProviderSettings;
   embedded?: boolean;
+  mindmapOpen: boolean;
+  mindmapExists: boolean;
+  mindmapBusy: boolean;
+  chapterNavigationRequest: EpubChapterNavigationRequest | null;
+  onToggleMindmap: () => void;
   onClose: () => void;
 }) {
   const stageRef = useRef<HTMLDivElement>(null);
@@ -412,7 +528,12 @@ export default function EpubReader({
   );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [navigationNotice, setNavigationNotice] = useState<{
+    message: string;
+    kind: 'success' | 'warning' | 'error';
+  } | null>(null);
   const [fraction, setFraction] = useState(0);
+  const [footerVisible, setFooterVisible] = useState(true);
   const [currentCfi, setCurrentCfi] = useState('');
   const [locationText, setLocationText] = useState('正在载入…');
   const [chapterTitle, setChapterTitle] = useState('');
@@ -464,8 +585,14 @@ export default function EpubReader({
     locationText,
   });
   const metadataRef = useRef({ title: selection.title, author: '' });
+  const tocRef = useRef<FoliateTocItem[]>(toc);
+  const activityBaselineRef = useRef(
+    loadEpubBookMetadata(selection.progressKey)?.progress ?? 0,
+  );
   const searchRequestRef = useRef(0);
   const aiAnalysisRequestRef = useRef(0);
+  const handledChapterNavigationIdRef = useRef(0);
+  const chapterNavigationQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [isFixedLayout, setIsFixedLayout] = useState(false);
 
   bookmarksRef.current = bookmarks;
@@ -557,6 +684,119 @@ export default function EpubReader({
     observer.observe(main);
     return () => observer.disconnect();
   }, [activeAiFootnote]);
+
+  useEffect(() => {
+    if (!navigationNotice) return;
+    const timer = window.setTimeout(() => setNavigationNotice(null), 4500);
+    return () => window.clearTimeout(timer);
+  }, [navigationNotice]);
+
+  useEffect(() => {
+    const request = chapterNavigationRequest;
+    if (
+      !request ||
+      loading ||
+      request.progressKey !== selection.progressKey ||
+      request.id <= handledChapterNavigationIdRef.current
+    ) {
+      return;
+    }
+
+    handledChapterNavigationIdRef.current = request.id;
+    setNavigationNotice(null);
+
+    let destination = request.href ? safeEpubDestination(request.href) : '';
+    if (request.href && !destination) {
+      setNavigationNotice({
+        message: '章节链接无效，已保留当前阅读位置。',
+        kind: 'warning',
+      });
+      return;
+    }
+
+    if (!destination) {
+      const normalizedLabel = normalizeTocLabel(request.label);
+      const matches = normalizedLabel
+        ? flattenTocItems(tocRef.current).filter(
+            (item) =>
+              normalizeTocLabel(displayLabel(item.label)) === normalizedLabel,
+          )
+        : [];
+      if (matches.length === 0) {
+        setNavigationNotice({
+          message: '目录中没有唯一匹配的章节，已保留当前阅读位置。',
+          kind: 'warning',
+        });
+        return;
+      }
+      if (matches.length > 1) {
+        setNavigationNotice({
+          message: '目录中有多个同名章节，已保留当前阅读位置。',
+          kind: 'warning',
+        });
+        return;
+      }
+      destination = safeEpubDestination(matches[0].href);
+      if (!destination) {
+        setNavigationNotice({
+          message: '匹配的章节链接无效，已保留当前阅读位置。',
+          kind: 'warning',
+        });
+        return;
+      }
+    }
+
+    const view = viewRef.current;
+    if (!view) return;
+    chapterNavigationQueueRef.current = chapterNavigationQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (
+          handledChapterNavigationIdRef.current !== request.id ||
+          viewRef.current !== view
+        ) {
+          return;
+        }
+        const previousCfi = currentLocationRef.current.cfi;
+        try {
+          const resolved = await view.goTo(destination);
+          if (!resolved)
+            throw new Error('Chapter destination was not resolved.');
+          if (
+            handledChapterNavigationIdRef.current === request.id &&
+            viewRef.current === view
+          ) {
+            setNavigationNotice({
+              message: `已定位：${request.label || '对应章节'}`,
+              kind: 'success',
+            });
+          }
+        } catch {
+          if (
+            handledChapterNavigationIdRef.current !== request.id ||
+            viewRef.current !== view
+          ) {
+            return;
+          }
+          if (previousCfi) {
+            try {
+              await view.goTo(previousCfi);
+            } catch {
+              // Keep Foliate's current location if restoration also fails.
+            }
+          }
+          if (
+            handledChapterNavigationIdRef.current === request.id &&
+            viewRef.current === view
+          ) {
+            setNavigationNotice({
+              message: '章节跳转失败，已保留当前阅读位置。',
+              kind: 'error',
+            });
+          }
+        }
+      });
+  }, [chapterNavigationRequest, loading, selection.progressKey, toc]);
 
   const searchBook = async (rawQuery: string) => {
     const query = rawQuery.trim();
@@ -851,8 +1091,70 @@ export default function EpubReader({
     let cancelled = false;
     let view: FoliateViewElement | null = null;
     const pageDocuments = new WeakSet<Document>();
+    const wheelListenerController = new AbortController();
     const documentListenerController = new AbortController();
+    let wheelAccumulator = 0;
+    let wheelGestureLocked = false;
+    let wheelResetTimer: number | undefined;
+    let restoringBookLocation = true;
+    let deferredRelocation: FoliateLocation | null = null;
+    let hasInitialActivityBaseline = false;
     const progressKey = savedLocationKey(selection.progressKey);
+
+    const turnPage = (direction: number) => {
+      const currentView = viewRef.current;
+      if (!currentView) return;
+      void (direction > 0 ? currentView.next() : currentView.prev()).catch(
+        () => {
+          // Ignore page-boundary errors; the reader remains on its current page.
+        },
+      );
+    };
+
+    const onReaderWheel = (event: WheelEvent) => {
+      if (
+        readerSettingsRef.current.flow !== 'paginated' ||
+        event.ctrlKey ||
+        Math.abs(event.deltaY) <= Math.abs(event.deltaX)
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      const delta =
+        event.deltaY *
+        (event.deltaMode === 1
+          ? 16
+          : event.deltaMode === 2
+            ? window.innerHeight
+            : 1);
+      if (!delta) return;
+
+      // Mouse wheels produce a discrete, larger delta per notch. Trackpads
+      // emit many small deltas, which we group into one page turn per gesture.
+      if (event.deltaMode !== 0 || Math.abs(delta) >= 70) {
+        wheelAccumulator = 0;
+        turnPage(delta);
+        return;
+      }
+      if (!wheelGestureLocked) {
+        wheelAccumulator += delta;
+        if (Math.abs(wheelAccumulator) >= 55) {
+          turnPage(wheelAccumulator);
+          wheelAccumulator = 0;
+          wheelGestureLocked = true;
+        }
+      }
+
+      if (wheelResetTimer !== undefined) {
+        window.clearTimeout(wheelResetTimer);
+      }
+      wheelResetTimer = window.setTimeout(() => {
+        wheelAccumulator = 0;
+        wheelGestureLocked = false;
+        wheelResetTimer = undefined;
+      }, 260);
+    };
 
     const updateDocumentSelection = (doc: Document, sectionIndex: number) => {
       const selected = doc.getSelection();
@@ -927,6 +1229,10 @@ export default function EpubReader({
       const sectionIndex = detail?.index;
       if (!doc || pageDocuments.has(doc)) return;
       pageDocuments.add(doc);
+      doc.addEventListener('wheel', onReaderWheel, {
+        passive: false,
+        signal: wheelListenerController.signal,
+      });
       if (typeof sectionIndex !== 'number') return;
       const updateSelection = () => updateDocumentSelection(doc, sectionIndex);
       doc.addEventListener('selectionchange', updateSelection, {
@@ -1026,8 +1332,65 @@ export default function EpubReader({
 
     const onRelocate = (event: Event) => {
       const detail = (event as CustomEvent<FoliateLocation>).detail;
+      if (restoringBookLocation) {
+        deferredRelocation = detail;
+        return;
+      }
+      clearSelectionDraft();
+      setActiveAiFootnote(null);
+      const currentToc = viewRef.current?.book?.toc ?? tocRef.current;
+      const flatToc = flattenTocItems(currentToc);
+      const tocHref = detail.tocItem?.href ?? '';
+      const hrefIndex = tocHref
+        ? flatToc.findIndex(
+            (item) => normalizeTocHref(item.href) === normalizeTocHref(tocHref),
+          )
+        : -1;
+      const chapterIndex =
+        (typeof detail.tocItem?.id === 'number'
+          ? detail.tocItem.id
+          : hrefIndex) >= 0
+          ? typeof detail.tocItem?.id === 'number'
+            ? detail.tocItem.id
+            : hrefIndex
+          : Math.max(0, detail.section?.current ?? 0);
+      const chapterCount =
+        flatToc.length ||
+        detail.section?.total ||
+        viewRef.current?.book?.sections?.length ||
+        0;
+      const label =
+        displayLabel(detail.tocItem?.label) ||
+        displayLabel(flatToc[chapterIndex]?.label) ||
+        (chapterCount ? `第 ${chapterIndex + 1} 章` : '');
+      const chapterHref = tocHref || flatToc[chapterIndex]?.href || '';
       if (typeof detail.fraction === 'number') {
         setFraction(Math.min(1, Math.max(0, detail.fraction)));
+        if (!hasInitialActivityBaseline) {
+          const existingActivity = loadEpubReadingActivity(
+            selection.progressKey,
+          );
+          if (!existingActivity) {
+            activityBaselineRef.current = Math.max(
+              activityBaselineRef.current,
+              Math.min(1, Math.max(0, detail.fraction)),
+            );
+          }
+          hasInitialActivityBaseline = true;
+        }
+        recordEpubReadingProgress(
+          selection.progressKey,
+          detail.fraction,
+          activityBaselineRef.current,
+        );
+        recordEpubChapterProgress(
+          selection.progressKey,
+          chapterIndex,
+          chapterCount,
+          detail.fraction,
+          chapterHref,
+          label,
+        );
       }
       if (detail.cfi) {
         setCurrentCfi(detail.cfi);
@@ -1048,18 +1411,25 @@ export default function EpubReader({
       } else if (typeof detail.fraction === 'number') {
         setLocationText(`${Math.round(detail.fraction * 100)}%`);
       }
-      const label = displayLabel(detail.tocItem?.label);
       if (label) setChapterTitle(label);
       const metadataUpdate: {
         title: string;
         author: string;
         progress?: number;
         lastReadAt?: number;
+        currentChapterHref?: string;
+        currentChapterLabel?: string;
+        currentChapterIndex?: number;
+        chapterCount?: number;
       } = { ...metadataRef.current };
       if (typeof detail.fraction === 'number') {
         metadataUpdate.progress = Math.min(1, Math.max(0, detail.fraction));
         metadataUpdate.lastReadAt = Date.now();
       }
+      if (chapterCount > 0) metadataUpdate.chapterCount = chapterCount;
+      metadataUpdate.currentChapterIndex = chapterIndex;
+      metadataUpdate.currentChapterHref = chapterHref;
+      metadataUpdate.currentChapterLabel = label;
       saveEpubBookMetadata(selection.progressKey, metadataUpdate);
     };
     const blockExternalLink = (event: Event) => event.preventDefault();
@@ -1067,6 +1437,8 @@ export default function EpubReader({
     const openBook = async () => {
       setLoading(true);
       setError('');
+      activityBaselineRef.current =
+        loadEpubBookMetadata(selection.progressKey)?.progress ?? 0;
       const initialSettings = loadReaderSettings(selection.progressKey, theme);
       readerSettingsRef.current = initialSettings;
       setReaderSettings(initialSettings);
@@ -1103,12 +1475,35 @@ export default function EpubReader({
         metadataRef.current = { title: bookTitle, author: bookAuthor };
         setTitle(bookTitle);
         setAuthor(bookAuthor);
-        setToc(view.book?.toc ?? []);
+        const loadedToc = view.book?.toc ?? [];
+        tocRef.current = loadedToc;
+        setToc(loadedToc);
         saveEpubBookMetadata(selection.progressKey, {
           title: bookTitle,
           author: bookAuthor,
+          chapterCount:
+            flattenTocItems(loadedToc).length ||
+            view.book?.sections?.length ||
+            0,
         });
         const book = view.book;
+        const existingActivity = loadEpubReadingActivity(selection.progressKey);
+        if (
+          !existingActivity ||
+          existingActivity.estimatedTotalWords === null
+        ) {
+          void estimateBookWordCount(book?.sections ?? []).then(
+            (totalWords) => {
+              if (!cancelled) {
+                saveEpubReadingWordEstimate(
+                  selection.progressKey,
+                  totalWords,
+                  activityBaselineRef.current,
+                );
+              }
+            },
+          );
+        }
         if (book?.getCover) {
           void book
             .getCover()
@@ -1140,6 +1535,12 @@ export default function EpubReader({
             }
           }
         }
+        restoringBookLocation = false;
+        if (deferredRelocation) {
+          const initialLocation = deferredRelocation;
+          deferredRelocation = null;
+          onRelocate(new CustomEvent('relocate', { detail: initialLocation }));
+        }
         if (!cancelled) setLoading(false);
       } catch (cause) {
         if (!cancelled) {
@@ -1167,7 +1568,11 @@ export default function EpubReader({
         view.close();
         view.remove();
       }
+      wheelListenerController.abort();
       documentListenerController.abort();
+      if (wheelResetTimer !== undefined) {
+        window.clearTimeout(wheelResetTimer);
+      }
       if (viewRef.current === view) viewRef.current = null;
     };
   }, [selection]);
@@ -1186,7 +1591,10 @@ export default function EpubReader({
     ) {
       return;
     }
-    if (event.key === 'Escape') {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'b') {
+      event.preventDefault();
+      toggleBookmarkAt();
+    } else if (event.key === 'Escape') {
       event.preventDefault();
       onClose();
     } else if (event.key === 'ArrowLeft' || event.key === 'PageUp') {
@@ -1228,8 +1636,33 @@ export default function EpubReader({
           <span className="epub-reader-kicker">LOCAL EPUB · READER</span>
           <strong title={title}>{title}</strong>
           {author && <span className="epub-reader-author">{author}</span>}
+          {navigationNotice && (
+            <span
+              className={`epub-reader-navigation-notice is-${navigationNotice.kind}`}
+              role={navigationNotice.kind === 'error' ? 'alert' : 'status'}
+              title={navigationNotice.message}
+            >
+              {navigationNotice.message}
+            </span>
+          )}
         </div>
         <div className="epub-reader-header-actions">
+          <button
+            type="button"
+            className={`epub-reader-tool epub-reader-mindmap-toggle${mindmapOpen ? ' is-active' : ''}`}
+            aria-pressed={mindmapOpen}
+            disabled={mindmapBusy}
+            title="生成或打开本书的思维导图，并排编辑"
+            onClick={onToggleMindmap}
+          >
+            {mindmapBusy
+              ? '生成中…'
+              : mindmapOpen
+                ? '收起导图'
+                : mindmapExists
+                  ? '并排导图'
+                  : '生成导图'}
+          </button>
           <button
             type="button"
             className="epub-reader-tool epub-reader-sidebar-toggle"
@@ -1918,7 +2351,20 @@ export default function EpubReader({
         </section>
       </div>
 
-      <footer className="epub-reader-footer">
+      <footer
+        className={`epub-reader-footer${footerVisible ? '' : ' is-hidden'}`}
+        aria-label="阅读进度与翻页控制"
+      >
+        <button
+          type="button"
+          className="epub-reader-footer-toggle"
+          aria-label={footerVisible ? '隐藏阅读控制栏' : '显示阅读控制栏'}
+          aria-expanded={footerVisible}
+          title={footerVisible ? '隐藏阅读控制栏' : '显示阅读控制栏'}
+          onClick={() => setFooterVisible((visible) => !visible)}
+        >
+          <span aria-hidden="true">{footerVisible ? '⌄' : '⌃'}</span>
+        </button>
         <button
           type="button"
           className="epub-reader-page-button"

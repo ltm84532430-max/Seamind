@@ -16,18 +16,25 @@ describe('YouTube playback integration', () => {
     expect(url.searchParams.get('enablejsapi')).toBe('1');
   });
 
-  it('does not offer a playback workaround for owner-disabled embeds', () => {
+  it('explains owner-disabled and missing videos', () => {
     expect(youtubePlayerErrorMessage(101)).toContain('禁止');
     expect(youtubePlayerErrorMessage(150)).toContain('禁止');
     expect(youtubePlayerErrorMessage(100)).toContain('不存在');
-    expect(canOfferAlternativePlayback('error', 101)).toBe(false);
-    expect(canOfferAlternativePlayback('error', 150)).toBe(false);
-    expect(canOfferAlternativePlayback('error', 100)).toBe(false);
+    expect(youtubePlayerErrorMessage(153)).toContain('来源标识');
   });
 
-  it('offers optional playback only after recoverable embed failures', () => {
-    expect(canOfferAlternativePlayback('error', 5)).toBe(true);
-    expect(canOfferAlternativePlayback('timeout', null)).toBe(true);
-    expect(canOfferAlternativePlayback('ready', null)).toBe(false);
+  it('offers another way to play once the embedded player has failed or settled', () => {
+    // Owner-disabled embeds (101/150) are the cases the built-in player exists for.
+    expect(canOfferAlternativePlayback('error')).toBe(true);
+    expect(canOfferAlternativePlayback('timeout')).toBe(true);
+    expect(canOfferAlternativePlayback('stalled')).toBe(true);
+    expect(canOfferAlternativePlayback('ready')).toBe(true);
+    expect(canOfferAlternativePlayback('external')).toBe(true);
+  });
+
+  it('does not offer alternatives while a player is still connecting', () => {
+    expect(canOfferAlternativePlayback('loading')).toBe(false);
+    expect(canOfferAlternativePlayback('resolving')).toBe(false);
+    expect(canOfferAlternativePlayback('playing')).toBe(false);
   });
 });

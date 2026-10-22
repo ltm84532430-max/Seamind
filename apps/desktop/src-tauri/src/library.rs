@@ -26,6 +26,8 @@ const MAX_GENERATED_HTML_ASSET_BYTES: usize = 256 * 1024;
 const MAX_GENERATED_HTML_ASSETS: usize = 8;
 const MAX_DOCUMENTS: usize = 50_000;
 const MAX_EPUB_BOOKS: usize = 10_000;
+const MAX_PLANTUML_FILES: usize = 10_000;
+const MAX_PLANTUML_BYTES: u64 = 50_000;
 const MAX_SEARCH_RESULTS: usize = 10_000;
 
 #[derive(Default)]
@@ -64,10 +66,21 @@ pub struct EpubBookDocument {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PlantUmlDocument {
+    pub relative_path: String,
+    pub title: String,
+    pub category: String,
+    pub file_size: u64,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LibrarySnapshot {
     pub root_path: Option<String>,
     pub documents: Vec<MapDocument>,
     pub books: Vec<EpubBookDocument>,
+    pub plantuml_files: Vec<PlantUmlDocument>,
     pub categories: Vec<String>,
 }
 
@@ -311,6 +324,75 @@ pub fn delete_epub_book(app: AppHandle, relative_path: String) -> Result<(), Str
         return Err("找不到要删除的 EPUB 文件。".to_string());
     }
     fs::remove_file(&path).map_err(|error| format!("无法删除 EPUB 文件：{error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn open_plantuml_document(app: AppHandle, relative_path: String) -> Result<String, String> {
+    let root = require_root(&app)?;
+    let relative = validate_plantuml_path(&relative_path)?;
+    let path = ensure_existing_inside_root(&root, &root.join(&relative))?;
+    if !path.is_file() {
+        return Err("找不到 PUML 文件。".to_string());
+    }
+    let metadata =
+        fs::metadata(&path).map_err(|error| format!("无法读取 PUML 文件属性：{error}"))?;
+    if metadata.len() > MAX_PLANTUML_BYTES {
+        return Err("PUML 源码超过 50 KB 上限，暂不能在工作区编辑。".to_string());
+    }
+    fs::read_to_string(&path).map_err(|error| format!("无法读取 PUML 文件：{error}"))
+}
+
+#[tauri::command]
+pub fn save_plantuml_document(
+    app: AppHandle,
+    relative_path: String,
+    source: String,
+) -> Result<PlantUmlDocument, String> {
+    if source.len() as u64 > MAX_PLANTUML_BYTES {
+        return Err("PUML 源码超过 50 KB 上限，无法保存。".to_string());
+    }
+    let root = require_root(&app)?;
+    let relative = validate_plantuml_path(&relative_path)?;
+    let path = ensure_existing_inside_root(&root, &root.join(&relative))?;
+    if !path.is_file() {
+        return Err("找不到要保存的 PUML 文件。".to_string());
+    }
+    fs::write(&path, &source).map_err(|error| format!("无法保存 PUML 文件：{error}"))?;
+    let metadata =
+        fs::metadata(&path).map_err(|error| format!("无法读取 PUML 文件属性：{error}"))?;
+    let relative = path
+        .strip_prefix(&root)
+        .map_err(|_| "PUML 文件超出了文件库位置。".to_string())?;
+    let relative_path = path_to_relative_string(relative);
+    crate::plantuml::retain_plantuml_snapshot_for_source(
+        &app,
+        &format!("file:{relative_path}"),
+        &source,
+    );
+    Ok(PlantUmlDocument {
+        relative_path,
+        title: path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("未命名 PUML 图表")
+            .to_string(),
+        category: category_from_relative(relative),
+        file_size: metadata.len(),
+        updated_at: modified_timestamp(&path),
+    })
+}
+
+#[tauri::command]
+pub fn delete_plantuml_document(app: AppHandle, relative_path: String) -> Result<(), String> {
+    let root = require_root(&app)?;
+    let relative = validate_plantuml_path(&relative_path)?;
+    let path = ensure_existing_inside_root(&root, &root.join(&relative))?;
+    if !path.is_file() {
+        return Err("找不到要删除的 PUML 文件。".to_string());
+    }
+    fs::remove_file(&path).map_err(|error| format!("无法删除 PUML 文件：{error}"))?;
+    crate::plantuml::delete_plantuml_snapshot_cache(&app, &format!("file:{relative_path}"));
     Ok(())
 }
 
@@ -924,6 +1006,74 @@ pub fn create_category(app: AppHandle, category: String) -> Result<LibrarySnapsh
 }
 
 #[tauri::command]
+pub fn rename_library_folder(
+    app: AppHandle,
+    relative_path: String,
+    new_name: String,
+) -> Result<LibrarySnapshot, String> {
+    if relative_path.trim().is_empty() {
+        return Err("不能重命名文件库根目录。".to_string());
+    }
+    let root = require_root(&app)?;
+    let normalized_path = normalize_category(&relative_path)?;
+    let relative = category_path(&normalized_path)?;
+    let source_candidate = root.join(&relative);
+    let source_metadata = fs::symlink_metadata(&source_candidate)
+        .map_err(|error| format!("无法读取文件夹：{error}"))?;
+    if source_metadata.file_type().is_symlink() {
+        return Err("不能重命名指向其他位置的符号链接。".to_string());
+    }
+    if !source_metadata.is_dir() {
+        return Err("所选路径不是文件夹，或文件夹已不存在。".to_string());
+    }
+    let source = ensure_existing_inside_root(&root, &source_candidate)?;
+    let new_name = validate_name(&new_name)?;
+    let current_name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "无法读取当前文件夹名称。".to_string())?;
+    if current_name == new_name {
+        return snapshot_for(&app, Some(root));
+    }
+
+    let parent = source
+        .parent()
+        .ok_or_else(|| "无法确定文件夹的上级目录。".to_string())?;
+    let destination = parent.join(&new_name);
+    match fs::symlink_metadata(&destination) {
+        Ok(_) => {
+            let existing = destination
+                .canonicalize()
+                .map_err(|error| format!("无法检查目标文件夹：{error}"))?;
+            if existing != source {
+                return Err("同级位置已经存在同名文件或文件夹。".to_string());
+            }
+
+            // Windows treats case-only destination names as the same path. Use a
+            // temporary sibling so names such as `Books` -> `books` still work.
+            let temporary = parent.join(format!(".seamind-rename-{}", Uuid::new_v4()));
+            fs::rename(&source, &temporary)
+                .map_err(|error| format!("无法重命名文件夹：{error}"))?;
+            if let Err(error) = fs::rename(&temporary, &destination) {
+                if let Err(rollback_error) = fs::rename(&temporary, &source) {
+                    return Err(format!(
+                        "重命名失败：{error}；恢复原文件夹也失败：{rollback_error}"
+                    ));
+                }
+                return Err(format!("无法重命名文件夹：{error}"));
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::rename(&source, &destination)
+                .map_err(|error| format!("无法重命名文件夹：{error}"))?;
+        }
+        Err(error) => return Err(format!("无法检查目标文件夹：{error}")),
+    }
+
+    snapshot_for(&app, Some(root))
+}
+
+#[tauri::command]
 pub fn rebuild_library_index(app: AppHandle) -> Result<LibrarySnapshot, String> {
     let root = configured_root(&app)?;
     snapshot_for(&app, root)
@@ -977,16 +1127,18 @@ fn snapshot_for(app: &AppHandle, root: Option<PathBuf>) -> Result<LibrarySnapsho
             root_path: None,
             documents: Vec::new(),
             books: Vec::new(),
+            plantuml_files: Vec::new(),
             categories: Vec::new(),
         });
     };
     fs::create_dir_all(&root).map_err(|error| format!("无法访问文件库目录：{error}"))?;
-    let (documents, books, categories) = scan_library(&root)?;
+    let (documents, books, plantuml_files, categories) = scan_library(&root)?;
     replace_index(app, &documents, &root)?;
     Ok(LibrarySnapshot {
         root_path: Some(root.to_string_lossy().into_owned()),
         documents,
         books,
+        plantuml_files,
         categories,
     })
 }
@@ -1295,11 +1447,27 @@ fn upsert_with_connection(
 
 fn scan_library(
     root: &Path,
-) -> Result<(Vec<MapDocument>, Vec<EpubBookDocument>, Vec<String>), String> {
+) -> Result<
+    (
+        Vec<MapDocument>,
+        Vec<EpubBookDocument>,
+        Vec<PlantUmlDocument>,
+        Vec<String>,
+    ),
+    String,
+> {
     let mut documents = Vec::new();
     let mut books = Vec::new();
+    let mut plantuml_files = Vec::new();
     let mut categories = Vec::new();
-    scan_directory(root, root, &mut documents, &mut books, &mut categories)?;
+    scan_directory(
+        root,
+        root,
+        &mut documents,
+        &mut books,
+        &mut plantuml_files,
+        &mut categories,
+    )?;
     let mut ids = HashSet::new();
     for document in &mut documents {
         if ids.insert(document.id.clone()) {
@@ -1316,9 +1484,10 @@ fn scan_library(
     }
     documents.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
     books.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    plantuml_files.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
     categories.sort_by_key(|category| category.to_lowercase());
     categories.dedup();
-    Ok((documents, books, categories))
+    Ok((documents, books, plantuml_files, categories))
 }
 
 fn scan_directory(
@@ -1326,6 +1495,7 @@ fn scan_directory(
     directory: &Path,
     documents: &mut Vec<MapDocument>,
     books: &mut Vec<EpubBookDocument>,
+    plantuml_files: &mut Vec<PlantUmlDocument>,
     categories: &mut Vec<String>,
 ) -> Result<(), String> {
     let entries = fs::read_dir(directory).map_err(|error| format!("无法读取文件库：{error}"))?;
@@ -1345,7 +1515,7 @@ fn scan_directory(
                 .map_err(|_| "分类目录超出了文件库位置。".to_string())?;
             let category = path_to_relative_string(relative);
             categories.push(category);
-            scan_directory(root, &path, documents, books, categories)?;
+            scan_directory(root, &path, documents, books, plantuml_files, categories)?;
         } else if file_type.is_file()
             && path
                 .extension()
@@ -1438,6 +1608,36 @@ fn scan_directory(
                 title,
                 category: category_from_relative(relative),
                 file_size,
+                updated_at: modified_timestamp(&path),
+            });
+        } else if file_type.is_file()
+            && path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("puml"))
+        {
+            if plantuml_files.len() >= MAX_PLANTUML_FILES {
+                return Err(format!(
+                    "文件库超过 {} 个 PUML 文件，已停止索引。",
+                    MAX_PLANTUML_FILES
+                ));
+            }
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|_| "PUML 文件超出了文件库位置。".to_string())?;
+            let relative_path = path_to_relative_string(relative);
+            let metadata = entry
+                .metadata()
+                .map_err(|error| format!("无法读取 PUML 文件属性：{error}"))?;
+            plantuml_files.push(PlantUmlDocument {
+                relative_path,
+                title: path
+                    .file_stem()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("未命名 PUML 图表")
+                    .to_string(),
+                category: category_from_relative(relative),
+                file_size: metadata.len(),
                 updated_at: modified_timestamp(&path),
             });
         }
@@ -1750,6 +1950,32 @@ fn validate_markdown_path(value: &str) -> Result<PathBuf, String> {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
     {
         return Err("文件库只支持 Markdown 思维导图文件。".to_string());
+    }
+    Ok(path.to_path_buf())
+}
+
+fn validate_plantuml_path(value: &str) -> Result<PathBuf, String> {
+    let path = Path::new(value);
+    if path.as_os_str().is_empty() || path.is_absolute() {
+        return Err("PUML 文件路径无效。".to_string());
+    }
+    for component in path.components() {
+        match component {
+            Component::Normal(name) => {
+                let name = name
+                    .to_str()
+                    .ok_or_else(|| "PUML 文件路径包含无效字符。".to_string())?;
+                validate_name(name)?;
+            }
+            _ => return Err("PUML 文件路径不能离开文件库目录。".to_string()),
+        }
+    }
+    if !path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("puml"))
+    {
+        return Err("文件库 PUML 图表必须使用 .puml 扩展名。".to_string());
     }
     Ok(path.to_path_buf())
 }

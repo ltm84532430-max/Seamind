@@ -29,7 +29,7 @@ pub enum MediaType {
     Unsupported,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "backend", rename_all = "camelCase")]
 #[serde(rename_all_fields = "camelCase")]
 pub enum PlaybackResolution {
@@ -48,6 +48,10 @@ pub enum PlaybackResolution {
         media_url: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         audio_url: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user_agent: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        referer: Option<String>,
         reason: String,
     },
 }

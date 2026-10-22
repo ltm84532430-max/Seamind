@@ -1,5 +1,6 @@
 export type YouTubePlaybackState =
   | 'loading'
+  | 'resolving'
   | 'ready'
   | 'playing'
   | 'paused'
@@ -7,7 +8,8 @@ export type YouTubePlaybackState =
   | 'ended'
   | 'error'
   | 'timeout'
-  | 'stalled';
+  | 'stalled'
+  | 'external';
 
 export type YouTubePlaybackResolution =
   | {
@@ -23,11 +25,35 @@ export type YouTubePlaybackResolution =
       mediaType: 'hls' | 'dash' | 'separateStreams' | 'unsupported';
       mediaUrl?: string;
       audioUrl?: string;
+      userAgent?: string;
+      referer?: string;
       reason: string;
     };
 
+export interface YouTubePlaybackCapabilities {
+  extractor: string | null;
+  extractorManaged: boolean;
+  /** The extractor exists but was too slow to answer, which is not the same as not installed. */
+  extractorTimedOut: boolean;
+  ejsAvailable: boolean | null;
+  newpipeBridgeConfigured: boolean;
+  nodeAvailable: boolean;
+  mpvAvailable: boolean;
+  ffplayAvailable: boolean;
+  ffmpegAvailable: boolean;
+  proxyUrl: string | null;
+}
+
+export interface YouTubeSettings {
+  proxyUrl: string | null;
+  /** The proxy the embedded WebView started with; a different value needs a restart. */
+  webviewProxyUrl: string | null;
+}
+
 export interface YouTubeIframePlayer {
   destroy(): void;
+  pauseVideo(): void;
+  getCurrentTime(): number;
 }
 
 interface YouTubePlayerEvent {
@@ -66,7 +92,8 @@ declare global {
 export const youtubePlaybackStateLabels: Record<YouTubePlaybackState, string> =
   {
     loading: '正在连接',
-    ready: '已就绪',
+    resolving: '正在解析播放地址',
+    ready: '播放器已载入，视频状态未知',
     playing: '播放中',
     paused: '已暂停',
     buffering: '缓冲中',
@@ -74,6 +101,7 @@ export const youtubePlaybackStateLabels: Record<YouTubePlaybackState, string> =
     error: '播放错误',
     timeout: '连接超时',
     stalled: '缓冲停滞',
+    external: '外部播放器已启动，播放状态未知',
   };
 
 export function youtubePlayerErrorMessage(code: number | null): string {
@@ -87,10 +115,29 @@ export function youtubePlayerErrorMessage(code: number | null): string {
     case 101:
     case 150:
       return '视频所有者禁止在嵌入播放器中播放。';
+    case 152:
     case 153:
-      return 'YouTube 未收到有效的来源标识。';
+      return 'YouTube 未收到有效的来源标识，内嵌播放器被拒绝。';
     default:
       return 'YouTube 播放器遇到问题。';
+  }
+}
+
+const preferNativeKey = 'seamind.youtube.preferNative';
+
+export function readPreferNative(): boolean {
+  try {
+    return localStorage.getItem(preferNativeKey) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function writePreferNative(value: boolean): void {
+  try {
+    localStorage.setItem(preferNativeKey, value ? '1' : '0');
+  } catch {
+    // The choice only lasts for this session when storage is unavailable.
   }
 }
 
@@ -103,7 +150,8 @@ export function canOfferAlternativePlayback(
     state === 'ended' ||
     state === 'error' ||
     state === 'timeout' ||
-    state === 'stalled'
+    state === 'stalled' ||
+    state === 'external'
   );
 }
 

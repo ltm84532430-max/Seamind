@@ -49,6 +49,11 @@ export interface IMarkmapOptions {
   toggleRecursively: boolean;
   zoom: boolean;
 
+  /** Called when the optional per-node add-sibling control is activated. */
+  onNodeAddSibling?: (node: INode) => void;
+  /** Return false to omit the add-sibling control for a node. */
+  isNodeAddSiblingAvailable?: (node: INode) => boolean;
+
   /** Layout direction: 'right' (default), 'both' (both sides), or 'down' (top-down tree). */
   direction?: 'right' | 'both' | 'down';
   /** Connector geometry. Defaults to the existing curved links. */

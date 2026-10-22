@@ -1215,6 +1215,16 @@ fn append_markdown_nodes(
         markdown.push_str(&"  ".repeat(depth));
         markdown.push_str("- ");
         markdown.push_str(&escape_markdown(&node.label));
+        if let Some(target) = &node.target {
+            let mut href = target.path.clone();
+            if let Some(fragment) = &target.fragment {
+                href.push('#');
+                href.push_str(fragment);
+            }
+            markdown.push_str(" <!-- seamind:epub-href=");
+            markdown.push_str(&encode_node_metadata(&href));
+            markdown.push_str(" -->");
+        }
         markdown.push('\n');
         if markdown.len() > MAX_MARKDOWN_BYTES {
             return Err("生成的目录内容超过 1 MB，无法导入。".to_string());
@@ -1222,6 +1232,19 @@ fn append_markdown_nodes(
         append_markdown_nodes(&node.children, depth + 1, markdown)?;
     }
     Ok(())
+}
+
+fn encode_node_metadata(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push('%');
+            encoded.push_str(&format!("{byte:02X}"));
+        }
+    }
+    encoded
 }
 
 fn escape_markdown(value: &str) -> String {

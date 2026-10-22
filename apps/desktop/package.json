@@ -30,7 +30,9 @@
     "pyodide": "314.0.7",
     "react": "19.1.0",
     "react-dom": "19.1.0",
-    "yaml": "2.8.0"
+    "shaka-player": "5.3.1",
+    "yaml": "2.8.0",
+    "youtubei.js": "18.2.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.8.4",

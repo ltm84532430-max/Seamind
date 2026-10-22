@@ -17,10 +17,19 @@ export interface EpubBookDocument {
   updatedAt: number;
 }
 
+export interface PlantUmlDocument {
+  relativePath: string;
+  title: string;
+  category: string;
+  fileSize: number;
+  updatedAt: number;
+}
+
 export interface LibrarySnapshot {
   rootPath: string | null;
   documents: MapDocument[];
   books: EpubBookDocument[];
+  plantumlFiles: PlantUmlDocument[];
   categories: string[];
 }
 

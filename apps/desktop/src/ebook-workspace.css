@@ -287,6 +287,23 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.epub-reader-navigation-notice {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  color: #5f7887;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.epub-reader-navigation-notice.is-success {
+  color: #397f68;
+}
+.epub-reader-navigation-notice.is-warning,
+.epub-reader-navigation-notice.is-error {
+  color: #b3543d;
+}
 .epub-reader-header-actions {
   display: flex;
   align-items: center;
@@ -681,6 +698,16 @@
 }
 .app-shell[data-theme='dark'] .epub-reader-book-heading strong {
   color: #e0e6e9;
+}
+.app-shell[data-theme='dark'] .epub-reader-navigation-notice {
+  color: #a5bbc6;
+}
+.app-shell[data-theme='dark'] .epub-reader-navigation-notice.is-success {
+  color: #89c9ae;
+}
+.app-shell[data-theme='dark'] .epub-reader-navigation-notice.is-warning,
+.app-shell[data-theme='dark'] .epub-reader-navigation-notice.is-error {
+  color: #ed9c89;
 }
 .app-shell[data-theme='dark'] .epub-reader-kicker,
 .app-shell[data-theme='dark'] .epub-reader-author,
@@ -1223,5 +1250,1116 @@
   }
   .epub-reader-bookmark-panel {
     right: -38px;
+  }
+}
+
+/* ==========================================================================
+   Institutional Reading Heatmap & 2D Velocity Telemetry Styles
+   ========================================================================== */
+
+.ebook-institutional-heatmap {
+  width: 100%;
+  margin: 14px auto 18px;
+  padding: 16px 18px 14px;
+  border: 1px solid #dfe4e7;
+  background: #ffffff;
+}
+
+.ebook-institutional-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #eef2f4;
+}
+
+.ebook-institutional-title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ebook-institutional-kicker-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ebook-institutional-kicker {
+  color: #7d8b94;
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ebook-institutional-badge {
+  display: inline-block;
+  padding: 1px 5px;
+  border: 1px solid #d4dcde;
+  color: #5d6c75;
+  background: #f4f7f8;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.ebook-institutional-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.ebook-institutional-title-row h2 {
+  margin: 0;
+  color: #202b32;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+.ebook-institutional-period-tag {
+  color: #8c99a0;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.ebook-institutional-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Segmented Control (Month / Year) */
+.ebook-institutional-seg-control {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border: 1px solid #dbe2e6;
+  background: #f2f5f7;
+}
+
+.ebook-institutional-seg-btn {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  color: #63727b;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  transition: all 0.15s ease;
+}
+
+.ebook-institutional-seg-btn:hover {
+  color: #232d33;
+}
+
+.ebook-institutional-seg-btn.is-active {
+  border-color: #cbd5dc;
+  color: #a83d25;
+  background: #ffffff;
+  font-weight: 700;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+/* Stepper Navigation */
+.ebook-institutional-stepper {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #dbe2e6;
+  background: #ffffff;
+}
+
+.ebook-institutional-stepper-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  color: #5d6c75;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  line-height: 26px;
+  text-align: center;
+}
+
+.ebook-institutional-stepper-btn:hover {
+  color: #a83d25;
+  background: #f6f8f9;
+}
+
+.ebook-institutional-stepper-reset {
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid #edf1f3;
+  border-left: 1px solid #edf1f3;
+  color: #55646d;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.ebook-institutional-stepper-reset:hover {
+  color: #a83d25;
+  background: #f6f8f9;
+}
+
+/* Body Container */
+.ebook-institutional-body {
+  margin-top: 14px;
+}
+
+/* KPI Ribbon (4 Metric Cards) */
+.ebook-institutional-kpi-ribbon {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.ebook-institutional-kpi-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 12px;
+  border: 1px solid #e3e8eb;
+  background: #f8fafb;
+}
+
+.ebook-kpi-label {
+  color: #7b8891;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ebook-kpi-main {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.ebook-kpi-value {
+  color: #1f2a31;
+  font-family: var(--mono);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+.ebook-kpi-unit {
+  color: #6d7b83;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.ebook-kpi-denom {
+  color: #8c99a0;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.ebook-kpi-badge {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 4px;
+  border: 1px solid #e0c5bc;
+  color: #a83d25;
+  background: #fdf3f0;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  font-weight: 700;
+}
+
+.ebook-kpi-sub {
+  color: #89969e;
+  font-size: 9.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Two-Column Analytics Split */
+.ebook-institutional-analytics-split {
+  display: grid;
+  grid-template-columns: minmax(360px, 1.25fr) minmax(320px, 1fr);
+  gap: 14px;
+}
+
+.ebook-institutional-heatmap-pane,
+.ebook-institutional-chart-pane {
+  display: flex;
+  flex-direction: column;
+  padding: 12px 14px;
+  border: 1px solid #e3e8eb;
+  background: #ffffff;
+}
+
+.ebook-pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #edf1f3;
+}
+
+.ebook-pane-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ebook-pane-tag {
+  padding: 1px 4px;
+  border: 1px solid #d8e0e3;
+  color: #64737c;
+  background: #f4f6f8;
+  font-family: var(--mono);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.ebook-pane-title {
+  margin: 0;
+  color: #243037;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ebook-pane-status,
+.ebook-pane-sub {
+  color: #8a979f;
+  font-family: var(--mono);
+  font-size: 9.5px;
+}
+
+/* Month Calendar Grid (Default View) */
+.ebook-month-calendar {
+  width: 100%;
+}
+
+.ebook-month-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  margin-bottom: 4px;
+  text-align: center;
+}
+
+.ebook-month-weekdays span {
+  color: #88969e;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 2px 0;
+}
+
+.ebook-month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+
+.ebook-month-day {
+  position: relative;
+  min-height: 44px;
+  padding: 4px;
+  border: 1px solid #e1e7eb;
+  background: #f5f8f9;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-start;
+  font: inherit;
+  transition: all 0.12s ease;
+}
+
+.ebook-month-day.is-outside {
+  opacity: 0.35;
+  background: #f7f9fa;
+  border-color: #ecf0f2;
+}
+
+.ebook-month-day-num {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: #38464e;
+  line-height: 1;
+}
+
+.ebook-month-day-val {
+  align-self: flex-end;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  font-weight: 600;
+  color: #2c383f;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.ebook-month-today-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 5px;
+  height: 5px;
+  background: #1e70bf;
+  border: 1px solid #ffffff;
+}
+
+/* Month Heat Color Steps */
+.ebook-month-day.level-0 {
+  background: #f4f6f8;
+}
+
+.ebook-month-day.level-1 {
+  background: #fce8e2;
+  border-color: #f7d0c3;
+}
+
+.ebook-month-day.level-2 {
+  background: #f7c3b2;
+  border-color: #efa48e;
+}
+
+.ebook-month-day.level-3 {
+  background: #ea8f76;
+  border-color: #dc7256;
+}
+
+.ebook-month-day.level-3 .ebook-month-day-num,
+.ebook-month-day.level-3 .ebook-month-day-val {
+  color: #ffffff;
+}
+
+.ebook-month-day.level-4 {
+  background: #aa3f26;
+  border-color: #8c321d;
+}
+
+.ebook-month-day.level-4 .ebook-month-day-num,
+.ebook-month-day.level-4 .ebook-month-day-val {
+  color: #ffffff;
+}
+
+.ebook-month-day:hover,
+.ebook-month-day.is-hovered {
+  border-color: #a83d25 !important;
+  box-shadow: 0 0 0 1px #a83d25;
+  z-index: 2;
+}
+
+.ebook-month-day.is-selected {
+  outline: 2px solid #232e35;
+  outline-offset: -1px;
+  z-index: 3;
+}
+
+.ebook-month-day.is-today {
+  box-shadow: inset 0 0 0 1.5px #1e70bf;
+}
+
+/* Institutional Legend */
+.ebook-institutional-legend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #eef2f4;
+}
+
+.ebook-legend-title {
+  color: #839199;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.ebook-legend-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ebook-legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: #798790;
+  font-family: var(--mono);
+  font-size: 8px;
+}
+
+.ebook-legend-chip i {
+  width: 9px;
+  height: 9px;
+  display: inline-block;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.ebook-legend-chip i.level-0 {
+  background: #f4f6f8;
+}
+.ebook-legend-chip i.level-1 {
+  background: #fce8e2;
+}
+.ebook-legend-chip i.level-2 {
+  background: #f7c3b2;
+}
+.ebook-legend-chip i.level-3 {
+  background: #ea8f76;
+}
+.ebook-legend-chip i.level-4 {
+  background: #aa3f26;
+}
+
+/* Year view: the 53 week columns share the pane width. The legacy rules in styles.css gave the grid
+   a 760px minimum, which pushed the last months under the chart pane. The square cell size comes
+   from the pane width (container query units), so weekday labels and month headers stay aligned
+   with the cells at any window width. */
+.ebook-institutional-heatmap .ebook-year-calendar {
+  --year-gap: 2px;
+  --year-label: 22px;
+  --year-label-gap: 8px;
+  --year-cell: max(
+    5px,
+    calc(
+      (
+          100cqw - var(--year-label) - var(--year-label-gap) - 52 *
+            var(--year-gap)
+        ) /
+        53
+    )
+  );
+  min-width: 0;
+  margin-block: auto;
+  container-type: inline-size;
+}
+
+.ebook-institutional-heatmap .ebook-year-calendar .ebook-heatmap-months {
+  min-width: 0;
+  gap: var(--year-gap);
+  margin: 0 0 6px calc(var(--year-label) + var(--year-label-gap));
+}
+
+.ebook-institutional-heatmap
+  .ebook-year-calendar
+  .ebook-heatmap-wrap.is-expanded {
+  min-width: 0;
+  gap: var(--year-label-gap);
+}
+
+.ebook-institutional-heatmap
+  .ebook-year-calendar
+  .ebook-heatmap-weekdays.is-expanded {
+  width: var(--year-label);
+  flex: 0 0 var(--year-label);
+  grid-template-rows: repeat(7, var(--year-cell));
+  gap: var(--year-gap);
+  font-size: 9px;
+  line-height: var(--year-cell);
+}
+
+.ebook-institutional-heatmap
+  .ebook-year-calendar
+  .ebook-heatmap-grid.is-expanded {
+  gap: var(--year-gap);
+}
+
+.ebook-institutional-heatmap
+  .ebook-year-calendar
+  .ebook-heatmap-grid.is-expanded
+  .ebook-heatmap-week {
+  grid-template-rows: repeat(7, var(--year-cell));
+  gap: var(--year-gap);
+}
+
+.ebook-institutional-heatmap
+  .ebook-year-calendar
+  .ebook-heatmap-grid.is-expanded
+  .ebook-heatmap-day {
+  height: var(--year-cell);
+}
+
+/* 2D Vector Chart Box */
+.ebook-2d-chart-box {
+  width: 100%;
+  height: 175px;
+  border: 1px solid #edf1f3;
+  background: #fcfdfe;
+}
+
+.ebook-2d-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.ebook-chart-grid-line {
+  stroke: #e7ecf0;
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.ebook-chart-y-text,
+.ebook-chart-x-text {
+  fill: #86949d;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.ebook-chart-x-text.is-active {
+  fill: #a83d25;
+  font-weight: 700;
+}
+
+.ebook-chart-avg-line {
+  stroke: #d06349;
+  stroke-width: 1.2;
+  stroke-dasharray: 4 3;
+}
+
+.ebook-chart-avg-label {
+  fill: #b3482f;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  font-weight: 700;
+  user-select: none;
+  /* A halo in the chart background keeps the label legible where it crosses a bar. */
+  paint-order: stroke;
+  stroke: #fcfdfe;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+.ebook-chart-bar-group {
+  cursor: pointer;
+}
+
+.ebook-chart-bar-hit {
+  fill: transparent;
+}
+
+.ebook-chart-bar-group:hover .ebook-chart-bar-hit,
+.ebook-chart-bar-group.is-active .ebook-chart-bar-hit {
+  fill: rgba(168, 61, 37, 0.04);
+}
+
+.ebook-chart-active-col {
+  fill: rgba(168, 61, 37, 0.08);
+}
+
+.ebook-chart-bar-zero {
+  fill: #d5dce0;
+}
+
+.ebook-chart-bar-rect {
+  transition: all 0.15s ease;
+}
+
+.ebook-chart-bar-rect.level-0 {
+  fill: #e5eaed;
+}
+.ebook-chart-bar-rect.level-1 {
+  fill: #f6d1c4;
+}
+.ebook-chart-bar-rect.level-2 {
+  fill: #efa48e;
+}
+.ebook-chart-bar-rect.level-3 {
+  fill: #dc7256;
+}
+.ebook-chart-bar-rect.level-4 {
+  fill: #aa3f26;
+}
+
+.ebook-chart-bar-group:hover .ebook-chart-bar-rect,
+.ebook-chart-bar-rect.is-active {
+  filter: brightness(0.92);
+  stroke: #253138;
+  stroke-width: 1;
+}
+
+/* Institutional Inspector Card */
+.ebook-institutional-inspector {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #e4eaee;
+  background: #f8fafb;
+}
+
+.ebook-inspector-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #edf1f3;
+}
+
+.ebook-inspector-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ebook-inspector-dot {
+  width: 6px;
+  height: 6px;
+  background: #a83d25;
+}
+
+.ebook-inspector-date {
+  color: #202b32;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.ebook-inspector-level {
+  color: #7b8890;
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
+.ebook-inspector-body {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 8px;
+}
+
+.ebook-inspector-words-block {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.ebook-inspector-number {
+  color: #1f2a31;
+  font-family: var(--mono);
+  font-size: 19px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.ebook-inspector-unit {
+  color: #717f87;
+  font-size: 10px;
+}
+
+.ebook-inspector-ratio {
+  color: #a83d25;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 600;
+}
+
+.ebook-inspector-books {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-height: 64px;
+  overflow-y: auto;
+}
+
+.ebook-inspector-book-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ebook-inspector-book-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10px;
+}
+
+.ebook-inspector-book-name {
+  color: #3b4850;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 170px;
+}
+
+.ebook-inspector-book-words {
+  color: #77858d;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
+.ebook-inspector-empty {
+  color: #929ea5;
+  font-size: 10px;
+  font-style: italic;
+}
+
+/* ==========================================================================
+   Dark Theme Adaptation (.app-shell[data-theme='dark'])
+   ========================================================================== */
+
+.app-shell[data-theme='dark'] .ebook-institutional-heatmap {
+  border-color: #364047;
+  background: #1c2429;
+}
+
+.app-shell[data-theme='dark'] .ebook-institutional-header {
+  border-bottom-color: #2b353c;
+}
+
+.app-shell[data-theme='dark'] .ebook-institutional-kicker {
+  color: #8fa0aa;
+}
+
+.app-shell[data-theme='dark'] .ebook-institutional-badge {
+  border-color: #404d55;
+  color: #a4b3bc;
+  background: #232c32;
+}
+
+.app-shell[data-theme='dark'] .ebook-institutional-title-row h2 {
+  color: #e2e8ec;
+}
+
+.app-shell[data-theme='dark'] .ebook-institutional-period-tag {
+  color: #9daab2;
+}
+
+.app-shell[data-theme='dark'] .ebook-institutional-seg-control {
+  border-color: #3c4850;
+  background: #20292f;
+}
+
+.app-shell[data-theme='dark'] .ebook-institutional-seg-btn {
+  color: #a1afb7;
+}
+
+.app-shell[data-theme='dark'] .ebook-institutional-seg-btn:hover {
+  color: #edf2f5;
+}
+
+.app-shell[data-theme='dark'] .ebook-institutional-seg-btn.is-active {
+  border-color: #4c5a63;
+  color: #f18c72;
+  background: #2a353c;
+}
+
+.app-shell[data-theme='dark'] .ebook-institutional-stepper {
+  border-color: #3c4850;
+  background: #20292f;
+}
+
+.app-shell[data-theme='dark'] .ebook-institutional-stepper-btn {
+  color: #a7b5bd;
+}
+
+.app-shell[data-theme='dark'] .ebook-institutional-stepper-btn:hover {
+  color: #f18c72;
+  background: #28333a;
+}
+
+.app-shell[data-theme='dark'] .ebook-institutional-stepper-reset {
+  border-right-color: #2e3a42;
+  border-left-color: #2e3a42;
+  color: #a7b5bd;
+}
+
+.app-shell[data-theme='dark'] .ebook-institutional-stepper-reset:hover {
+  color: #f18c72;
+  background: #28333a;
+}
+
+.app-shell[data-theme='dark'] .ebook-institutional-kpi-tile {
+  border-color: #323d44;
+  background: #20292f;
+}
+
+.app-shell[data-theme='dark'] .ebook-kpi-label {
+  color: #8fa0aa;
+}
+
+.app-shell[data-theme='dark'] .ebook-kpi-value {
+  color: #e5ebef;
+}
+
+.app-shell[data-theme='dark'] .ebook-kpi-unit,
+.app-shell[data-theme='dark'] .ebook-kpi-denom {
+  color: #8c9ba4;
+}
+
+.app-shell[data-theme='dark'] .ebook-kpi-badge {
+  border-color: #723c31;
+  color: #f69b84;
+  background: #3c2420;
+}
+
+.app-shell[data-theme='dark'] .ebook-kpi-sub {
+  color: #82929b;
+}
+
+.app-shell[data-theme='dark'] .ebook-institutional-heatmap-pane,
+.app-shell[data-theme='dark'] .ebook-institutional-chart-pane {
+  border-color: #323d44;
+  background: #1c2429;
+}
+
+.app-shell[data-theme='dark'] .ebook-pane-header {
+  border-bottom-color: #2a343a;
+}
+
+.app-shell[data-theme='dark'] .ebook-pane-tag {
+  border-color: #3c4850;
+  color: #9cb0ba;
+  background: #232c32;
+}
+
+.app-shell[data-theme='dark'] .ebook-pane-title {
+  color: #dde4e8;
+}
+
+.app-shell[data-theme='dark'] .ebook-pane-status,
+.app-shell[data-theme='dark'] .ebook-pane-sub {
+  color: #8a9ba4;
+}
+
+/* Dark Month Grid */
+.app-shell[data-theme='dark'] .ebook-month-weekdays span {
+  color: #8798a2;
+}
+
+.app-shell[data-theme='dark'] .ebook-month-day {
+  border-color: #2b353c;
+  background: #222b31;
+}
+
+.app-shell[data-theme='dark'] .ebook-month-day.is-outside {
+  background: #1a2227;
+  border-color: #232c32;
+}
+
+.app-shell[data-theme='dark'] .ebook-month-day-num {
+  color: #cdd7dd;
+}
+
+.app-shell[data-theme='dark'] .ebook-month-day-val {
+  color: #a8b8c2;
+}
+
+.app-shell[data-theme='dark'] .ebook-month-day.level-0 {
+  background: #222b31;
+}
+
+.app-shell[data-theme='dark'] .ebook-month-day.level-1 {
+  background: #4a2d26;
+  border-color: #5d382f;
+}
+
+.app-shell[data-theme='dark'] .ebook-month-day.level-2 {
+  background: #753b2f;
+  border-color: #8e493b;
+}
+
+.app-shell[data-theme='dark'] .ebook-month-day.level-3 {
+  background: #aa4e39;
+  border-color: #c55d44;
+}
+
+.app-shell[data-theme='dark'] .ebook-month-day.level-4 {
+  background: #db6549;
+  border-color: #f1785b;
+}
+
+.app-shell[data-theme='dark'] .ebook-month-day.is-selected {
+  outline-color: #e5ebef;
+}
+
+.app-shell[data-theme='dark'] .ebook-institutional-legend {
+  border-top-color: #293339;
+}
+
+.app-shell[data-theme='dark'] .ebook-legend-title {
+  color: #8899a3;
+}
+
+.app-shell[data-theme='dark'] .ebook-legend-chip {
+  color: #92a3ad;
+}
+
+.app-shell[data-theme='dark'] .ebook-legend-chip i.level-0 {
+  background: #222b31;
+  border-color: #344048;
+}
+.app-shell[data-theme='dark'] .ebook-legend-chip i.level-1 {
+  background: #4a2d26;
+  border-color: #5d382f;
+}
+.app-shell[data-theme='dark'] .ebook-legend-chip i.level-2 {
+  background: #753b2f;
+  border-color: #8e493b;
+}
+.app-shell[data-theme='dark'] .ebook-legend-chip i.level-3 {
+  background: #aa4e39;
+  border-color: #c55d44;
+}
+.app-shell[data-theme='dark'] .ebook-legend-chip i.level-4 {
+  background: #db6549;
+  border-color: #f1785b;
+}
+
+.app-shell[data-theme='dark'] .ebook-2d-chart-box {
+  border-color: #2e383f;
+  background: #182025;
+}
+
+.app-shell[data-theme='dark'] .ebook-chart-grid-line {
+  stroke: #28333a;
+}
+
+.app-shell[data-theme='dark'] .ebook-chart-y-text,
+.app-shell[data-theme='dark'] .ebook-chart-x-text {
+  fill: #788993;
+}
+
+.app-shell[data-theme='dark'] .ebook-chart-x-text.is-active {
+  fill: #f18c72;
+}
+
+.app-shell[data-theme='dark'] .ebook-chart-avg-line {
+  stroke: #e27156;
+}
+
+.app-shell[data-theme='dark'] .ebook-chart-avg-label {
+  fill: #f18c72;
+  stroke: #182025;
+}
+
+.app-shell[data-theme='dark'] .ebook-chart-bar-hit:hover,
+.app-shell[data-theme='dark']
+  .ebook-chart-bar-group.is-active
+  .ebook-chart-bar-hit {
+  fill: rgba(241, 140, 114, 0.08);
+}
+
+.app-shell[data-theme='dark'] .ebook-chart-active-col {
+  fill: rgba(241, 140, 114, 0.12);
+}
+
+.app-shell[data-theme='dark'] .ebook-chart-bar-zero {
+  fill: #34414a;
+}
+
+.app-shell[data-theme='dark'] .ebook-chart-bar-rect.level-0 {
+  fill: #263138;
+}
+.app-shell[data-theme='dark'] .ebook-chart-bar-rect.level-1 {
+  fill: #523129;
+}
+.app-shell[data-theme='dark'] .ebook-chart-bar-rect.level-2 {
+  fill: #824032;
+}
+.app-shell[data-theme='dark'] .ebook-chart-bar-rect.level-3 {
+  fill: #b8543d;
+}
+.app-shell[data-theme='dark'] .ebook-chart-bar-rect.level-4 {
+  fill: #e56d51;
+}
+
+.app-shell[data-theme='dark']
+  .ebook-chart-bar-group:hover
+  .ebook-chart-bar-rect,
+.app-shell[data-theme='dark'] .ebook-chart-bar-rect.is-active {
+  stroke: #e2e8ec;
+}
+
+.app-shell[data-theme='dark'] .ebook-institutional-inspector {
+  border-color: #313c43;
+  background: #20292f;
+}
+
+.app-shell[data-theme='dark'] .ebook-inspector-header {
+  border-bottom-color: #2b353c;
+}
+
+.app-shell[data-theme='dark'] .ebook-inspector-dot {
+  background: #f18c72;
+}
+
+.app-shell[data-theme='dark'] .ebook-inspector-date {
+  color: #e2e8ec;
+}
+
+.app-shell[data-theme='dark'] .ebook-inspector-level {
+  color: #8c9da7;
+}
+
+.app-shell[data-theme='dark'] .ebook-inspector-number {
+  color: #edf2f5;
+}
+
+.app-shell[data-theme='dark'] .ebook-inspector-unit {
+  color: #8a9aa3;
+}
+
+.app-shell[data-theme='dark'] .ebook-inspector-ratio {
+  color: #f18c72;
+}
+
+.app-shell[data-theme='dark'] .ebook-inspector-book-name {
+  color: #cad4da;
+}
+
+.app-shell[data-theme='dark'] .ebook-inspector-book-words {
+  color: #8f9ea7;
+}
+
+.app-shell[data-theme='dark'] .ebook-inspector-empty {
+  color: #798a94;
+}
+
+@media (max-width: 960px) {
+  .ebook-institutional-kpi-ribbon {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .ebook-institutional-analytics-split {
+    grid-template-columns: 1fr;
   }
 }

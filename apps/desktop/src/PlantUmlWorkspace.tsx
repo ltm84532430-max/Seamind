@@ -28,6 +28,7 @@ export interface PlantUmlEditorRequest {
   source: string;
   language: 'plantuml' | 'puml';
   saveTarget?: 'markdown' | 'file';
+  cacheKey?: string;
   documentTitle?: string;
   onSave: (nextSource: string) => void | Promise<void>;
 }
@@ -196,6 +197,7 @@ export default function PlantUmlWorkspace({
   const [rendering, setRendering] = useState(false);
   const [saving, setSaving] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [svgSnapshot, setSvgSnapshot] = useState('');
   const [appliedSource, setAppliedSource] = useState(request.source);
   const [view, setView] = useState<CanvasView>({ scale: 1, x: 0, y: 0 });
   const previewRef = useRef<HTMLDivElement>(null);
@@ -256,9 +258,11 @@ export default function PlantUmlWorkspace({
         source,
         dark: theme === 'dark',
         authorizedIncludeDirectory: authorizedDirectory || null,
+        cacheKey: request.cacheKey ?? null,
       })
         .then((result) => {
           if (revision !== renderRevisionRef.current) return;
+          setSvgSnapshot(result.svg);
           const svg = sanitizeDiagramSvg(result.svg);
           const host = previewRef.current;
           if (!svg || !host) {
@@ -281,6 +285,7 @@ export default function PlantUmlWorkspace({
         })
         .catch((error: unknown) => {
           if (revision !== renderRevisionRef.current) return;
+          setSvgSnapshot('');
           setRenderError(
             error instanceof Error ? error.message : String(error),
           );
@@ -295,13 +300,40 @@ export default function PlantUmlWorkspace({
       window.clearTimeout(timer);
       renderRevisionRef.current += 1;
     };
-  }, [authorizedDirectory, document.diagramType, fullscreen, source, theme]);
+  }, [
+    authorizedDirectory,
+    document.diagramType,
+    request.cacheKey,
+    source,
+    theme,
+  ]);
+
+  useEffect(() => {
+    const host = previewRef.current;
+    if (!host) return;
+    host.replaceChildren();
+    if (!svgSnapshot) return;
+
+    const svg = sanitizeDiagramSvg(svgSnapshot);
+    if (!svg) return;
+    svg.classList.add('seamind-diagram-svg');
+    svg.setAttribute('role', 'img');
+    svg.setAttribute(
+      'aria-label',
+      `${diagramTypeLabel(document.diagramType)}预览`,
+    );
+    svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    svg.style.width = '100%';
+    svg.style.height = '100%';
+    host.replaceChildren(svg);
+    strengthenFineStrokes(svg, theme === 'dark');
+  }, [document.diagramType, fullscreen, svgSnapshot, theme]);
 
   useEffect(() => {
     const svg = previewRef.current?.querySelector('svg');
     if (svg)
       svg.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.scale})`;
-  }, [view]);
+  }, [fullscreen, svgSnapshot, view]);
 
   const changeSource = (nextSource: string) => onSourceChange(nextSource);
   const closeWorkspace = () => {

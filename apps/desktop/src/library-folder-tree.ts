@@ -1,10 +1,16 @@
-import type { MapDocument } from './library';
+import type {
+  EpubBookDocument,
+  MapDocument,
+  PlantUmlDocument,
+} from './library';
 
 export interface LibraryFolderNode {
   path: string;
   name: string;
   children: LibraryFolderNode[];
   documents: MapDocument[];
+  books: EpubBookDocument[];
+  plantumlFiles: PlantUmlDocument[];
   documentCount: number;
 }
 
@@ -13,6 +19,8 @@ interface MutableLibraryFolderNode {
   name: string;
   children: Map<string, MutableLibraryFolderNode>;
   documents: MapDocument[];
+  books: EpubBookDocument[];
+  plantumlFiles: PlantUmlDocument[];
 }
 
 function normalizeFolderPath(value: string): string {
@@ -27,6 +35,8 @@ function normalizeFolderPath(value: string): string {
 export function buildLibraryFolderTree(
   categories: string[],
   documents: MapDocument[],
+  books: EpubBookDocument[] = [],
+  plantumlFiles: PlantUmlDocument[] = [],
 ): LibraryFolderNode[] {
   const roots = new Map<string, MutableLibraryFolderNode>();
 
@@ -42,7 +52,14 @@ export function buildLibraryFolderTree(
       const path = parentPath ? `${parentPath}/${name}` : name;
       node = children.get(name);
       if (!node) {
-        node = { path, name, children: new Map(), documents: [] };
+        node = {
+          path,
+          name,
+          children: new Map(),
+          documents: [],
+          books: [],
+          plantumlFiles: [],
+        };
         children.set(name, node);
       }
       parentPath = path;
@@ -60,6 +77,18 @@ export function buildLibraryFolderTree(
     folder?.documents.push(document);
   }
 
+  for (const book of books) {
+    const category = normalizeFolderPath(book.category || '未分类');
+    const folder = ensureFolder(category);
+    folder?.books.push(book);
+  }
+
+  for (const diagram of plantumlFiles) {
+    const category = normalizeFolderPath(diagram.category || '未分类');
+    const folder = ensureFolder(category);
+    folder?.plantumlFiles.push(diagram);
+  }
+
   const compareFolders = (left: LibraryFolderNode, right: LibraryFolderNode) =>
     left.name.localeCompare(right.name, 'zh-CN', {
       numeric: true,
@@ -71,14 +100,20 @@ export function buildLibraryFolderTree(
       .map(finalize)
       .sort(compareFolders);
     const folderDocuments = [...node.documents];
+    const folderBooks = [...node.books];
+    const folderPlantUmlFiles = [...node.plantumlFiles];
 
     return {
       path: node.path,
       name: node.name,
       children,
       documents: folderDocuments,
+      books: folderBooks,
+      plantumlFiles: folderPlantUmlFiles,
       documentCount:
         folderDocuments.length +
+        folderBooks.length +
+        folderPlantUmlFiles.length +
         children.reduce((total, child) => total + child.documentCount, 0),
     };
   };

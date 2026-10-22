@@ -6,6 +6,32 @@ export interface EpubBookMetadata {
   coverDataUrl?: string;
   progress: number;
   lastReadAt: number;
+  currentChapterHref?: string;
+  currentChapterLabel?: string;
+  currentChapterIndex?: number;
+  chapterCount?: number;
+}
+
+export interface EpubReadingActivity {
+  furthestProgress: number;
+  estimatedTotalWords: number | null;
+  dailyWords: Record<string, number>;
+  pendingProgress: Record<string, number>;
+  wordCountUnavailable: boolean;
+}
+
+export interface EpubReadingPlan {
+  targetChapters: number;
+  dueDate: string;
+  startPending: boolean;
+  startChapterIndex: number;
+  startChapterHref: string;
+  startChapterLabel: string;
+  furthestChapterIndex: number;
+  chapterCount: number;
+  reachedBookEnd: boolean;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface EpubBookmark {
@@ -37,6 +63,8 @@ const SETTINGS_PREFIX = 'seamind:epub-settings:v1:';
 const METADATA_PREFIX = 'seamind:epub-metadata:v1:';
 const BOOKMARK_PREFIX = 'seamind:epub-bookmarks:v1:';
 const ANNOTATION_PREFIX = 'seamind:epub-annotations:v1:';
+const READING_ACTIVITY_PREFIX = 'seamind:epub-reading-activity:v1:';
+const READING_PLAN_PREFIX = 'seamind:epub-reading-plan:v1:';
 
 function suffix(progressKey: string) {
   return encodeURIComponent(progressKey);
@@ -72,6 +100,25 @@ export function loadEpubBookMetadata(
         Number.isFinite(value.lastReadAt)
           ? value.lastReadAt
           : 0,
+      ...(typeof value.currentChapterHref === 'string'
+        ? { currentChapterHref: value.currentChapterHref }
+        : {}),
+      ...(typeof value.currentChapterLabel === 'string'
+        ? { currentChapterLabel: value.currentChapterLabel }
+        : {}),
+      ...(typeof value.currentChapterIndex === 'number' &&
+      Number.isFinite(value.currentChapterIndex)
+        ? {
+            currentChapterIndex: Math.max(
+              0,
+              Math.floor(value.currentChapterIndex),
+            ),
+          }
+        : {}),
+      ...(typeof value.chapterCount === 'number' &&
+      Number.isFinite(value.chapterCount)
+        ? { chapterCount: Math.max(0, Math.floor(value.chapterCount)) }
+        : {}),
     };
   } catch {
     return null;
@@ -91,6 +138,28 @@ export function saveEpubBookMetadata(
       : {}),
     progress: update.progress ?? previous?.progress ?? 0,
     lastReadAt: update.lastReadAt ?? previous?.lastReadAt ?? 0,
+    ...((update.currentChapterHref ?? previous?.currentChapterHref)
+      ? {
+          currentChapterHref:
+            update.currentChapterHref ?? previous?.currentChapterHref,
+        }
+      : {}),
+    ...((update.currentChapterLabel ?? previous?.currentChapterLabel)
+      ? {
+          currentChapterLabel:
+            update.currentChapterLabel ?? previous?.currentChapterLabel,
+        }
+      : {}),
+    ...((update.currentChapterIndex ?? previous?.currentChapterIndex) !==
+    undefined
+      ? {
+          currentChapterIndex:
+            update.currentChapterIndex ?? previous?.currentChapterIndex,
+        }
+      : {}),
+    ...((update.chapterCount ?? previous?.chapterCount) !== undefined
+      ? { chapterCount: update.chapterCount ?? previous?.chapterCount }
+      : {}),
   };
   const key = `${METADATA_PREFIX}${suffix(progressKey)}`;
   try {
@@ -104,6 +173,18 @@ export function saveEpubBookMetadata(
         author: next.author,
         progress: next.progress,
         lastReadAt: next.lastReadAt,
+        ...(next.currentChapterHref
+          ? { currentChapterHref: next.currentChapterHref }
+          : {}),
+        ...(next.currentChapterLabel
+          ? { currentChapterLabel: next.currentChapterLabel }
+          : {}),
+        ...(next.currentChapterIndex !== undefined
+          ? { currentChapterIndex: next.currentChapterIndex }
+          : {}),
+        ...(next.chapterCount !== undefined
+          ? { chapterCount: next.chapterCount }
+          : {}),
       };
       localStorage.setItem(key, JSON.stringify(withoutCover));
       return false;
@@ -218,7 +299,276 @@ export function clearEpubReaderData(progressKey: string) {
     localStorage.removeItem(`${SETTINGS_PREFIX}${key}`);
     localStorage.removeItem(`${METADATA_PREFIX}${key}`);
     localStorage.removeItem(`${BOOKMARK_PREFIX}${key}`);
+    localStorage.removeItem(`${ANNOTATION_PREFIX}${key}`);
+    localStorage.removeItem(`${READING_ACTIVITY_PREFIX}${key}`);
+    localStorage.removeItem(`${READING_PLAN_PREFIX}${key}`);
   } catch {
     // The EPUB file deletion remains successful if browser storage is unavailable.
   }
+}
+
+function clampProgress(progress: number) {
+  return Math.max(0, Math.min(1, Number.isFinite(progress) ? progress : 0));
+}
+
+function localDateKey(timestamp = Date.now()) {
+  const date = new Date(timestamp);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function readActivity(progressKey: string): EpubReadingActivity | null {
+  try {
+    const parsed: unknown = JSON.parse(
+      localStorage.getItem(
+        `${READING_ACTIVITY_PREFIX}${suffix(progressKey)}`,
+      ) ?? 'null',
+    );
+    if (!parsed || typeof parsed !== 'object') return null;
+    const value = parsed as Partial<EpubReadingActivity>;
+    const dailyWords: Record<string, number> = {};
+    if (value.dailyWords && typeof value.dailyWords === 'object') {
+      for (const [date, words] of Object.entries(value.dailyWords)) {
+        if (
+          /^\d{4}-\d{2}-\d{2}$/.test(date) &&
+          typeof words === 'number' &&
+          Number.isFinite(words) &&
+          words > 0
+        ) {
+          dailyWords[date] = Math.round(words);
+        }
+      }
+    }
+    const pendingProgress: Record<string, number> = {};
+    if (value.pendingProgress && typeof value.pendingProgress === 'object') {
+      for (const [date, progress] of Object.entries(value.pendingProgress)) {
+        if (
+          /^\d{4}-\d{2}-\d{2}$/.test(date) &&
+          typeof progress === 'number' &&
+          Number.isFinite(progress) &&
+          progress > 0
+        ) {
+          pendingProgress[date] = progress;
+        }
+      }
+    }
+    return {
+      furthestProgress: clampProgress(
+        typeof value.furthestProgress === 'number' ? value.furthestProgress : 0,
+      ),
+      estimatedTotalWords:
+        typeof value.estimatedTotalWords === 'number' &&
+        Number.isFinite(value.estimatedTotalWords)
+          ? Math.max(0, Math.floor(value.estimatedTotalWords))
+          : null,
+      dailyWords,
+      pendingProgress,
+      wordCountUnavailable: value.wordCountUnavailable === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveActivity(progressKey: string, activity: EpubReadingActivity) {
+  try {
+    localStorage.setItem(
+      `${READING_ACTIVITY_PREFIX}${suffix(progressKey)}`,
+      JSON.stringify(activity),
+    );
+  } catch {
+    // Reading remains available when local storage is full or disabled.
+  }
+}
+
+export function loadEpubReadingActivity(
+  progressKey: string,
+): EpubReadingActivity | null {
+  return readActivity(progressKey);
+}
+
+export function recordEpubReadingProgress(
+  progressKey: string,
+  progress: number,
+  baselineProgress: number,
+) {
+  const current = clampProgress(progress);
+  const activity = readActivity(progressKey) ?? {
+    furthestProgress: clampProgress(baselineProgress),
+    estimatedTotalWords: null,
+    dailyWords: {},
+    pendingProgress: {},
+    wordCountUnavailable: false,
+  };
+  const delta = current - activity.furthestProgress;
+  if (delta <= 0) {
+    saveActivity(progressKey, activity);
+    return activity;
+  }
+
+  activity.furthestProgress = current;
+  const date = localDateKey();
+  if (activity.estimatedTotalWords === null) {
+    activity.pendingProgress[date] =
+      (activity.pendingProgress[date] ?? 0) + delta;
+  } else if (activity.estimatedTotalWords > 0) {
+    activity.dailyWords[date] =
+      (activity.dailyWords[date] ?? 0) +
+      Math.max(1, Math.round(delta * activity.estimatedTotalWords));
+  }
+  saveActivity(progressKey, activity);
+  return activity;
+}
+
+export function saveEpubReadingWordEstimate(
+  progressKey: string,
+  totalWords: number,
+  baselineProgress: number,
+) {
+  const activity = readActivity(progressKey) ?? {
+    furthestProgress: clampProgress(baselineProgress),
+    estimatedTotalWords: null,
+    dailyWords: {},
+    pendingProgress: {},
+    wordCountUnavailable: false,
+  };
+  const estimate = Math.max(0, Math.floor(totalWords));
+  activity.estimatedTotalWords = estimate;
+  activity.wordCountUnavailable = estimate === 0;
+  if (estimate > 0) {
+    for (const [date, delta] of Object.entries(activity.pendingProgress)) {
+      const words = Math.round(delta * estimate);
+      if (words > 0) {
+        activity.dailyWords[date] = (activity.dailyWords[date] ?? 0) + words;
+      }
+    }
+  }
+  activity.pendingProgress = {};
+  saveActivity(progressKey, activity);
+  return activity;
+}
+
+export function loadEpubReadingPlan(
+  progressKey: string,
+): EpubReadingPlan | null {
+  try {
+    const parsed: unknown = JSON.parse(
+      localStorage.getItem(`${READING_PLAN_PREFIX}${suffix(progressKey)}`) ??
+        'null',
+    );
+    if (!parsed || typeof parsed !== 'object') return null;
+    const value = parsed as Partial<EpubReadingPlan>;
+    if (
+      typeof value.targetChapters !== 'number' ||
+      !Number.isFinite(value.targetChapters) ||
+      typeof value.dueDate !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(value.dueDate)
+    ) {
+      return null;
+    }
+    return {
+      targetChapters: Math.max(1, Math.floor(value.targetChapters)),
+      dueDate: value.dueDate,
+      startPending: value.startPending === true,
+      startChapterIndex:
+        typeof value.startChapterIndex === 'number' &&
+        Number.isFinite(value.startChapterIndex)
+          ? Math.max(0, Math.floor(value.startChapterIndex))
+          : 0,
+      startChapterHref:
+        typeof value.startChapterHref === 'string'
+          ? value.startChapterHref
+          : '',
+      startChapterLabel:
+        typeof value.startChapterLabel === 'string'
+          ? value.startChapterLabel
+          : '',
+      furthestChapterIndex:
+        typeof value.furthestChapterIndex === 'number' &&
+        Number.isFinite(value.furthestChapterIndex)
+          ? Math.max(0, Math.floor(value.furthestChapterIndex))
+          : 0,
+      chapterCount:
+        typeof value.chapterCount === 'number' &&
+        Number.isFinite(value.chapterCount)
+          ? Math.max(0, Math.floor(value.chapterCount))
+          : 0,
+      reachedBookEnd: value.reachedBookEnd === true,
+      createdAt:
+        typeof value.createdAt === 'number' && Number.isFinite(value.createdAt)
+          ? value.createdAt
+          : Date.now(),
+      updatedAt:
+        typeof value.updatedAt === 'number' && Number.isFinite(value.updatedAt)
+          ? value.updatedAt
+          : Date.now(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function saveEpubReadingPlan(
+  progressKey: string,
+  plan: EpubReadingPlan,
+): boolean {
+  try {
+    localStorage.setItem(
+      `${READING_PLAN_PREFIX}${suffix(progressKey)}`,
+      JSON.stringify(plan),
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function deleteEpubReadingPlan(progressKey: string) {
+  try {
+    localStorage.removeItem(`${READING_PLAN_PREFIX}${suffix(progressKey)}`);
+  } catch {
+    // Ignore unavailable browser storage.
+  }
+}
+
+export function recordEpubChapterProgress(
+  progressKey: string,
+  chapterIndex: number,
+  chapterCount: number,
+  progress: number,
+  chapterHref = '',
+  chapterLabel = '',
+) {
+  const plan = loadEpubReadingPlan(progressKey);
+  if (!plan) return;
+  const index = Math.max(0, Math.floor(chapterIndex));
+  if (plan.startPending) {
+    plan.startPending = false;
+    plan.startChapterIndex = index;
+    plan.startChapterHref = chapterHref;
+    plan.startChapterLabel = chapterLabel || `第 ${index + 1} 章`;
+    plan.furthestChapterIndex = index;
+    plan.chapterCount = Math.max(plan.chapterCount, Math.floor(chapterCount));
+    plan.updatedAt = Date.now();
+    saveEpubReadingPlan(progressKey, plan);
+    return;
+  }
+  plan.furthestChapterIndex = Math.max(plan.furthestChapterIndex, index);
+  plan.chapterCount = Math.max(plan.chapterCount, Math.floor(chapterCount));
+  plan.reachedBookEnd = plan.reachedBookEnd || progress >= 0.999;
+  plan.updatedAt = Date.now();
+  saveEpubReadingPlan(progressKey, plan);
+}
+
+export function getEpubReadingPlanCompleted(plan: EpubReadingPlan) {
+  const passed = Math.max(
+    0,
+    plan.furthestChapterIndex - plan.startChapterIndex,
+  );
+  const completedAtEnd = plan.reachedBookEnd
+    ? Math.max(0, plan.chapterCount - plan.startChapterIndex)
+    : 0;
+  return Math.min(plan.targetChapters, Math.max(passed, completedAtEnd));
 }
