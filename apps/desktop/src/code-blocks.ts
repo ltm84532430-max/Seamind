@@ -320,6 +320,13 @@ function isSafeSvgStyle(value: string): boolean {
 
 const safeSvgPathData = /^[MmLlHhVvCcSsQqTtAaZz0-9.,+\-\s]+$/;
 const safeSvgPoints = /^[-+\d.eE,\s]+$/;
+// Pele colours its shapes with CSS variables, e.g. fill="var(--_bg)" or
+// stroke="var(--pele-series-1,#4c78a8)". A variable reference cannot load anything or run script,
+// and its fallback is limited to a plain colour.
+const safeSvgPaint =
+  /^(?:none|currentcolor|transparent|#[\da-f]{3,8}|[a-z]{1,20}|rgba?\([\d.,%\s]+\))$/i;
+const safeCssVariable =
+  /^var\(\s*--[\w-]{1,40}\s*(?:,\s*(?:#[\da-f]{3,8}|[a-z]{1,20}|rgba?\([\d.,%\s]+\))\s*)?\)$/i;
 
 function sanitizeMermaidSvg(source: string): SVGSVGElement | null {
   if (source.length > 300_000 || /<!doctype|<!entity/i.test(source))
@@ -368,9 +375,7 @@ function sanitizeMermaidSvg(source: string): SVGSVGElement | null {
         ) &&
           /^url\(#[\w-]{1,120}\)$/.test(value)) ||
         ((key === 'fill' || key === 'stroke') &&
-          /^(?:none|currentcolor|transparent|#[\da-f]{3,8}|[a-z]{1,20}|rgba?\([\d.,%\s]+\))$/i.test(
-            value,
-          )) ||
+          (safeSvgPaint.test(value) || safeCssVariable.test(value))) ||
         (key === 'transform' &&
           /^(?:(?:matrix|translate|scale|rotate|skewX|skewY)\([-+\d.eE,\s]+\)\s*)+$/i.test(
             value,
@@ -383,7 +388,13 @@ function sanitizeMermaidSvg(source: string): SVGSVGElement | null {
         (key === 'stroke-dasharray' &&
           /^(?:none|[-+\d.eE,\s]+)$/i.test(value)) ||
         (key === 'font-family' && /^[\w\s,'-]{1,100}$/.test(value)) ||
-        (key === 'font-weight' && /^(?:normal|bold|[1-9]00)$/i.test(value)) ||
+        (key === 'font-weight' &&
+          (/^(?:normal|bold|[1-9]00)$/i.test(value) ||
+            safeCssVariable.test(value))) ||
+        (key === 'stroke-linecap' &&
+          ['butt', 'round', 'square'].includes(value)) ||
+        (key === 'stroke-linejoin' &&
+          ['miter', 'round', 'bevel'].includes(value)) ||
         (key === 'text-anchor' && ['start', 'middle', 'end'].includes(value)) ||
         (key === 'role' && ['img', 'presentation'].includes(value)) ||
         (key === 'aria-hidden' && ['true', 'false'].includes(value)) ||
