@@ -23,6 +23,7 @@ import {
   updatePlantUmlRelationship,
 } from './plantuml-model';
 import type { PlantUmlDiagramType } from './plantuml-model';
+import { plantUmlDiagramNames, splitSvgDocuments } from './plantuml-svg';
 
 export interface PlantUmlEditorRequest {
   source: string;
@@ -198,11 +199,14 @@ export default function PlantUmlWorkspace({
   const [saving, setSaving] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [svgSnapshot, setSvgSnapshot] = useState('');
+  const [diagramIndex, setDiagramIndex] = useState(0);
   const [appliedSource, setAppliedSource] = useState(request.source);
   const [view, setView] = useState<CanvasView>({ scale: 1, x: 0, y: 0 });
   const previewRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const renderRevisionRef = useRef(0);
+  const diagramIndexRef = useRef(0);
+  diagramIndexRef.current = diagramIndex;
   const dragRef = useRef<{
     pointerId: number;
     startX: number;
@@ -210,6 +214,16 @@ export default function PlantUmlWorkspace({
     startView: CanvasView;
   } | null>(null);
   const document = useMemo(() => parsePlantUmlDocument(source), [source]);
+  // A source with several @startuml blocks comes back as several SVG documents.
+  const diagramDocuments = useMemo(
+    () => splitSvgDocuments(svgSnapshot),
+    [svgSnapshot],
+  );
+  const diagramNames = useMemo(() => plantUmlDiagramNames(source), [source]);
+  const activeDiagram = Math.min(
+    diagramIndex,
+    Math.max(0, diagramDocuments.length - 1),
+  );
   const selectedElement = document.elements.find(
     (element) => element.id === selectedElementId,
   );
@@ -263,10 +277,15 @@ export default function PlantUmlWorkspace({
         .then((result) => {
           if (revision !== renderRevisionRef.current) return;
           setSvgSnapshot(result.svg);
-          const svg = sanitizeDiagramSvg(result.svg);
+          const documents = splitSvgDocuments(result.svg);
+          const svg = sanitizeDiagramSvg(
+            documents[
+              Math.min(diagramIndexRef.current, documents.length - 1)
+            ] ?? '',
+          );
           const host = previewRef.current;
           if (!svg || !host) {
-            setRenderError('PlantUML SVG 未通过应用安全检查。');
+            setRenderError('PlantUML SVG 无法解析或未通过应用安全检查。');
             return;
           }
           svg.classList.add('seamind-diagram-svg');
@@ -314,7 +333,7 @@ export default function PlantUmlWorkspace({
     host.replaceChildren();
     if (!svgSnapshot) return;
 
-    const svg = sanitizeDiagramSvg(svgSnapshot);
+    const svg = sanitizeDiagramSvg(diagramDocuments[activeDiagram] ?? '');
     if (!svg) return;
     svg.classList.add('seamind-diagram-svg');
     svg.setAttribute('role', 'img');
@@ -327,13 +346,20 @@ export default function PlantUmlWorkspace({
     svg.style.height = '100%';
     host.replaceChildren(svg);
     strengthenFineStrokes(svg, theme === 'dark');
-  }, [document.diagramType, fullscreen, svgSnapshot, theme]);
+  }, [
+    activeDiagram,
+    diagramDocuments,
+    document.diagramType,
+    fullscreen,
+    svgSnapshot,
+    theme,
+  ]);
 
   useEffect(() => {
     const svg = previewRef.current?.querySelector('svg');
     if (svg)
       svg.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.scale})`;
-  }, [fullscreen, svgSnapshot, view]);
+  }, [activeDiagram, fullscreen, svgSnapshot, view]);
 
   const changeSource = (nextSource: string) => onSourceChange(nextSource);
   const closeWorkspace = () => {
@@ -494,6 +520,27 @@ export default function PlantUmlWorkspace({
         <span className="plantuml-toolbar-type">
           {diagramTypeLabel(document.diagramType)}
         </span>
+        {diagramDocuments.length > 1 && (
+          <select
+            className="plantuml-diagram-select"
+            value={activeDiagram}
+            aria-label="选择要预览的图表"
+            title="源码里有多个图，选择要预览的一个"
+            onChange={(event) => {
+              setDiagramIndex(Number(event.target.value));
+              setView({ scale: 1, x: 0, y: 0 });
+            }}
+          >
+            {diagramDocuments.map((_, index) => (
+              <option key={index} value={index}>
+                {diagramNames.length === diagramDocuments.length &&
+                diagramNames[index]
+                  ? `${index + 1}/${diagramDocuments.length} · ${diagramNames[index]}`
+                  : `图 ${index + 1}/${diagramDocuments.length}`}
+              </option>
+            ))}
+          </select>
+        )}
         <button
           type="button"
           disabled={!document.supportsGui}

@@ -3767,6 +3767,26 @@ button {
   color: var(--muted);
   font-size: 9px;
 }
+/* Picks which diagram to preview when the source holds several @startuml blocks. */
+.plantuml-diagram-select {
+  box-sizing: border-box;
+  max-width: 240px;
+  min-height: 26px;
+  flex: 0 1 auto;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  color: var(--ink);
+  background: var(--panel);
+  font: inherit;
+  font-size: 9px;
+  cursor: pointer;
+}
+.plantuml-diagram-select:hover,
+.plantuml-diagram-select:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
 .plantuml-toolbar-spacer {
   flex: 1 1 auto;
 }
