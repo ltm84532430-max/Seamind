@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { hydrateCodeBlocks } from './code-blocks';
 import type { CodeBlockHandlers } from './code-blocks';
 import { createMarkdownPreviewMinimap } from './markdown-minimap';
@@ -20,6 +20,9 @@ export default function MarkdownPreview({
 }: MarkdownPreviewProps) {
   const rootRef = useRef<HTMLElement>(null);
   const minimapHostRef = useRef<HTMLDivElement>(null);
+  // React sets the markup again whenever it gets a new object, even for the same string, and that
+  // would wipe the diagrams the effect below has put into the page.
+  const markup = useMemo(() => ({ __html: html }), [html]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -53,7 +56,7 @@ export default function MarkdownPreview({
         ref={rootRef}
         className="markdown-rendered-preview"
         aria-label="Markdown 渲染视图"
-        dangerouslySetInnerHTML={{ __html: html }}
+        dangerouslySetInnerHTML={markup}
       />
       <div ref={minimapHostRef} className="markdown-preview-minimap-host" />
     </div>
