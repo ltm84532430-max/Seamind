@@ -56,13 +56,17 @@ function findCssStructureProblem(css: string): string | null {
 }
 
 describe('stylesheet structure', () => {
-  const stylesheets = readdirSync(sourceDirectory).filter((name) =>
-    name.endsWith('.css'),
-  );
+  const stylesheets = [
+    ...readdirSync(sourceDirectory).filter((name) => name.endsWith('.css')),
+    ...readdirSync(new URL('workbench/', sourceDirectory))
+      .filter((name) => name.endsWith('.css'))
+      .map((name) => `workbench/${name}`),
+  ];
 
   it('finds the stylesheets', () => {
     expect(stylesheets).toContain('styles.css');
     expect(stylesheets).toContain('ebook-workspace.css');
+    expect(stylesheets).toContain('workbench/workbench.css');
   });
 
   for (const name of stylesheets) {

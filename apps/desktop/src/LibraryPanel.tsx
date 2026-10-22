@@ -6,11 +6,13 @@ import type {
   LibrarySnapshot,
   MapDocument,
   PlantUmlDocument,
+  TextDocument,
 } from './library';
 import {
   buildLibraryFolderTree,
   type LibraryFolderNode,
 } from './library-folder-tree';
+import type { NewFileKind } from './workbench/templates';
 
 export interface LibraryPanelProps {
   snapshot: LibrarySnapshot | null;
@@ -18,6 +20,8 @@ export interface LibraryPanelProps {
   selectedPath: string | null;
   /** The .puml file open in the PlantUML canvas, if any. */
   selectedPlantUmlPath?: string | null;
+  /** The .mmd diagram open in the diagram workbench, if any. */
+  selectedTextPath?: string | null;
   collapsed: boolean;
   categoryFilter: string;
   query: string;
@@ -33,6 +37,10 @@ export interface LibraryPanelProps {
   onOpenBook: (book: EpubBookDocument) => void;
   onOpenPlantUmlFile: (file: PlantUmlDocument) => void;
   onDeletePlantUmlFile: (file: PlantUmlDocument) => void;
+  onOpenTextDocument: (file: TextDocument) => void;
+  onDeleteTextDocument: (file: TextDocument) => void;
+  /** Creates an empty file of the chosen kind in the current folder and opens it. */
+  onCreateOfKind: (kind: NewFileKind) => void;
   onToggleEpubSummary: (enabled: boolean) => void;
   onCreateCategory: () => void;
   onRenameFolder: (path: string, newName: string) => Promise<void>;
@@ -147,7 +155,8 @@ function formatRelativeTime(timestamp: number): string {
 type SortMode = 'updated' | 'title' | 'category';
 type DeleteConfirmation =
   | { kind: 'map'; document: MapDocument }
-  | { kind: 'plantuml'; document: PlantUmlDocument };
+  | { kind: 'plantuml'; document: PlantUmlDocument }
+  | { kind: 'text'; document: TextDocument };
 type FolderContextMenu = { path: string; name: string; x: number; y: number };
 
 export default function LibraryPanel({
@@ -155,6 +164,7 @@ export default function LibraryPanel({
   documents,
   selectedPath,
   selectedPlantUmlPath = null,
+  selectedTextPath = null,
   collapsed,
   categoryFilter,
   query,
@@ -170,6 +180,9 @@ export default function LibraryPanel({
   onOpenBook,
   onOpenPlantUmlFile,
   onDeletePlantUmlFile,
+  onOpenTextDocument,
+  onDeleteTextDocument,
+  onCreateOfKind,
   onToggleEpubSummary,
   onCreateCategory,
   onRenameFolder,
@@ -232,16 +245,18 @@ export default function LibraryPanel({
     };
   }, [folderContextMenu]);
 
-  // Reveal the PUML file that was opened: expand its folders and bring its row into view. Only a
-  // change of the open file does this, so a later library refresh does not reopen folders the user
-  // closed.
+  // Reveal the PUML or diagram file that was opened: expand its folders and bring its row into
+  // view. Only a change of the open file does this, so a later library refresh does not reopen
+  // folders the user closed.
+  const revealedPath = selectedPlantUmlPath ?? selectedTextPath;
   useEffect(() => {
-    if (!selectedPlantUmlPath) return undefined;
-    const file = snapshot?.plantumlFiles.find(
-      (candidate) => candidate.relativePath === selectedPlantUmlPath,
-    );
+    if (!revealedPath) return undefined;
+    const file = [
+      ...(snapshot?.plantumlFiles ?? []),
+      ...(snapshot?.textDocuments ?? []),
+    ].find((candidate) => candidate.relativePath === revealedPath);
     const folder =
-      file?.category ?? selectedPlantUmlPath.split('/').slice(0, -1).join('/');
+      file?.category ?? revealedPath.split('/').slice(0, -1).join('/');
     const ancestors = folder
       .split('/')
       .filter(Boolean)
@@ -253,11 +268,13 @@ export default function LibraryPanel({
     );
     const frame = window.requestAnimationFrame(() =>
       sidebarRef.current
-        ?.querySelector('.library-puml-row.is-selected')
+        ?.querySelector(
+          '.library-puml-row.is-selected, .library-text-row.is-selected',
+        )
         ?.scrollIntoView({ block: 'nearest' }),
     );
     return () => window.cancelAnimationFrame(frame);
-  }, [selectedPlantUmlPath]);
+  }, [revealedPath]);
 
   // Root folder label
   const rootName =
@@ -333,6 +350,27 @@ export default function LibraryPanel({
     return list.sort((a, b) => a.category.localeCompare(b.category, 'zh-CN'));
   }, [snapshot?.plantumlFiles, categoryFilter, query, sortMode]);
 
+  const visibleTextDocuments = useMemo(() => {
+    const queryText = query.trim().toLocaleLowerCase();
+    const categoryText = categoryFilter.trim();
+    const list = (snapshot?.textDocuments ?? []).filter((file) => {
+      const matchesCategory =
+        !categoryText ||
+        file.category === categoryText ||
+        file.category.startsWith(`${categoryText}/`);
+      const matchesQuery =
+        !queryText ||
+        file.title.toLocaleLowerCase().includes(queryText) ||
+        file.relativePath.toLocaleLowerCase().includes(queryText);
+      return matchesCategory && matchesQuery;
+    });
+    if (sortMode === 'updated')
+      return list.sort((a, b) => b.updatedAt - a.updatedAt);
+    if (sortMode === 'title')
+      return list.sort((a, b) => a.title.localeCompare(b.title, 'zh-CN'));
+    return list.sort((a, b) => a.category.localeCompare(b.category, 'zh-CN'));
+  }, [snapshot?.textDocuments, categoryFilter, query, sortMode]);
+
   const folderTree = useMemo(
     () =>
       buildLibraryFolderTree(
@@ -340,8 +378,15 @@ export default function LibraryPanel({
         sortedDocuments,
         visibleBooks,
         visiblePlantUmlFiles,
+        visibleTextDocuments,
       ),
-    [snapshot?.categories, sortedDocuments, visibleBooks, visiblePlantUmlFiles],
+    [
+      snapshot?.categories,
+      sortedDocuments,
+      visibleBooks,
+      visiblePlantUmlFiles,
+      visibleTextDocuments,
+    ],
   );
 
   const toggleFolder = (cat: string) => {
@@ -412,7 +457,8 @@ export default function LibraryPanel({
       folder.children.length > 0 ||
       folder.documents.length > 0 ||
       folder.books.length > 0 ||
-      folder.plantumlFiles.length > 0;
+      folder.plantumlFiles.length > 0 ||
+      folder.textDocuments.length > 0;
 
     return (
       <div className="library-folder-group" key={folder.path}>
@@ -493,10 +539,19 @@ export default function LibraryPanel({
                   setDeleteConfirmation({ kind: 'plantuml', document }),
               ),
             )}
+            {folder.textDocuments.map((file) =>
+              renderTextDocumentRow(
+                file,
+                selectedTextPath,
+                onOpenTextDocument,
+                (document) => setDeleteConfirmation({ kind: 'text', document }),
+              ),
+            )}
             {folder.children.length === 0 &&
               folder.documents.length === 0 &&
               folder.books.length === 0 &&
-              folder.plantumlFiles.length === 0 && (
+              folder.plantumlFiles.length === 0 &&
+              folder.textDocuments.length === 0 && (
                 <div className="folder-empty-hint">暂无文件</div>
               )}
           </div>
@@ -529,7 +584,8 @@ export default function LibraryPanel({
               <span className="library-tab-badge">
                 {documents.length +
                   (snapshot?.books.length ?? 0) +
-                  (snapshot?.plantumlFiles.length ?? 0)}
+                  (snapshot?.plantumlFiles.length ?? 0) +
+                  (snapshot?.textDocuments?.length ?? 0)}
               </span>
             </button>
             <button
@@ -648,6 +704,48 @@ export default function LibraryPanel({
                       <div>
                         <strong>AI 智能构图…</strong>
                         <small>输入主题生成专业思维结构</small>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      className="library-menu-item"
+                      onClick={() => {
+                        setCreateMenuOpen(false);
+                        onCreateOfKind('doc');
+                      }}
+                    >
+                      <span className="menu-icon">📝</span>
+                      <div>
+                        <strong>新建 Markdown 文档</strong>
+                        <small>源码与渲染预览并排，适合写作</small>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      className="library-menu-item"
+                      onClick={() => {
+                        setCreateMenuOpen(false);
+                        onCreateOfKind('mermaid');
+                      }}
+                    >
+                      <span className="menu-icon">🧩</span>
+                      <div>
+                        <strong>新建 Pele 图表 (.mmd)</strong>
+                        <small>Mermaid 语法，由 Pele 渲染</small>
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      className="library-menu-item"
+                      onClick={() => {
+                        setCreateMenuOpen(false);
+                        onCreateOfKind('plantuml');
+                      }}
+                    >
+                      <span className="menu-icon">🗺️</span>
+                      <div>
+                        <strong>新建 PlantUML 图表 (.puml)</strong>
+                        <small>带一个时序图模板</small>
                       </div>
                     </button>
                     <button
@@ -793,7 +891,8 @@ export default function LibraryPanel({
                       搜索匹配 (
                       {sortedDocuments.length +
                         visibleBooks.length +
-                        visiblePlantUmlFiles.length}
+                        visiblePlantUmlFiles.length +
+                        visibleTextDocuments.length}
                       )
                     </span>
                   </div>
@@ -807,6 +906,15 @@ export default function LibraryPanel({
                         setDeleteConfirmation({ kind: 'plantuml', document }),
                     ),
                   )}
+                  {visibleTextDocuments.map((file) =>
+                    renderTextDocumentRow(
+                      file,
+                      selectedTextPath,
+                      onOpenTextDocument,
+                      (document) =>
+                        setDeleteConfirmation({ kind: 'text', document }),
+                    ),
+                  )}
                   {sortedDocuments.map((doc) =>
                     renderDocumentRow(
                       doc,
@@ -818,7 +926,8 @@ export default function LibraryPanel({
                   )}
                   {sortedDocuments.length === 0 &&
                     visibleBooks.length === 0 &&
-                    visiblePlantUmlFiles.length === 0 && (
+                    visiblePlantUmlFiles.length === 0 &&
+                    visibleTextDocuments.length === 0 && (
                       <div className="library-empty">
                         <span>没有找到与 “{query}” 相关的导图</span>
                         <button type="button" onClick={() => onSearch('')}>
@@ -835,6 +944,7 @@ export default function LibraryPanel({
                   {documents.length === 0 &&
                     visibleBooks.length === 0 &&
                     visiblePlantUmlFiles.length === 0 &&
+                    visibleTextDocuments.length === 0 &&
                     !busy && (
                       <div className="library-empty">
                         <span>文件库中还没有思维导图</span>
@@ -971,8 +1081,12 @@ export default function LibraryPanel({
             <div className="modal-header">
               <h3>
                 {deleteConfirmation.kind === 'map'
-                  ? '确认删除导图？'
-                  : '确认删除 PUML 文件？'}
+                  ? deleteConfirmation.document.kind === 'doc'
+                    ? '确认删除文档？'
+                    : '确认删除导图？'
+                  : deleteConfirmation.kind === 'text'
+                    ? '确认删除图表文件？'
+                    : '确认删除 PUML 文件？'}
               </h3>
             </div>
             <p className="modal-body">
@@ -995,6 +1109,8 @@ export default function LibraryPanel({
                 onClick={() => {
                   if (deleteConfirmation.kind === 'map') {
                     onDeleteDocument(deleteConfirmation.document);
+                  } else if (deleteConfirmation.kind === 'text') {
+                    onDeleteTextDocument(deleteConfirmation.document);
                   } else {
                     onDeletePlantUmlFile(deleteConfirmation.document);
                   }
@@ -1090,6 +1206,76 @@ export default function LibraryPanel({
   );
 }
 
+function renderTextDocumentRow(
+  file: TextDocument,
+  selectedTextPath: string | null,
+  onOpen: (file: TextDocument) => void,
+  onDeleteRequest: (file: TextDocument) => void,
+) {
+  const isSelected = selectedTextPath === file.relativePath;
+  const sizeLabel =
+    file.fileSize >= 1024 * 1024
+      ? `${(file.fileSize / (1024 * 1024)).toFixed(1)} MB`
+      : `${Math.max(1, Math.round(file.fileSize / 1024))} KB`;
+
+  return (
+    <div
+      className={`library-doc-row library-text-row${isSelected ? ' is-selected' : ''}`}
+      key={`text:${file.relativePath}`}
+      onClick={() => onOpen(file)}
+      role="treeitem"
+      aria-selected={isSelected}
+      title={`打开图表 ${file.relativePath}`}
+    >
+      <div className="doc-active-bar" aria-hidden="true" />
+      <span className="doc-icon" aria-hidden="true">
+        <svg
+          viewBox="0 0 16 16"
+          width="14"
+          height="14"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.3"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <rect x="2" y="2.5" width="4.5" height="3.5" rx="0.8" />
+          <rect x="9.5" y="10" width="4.5" height="3.5" rx="0.8" />
+          <path d="M4.25 6v2.5a1.5 1.5 0 0 0 1.5 1.5h3.75" />
+        </svg>
+      </span>
+      <div className="doc-info-wrap">
+        <span className="doc-title" title={file.title}>
+          {file.title}
+        </span>
+        <div className="doc-meta-row">
+          <span className="doc-time">{formatRelativeTime(file.updatedAt)}</span>
+          <span className="doc-badge">MMD · {sizeLabel}</span>
+        </div>
+      </div>
+      <button
+        type="button"
+        className="doc-delete-btn"
+        title="删除此图表文件"
+        aria-label={`删除 ${file.title}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          onDeleteRequest(file);
+        }}
+      >
+        <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+          <path
+            d="M4 4l8 8M12 4l-8 8"
+            stroke="currentColor"
+            strokeWidth="1.4"
+            strokeLinecap="round"
+          />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
 function renderPlantUmlRow(
   file: PlantUmlDocument,
   selectedPlantUmlPath: string | null,
@@ -1166,6 +1352,7 @@ function renderDocumentRow(
 ) {
   const isSelected = selectedPath === doc.relativePath;
   const isEpub = doc.mapType === 'EPUB 目录';
+  const isDocument = doc.kind === 'doc';
 
   return (
     <div
@@ -1212,6 +1399,7 @@ function renderDocumentRow(
         </span>
         <div className="doc-meta-row">
           <span className="doc-time">{formatRelativeTime(doc.updatedAt)}</span>
+          {isDocument && <span className="doc-badge">DOC</span>}
           {doc.category && doc.category !== '未分类' && (
             <span className="doc-badge doc-cat-badge">{doc.category}</span>
           )}

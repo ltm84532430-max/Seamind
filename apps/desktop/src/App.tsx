@@ -31,6 +31,10 @@ import PlantUmlWorkspace, {
   plantUmlWorkspaceEventName,
 } from './PlantUmlWorkspace';
 import type { PlantUmlEditorRequest } from './PlantUmlWorkspace';
+import DocumentWorkbench from './workbench/DocumentWorkbench';
+import { useActiveDocument } from './workbench/use-active-document';
+import { NEW_FILE_TEMPLATES } from './workbench/templates';
+import type { NewFileKind } from './workbench/templates';
 import {
   buildYouTubeEmbedUrl,
   nextYouTubeThumbnail,
@@ -90,6 +94,7 @@ import type {
   OpenedDocument,
   PlantUmlDocument,
   SaveDocumentInput,
+  TextDocument,
 } from './library';
 
 type ProviderSettings = { baseUrl: string; model: string };
@@ -1750,6 +1755,21 @@ export default function App() {
   const epubDropHandlerRef = useRef<(paths: string[]) => void>(() => {});
   const searchRequestRef = useRef(0);
   const markdownNodeSourcesMarkdownRef = useRef(editorDraft.markdown);
+  // The document open in the workbench, if any: a Markdown document or a diagram. While one is
+  // open it takes the mind map's place on screen; the mind map itself stays where it was.
+  const workbench = useActiveDocument({
+    getSnapshot: () => librarySnapshotRef.current,
+    installSnapshot: (snapshot) => installLibrarySnapshot(snapshot),
+    refreshList: () => {
+      void searchLibrary().catch((error) =>
+        setLibraryError(errorMessage(error, '更新搜索索引失败')),
+      );
+    },
+    setStatus: (message) => setSaveMessage(message),
+    setError: (message) => setLibraryError(message),
+    confirmDiscard: (message) => window.confirm(message),
+  });
+  const activeDocument = workbench.active;
 
   useEffect(() => {
     try {
@@ -1837,13 +1857,19 @@ export default function App() {
       window.dispatchEvent(new Event('resize'));
       if (
         !plantUmlSession &&
+        !activeDocument &&
         (activeWorkspace === 'mindmap' || readerSplitActive)
       ) {
         void markmapRef.current?.fit();
       }
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [activeWorkspace, readerSplitActive, Boolean(plantUmlSession)]);
+  }, [
+    activeWorkspace,
+    readerSplitActive,
+    Boolean(plantUmlSession),
+    Boolean(activeDocument),
+  ]);
 
   useEffect(() => {
     if (
@@ -1967,6 +1993,21 @@ export default function App() {
       { allowMarkdownImages: true },
     ).content;
   }, [markdownPreviewSource, transformer]);
+  const renderDocumentPreview = useMemo(
+    () => (markdown: string) => {
+      const source = normalizeKatexDelimiters(markdownBody(markdown));
+      if (!source.trim()) return { html: '<p>暂无 Markdown 内容</p>', source };
+      const rendered = renderMarkdownToHtml(transformer.md, source);
+      return {
+        html: sanitizeNode(
+          { content: rendered, children: [] },
+          { allowMarkdownImages: true },
+        ).content,
+        source,
+      };
+    },
+    [transformer],
+  );
   const historyPreviewHtml = useMemo(() => {
     if (!historyPreview?.markdown.trim())
       return '<p>此版本没有 Markdown 内容。</p>';
@@ -2969,8 +3010,18 @@ export default function App() {
     return true;
   };
 
-  const openMap = async (document: MapDocument) => {
+  const openMap = async (
+    document: Pick<MapDocument, 'relativePath' | 'kind'>,
+    options: { asMindmap?: boolean } = {},
+  ) => {
     if (!leavePlantUmlSession()) return;
+    if (document.kind === 'doc' && !options.asMindmap) {
+      if (draftRef.current.dirty && !(await saveDraft())) return;
+      if (await workbench.controller.openMarkdown(document))
+        setActiveWorkspace('mindmap');
+      return;
+    }
+    if (!(await workbench.controller.leave())) return;
     if (draftRef.current.dirty && !(await saveDraft())) return;
     setSaveMessage('正在打开思维导图…');
     try {
@@ -3022,6 +3073,7 @@ export default function App() {
       });
       if (typeof selected !== 'string') return;
       if (!leavePlantUmlSession()) return;
+      if (!(await workbench.controller.leave())) return;
       setLibraryBusy(true);
       const snapshot = await invoke<LibrarySnapshot>('set_library_root', {
         path: selected,
@@ -3051,6 +3103,7 @@ export default function App() {
 
   const createNewDocument = async () => {
     if (!leavePlantUmlSession()) return;
+    if (!(await workbench.controller.leave())) return;
     if (draftRef.current.dirty && !(await saveDraft())) return;
     const revision = draftRef.current.revision + 1;
     const category = categoryFilter || '未分类';
@@ -3078,7 +3131,7 @@ export default function App() {
     } else if (draftRef.current.dirty && !(await saveDraft())) {
       return false;
     }
-    return leavePlantUmlSession();
+    return leavePlantUmlSession() && (await workbench.controller.leave());
   };
 
   const importEpubPath = async (
@@ -3238,6 +3291,7 @@ export default function App() {
   };
 
   const openLibraryPlantUml = async (file: PlantUmlDocument) => {
+    if (!(await workbench.controller.leave())) return;
     try {
       const source = await invoke<string>('open_plantuml_document', {
         relativePath: file.relativePath,
@@ -3296,6 +3350,95 @@ export default function App() {
     } catch (error) {
       setLibraryError(errorMessage(error, '删除 PUML 文件失败'));
     }
+  };
+
+  const openLibraryTextDocument = async (file: TextDocument) => {
+    if (!leavePlantUmlSession()) return;
+    if (draftRef.current.dirty && !(await saveDraft())) return;
+    if (await workbench.controller.openDiagram(file))
+      setActiveWorkspace('mindmap');
+  };
+
+  const deleteLibraryTextDocument = async (file: TextDocument) => {
+    try {
+      // A save that is still running must not bring the file back once it is deleted.
+      if (workbench.controller.getState()?.relativePath === file.relativePath)
+        await workbench.controller.discard();
+      await invoke('delete_text_document', { relativePath: file.relativePath });
+      const snapshot = librarySnapshotRef.current;
+      if (snapshot) {
+        installLibrarySnapshot({
+          ...snapshot,
+          textDocuments: snapshot.textDocuments.filter(
+            (candidate) => candidate.relativePath !== file.relativePath,
+          ),
+        });
+      }
+      setLibraryError('');
+      setSaveMessage('图表文件已删除');
+    } catch (error) {
+      setLibraryError(errorMessage(error, '删除图表文件失败'));
+    }
+  };
+
+  // The "新建" menu: a file of the chosen kind, from its template, in the current folder.
+  const createFileOfKind = async (kind: NewFileKind) => {
+    if (!librarySnapshotRef.current?.rootPath) {
+      setLibraryError('请先选择文件库目录，再新建文件。');
+      return;
+    }
+    if (!leavePlantUmlSession()) return;
+    if (draftRef.current.dirty && !(await saveDraft())) return;
+    const category = categoryFilter || '未分类';
+    if (kind === 'plantuml') {
+      if (!(await workbench.controller.leave())) return;
+      try {
+        const template = NEW_FILE_TEMPLATES.plantuml;
+        const created = await invoke<PlantUmlDocument>(
+          'create_plantuml_document',
+          { category, title: template.title, source: template.source },
+        );
+        const snapshot = librarySnapshotRef.current;
+        if (snapshot) {
+          installLibrarySnapshot({
+            ...snapshot,
+            plantumlFiles: [
+              created,
+              ...snapshot.plantumlFiles.filter(
+                (candidate) => candidate.relativePath !== created.relativePath,
+              ),
+            ],
+          });
+        }
+        await openLibraryPlantUml(created);
+      } catch (error) {
+        setLibraryError(errorMessage(error, '新建 PlantUML 图表失败'));
+      }
+      return;
+    }
+    if (await workbench.controller.createDocument(kind, category))
+      setActiveWorkspace('mindmap');
+  };
+
+  const openActiveDocumentAsMindmap = async () => {
+    const current = workbench.controller.getState();
+    if (current?.kind !== 'doc') return;
+    if (!(await workbench.controller.leave())) return;
+    await openMap(
+      { relativePath: current.relativePath, kind: 'doc' },
+      { asMindmap: true },
+    );
+  };
+
+  const convertActiveDocumentToMindmap = async () => {
+    if (
+      !window.confirm(
+        '转为思维导图后，这份文档会按思维导图打开，内容不变。继续吗？',
+      )
+    )
+      return;
+    const converted = await workbench.controller.convertToMindmap();
+    if (converted) await openMap(converted);
   };
 
   const toggleBookMindmap = async () => {
@@ -3588,6 +3731,7 @@ export default function App() {
       };
 
       setCategoryFilter((current) => remapFolderPath(current) ?? '');
+      workbench.controller.remapPaths(remapFolderPath);
       const currentDraft = draftRef.current;
       const nextRelativePath = remapFolderPath(currentDraft.relativePath);
       if (nextRelativePath !== currentDraft.relativePath) {
@@ -3668,6 +3812,10 @@ export default function App() {
       if (!(await saveDraft())) return;
     }
     try {
+      if (
+        workbench.controller.getState()?.relativePath === document.relativePath
+      )
+        await workbench.controller.discard();
       await invoke('delete_document', { relativePath: document.relativePath });
       if (draftRef.current.relativePath === document.relativePath) {
         installDraft(
@@ -4899,7 +5047,8 @@ export default function App() {
               title={
                 activeWorkspace === 'reader'
                   ? (epubReader?.title ?? '电子书书架')
-                  : (plantUmlSession?.request.documentTitle ??
+                  : (activeDocument?.relativePath ??
+                    plantUmlSession?.request.documentTitle ??
                     editorDraft.relativePath ??
                     '')
               }
@@ -4907,12 +5056,19 @@ export default function App() {
               <span>
                 {activeWorkspace === 'reader'
                   ? (epubReader?.title ?? '电子书书架')
-                  : (plantUmlSession?.request.documentTitle ??
+                  : (activeDocument?.title ??
+                      plantUmlSession?.request.documentTitle ??
                       editorDraft.title) ||
                     '未命名思维导图'}
               </span>
               {activeWorkspace === 'mindmap' && !plantUmlSession && (
-                <i className={editorDraft.dirty ? 'is-dirty' : ''} />
+                <i
+                  className={
+                    (activeDocument ? workbench.dirty : editorDraft.dirty)
+                      ? 'is-dirty'
+                      : ''
+                  }
+                />
               )}
             </div>
           </div>
@@ -4955,7 +5111,11 @@ export default function App() {
             <button
               type="button"
               className="save-document-button"
-              onClick={() => void saveDraft(true)}
+              onClick={() => {
+                if (activeDocument)
+                  void workbench.controller.save({ manual: true });
+                else void saveDraft(true);
+              }}
               disabled={saveMessage === '正在保存…'}
             >
               保存
@@ -4982,15 +5142,28 @@ export default function App() {
       </header>
 
       <section
-        className={`workspace${sourceCollapsed ? ' is-source-collapsed' : ''}${libraryCollapsed ? ' is-library-collapsed' : ''}${aiCollapsed ? ' is-ai-collapsed' : ''}${terminalOpen ? ' is-terminal-open' : ''}${markdownFullscreen ? ' is-markdown-fullscreen' : ''}${activeWorkspace === 'reader' && !readerSplitActive ? ' is-workspace-hidden' : ''}`}
+        className={`workspace${sourceCollapsed ? ' is-source-collapsed' : ''}${libraryCollapsed ? ' is-library-collapsed' : ''}${aiCollapsed ? ' is-ai-collapsed' : ''}${terminalOpen ? ' is-terminal-open' : ''}${markdownFullscreen ? ' is-markdown-fullscreen' : ''}${activeDocument ? ' is-document-open' : ''}${activeWorkspace === 'reader' && !readerSplitActive ? ' is-workspace-hidden' : ''}`}
         aria-label="Markdown 思维导图编辑器"
         aria-hidden={activeWorkspace === 'reader' && !readerSplitActive}
       >
         <LibraryPanel
           snapshot={librarySnapshot}
           documents={libraryDocuments}
-          selectedPath={openPlantUmlPath ? null : editorDraft.relativePath}
+          selectedPath={
+            activeDocument
+              ? activeDocument.kind === 'doc'
+                ? activeDocument.relativePath
+                : null
+              : openPlantUmlPath
+                ? null
+                : editorDraft.relativePath
+          }
           selectedPlantUmlPath={openPlantUmlPath}
+          selectedTextPath={
+            activeDocument?.kind === 'mermaid'
+              ? activeDocument.relativePath
+              : null
+          }
           collapsed={libraryCollapsed}
           categoryFilter={categoryFilter}
           query={libraryQuery}
@@ -5019,10 +5192,28 @@ export default function App() {
           onOpenBook={(book) => void openLibraryEpub(book)}
           onOpenPlantUmlFile={(file) => void openLibraryPlantUml(file)}
           onDeletePlantUmlFile={(file) => void deleteLibraryPlantUmlFile(file)}
+          onOpenTextDocument={(file) => void openLibraryTextDocument(file)}
+          onDeleteTextDocument={(file) => void deleteLibraryTextDocument(file)}
+          onCreateOfKind={(kind) => void createFileOfKind(kind)}
           onToggleCollapse={() =>
             setLibraryCollapsed((collapsed) => !collapsed)
           }
         />
+
+        {activeDocument && (
+          <DocumentWorkbench
+            document={activeDocument}
+            dirty={workbench.dirty}
+            statusText={saveMessage}
+            theme={theme}
+            renderMarkdownPreview={renderDocumentPreview}
+            onSourceChange={(source) => workbench.controller.edit(source)}
+            onSave={() => void workbench.controller.save({ manual: true })}
+            onRename={(title) => workbench.controller.rename(title)}
+            onOpenAsMindmap={() => void openActiveDocumentAsMindmap()}
+            onConvertToMindmap={() => void convertActiveDocumentToMindmap()}
+          />
+        )}
 
         <section
           className={`editor-pane${sourceCollapsed ? ' is-collapsed' : ''}${isStandalonePlantUml ? ' is-plantuml-file' : ''}`}

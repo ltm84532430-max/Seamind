@@ -32,6 +32,9 @@ interface MarkdownEditorProps {
   value: string;
   onChange: (value: string) => void;
   onSelectionChange: (selection: MarkdownSelection) => void;
+  /** "plain" edits text that is not Markdown, such as a diagram's source, without highlighting. */
+  language?: 'markdown' | 'plain';
+  ariaLabel?: string;
 }
 
 function findChange(
@@ -75,7 +78,17 @@ function linePosition(value: string, lineIndex: number): number {
 }
 
 const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
-  function MarkdownEditor({ id, value, onChange, onSelectionChange }, ref) {
+  function MarkdownEditor(
+    {
+      id,
+      value,
+      onChange,
+      onSelectionChange,
+      language = 'markdown',
+      ariaLabel = 'Markdown 源文本',
+    },
+    ref,
+  ) {
     const hostRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     const valueRef = useRef(value);
@@ -92,11 +105,11 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
         doc: normalizeLineEndings(valueRef.current),
         extensions: [
           basicSetup,
-          markdown(),
+          ...(language === 'markdown' ? [markdown()] : []),
           EditorView.lineWrapping,
           EditorView.editorAttributes.of({
             id,
-            'aria-label': 'Markdown 源文本',
+            'aria-label': ariaLabel,
             spellcheck: 'false',
             class: 'markdown-editor-codemirror',
           }),
@@ -127,7 +140,7 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
         view.destroy();
         viewRef.current = null;
       };
-    }, [id]);
+    }, [id, language, ariaLabel]);
 
     useEffect(() => {
       const view = viewRef.current;
