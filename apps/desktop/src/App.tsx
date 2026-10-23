@@ -51,6 +51,7 @@ import EbookWorkspace from './EbookWorkspace';
 import MindmapMiniTree from './MindmapMiniTree';
 import type { MindmapMiniTreeNode } from './MindmapMiniTree';
 import './ebook-workspace.css';
+import './player/player-workspace.css';
 import type {
   EpubChapterNavigationRequest,
   EpubReaderSelection,
@@ -86,6 +87,7 @@ import {
   type MarkdownNodeSource,
 } from './mindmap/commands';
 const TerminalPanel = lazy(() => import('./TerminalPanel'));
+const PlayerWorkspace = lazy(() => import('./player/PlayerWorkspace'));
 import type {
   DocumentVersion,
   DocumentVersionSnapshot,
@@ -100,16 +102,15 @@ import type {
 
 type ProviderSettings = { baseUrl: string; model: string };
 type Theme = 'light' | 'dark';
-type ActiveWorkspace = 'mindmap' | 'reader';
+type ActiveWorkspace = 'mindmap' | 'reader' | 'player';
 const ACTIVE_WORKSPACE_KEY = 'seamind:active-workspace:v1';
 const LAST_READER_BOOK_KEY = 'seamind:last-reader-book:v1';
 const RECOVERABLE_DRAFT_KEY = 'seamind:recoverable-mindmap-draft:v1';
 
 function readActiveWorkspace(): ActiveWorkspace {
   try {
-    return localStorage.getItem(ACTIVE_WORKSPACE_KEY) === 'reader'
-      ? 'reader'
-      : 'mindmap';
+    const stored = localStorage.getItem(ACTIVE_WORKSPACE_KEY);
+    return stored === 'reader' || stored === 'player' ? stored : 'mindmap';
   } catch {
     return 'mindmap';
   }
@@ -1559,6 +1560,11 @@ export default function App() {
   );
   const [activeWorkspace, setActiveWorkspace] =
     useState<ActiveWorkspace>(readActiveWorkspace);
+  // The player page is built the first time it is opened and then kept, so a video can go on
+  // playing in the background and the lists keep their place.
+  const [playerOpened, setPlayerOpened] = useState(
+    () => activeWorkspace === 'player',
+  );
   const [theme, setTheme] = useState<Theme>(readTheme);
   const [mindmapStyle, setMindmapStyle] =
     useState<MindmapStyle>(readMindmapStyle);
@@ -1752,6 +1758,7 @@ export default function App() {
     } catch {
       // The active workspace remains available for this session.
     }
+    if (activeWorkspace === 'player') setPlayerOpened(true);
   }, [activeWorkspace]);
 
   useEffect(() => {
@@ -5082,21 +5089,25 @@ export default function App() {
             <div
               className="document-name"
               title={
-                activeWorkspace === 'reader'
-                  ? (epubReader?.title ?? '电子书书架')
-                  : (activeDocument?.relativePath ??
-                    plantUmlSession?.request.documentTitle ??
-                    editorDraft.relativePath ??
-                    '')
+                activeWorkspace === 'player'
+                  ? 'YouTube 播放器'
+                  : activeWorkspace === 'reader'
+                    ? (epubReader?.title ?? '电子书书架')
+                    : (activeDocument?.relativePath ??
+                      plantUmlSession?.request.documentTitle ??
+                      editorDraft.relativePath ??
+                      '')
               }
             >
               <span>
-                {activeWorkspace === 'reader'
-                  ? (epubReader?.title ?? '电子书书架')
-                  : (activeDocument?.title ??
-                      plantUmlSession?.request.documentTitle ??
-                      editorDraft.title) ||
-                    '未命名思维导图'}
+                {activeWorkspace === 'player'
+                  ? 'YouTube 播放器'
+                  : activeWorkspace === 'reader'
+                    ? (epubReader?.title ?? '电子书书架')
+                    : (activeDocument?.title ??
+                        plantUmlSession?.request.documentTitle ??
+                        editorDraft.title) ||
+                      '未命名思维导图'}
               </span>
               {activeWorkspace === 'mindmap' && !plantUmlSession && (
                 <i
@@ -5126,6 +5137,14 @@ export default function App() {
             onClick={() => setActiveWorkspace('reader')}
           >
             电子书
+          </button>
+          <button
+            type="button"
+            className={activeWorkspace === 'player' ? 'is-active' : ''}
+            aria-pressed={activeWorkspace === 'player'}
+            onClick={() => setActiveWorkspace('player')}
+          >
+            播放器
           </button>
         </nav>
         <div className="topbar-actions">
@@ -5179,9 +5198,9 @@ export default function App() {
       </header>
 
       <section
-        className={`workspace${sourceCollapsed ? ' is-source-collapsed' : ''}${libraryCollapsed ? ' is-library-collapsed' : ''}${aiCollapsed ? ' is-ai-collapsed' : ''}${terminalOpen ? ' is-terminal-open' : ''}${markdownFullscreen ? ' is-markdown-fullscreen' : ''}${activeDocument ? ' is-document-open' : ''}${activeWorkspace === 'reader' && !readerSplitActive ? ' is-workspace-hidden' : ''}`}
+        className={`workspace${sourceCollapsed ? ' is-source-collapsed' : ''}${libraryCollapsed ? ' is-library-collapsed' : ''}${aiCollapsed ? ' is-ai-collapsed' : ''}${terminalOpen ? ' is-terminal-open' : ''}${markdownFullscreen ? ' is-markdown-fullscreen' : ''}${activeDocument ? ' is-document-open' : ''}${activeWorkspace !== 'mindmap' && !readerSplitActive ? ' is-workspace-hidden' : ''}`}
         aria-label="Markdown 思维导图编辑器"
-        aria-hidden={activeWorkspace === 'reader' && !readerSplitActive}
+        aria-hidden={activeWorkspace !== 'mindmap' && !readerSplitActive}
       >
         <LibraryPanel
           snapshot={librarySnapshot}
@@ -6136,9 +6155,9 @@ export default function App() {
       </section>
 
       <section
-        className={`ebook-workspace-stage${activeWorkspace === 'mindmap' ? ' is-workspace-hidden' : ''}`}
+        className={`ebook-workspace-stage${activeWorkspace !== 'reader' ? ' is-workspace-hidden' : ''}`}
         aria-label="电子书工作区"
-        aria-hidden={activeWorkspace === 'mindmap'}
+        aria-hidden={activeWorkspace !== 'reader'}
       >
         {epubReader ? (
           <EpubReader
@@ -6168,6 +6187,20 @@ export default function App() {
             onOpenBook={(book) => void openLibraryEpub(book)}
             onDeleteBook={deleteLibraryEpubBook}
           />
+        )}
+      </section>
+
+      <section
+        className={`player-workspace-stage${activeWorkspace !== 'player' ? ' is-workspace-hidden' : ''}`}
+        aria-label="播放器工作区"
+        aria-hidden={activeWorkspace !== 'player'}
+      >
+        {playerOpened && (
+          <Suspense
+            fallback={<div className="player-loading">正在载入播放器…</div>}
+          >
+            <PlayerWorkspace active={activeWorkspace === 'player'} />
+          </Suspense>
         )}
       </section>
 

@@ -61,12 +61,16 @@ describe('stylesheet structure', () => {
     ...readdirSync(new URL('workbench/', sourceDirectory))
       .filter((name) => name.endsWith('.css'))
       .map((name) => `workbench/${name}`),
+    ...readdirSync(new URL('player/', sourceDirectory))
+      .filter((name) => name.endsWith('.css'))
+      .map((name) => `player/${name}`),
   ];
 
   it('finds the stylesheets', () => {
     expect(stylesheets).toContain('styles.css');
     expect(stylesheets).toContain('ebook-workspace.css');
     expect(stylesheets).toContain('workbench/workbench.css');
+    expect(stylesheets).toContain('player/player-workspace.css');
   });
 
   for (const name of stylesheets) {
