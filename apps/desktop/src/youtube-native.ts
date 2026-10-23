@@ -45,7 +45,7 @@ export interface ResolveNativeOptions {
   clients?: NativeClient[];
 }
 
-type Library = typeof import('youtubei.js/web.bundle');
+export type Library = typeof import('youtubei.js/web.bundle');
 type Format = InstanceType<Library['Misc']['Format']>;
 
 let libraryPromise: Promise<Library> | null = null;
@@ -88,6 +88,11 @@ class PlayerCache {
   async remove(): Promise<void> {
     // Entries are pruned by count on the Rust side.
   }
+}
+
+/** The YouTube.js bundle, loaded once and set up to run its player script in the Rust sandbox. */
+export function loadYouTubeLibrary(): Promise<Library> {
+  return loadLibrary();
 }
 
 function loadLibrary(): Promise<Library> {

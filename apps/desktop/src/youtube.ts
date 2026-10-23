@@ -176,6 +176,7 @@ export function nextYouTubeThumbnail(
 export function buildYouTubeEmbedUrl(
   videoId: string,
   startSeconds = 0,
+  options: { autoplay?: boolean } = {},
 ): string | null {
   if (!videoIdPattern.test(videoId)) return null;
   const url = new URL(`https://www.youtube.com/embed/${videoId}`);
@@ -190,5 +191,6 @@ export function buildYouTubeEmbedUrl(
     url.searchParams.set('origin', window.location.origin);
   if (Number.isSafeInteger(startSeconds) && startSeconds > 0)
     url.searchParams.set('start', String(Math.floor(startSeconds)));
+  if (options.autoplay) url.searchParams.set('autoplay', '1');
   return url.toString();
 }

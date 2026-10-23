@@ -53,7 +53,12 @@ export interface YouTubeSettings {
 export interface YouTubeIframePlayer {
   destroy(): void;
   pauseVideo(): void;
+  playVideo(): void;
   getCurrentTime(): number;
+  getDuration(): number;
+  seekTo(seconds: number, allowSeekAhead: boolean): void;
+  setPlaybackRate(rate: number): void;
+  getPlaybackRate(): number;
 }
 
 interface YouTubePlayerEvent {
