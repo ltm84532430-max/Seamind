@@ -2,6 +2,8 @@ mod epub;
 mod library;
 mod media_resolver;
 mod plantuml;
+mod player;
+mod player_store;
 mod terminal;
 mod youtube;
 mod youtube_eval;
@@ -87,6 +89,34 @@ pub fn run() {
             youtube_eval::youtube_eval_script,
             youtube_eval::youtube_player_cache_get,
             youtube_eval::youtube_player_cache_set,
+            player::player_overview,
+            player::player_settings_save,
+            player::player_subscribe,
+            player::player_unsubscribe,
+            player::player_update_channel,
+            player::player_import_channels,
+            player::player_store_videos,
+            player::player_video_items,
+            player::player_feed,
+            player::player_history,
+            player::player_history_remove,
+            player::player_history_clear,
+            player::player_mark_played,
+            player::player_save_progress,
+            player::player_watch_state,
+            player::player_set_watched,
+            player::player_playlist_create,
+            player::player_playlist_rename,
+            player::player_playlist_delete,
+            player::player_playlist_add,
+            player::player_playlist_remove,
+            player::player_playlist_toggle,
+            player::player_playlist_items,
+            player::player_course_save,
+            player::player_export_backup,
+            player::player_import_backup,
+            player::player_fetch_feed,
+            player::player_fetch_video_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Markmap Desktop");
