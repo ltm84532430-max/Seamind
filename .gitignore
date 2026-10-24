@@ -12,3 +12,13 @@ apps/desktop/dist/
 apps/desktop/src-tauri/gen/
 apps/desktop/src-tauri/target/
 .codebase-memory/
+
+# OS, editor and local data files
+.DS_Store
+Thumbs.db
+.vscode/
+.env
+.env.local
+*.db
+*.sqlite
+*.sqlite3

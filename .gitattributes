@@ -1,0 +1,11 @@
+# One line-ending convention for every checkout: LF in the repository and in the working tree.
+* text=auto eol=lf
+
+# Binary assets that must never be converted.
+*.jar binary
+*.png binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
