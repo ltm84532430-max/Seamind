@@ -2,8 +2,8 @@
 
 ## Comparison Target
 
-- Source visual truth: `<本机生成图>` (selected first generated design, 1570 x 1002 px).
-- Reference context: `<本机截图>`.
+- Source visual truth: a locally saved generated design (path omitted; the selected first design, 1570 x 1002 px).
+- Reference context: a locally saved screenshot (path omitted).
 - Implementation: SeaMind at `http://127.0.0.1:1420/`, open in the Codex in-app browser.
 - Implementation screenshot: captured in the current verification session through the browser preview; it was not saved as a repository artifact.
 - Viewport and device scale factor: screenshot dimensions were not recorded, so pixel and CSS dimensions cannot be normalized.

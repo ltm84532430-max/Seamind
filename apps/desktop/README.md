@@ -1,4 +1,4 @@
-# seamind
+# Seamind desktop
 
 This is a Tauri 2 desktop app with a Markdown editor, a live interactive Markmap canvas, and AI generation through OpenAI-compatible Chat Completions APIs.
 
@@ -11,7 +11,11 @@ corepack pnpm@9.15.9 install
 corepack pnpm@9.15.9 --filter @markmap/desktop tauri dev
 ```
 
-The development window starts at 1440 × 900. The frontend uses the Markmap workspace source directly, so a prior Markmap package build is not required.
+The development window starts at 1440 × 900. The frontend uses the Markmap workspace source directly, so a prior Markmap package build is not required to run the app.
+
+Type checks read each package's built declarations, so run `corepack pnpm@9.15.9 -r build:types` from the repository root before `tsc`.
+
+Feature notes live in the repository's `docs/` folder, for example `document-workbench.md`, `math-visualization.md`, `plantuml-gui.md`, `pele-diagrams.md`, and `youtube-player-page.md`.
 
 ## Included
 
@@ -40,4 +44,4 @@ The app stores the selected library location in its application config directory
 
 Open **模型设置**, set the Chat Completions API base URL and model name, then save an API key. For example, the default OpenAI values are `https://api.openai.com/v1` and `gpt-4o-mini`. The app sends the prompt from its Rust backend and returns only the generated Markdown to the editor.
 
-The API key is stored in the current Windows user's Credential Manager under the Markmap Desktop service name. Model and endpoint settings are stored in the local WebView profile. The app does not write the key to Markdown, logs, or frontend storage.
+The API key is stored in the current Windows user's Credential Manager under the service name `com.markmap.desktop`. Model and endpoint settings are stored in the local WebView profile. The app does not write the key to Markdown, logs, or frontend storage.
