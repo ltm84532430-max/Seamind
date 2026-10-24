@@ -18,6 +18,7 @@ jobs:
       - run: corepack enable
       - run: corepack pnpm@9.15.9 install --frozen-lockfile
       - run: corepack pnpm@9.15.9 -r build:types
+      - run: corepack pnpm@9.15.9 -r build:js
       - run: corepack pnpm@9.15.9 lint
       - run: corepack pnpm@9.15.9 test
       - run: corepack pnpm@9.15.9 --filter @markmap/desktop exec tsc --noEmit -p tsconfig.json
