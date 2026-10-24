@@ -1,17 +1,25 @@
 name: CI
 
 on:
-  - pull_request
+  push:
+    branches: [main]
+  pull_request:
 
 jobs:
-  block:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: corepack enable
+        with:
+          submodules: recursive
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: "pnpm"
-      - run: pnpm install
-      - run: pnpm build
+      - run: corepack enable
+      - run: corepack pnpm@9.15.9 install --frozen-lockfile
+      - run: corepack pnpm@9.15.9 -r build:types
+      - run: corepack pnpm@9.15.9 lint
+      - run: corepack pnpm@9.15.9 test
+      - run: corepack pnpm@9.15.9 --filter @markmap/desktop exec tsc --noEmit -p tsconfig.json
+      - run: corepack pnpm@9.15.9 --filter @markmap/desktop exec vitest run test/
+      - run: node --test apps/desktop/tests/*.test.mjs
