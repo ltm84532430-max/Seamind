@@ -16,7 +16,8 @@ export default [
       },
     },
   },
-  { ignores: ['**/*.js', '**/dist/'] },
+  // foliate-js is a third-party submodule, and the root PostCSS config is CommonJS.
+  { ignores: ['**/*.js', '**/dist/', 'packages/foliate-js/**', 'postcss.config.cjs'] },
   {
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',

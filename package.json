@@ -15,14 +15,12 @@
     "eslint-plugin-prettier": "^5.4.1",
     "globals": "^16.2.0",
     "husky": "^9.1.7",
-    "lerna": "^8.2.2",
     "lint-staged": "^16.1.0",
     "postcss": "^8.5.5",
     "postcss-calc": "^10.1.1",
     "postcss-nested": "^7.0.2",
     "prettier": "^3.5.3",
     "read-package-up": "^11.0.0",
-    "typedoc": "^0.28.5",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.34.0",
     "unocss": "^66.2.0",
@@ -32,13 +30,12 @@
   "scripts": {
     "prepare": "husky || true",
     "build": "pnpm lint && pnpm clean && pnpm build:types && pnpm build:js && pnpm test",
-    "lint": "eslint && prettier --check packages/*/src",
-    "lint:fix": "eslint --fix && prettier --write packages/*/src",
+    "lint": "eslint && prettier --check \"packages/*/src/**/*.{ts,tsx}\"",
+    "lint:fix": "eslint --fix && prettier --write \"packages/*/src/**/*.{ts,tsx}\"",
     "test": "vitest --run",
     "clean": "pnpm -r clean",
     "build:types": "pnpm -r build:types",
-    "build:js": "pnpm -r build:js",
-    "build:docs": "typedoc --out api --titleLink / --name markmap"
+    "build:js": "pnpm -r build:js"
   },
   "lint-staged": {
     "*.{ts,tsx}": [
