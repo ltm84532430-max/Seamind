@@ -109,6 +109,13 @@ function getLevel(tagName: string) {
   return Levels.Block;
 }
 
+/** Blocks and lists may be children of the same parent; other levels replace one another. */
+function areSideBySide(a: Levels, b: Levels) {
+  const isBlockOrList = (level: Levels) =>
+    level === Levels.Block || level === Levels.List;
+  return isBlockOrList(a) && isBlockOrList(b);
+}
+
 export function parseHtml(html: string, opts?: Partial<IHtmlParserOptions>) {
   const options = {
     ...defaultOptions,
@@ -158,14 +165,17 @@ export function parseHtml(html: string, opts?: Partial<IHtmlParserOptions>) {
       node.data = props.data;
     }
     if (parent.children) {
+      // Blocks such as display formulas sit side by side with lists under one parent. Only headings
+      // replace what is already there, so a block must not wipe out the list items before it.
+      const sideBySide = areSideBySide(parent.childrenLevel, node.level);
       if (
         parent.childrenLevel === Levels.None ||
-        parent.childrenLevel > node.level
+        (parent.childrenLevel > node.level && !sideBySide)
       ) {
         parent.children = [];
         parent.childrenLevel = node.level;
       }
-      if (parent.childrenLevel === node.level) {
+      if (parent.childrenLevel === node.level || sideBySide) {
         parent.children.push(node);
       }
     }
@@ -258,12 +268,29 @@ export function parseHtml(html: string, opts?: Partial<IHtmlParserOptions>) {
   }
 }
 
+const isListWrapper = (htmlNode: IHtmlNode) =>
+  htmlNode.tag === 'ul' || htmlNode.tag === 'ol';
+
 export function convertNode(htmlRoot: IHtmlNode) {
   return walkTree<IHtmlNode, IPureNode>(htmlRoot, (htmlNode, next) => {
+    const converted = next() || [];
     const node: IPureNode = {
       content: htmlNode.html,
-      children: next() || [],
+      children: converted,
     };
+    const siblings = htmlNode.children ?? [];
+    if (
+      siblings.some(isListWrapper) &&
+      siblings.some((child) => !isListWrapper(child))
+    ) {
+      // A list beside a block, such as a display formula, has no node of its own: its items sit at
+      // the block's level, where an empty list node would only add a level.
+      node.children = siblings.flatMap((child, index) =>
+        isListWrapper(child)
+          ? (converted[index].children ?? [])
+          : [converted[index]],
+      );
+    }
     if (htmlNode.data) {
       node.payload = {
         tag: htmlNode.tag,

@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { convertNode, parseHtml } from '../src/index';
+import { buildTree, convertNode, parseHtml } from '../src/index';
 
 test('parseHtml', () => {
   const root = parseHtml(`
@@ -90,4 +90,47 @@ test('ol > li', () => {
 </body>`);
   expect(root).toMatchSnapshot();
   expect(convertNode(root)).toMatchSnapshot();
+});
+
+test('a display formula and a list under one heading are both kept', () => {
+  const listThenFormula = parseHtml(`<body>
+<h1>title</h1>
+<ul>
+<li>first item</li>
+<li>second item</li>
+</ul>
+<p class="katex-block"><span class="katex-display">formula</span></p>
+</body>`);
+  const heading = listThenFormula.children[0];
+  expect(heading.children?.map((child) => child.tag)).toEqual(['ul', 'p']);
+  expect(heading.children?.[0].children?.map((child) => child.html)).toEqual([
+    'first item',
+    'second item',
+  ]);
+
+  const formulaThenList = parseHtml(`<body>
+<h1>title</h1>
+<p class="katex-block"><span class="katex-display">formula</span></p>
+<ul>
+<li>first item</li>
+</ul>
+</body>`);
+  expect(
+    formulaThenList.children[0].children?.map((child) => child.tag),
+  ).toEqual(['p', 'ul']);
+
+  // The list items become children of the heading itself, with no empty list node in between.
+  const tree = buildTree(`<body>
+<h1>title</h1>
+<ul>
+<li>first item</li>
+<li>second item</li>
+</ul>
+<p class="katex-block"><span class="katex-display">formula</span></p>
+</body>`);
+  expect(tree.children[0].children.map((child) => child.content)).toEqual([
+    'first item',
+    'second item',
+    expect.stringContaining('formula'),
+  ]);
 });
