@@ -4998,7 +4998,9 @@ export default function App() {
       data-map-style={mindmapStyle}
       style={readerSplitStyle}
     >
-      <header className="topbar">
+      <header
+        className={`topbar${activeWorkspace === 'reader' ? ' is-ebook-workspace' : ''}`}
+      >
         <div className="brand-lockup">
           <div className="brand-mark" aria-hidden="true">
             <svg viewBox="0 0 32 32" fill="none">

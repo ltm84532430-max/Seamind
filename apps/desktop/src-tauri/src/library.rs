@@ -390,6 +390,7 @@ pub fn delete_epub_book(app: AppHandle, relative_path: String) -> Result<(), Str
         return Err("找不到要删除的 EPUB 文件。".to_string());
     }
     fs::remove_file(&path).map_err(|error| format!("无法删除 EPUB 文件：{error}"))?;
+    crate::epub_exam::delete_epub_exams_for_book(&app, &relative_path)?;
     Ok(())
 }
 

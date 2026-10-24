@@ -22,6 +22,7 @@ const API_TIMEOUT: Duration = Duration::from_secs(45);
 const TOKEN_HEADER: &str = "x-seamind-token";
 const USER_AGENT_HEADER: &str = "x-seamind-ua";
 const ALLOWED_HOST_SUFFIXES: [&str; 3] = ["googlevideo.com", "youtube.com", "ytimg.com"];
+const ALLOWED_EXACT_HOSTS: [&str; 2] = ["jnn-pa.googleapis.com", "www.google.com"];
 const ALLOWED_ORIGINS: [&str; 5] = [
     "http://tauri.localhost",
     "https://tauri.localhost",
@@ -29,14 +30,16 @@ const ALLOWED_ORIGINS: [&str; 5] = [
     "http://127.0.0.1:1420",
     "http://localhost:1420",
 ];
-const FORWARDED_REQUEST_HEADERS: [&str; 9] = [
+const FORWARDED_REQUEST_HEADERS: [&str; 11] = [
     "accept",
     "accept-language",
     "content-type",
     "range",
     "if-range",
     "x-goog-visitor-id",
+    "x-goog-api-key",
     "x-goog-api-format-version",
+    "x-user-agent",
     "x-youtube-client-name",
     "x-youtube-client-version",
 ];
@@ -128,13 +131,14 @@ fn is_allowed_target_with(url: &Url, allow_loopback: bool) -> bool {
     }
     url.scheme() == "https"
         && url.port_or_known_default() == Some(443)
-        && ALLOWED_HOST_SUFFIXES
-            .iter()
-            .any(|suffix| host_matches(host, suffix))
+        && (ALLOWED_EXACT_HOSTS.contains(&host)
+            || ALLOWED_HOST_SUFFIXES
+                .iter()
+                .any(|suffix| host_matches(host, suffix)))
 }
 
-/// The only places the proxy will talk to: YouTube's API and player scripts, its media servers and
-/// its thumbnail host. Redirects are re-checked against the same rule.
+/// The proxy only reaches YouTube APIs/media plus the exact BotGuard API and interpreter hosts.
+/// Redirects are re-checked against the same rule.
 pub fn is_allowed_target(url: &Url) -> bool {
     is_allowed_target_with(url, ALLOW_LOOPBACK_UPSTREAM.load(Ordering::Relaxed))
 }
@@ -161,14 +165,18 @@ fn tokens_match(expected: &str, provided: &str) -> bool {
         && expected
             .bytes()
             .zip(provided.bytes())
-            .fold(0_u8, |difference, (left, right)| difference | (left ^ right))
+            .fold(0_u8, |difference, (left, right)| {
+                difference | (left ^ right)
+            })
             == 0
 }
 
 fn valid_user_agent(value: &HeaderValue) -> Option<HeaderValue> {
     let bytes = value.as_bytes();
-    (!bytes.is_empty() && bytes.len() <= 512 && bytes.iter().all(|byte| (0x20..0x7f).contains(byte)))
-        .then(|| value.clone())
+    (!bytes.is_empty()
+        && bytes.len() <= 512
+        && bytes.iter().all(|byte| (0x20..0x7f).contains(byte)))
+    .then(|| value.clone())
 }
 
 /// Builds the headers that go upstream: a fixed allow-list from the page, a YouTube-looking
@@ -185,10 +193,19 @@ fn upstream_headers(incoming: &HeaderMap, target: &Url) -> HeaderMap {
         .and_then(valid_user_agent)
         .unwrap_or_else(|| HeaderValue::from_static(default_user_agent()));
     headers.insert(header::USER_AGENT, user_agent);
-    headers.insert(header::ORIGIN, HeaderValue::from_static("https://www.youtube.com"));
-    headers.insert(header::REFERER, HeaderValue::from_static("https://www.youtube.com/"));
+    headers.insert(
+        header::ORIGIN,
+        HeaderValue::from_static("https://www.youtube.com"),
+    );
+    headers.insert(
+        header::REFERER,
+        HeaderValue::from_static("https://www.youtube.com/"),
+    );
     if is_media_host(target) || incoming.contains_key(header::RANGE) {
-        headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_static("identity"));
+        headers.insert(
+            header::ACCEPT_ENCODING,
+            HeaderValue::from_static("identity"),
+        );
     }
     headers
 }
@@ -302,7 +319,10 @@ fn preflight(ctx: &ProxyContext, headers: &HeaderMap) -> Result<Response<Body>, 
 
     let mut response = Response::builder()
         .status(StatusCode::NO_CONTENT)
-        .header(header::ACCESS_CONTROL_ALLOW_METHODS, "GET, HEAD, POST, OPTIONS")
+        .header(
+            header::ACCESS_CONTROL_ALLOW_METHODS,
+            "GET, HEAD, POST, OPTIONS",
+        )
         .header(header::ACCESS_CONTROL_MAX_AGE, "600")
         .header("access-control-allow-private-network", "true")
         .body(Body::empty())
@@ -317,25 +337,38 @@ fn preflight(ctx: &ProxyContext, headers: &HeaderMap) -> Result<Response<Body>, 
 }
 
 fn map_upstream_error(error: reqwest::Error) -> ProxyError {
+    let host = error
+        .url()
+        .and_then(Url::host_str)
+        .unwrap_or("YouTube upstream");
     if error.is_timeout() {
-        ProxyError::new(StatusCode::GATEWAY_TIMEOUT, "连接 YouTube 超时。")
+        ProxyError::new(
+            StatusCode::GATEWAY_TIMEOUT,
+            format!("连接 {host} 超时；请检查当前网络出口或代理。"),
+        )
     } else if error.is_connect() {
-        ProxyError::new(StatusCode::BAD_GATEWAY, "无法连接 YouTube，请检查网络或代理。")
+        ProxyError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("无法连接 {host}（DNS、TCP、TLS 握手或代理出口失败）。"),
+        )
     } else {
-        ProxyError::new(StatusCode::BAD_GATEWAY, "请求 YouTube 失败。")
+        ProxyError::new(
+            StatusCode::BAD_GATEWAY,
+            format!("请求 {host} 失败；请检查网络或代理。"),
+        )
     }
 }
 
-async fn forward(
-    ctx: &ProxyContext,
-    request: Request<Body>,
-) -> Result<Response<Body>, ProxyError> {
+async fn forward(ctx: &ProxyContext, request: Request<Body>) -> Result<Response<Body>, ProxyError> {
     let (parts, body) = request.into_parts();
     authorize(ctx, &parts.headers)?;
     let method = match parts.method {
         Method::GET | Method::HEAD | Method::POST => parts.method.clone(),
         _ => {
-            return Err(ProxyError::new(StatusCode::METHOD_NOT_ALLOWED, "不支持该请求方法。"));
+            return Err(ProxyError::new(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "不支持该请求方法。",
+            ));
         }
     };
     let target = target_from_query(parts.uri.query())?;
@@ -349,7 +382,8 @@ async fn forward(
         .await
         .map_err(|_| ProxyError::new(StatusCode::PAYLOAD_TOO_LARGE, "请求内容过大。"))?;
 
-    let client = (ctx.client)().map_err(|message| ProxyError::new(StatusCode::BAD_GATEWAY, message))?;
+    let client =
+        (ctx.client)().map_err(|message| ProxyError::new(StatusCode::BAD_GATEWAY, message))?;
     let send = |url: &Url| {
         let mut request = client
             .request(method.clone(), url.clone())
@@ -442,7 +476,9 @@ async fn start(client: ClientProvider) -> Result<ProxyEndpoint, String> {
         client,
         redirects: RedirectMemory::default(),
     });
-    let router = Router::new().route("/fetch", any(handle)).with_state(context);
+    let router = Router::new()
+        .route("/fetch", any(handle))
+        .with_state(context);
     tokio::spawn(async move {
         if let Err(error) = axum::serve(listener, router).await {
             eprintln!("Seamind media proxy stopped: {error}");
@@ -464,9 +500,8 @@ pub async fn youtube_proxy_info(
     let endpoint = net
         .endpoint()
         .get_or_try_init(|| async move {
-            let provider: ClientProvider = Box::new(move || {
-                app.state::<YouTubeNet>().client(RedirectScope::YouTube)
-            });
+            let provider: ClientProvider =
+                Box::new(move || app.state::<YouTubeNet>().client(RedirectScope::YouTube));
             start(provider).await
         })
         .await?;
@@ -534,7 +569,10 @@ mod tests {
         incoming.insert("cookie", HeaderValue::from_static("SID=secret"));
         incoming.insert("authorization", HeaderValue::from_static("Bearer secret"));
         incoming.insert("origin", HeaderValue::from_static("http://tauri.localhost"));
-        incoming.insert("referer", HeaderValue::from_static("http://tauri.localhost/"));
+        incoming.insert(
+            "referer",
+            HeaderValue::from_static("http://tauri.localhost/"),
+        );
         incoming.insert("x-seamind-token", HeaderValue::from_static("token"));
         incoming.insert("x-goog-visitor-id", HeaderValue::from_static("visitor"));
         incoming.insert(
@@ -542,33 +580,53 @@ mod tests {
             HeaderValue::from_static("com.example.app/1.0 (Linux; U; Android 12)"),
         );
 
-        let headers = upstream_headers(&incoming, &url("https://rr1---sn-a.googlevideo.com/videoplayback"));
+        let headers = upstream_headers(
+            &incoming,
+            &url("https://rr1---sn-a.googlevideo.com/videoplayback"),
+        );
         assert_eq!(headers["range"], "bytes=0-99");
         assert_eq!(headers["x-goog-visitor-id"], "visitor");
-        assert_eq!(headers["user-agent"], "com.example.app/1.0 (Linux; U; Android 12)");
+        assert_eq!(
+            headers["user-agent"],
+            "com.example.app/1.0 (Linux; U; Android 12)"
+        );
         assert_eq!(headers["origin"], "https://www.youtube.com");
         assert_eq!(headers["referer"], "https://www.youtube.com/");
         assert_eq!(headers["accept-encoding"], "identity");
         for dropped in ["cookie", "authorization", "x-seamind-token", "x-seamind-ua"] {
-            assert!(!headers.contains_key(dropped), "{dropped} must not be forwarded");
+            assert!(
+                !headers.contains_key(dropped),
+                "{dropped} must not be forwarded"
+            );
         }
     }
 
     #[test]
     fn falls_back_to_the_default_user_agent_for_bad_values() {
         let mut incoming = HeaderMap::new();
-        incoming.insert("x-seamind-ua", HeaderValue::from_bytes(b"agent-\xe9").unwrap());
-        let headers = upstream_headers(&incoming, &url("https://www.youtube.com/youtubei/v1/player"));
+        incoming.insert(
+            "x-seamind-ua",
+            HeaderValue::from_bytes(b"agent-\xe9").unwrap(),
+        );
+        let headers = upstream_headers(
+            &incoming,
+            &url("https://www.youtube.com/youtubei/v1/player"),
+        );
         assert_eq!(headers["user-agent"], default_user_agent());
         assert!(!headers.contains_key("accept-encoding"));
     }
 
     #[test]
     fn extracts_the_target_from_the_query() {
-        let target = target_from_query(Some("u=https%3A%2F%2Fwww.youtube.com%2Fiframe_api%3Fa%3D1%26b%3D2"))
-            .ok()
-            .expect("target");
-        assert_eq!(target.as_str(), "https://www.youtube.com/iframe_api?a=1&b=2");
+        let target = target_from_query(Some(
+            "u=https%3A%2F%2Fwww.youtube.com%2Fiframe_api%3Fa%3D1%26b%3D2",
+        ))
+        .ok()
+        .expect("target");
+        assert_eq!(
+            target.as_str(),
+            "https://www.youtube.com/iframe_api?a=1&b=2"
+        );
         assert!(target_from_query(None).is_err());
         assert!(target_from_query(Some("x=1")).is_err());
         assert!(target_from_query(Some("u=not a url")).is_err());
@@ -591,7 +649,9 @@ mod tests {
     async fn upstream() -> (u16, Arc<UpstreamState>) {
         async fn echo(request: Request<Body>) -> axum::Json<serde_json::Value> {
             let (parts, body) = request.into_parts();
-            let bytes = axum::body::to_bytes(body, 1 << 20).await.unwrap_or_default();
+            let bytes = axum::body::to_bytes(body, 1 << 20)
+                .await
+                .unwrap_or_default();
             let header = |name: &str| {
                 parts
                     .headers
@@ -647,9 +707,14 @@ mod tests {
             request: Request<Body>,
         ) -> Response<Body> {
             let version = request.uri().query().unwrap_or_default().to_string();
-            let gone = version == "v=1" && state.first_node_hits.fetch_add(1, Ordering::SeqCst) >= 1;
+            let gone =
+                version == "v=1" && state.first_node_hits.fetch_add(1, Ordering::SeqCst) >= 1;
             Response::builder()
-                .status(if gone { StatusCode::GONE } else { StatusCode::OK })
+                .status(if gone {
+                    StatusCode::GONE
+                } else {
+                    StatusCode::OK
+                })
                 .body(Body::from(format!("node-{version}")))
                 .unwrap()
         }
@@ -658,7 +723,11 @@ mod tests {
             request: Request<Body>,
             next: axum::middleware::Next,
         ) -> Response<Body> {
-            state.requested.lock().unwrap().push(request.uri().path().to_string());
+            state
+                .requested
+                .lock()
+                .unwrap()
+                .push(request.uri().path().to_string());
             next.run(request).await
         }
         let state = Arc::new(UpstreamState::default());
@@ -671,7 +740,9 @@ mod tests {
             .route("/node", get(node))
             .layer(axum::middleware::from_fn_with_state(state.clone(), record))
             .with_state(state.clone());
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
             axum::serve(listener, router).await.unwrap();
@@ -735,7 +806,10 @@ mod tests {
         assert_eq!(echoed["origin"], "https://www.youtube.com");
         assert_eq!(echoed["referer"], "https://www.youtube.com/");
         assert!(echoed["cookie"].is_null(), "cookies must not reach YouTube");
-        assert!(echoed["token"].is_null(), "the proxy token must not reach YouTube");
+        assert!(
+            echoed["token"].is_null(),
+            "the proxy token must not reach YouTube"
+        );
     }
 
     #[tokio::test]
@@ -768,7 +842,14 @@ mod tests {
     #[tokio::test]
     async fn follows_allowed_redirects_but_not_others() {
         let harness = Harness::new().await;
-        let followed: serde_json::Value = harness.fetch("/hop").send().await.unwrap().json().await.unwrap();
+        let followed: serde_json::Value = harness
+            .fetch("/hop")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
         assert_eq!(followed["method"], "GET");
 
         let blocked = harness.fetch("/leave").send().await.unwrap();
@@ -783,7 +864,10 @@ mod tests {
             assert_eq!(response.status(), 200);
         }
         // The first request pays for the redirect; the others go straight to the final address.
-        assert_eq!(harness.upstream.requested(), ["/hop", "/echo", "/echo", "/echo"]);
+        assert_eq!(
+            harness.upstream.requested(),
+            ["/hop", "/echo", "/echo", "/echo"]
+        );
     }
 
     #[tokio::test]
@@ -791,7 +875,10 @@ mod tests {
         let harness = Harness::new().await;
         let body = |response: reqwest::Response| async move { response.text().await.unwrap() };
 
-        assert_eq!(body(harness.fetch("/moving").send().await.unwrap()).await, "node-v=1");
+        assert_eq!(
+            body(harness.fetch("/moving").send().await.unwrap()).await,
+            "node-v=1"
+        );
         // The remembered node has gone away, so the proxy retries the original address, which hands
         // out a new one, and the caller never sees the failure.
         let second = harness.fetch("/moving").send().await.unwrap();
@@ -829,12 +916,21 @@ mod tests {
     #[tokio::test]
     async fn rejects_unauthorized_callers() {
         let harness = Harness::new().await;
-        let base = format!("{}/fetch?u=https%3A%2F%2Fwww.youtube.com%2F", harness.endpoint.origin);
+        let base = format!(
+            "{}/fetch?u=https%3A%2F%2Fwww.youtube.com%2F",
+            harness.endpoint.origin
+        );
 
         let missing = harness.http.get(&base).send().await.unwrap();
         assert_eq!(missing.status(), 401);
 
-        let wrong = harness.http.get(&base).header(TOKEN_HEADER, "nope").send().await.unwrap();
+        let wrong = harness
+            .http
+            .get(&base)
+            .header(TOKEN_HEADER, "nope")
+            .send()
+            .await
+            .unwrap();
         assert_eq!(wrong.status(), 401);
 
         let foreign_origin = harness
@@ -849,7 +945,10 @@ mod tests {
 
         let off_list = harness
             .http
-            .get(format!("{}/fetch?u=https%3A%2F%2Fexample.com%2F", harness.endpoint.origin))
+            .get(format!(
+                "{}/fetch?u=https%3A%2F%2Fexample.com%2F",
+                harness.endpoint.origin
+            ))
             .header(TOKEN_HEADER, &harness.endpoint.token)
             .send()
             .await
@@ -885,7 +984,8 @@ mod tests {
             )
         };
 
-        let (player_url, token) = through_proxy("https://www.youtube.com/youtubei/v1/player?prettyPrint=false");
+        let (player_url, token) =
+            through_proxy("https://www.youtube.com/youtubei/v1/player?prettyPrint=false");
         let body = serde_json::json!({
             "context": { "client": {
                 "clientName": "VISIONOS", "clientVersion": "1.02",
@@ -911,7 +1011,10 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), 200);
         let player: serde_json::Value = response.json().await.unwrap();
-        let status = player["playabilityStatus"]["status"].as_str().unwrap_or_default().to_string();
+        let status = player["playabilityStatus"]["status"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
         assert_eq!(status, "OK", "playability: {}", player["playabilityStatus"]);
 
         let media_url = player["streamingData"]["adaptiveFormats"]
@@ -930,7 +1033,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(media.status(), 206);
-        assert!(media.headers()["content-range"].to_str().unwrap().starts_with("bytes 0-1023/"));
+        assert!(media.headers()["content-range"]
+            .to_str()
+            .unwrap()
+            .starts_with("bytes 0-1023/"));
         assert_eq!(media.bytes().await.unwrap().len(), 1024);
     }
 
@@ -1007,7 +1113,10 @@ mod tests {
                 "redirected: {}",
                 final_url != media && !final_url.starts_with(&media[..40])
             );
-            for (label, url) in [("via original url", media.clone()), ("via final url   ", final_url)] {
+            for (label, url) in [
+                ("via original url", media.clone()),
+                ("via final url   ", final_url),
+            ] {
                 let mut times = Vec::new();
                 for step in 1..=5 {
                     let started = std::time::Instant::now();
@@ -1048,7 +1157,10 @@ mod tests {
     #[tokio::test]
     async fn answers_cors_preflight_for_allowed_headers_only() {
         let harness = Harness::new().await;
-        let url = format!("{}/fetch?u=https%3A%2F%2Fwww.youtube.com%2F", harness.endpoint.origin);
+        let url = format!(
+            "{}/fetch?u=https%3A%2F%2Fwww.youtube.com%2F",
+            harness.endpoint.origin
+        );
         let allowed = harness
             .http
             .request(Method::OPTIONS, &url)
@@ -1060,8 +1172,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(allowed.status(), 204);
-        assert_eq!(allowed.headers()["access-control-allow-origin"], "http://tauri.localhost");
-        assert_eq!(allowed.headers()["access-control-allow-private-network"], "true");
+        assert_eq!(
+            allowed.headers()["access-control-allow-origin"],
+            "http://tauri.localhost"
+        );
+        assert_eq!(
+            allowed.headers()["access-control-allow-private-network"],
+            "true"
+        );
 
         let denied = harness
             .http

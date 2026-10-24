@@ -3,6 +3,7 @@ import type { EpubBookDocument } from './library';
 export interface EpubBookMetadata {
   title: string;
   author: string;
+  manualCategory?: string;
   coverDataUrl?: string;
   progress: number;
   lastReadAt: number;
@@ -87,6 +88,10 @@ export function loadEpubBookMetadata(
     return {
       title: typeof value.title === 'string' ? value.title : '',
       author: typeof value.author === 'string' ? value.author : '',
+      ...(typeof value.manualCategory === 'string' &&
+      value.manualCategory.trim()
+        ? { manualCategory: value.manualCategory.trim() }
+        : {}),
       ...(typeof value.coverDataUrl === 'string' &&
       value.coverDataUrl.startsWith('data:image/')
         ? { coverDataUrl: value.coverDataUrl }
@@ -130,9 +135,13 @@ export function saveEpubBookMetadata(
   update: Partial<EpubBookMetadata>,
 ) {
   const previous = loadEpubBookMetadata(progressKey);
+  const manualCategory = update.manualCategory ?? previous?.manualCategory;
   const next: EpubBookMetadata = {
     title: update.title ?? previous?.title ?? '',
     author: update.author ?? previous?.author ?? '',
+    ...(manualCategory?.trim()
+      ? { manualCategory: manualCategory.trim() }
+      : {}),
     ...((update.coverDataUrl ?? previous?.coverDataUrl)
       ? { coverDataUrl: update.coverDataUrl ?? previous?.coverDataUrl }
       : {}),
@@ -171,6 +180,7 @@ export function saveEpubBookMetadata(
       const withoutCover: Omit<EpubBookMetadata, 'coverDataUrl'> = {
         title: next.title,
         author: next.author,
+        ...(next.manualCategory ? { manualCategory: next.manualCategory } : {}),
         progress: next.progress,
         lastReadAt: next.lastReadAt,
         ...(next.currentChapterHref

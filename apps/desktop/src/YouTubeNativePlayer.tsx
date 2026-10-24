@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import type { NativePlayerErrorKind } from './youtube-native-errors';
-import { classifyShakaError } from './youtube-native-errors';
-import type { NativePlayback } from './youtube-native';
+import {
+  classifyShakaError,
+  NativePlaybackError,
+} from './youtube-native-errors';
+import {
+  activateSabrPlayback,
+  resolveNativePlayback,
+  type NativePlayback,
+} from './youtube-native';
 import type { YouTubePlaybackState } from './youtube-player';
 import {
   getYouTubeProxyEndpoint,
@@ -13,6 +20,12 @@ import {
 type Shaka =
   typeof import('shaka-player/dist/shaka-player.compiled.js').default;
 type ShakaPlayer = InstanceType<Shaka['Player']>;
+type ShakaNetworkingEngine = NonNullable<
+  ReturnType<ShakaPlayer['getNetworkingEngine']>
+>;
+type ShakaRequestFilter = Parameters<
+  ShakaNetworkingEngine['registerRequestFilter']
+>[0];
 type ShakaTrack = ReturnType<ShakaPlayer['getVariantTracks']>[number];
 
 export interface NativePlayerFailure {
@@ -25,6 +38,7 @@ interface YouTubeNativePlayerProps {
   startSeconds: number;
   onState: (state: YouTubePlaybackState) => void;
   onFailure: (failure: NativePlayerFailure) => void;
+  onPlaybackFallback: (playback: NativePlayback, resumeAt: number) => void;
   onTime?: (seconds: number) => void;
 }
 
@@ -111,17 +125,19 @@ export default function YouTubeNativePlayer({
   startSeconds,
   onState,
   onFailure,
+  onPlaybackFallback,
   onTime,
 }: YouTubeNativePlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerRef = useRef<ShakaPlayer | null>(null);
-  const callbacks = useRef({ onState, onFailure, onTime });
+  const callbacks = useRef({ onState, onFailure, onPlaybackFallback, onTime });
   const initialStart = useRef(startSeconds);
   const [choices, setChoices] = useState<TrackChoices>(emptyChoices);
   const [manualHeight, setManualHeight] = useState<number | null>(null);
 
   useEffect(() => {
-    callbacks.current = { onState, onFailure, onTime };
+    callbacks.current = { onState, onFailure, onPlaybackFallback, onTime };
+    initialStart.current = startSeconds;
   });
 
   useEffect(() => {
@@ -129,11 +145,26 @@ export default function YouTubeNativePlayer({
     if (!video) return;
     let cancelled = false;
     let player: ShakaPlayer | null = null;
+    let sabrAdapter: { dispose: () => void } | null = null;
+    let sabrAttempted = playback.source.kind === 'sabr';
+    let sabrSwitch: Promise<void> | null = null;
+    let webSwitch: Promise<void> | null = null;
+    let webFallbackAttempted = playback.client === 'WEB';
+    const fallbackAbort = new AbortController();
+    let recoverWithSabr: ((failure: NativePlayerFailure) => boolean) | null =
+      null;
+    let recoverWithWeb: ((failure: NativePlayerFailure) => boolean) | null =
+      null;
 
     const fail = (failure: NativePlayerFailure) => {
       if (cancelled) return;
       callbacks.current.onState('error');
       callbacks.current.onFailure(failure);
+    };
+    const handleFailure = (failure: NativePlayerFailure) => {
+      if (recoverWithSabr?.(failure)) return;
+      if (recoverWithWeb?.(failure)) return;
+      fail(failure);
     };
 
     const videoEvents: [string, () => void][] = [
@@ -173,11 +204,14 @@ export default function YouTubeNativePlayer({
         ).__seamindShakaPlayer = player;
       await player.attach(video);
       if (cancelled) return;
+      const source = playback.source;
+      const networkingEngine = player.getNetworkingEngine();
+      let proxyFilterRegistered = false;
 
       // Shaka runs request filters again for every retry on the same request object, so rewriting
       // has to leave an address that already points at the proxy alone.
       const proxyPrefix = `${endpoint.origin}/fetch?`;
-      player.getNetworkingEngine()?.registerRequestFilter((_type, request) => {
+      const proxyRequestFilter: ShakaRequestFilter = (_type, request) => {
         request.uris = request.uris.map((uri) =>
           !uri.startsWith(proxyPrefix) && isProxiedYouTubeUrl(uri)
             ? toProxyUrl(endpoint, uri)
@@ -189,7 +223,13 @@ export default function YouTubeNativePlayer({
             request.headers['x-seamind-ua'] = playback.userAgent;
         }
         request.allowCrossSiteCredentials = false;
-      });
+      };
+      // SABR installs a Shaka scheme handler that sends original googlevideo URLs through the
+      // authenticated local proxy. Rewriting them first would hide SABR request metadata.
+      if (source.kind !== 'sabr') {
+        networkingEngine?.registerRequestFilter(proxyRequestFilter);
+        proxyFilterRegistered = Boolean(networkingEngine);
+      }
 
       const retryParameters = {
         maxAttempts: 4,
@@ -219,6 +259,102 @@ export default function YouTubeNativePlayer({
       const refreshChoices = () => {
         if (!cancelled && player) setChoices(readChoices(player));
       };
+      recoverWithSabr = (failure) => {
+        const activePlayer = player;
+        if (cancelled) return false;
+        if (sabrSwitch) return true;
+        if (sabrAttempted || !playback.sabrSessionId || !activePlayer)
+          return false;
+        sabrAttempted = true;
+        callbacks.current.onState('buffering');
+        const resumeAt = video.currentTime;
+        sabrSwitch = (async () => {
+          try {
+            if (proxyFilterRegistered && networkingEngine) {
+              networkingEngine.unregisterRequestFilter(proxyRequestFilter);
+              proxyFilterRegistered = false;
+            }
+            await activePlayer.unload();
+            const prepared = await activateSabrPlayback(playback, activePlayer);
+            if (cancelled) {
+              prepared.adapter.dispose();
+              return;
+            }
+            sabrAdapter = prepared.adapter;
+            const uri = `data:application/dash+xml;charset=utf-8,${encodeURIComponent(prepared.manifest)}`;
+            await activePlayer.load(
+              uri,
+              resumeAt > 0 && !playback.live ? resumeAt : null,
+              'application/dash+xml',
+            );
+            if (cancelled) return;
+            callbacks.current.onState('ready');
+            refreshChoices();
+            void video.play().catch(() => undefined);
+          } catch (error) {
+            let fallbackFailure: NativePlayerFailure;
+            if (error instanceof NativePlaybackError) {
+              fallbackFailure = {
+                kind: error.code === 'expired' ? 'expired' : 'unknown',
+                message: error.message,
+              };
+            } else {
+              const shakaError = error as { code?: number; data?: unknown[] };
+              fallbackFailure =
+                typeof shakaError.code === 'number'
+                  ? classifyShakaError({
+                      code: shakaError.code,
+                      data: shakaError.data,
+                    })
+                  : {
+                      kind: 'unknown',
+                      message: `SABR fallback failed: ${error instanceof Error ? error.message : String(error)} (original: ${failure.message})`,
+                    };
+            }
+            if (!recoverWithWeb?.(fallbackFailure)) fail(fallbackFailure);
+          }
+        })().finally(() => {
+          sabrSwitch = null;
+        });
+        return true;
+      };
+      recoverWithWeb = (failure) => {
+        if (cancelled) return false;
+        if (webSwitch) return true;
+        if (webFallbackAttempted || failure.kind === 'unsupported')
+          return false;
+        webFallbackAttempted = true;
+        callbacks.current.onState('buffering');
+        const resumeAt = video.currentTime;
+        webSwitch = resolveNativePlayback(playback.videoId, {
+          clients: ['WEB'],
+          signal: fallbackAbort.signal,
+        })
+          .then((webPlayback) => {
+            if (cancelled) return;
+            callbacks.current.onPlaybackFallback(webPlayback, resumeAt);
+          })
+          .catch((error: unknown) => {
+            if (cancelled || fallbackAbort.signal.aborted) return;
+            const message =
+              error instanceof Error ? error.message : String(error);
+            const kind =
+              error instanceof NativePlaybackError && error.code === 'expired'
+                ? 'expired'
+                : error instanceof NativePlaybackError &&
+                    error.code === 'network'
+                  ? 'network'
+                  : 'unknown';
+            fail({
+              kind,
+              message: `WEB client fallback failed: ${message} (original: ${failure.message})`,
+            });
+          })
+          .finally(() => {
+            webSwitch = null;
+          });
+        return true;
+      };
       player.addEventListener('error', (event) => {
         const detail = (
           event as unknown as {
@@ -236,7 +372,7 @@ export default function YouTubeNativePlayer({
           detail.severity === shaka.util.Error.Severity.RECOVERABLE
         )
           return;
-        fail(classifyShakaError(detail));
+        handleFailure(classifyShakaError(detail));
       });
       player.addEventListener('buffering', (event) => {
         const buffering = (event as unknown as { buffering: boolean })
@@ -252,15 +388,20 @@ export default function YouTubeNativePlayer({
       ])
         player.addEventListener(name, refreshChoices);
 
-      const source = playback.source;
-      const uri =
-        source.kind === 'dash'
-          ? `data:application/dash+xml;charset=utf-8,${encodeURIComponent(source.manifest)}`
-          : source.url;
-      const mimeType =
-        source.kind === 'dash'
-          ? 'application/dash+xml'
-          : 'application/x-mpegurl';
+      let uri: string;
+      let mimeType: string;
+      if (source.kind === 'sabr') {
+        const prepared = await activateSabrPlayback(playback, player);
+        sabrAdapter = prepared.adapter;
+        uri = `data:application/dash+xml;charset=utf-8,${encodeURIComponent(prepared.manifest)}`;
+        mimeType = 'application/dash+xml';
+      } else if (source.kind === 'dash') {
+        uri = `data:application/dash+xml;charset=utf-8,${encodeURIComponent(source.manifest)}`;
+        mimeType = 'application/dash+xml';
+      } else {
+        uri = source.url;
+        mimeType = 'application/x-mpegurl';
+      }
       const start = initialStart.current;
       await player.load(
         uri,
@@ -276,11 +417,16 @@ export default function YouTubeNativePlayer({
     })().catch((error: unknown) => {
       const shakaError = error as { code?: number; data?: unknown[] };
       if (typeof shakaError.code === 'number')
-        fail(
+        handleFailure(
           classifyShakaError({ code: shakaError.code, data: shakaError.data }),
         );
+      else if (error instanceof NativePlaybackError)
+        handleFailure({
+          kind: error.code === 'expired' ? 'expired' : 'unknown',
+          message: error.message,
+        });
       else
-        fail({
+        handleFailure({
           kind: 'unknown',
           message: `内置播放器初始化失败：${error instanceof Error ? error.message : String(error)}`,
         });
@@ -288,9 +434,11 @@ export default function YouTubeNativePlayer({
 
     return () => {
       cancelled = true;
+      fallbackAbort.abort();
       for (const [name, listener] of videoEvents)
         video.removeEventListener(name, listener);
       playerRef.current = null;
+      sabrAdapter?.dispose();
       void player?.destroy();
       video.removeAttribute('src');
       video.load();

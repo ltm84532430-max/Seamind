@@ -96,6 +96,9 @@ export default function YouTubeDiagnostics({
   const testAbort = useRef<AbortController | null>(null);
 
   useEffect(() => () => testAbort.current?.abort(), []);
+  useEffect(() => {
+    if (failure) setOpen(true);
+  }, [failure]);
 
   const load = () => {
     void fetchCapabilities().then(setCapabilities, () => setCapabilities(null));
@@ -117,7 +120,7 @@ export default function YouTubeDiagnostics({
       setSettingsMessage(
         saved.proxyUrl === saved.webviewProxyUrl
           ? '已保存。'
-          : '已保存。内置播放器、解析器和 mpv 立即生效；YouTube 内嵌播放器（iframe）需要重启应用。',
+          : '已保存。解析、媒体取流和 mpv 立即使用新代理；YouTube 播放验证和内嵌播放器需要重启应用后才会使用新代理。',
       );
     } catch (error) {
       setSettingsMessage(messageOf(error));
@@ -155,6 +158,7 @@ export default function YouTubeDiagnostics({
   return (
     <details
       className="youtube-player-auth youtube-player-diagnostics"
+      open={open}
       onToggle={(event) => {
         const nowOpen = event.currentTarget.open;
         setOpen(nowOpen);

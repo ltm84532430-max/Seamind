@@ -9652,7 +9652,7 @@ button {
 }
 .ebook-shelf-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(148px, 168px));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 25px 24px;
   padding: 24px 0;
 }
@@ -9847,6 +9847,16 @@ button {
     padding: 0 8px;
   }
 }
+@media (max-width: 900px) {
+  .ebook-shelf-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+@media (max-width: 760px) {
+  .ebook-shelf-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
 @media (max-width: 720px) {
   .ebook-shelf {
     padding: 18px 16px 28px;
@@ -9880,13 +9890,13 @@ button {
 /* EPUB reading dashboard */
 .ebook-shelf {
   display: grid;
-  grid-template-columns: 300px minmax(0, 1100px);
+  grid-template-columns: 300px minmax(0, 1fr) 286px;
   align-items: start;
   justify-content: start;
   column-gap: 16px;
 }
 .ebook-shelf-content {
-  width: 1100px;
+  width: auto;
   max-width: 100%;
   min-width: 0;
 }
@@ -11604,4 +11614,1092 @@ button {
     border-right: 0;
     border-bottom: 1px solid #d5dde1;
   }
+}
+
+/* EPUB exam library and answer review */
+.ebook-shelf-actions .ebook-exam-library-toggle {
+  display: none;
+}
+.ebook-book-card {
+  cursor: default;
+}
+.ebook-book-exam-count {
+  justify-self: start;
+  min-height: 23px;
+  padding: 0 7px;
+  border: 1px solid #dbe1e4;
+  color: #7b8991;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 9px;
+}
+.ebook-book-exam-count:hover,
+.ebook-book-exam-count.has-exams {
+  border-color: #bb5a42;
+  color: #ad503a;
+}
+.epub-exam-library {
+  position: sticky;
+  top: 0;
+  width: 286px;
+  max-height: calc(100vh - 142px);
+  min-height: 340px;
+  overflow: auto;
+  padding: 4px 0 18px 14px;
+  border-left: 1px solid #dfe4e7;
+  color: #344149;
+  background: transparent;
+  scrollbar-width: thin;
+  scrollbar-color: #c5cdd1 transparent;
+}
+.epub-exam-library-heading {
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #dfe4e7;
+}
+.epub-exam-library-heading h2 {
+  margin: 5px 0 0;
+  color: #202a31;
+  font-size: 16px;
+}
+.epub-exam-library-close {
+  display: none;
+}
+.epub-exam-library-intro {
+  margin: 10px 0;
+  color: #77848c;
+  font-size: 10px;
+  line-height: 1.6;
+}
+.epub-exam-library-search {
+  height: 31px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px;
+  border: 1px solid #dbe1e4;
+  color: #7b8991;
+  background: #fff;
+}
+.epub-exam-library-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  color: #344148;
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+}
+.epub-exam-library-search > button {
+  padding: 0;
+  border: 0;
+  color: #87939b;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 16px;
+}
+.epub-exam-library-clear-filter {
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+  color: #ad503a;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+}
+.epub-exam-library-groups {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}
+.epub-exam-book-group {
+  min-width: 0;
+}
+.epub-exam-book-heading {
+  width: 100%;
+  min-height: 29px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  color: #45545c;
+  background: #edf1f3;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 650;
+}
+.epub-exam-book-heading > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.epub-exam-book-heading small {
+  flex: 0 0 auto;
+  color: #87939b;
+  font: inherit;
+  font-size: 9px;
+}
+.epub-exam-book-heading.is-active {
+  border-color: #d7a094;
+  color: #a74c37;
+}
+.epub-exam-book-list {
+  display: grid;
+}
+.epub-exam-entry {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 9px 6px;
+  border: 0;
+  border-bottom: 1px solid #e2e7e9;
+  color: #344149;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.epub-exam-entry:hover {
+  background: #f1f4f5;
+}
+.epub-exam-entry-title {
+  overflow: hidden;
+  font-size: 10px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.epub-exam-entry-meta {
+  color: #87939b;
+  font-size: 9px;
+}
+.epub-exam-status {
+  justify-self: start;
+  padding: 2px 5px;
+  border: 1px solid #d9e0e3;
+  color: #7c8a91;
+  font-size: 8px;
+}
+.epub-exam-status.is-submitted {
+  border-color: #a7cbb8;
+  color: #41735a;
+}
+.epub-exam-library-empty {
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+  padding: 28px 8px;
+  color: #819099;
+  text-align: center;
+  font-size: 10px;
+}
+.epub-exam-library-empty > span {
+  font-size: 20px;
+}
+.epub-exam-library-empty strong {
+  color: #56656d;
+  font-size: 11px;
+}
+.epub-exam-library-empty p {
+  margin: 0;
+  line-height: 1.6;
+}
+.epub-exam-library-error,
+.epub-exam-error {
+  padding: 9px;
+  border: 1px solid #d9a69a;
+  color: #a34432;
+  background: #fff8f5;
+  font-size: 11px;
+  line-height: 1.55;
+}
+.epub-exam-library-backdrop {
+  display: none;
+}
+
+.epub-exam-generate-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgb(16 22 26 / 48%);
+}
+.epub-exam-generate-dialog {
+  width: min(460px, 100%);
+  display: grid;
+  gap: 13px;
+  padding: 18px;
+  border: 1px solid #d7dfe2;
+  color: #344149;
+  background: #f8fafb;
+}
+.epub-exam-generate-dialog > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 11px;
+  border-bottom: 1px solid #dfe4e7;
+}
+.epub-exam-generate-dialog > header h2 {
+  margin: 5px 0 0;
+  color: #202a31;
+  font-size: 17px;
+}
+.epub-exam-generate-dialog > header button {
+  width: 27px;
+  height: 27px;
+  border: 1px solid #dbe1e4;
+  color: #687780;
+  background: #fff;
+  cursor: pointer;
+  font: inherit;
+}
+.epub-exam-generate-dialog dl {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+.epub-exam-generate-dialog dl > div {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 10px;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.epub-exam-generate-dialog dt {
+  color: #87939b;
+}
+.epub-exam-generate-dialog dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: #39474f;
+}
+.epub-exam-generation-privacy {
+  margin: 0;
+  padding: 9px;
+  border-left: 2px solid #bd6048;
+  color: #687780;
+  background: #f1f4f5;
+  font-size: 10px;
+  line-height: 1.55;
+}
+.epub-exam-generate-dialog > label {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  color: #687780;
+  font-size: 10px;
+}
+.epub-exam-generate-dialog select {
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid #dbe1e4;
+  color: #344149;
+  background: #fff;
+  font: inherit;
+}
+.epub-exam-generation-error {
+  margin: 0;
+  padding: 9px;
+  border: 1px solid #d9a69a;
+  color: #a34432;
+  background: #fff8f5;
+  font-size: 10px;
+  line-height: 1.55;
+}
+.epub-exam-generate-dialog > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 9px;
+  border-top: 1px solid #dfe4e7;
+}
+.epub-exam-generate-dialog > footer button,
+.epub-exam-page-actions button,
+.epub-exam-page-footer button {
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px solid #dbe1e4;
+  color: #59676f;
+  background: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+}
+.epub-exam-generate-dialog > footer button.is-primary,
+.epub-exam-page-footer button.is-primary {
+  border-color: #bd5b42;
+  color: #fff;
+  background: #bd5b42;
+}
+.epub-exam-generate-dialog button:disabled,
+.epub-exam-page button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.epub-exam-page {
+  width: min(1100px, 100%);
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  margin: 0 auto;
+  padding: 26px 30px 34px;
+  color: #344149;
+  background: #f4f6f7;
+}
+.epub-exam-page-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #dfe4e7;
+}
+.epub-exam-back {
+  min-height: 31px;
+  flex: 0 0 auto;
+  padding: 0 9px;
+  border: 1px solid #dbe1e4;
+  color: #59676f;
+  background: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+}
+.epub-exam-page-header > div:nth-child(2) {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.epub-exam-page-header h1 {
+  margin: 5px 0 4px;
+  color: #202a31;
+  font-size: 20px;
+}
+.epub-exam-page-header p {
+  margin: 0;
+  color: #77848c;
+  font-size: 10px;
+}
+.epub-exam-page-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.epub-exam-page-actions button.is-danger {
+  color: #a34432;
+}
+.epub-exam-page-actions button.is-primary {
+  border-color: #bd5b42;
+  color: #fff;
+  background: #bd5b42;
+}
+.epub-exam-answer-note {
+  margin: 15px 0;
+  color: #6e7b83;
+  font-size: 11px;
+}
+.epub-exam-attempt-history {
+  margin: 0 0 15px;
+  border: 1px solid #dbe1e4;
+  background: #fff;
+}
+.epub-exam-attempt-history > summary {
+  padding: 10px 12px;
+  color: #59676f;
+  cursor: pointer;
+  font-size: 10px;
+}
+.epub-exam-attempt-list {
+  display: grid;
+  gap: 10px;
+  padding: 0 12px 12px;
+}
+.epub-exam-attempt {
+  padding: 10px;
+  border: 1px solid #e5e9eb;
+}
+.epub-exam-attempt h2 {
+  margin: 0 0 8px;
+  color: #344149;
+  font-size: 11px;
+}
+.epub-exam-attempt ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 20px;
+}
+.epub-exam-attempt li,
+.epub-exam-attempt li p {
+  color: #59676f;
+  font-size: 10px;
+  line-height: 1.6;
+}
+.epub-exam-attempt li p {
+  margin: 3px 0 0;
+  white-space: pre-wrap;
+}
+.epub-exam-questions {
+  display: grid;
+  gap: 13px;
+}
+.epub-exam-question {
+  padding: 16px;
+  border: 1px solid #dbe1e4;
+  background: #fff;
+}
+.epub-exam-question > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #87939b;
+  font-size: 9px;
+}
+.epub-exam-question h2 {
+  margin: 12px 0;
+  color: #29363d;
+  font-size: 14px;
+  font-weight: 620;
+  line-height: 1.7;
+}
+.epub-exam-options {
+  display: grid;
+  gap: 7px;
+}
+.epub-exam-options label {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px;
+  border: 1px solid #e2e7e9;
+  color: #52616a;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.epub-exam-options label.is-selected {
+  border-color: #d8a196;
+  background: #fff7f4;
+}
+.epub-exam-options input {
+  margin: 3px 0 0;
+  accent-color: #b94d34;
+}
+.epub-exam-question textarea {
+  width: 100%;
+  min-height: 90px;
+  resize: vertical;
+  padding: 9px;
+  border: 1px solid #dbe1e4;
+  color: #344149;
+  background: #fff;
+  font: inherit;
+  font-size: 11px;
+}
+.epub-exam-review {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #77848c;
+}
+.epub-exam-review select {
+  min-height: 26px;
+  padding: 0 5px;
+  border: 1px solid #dbe1e4;
+  color: #52616a;
+  background: #fff;
+  font: inherit;
+  font-size: 9px;
+}
+.epub-exam-ai-answer {
+  display: grid;
+  gap: 5px;
+  margin-top: 13px;
+  padding: 11px;
+  border-left: 2px solid #bd6048;
+  background: #f4f6f7;
+}
+.epub-exam-ai-answer strong {
+  color: #a74c37;
+  font-size: 10px;
+}
+.epub-exam-ai-answer p {
+  margin: 0 0 5px;
+  color: #45545c;
+  font-size: 11px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+.epub-exam-page-footer {
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid #dfe4e7;
+}
+.epub-exam-page-footer > span {
+  color: #77848c;
+  font-size: 10px;
+}
+
+.app-shell[data-theme='dark'] .ebook-book-exam-count,
+.app-shell[data-theme='dark'] .epub-exam-library,
+.app-shell[data-theme='dark'] .epub-exam-page {
+  border-color: #354149;
+  color: #c8d2d8;
+}
+.app-shell[data-theme='dark'] .epub-exam-library-heading,
+.app-shell[data-theme='dark'] .epub-exam-entry,
+.app-shell[data-theme='dark'] .epub-exam-page-header,
+.app-shell[data-theme='dark'] .epub-exam-page-footer {
+  border-color: #354149;
+}
+.app-shell[data-theme='dark'] .epub-exam-library-heading h2,
+.app-shell[data-theme='dark'] .epub-exam-page-header h1 {
+  color: #e0e7eb;
+}
+.app-shell[data-theme='dark'] .epub-exam-library-search,
+.app-shell[data-theme='dark'] .epub-exam-library-search input,
+.app-shell[data-theme='dark'] .epub-exam-question textarea,
+.app-shell[data-theme='dark'] .epub-exam-review select {
+  border-color: #3a464e;
+  color: #d0d9de;
+  background: #1b2429;
+}
+.app-shell[data-theme='dark'] .epub-exam-book-heading {
+  color: #c5d0d6;
+  background: #232d33;
+}
+.app-shell[data-theme='dark'] .epub-exam-book-heading.is-active {
+  border-color: #815246;
+  color: #efaa97;
+}
+.app-shell[data-theme='dark'] .epub-exam-entry {
+  color: #cbd5da;
+}
+.app-shell[data-theme='dark'] .epub-exam-entry:hover,
+.app-shell[data-theme='dark'] .epub-exam-question,
+.app-shell[data-theme='dark'] .epub-exam-attempt-history,
+.app-shell[data-theme='dark'] .epub-exam-options label {
+  border-color: #354149;
+  background: #1b2429;
+}
+.app-shell[data-theme='dark'] .epub-exam-question h2,
+.app-shell[data-theme='dark'] .epub-exam-options label,
+.app-shell[data-theme='dark'] .epub-exam-attempt h2,
+.app-shell[data-theme='dark'] .epub-exam-attempt li,
+.app-shell[data-theme='dark'] .epub-exam-attempt li p,
+.app-shell[data-theme='dark'] .epub-exam-ai-answer p {
+  color: #d5dee3;
+}
+.app-shell[data-theme='dark'] .epub-exam-options label.is-selected {
+  border-color: #815246;
+  background: #302522;
+}
+.app-shell[data-theme='dark'] .epub-exam-ai-answer,
+.app-shell[data-theme='dark'] .epub-exam-generation-privacy {
+  background: #202a30;
+}
+.app-shell[data-theme='dark'] .epub-exam-generate-dialog {
+  border-color: #3a464e;
+  color: #c8d2d8;
+  background: #1b2429;
+}
+.app-shell[data-theme='dark'] .epub-exam-generate-dialog > header,
+.app-shell[data-theme='dark'] .epub-exam-generate-dialog > footer {
+  border-color: #354149;
+}
+.app-shell[data-theme='dark'] .epub-exam-generate-dialog > header h2 {
+  color: #e0e7eb;
+}
+.app-shell[data-theme='dark'] .epub-exam-generate-dialog > header button,
+.app-shell[data-theme='dark'] .epub-exam-generate-dialog > footer button,
+.app-shell[data-theme='dark'] .epub-exam-back,
+.app-shell[data-theme='dark'] .epub-exam-page-actions button {
+  border-color: #3a464e;
+  color: #d0d9de;
+  background: #202a30;
+}
+.app-shell[data-theme='dark'] .epub-exam-page-actions button.is-primary {
+  border-color: #bd5b42;
+  color: #fff;
+  background: #bd5b42;
+}
+.app-shell[data-theme='dark'] .epub-exam-generate-dialog select {
+  border-color: #3a464e;
+  color: #d0d9de;
+  background: #151c20;
+}
+.app-shell[data-theme='dark'] .epub-exam-entry-meta,
+.app-shell[data-theme='dark'] .epub-exam-library-intro,
+.app-shell[data-theme='dark'] .epub-exam-page-header p,
+.app-shell[data-theme='dark'] .epub-exam-answer-note {
+  color: #8f9da5;
+}
+
+@media (max-width: 1480px) {
+  .ebook-shelf-actions .ebook-exam-library-toggle {
+    display: inline-flex;
+  }
+  .epub-exam-library {
+    position: fixed;
+    inset: 76px 0 22px auto;
+    z-index: 202;
+    width: min(340px, calc(100vw - 24px));
+    max-height: none;
+    min-height: 0;
+    display: none;
+    padding: 12px 14px 20px;
+    border: 1px solid #dfe4e7;
+    background: #f4f6f7;
+  }
+  .epub-exam-library.is-open {
+    display: block;
+  }
+  .epub-exam-library-close {
+    width: 27px;
+    height: 27px;
+    display: grid;
+    place-items: center;
+    border: 1px solid #dbe1e4;
+    color: #697780;
+    background: #fff;
+    cursor: pointer;
+    font: inherit;
+    font-size: 17px;
+  }
+  .epub-exam-library-backdrop {
+    position: fixed;
+    inset: 74px 0 20px;
+    z-index: 201;
+    display: block;
+    border: 0;
+    background: rgb(20 28 33 / 24%);
+  }
+  .app-shell[data-theme='dark'] .epub-exam-library {
+    border-color: #354149;
+    background: #171e22;
+  }
+  .app-shell[data-theme='dark'] .epub-exam-library-close {
+    border-color: #3a464e;
+    color: #c8d2d8;
+    background: #202a30;
+  }
+}
+
+@media (max-width: 720px) {
+  .epub-exam-library {
+    inset: 68px 0 18px auto;
+  }
+  .epub-exam-library-backdrop {
+    inset: 66px 0 16px;
+  }
+  .epub-exam-page {
+    padding: 16px 13px 26px;
+  }
+  .epub-exam-page-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+  }
+  .epub-exam-page-header > .epub-exam-back {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+  .epub-exam-page-actions {
+    flex-direction: column;
+    align-items: flex-end;
+  }
+  .epub-exam-question {
+    padding: 12px;
+  }
+}
+
+/* Compact ebook header and manual shelf categories */
+.topbar.is-ebook-workspace .brand-mark,
+.topbar.is-ebook-workspace .brand-name {
+  display: none;
+}
+.topbar.is-ebook-workspace .brand-lockup {
+  gap: 0;
+}
+.topbar.is-ebook-workspace .document-name {
+  margin-top: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+.ebook-shelf-content > .ebook-shelf-header,
+.ebook-shelf-content > .ebook-shelf-toolbar,
+.ebook-shelf-content > .ebook-shelf-grid,
+.ebook-shelf-content > .ebook-shelf-empty {
+  width: 100%;
+  max-width: 1100px;
+  box-sizing: border-box;
+}
+.ebook-shelf-category-filter {
+  min-width: 155px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  color: #87939b;
+  font-size: 10px;
+}
+.ebook-shelf-category-filter select,
+.ebook-book-category-control select {
+  min-width: 0;
+  height: 30px;
+  padding: 0 7px;
+  border: 1px solid #dbe1e4;
+  border-radius: 0;
+  color: #53616a;
+  background: #fff;
+  font: inherit;
+  font-size: 10px;
+}
+.ebook-shelf-category-filter select {
+  width: 118px;
+}
+.ebook-category-error {
+  width: 100%;
+  max-width: 1100px;
+  margin: 0 auto 8px;
+  color: #ad503a;
+  font-size: 10px;
+}
+.ebook-category-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 330;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgb(13 20 24 / 58%);
+}
+.ebook-category-dialog {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 14px;
+  padding: 22px;
+  border: 1px solid #d8dfe2;
+  color: #344148;
+  background: #f4f6f7;
+}
+.ebook-category-dialog h2,
+.ebook-category-dialog p {
+  margin: 0;
+}
+.ebook-category-dialog h2 {
+  font-size: 16px;
+}
+.ebook-category-dialog > p {
+  color: #7b8991;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.ebook-category-dialog label {
+  display: grid;
+  gap: 6px;
+  color: #7b8991;
+  font-size: 10px;
+}
+.ebook-category-dialog input {
+  width: 100%;
+  height: 34px;
+  padding: 0 9px;
+  border: 1px solid #dbe1e4;
+  border-radius: 0;
+  color: #344148;
+  background: #fff;
+  font: inherit;
+  font-size: 12px;
+}
+.ebook-category-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.ebook-category-dialog-actions button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid #dbe1e4;
+  color: #53616a;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+}
+.ebook-category-dialog-actions button.is-primary {
+  border-color: #b94d34;
+  color: #fff;
+  background: #b94d34;
+}
+.ebook-book-card-footer {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 4px;
+}
+.ebook-book-category-control {
+  width: 100%;
+  min-width: 0;
+}
+.ebook-book-category-control select {
+  width: 100%;
+  max-width: 100%;
+  height: 23px;
+  overflow: hidden;
+  padding: 0 4px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ebook-book-card-footer .ebook-book-exam-count {
+  flex: 0 0 auto;
+}
+.ebook-book-card-footer .ebook-book-actions {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  z-index: 5;
+  width: 24px;
+}
+.ebook-shelf-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  column-gap: 24px;
+}
+.app-shell[data-theme='dark'] .ebook-shelf-category-filter select,
+.app-shell[data-theme='dark'] .ebook-book-category-control select {
+  border-color: #354149;
+  color: #c8d2d8;
+  background: #202a30;
+}
+.app-shell[data-theme='dark'] .ebook-category-error {
+  color: #e0a391;
+}
+.app-shell[data-theme='dark'] .ebook-category-dialog {
+  border-color: #354149;
+  color: #dce5e9;
+  background: #1a2328;
+}
+.app-shell[data-theme='dark'] .ebook-category-dialog input {
+  border-color: #354149;
+  color: #dce5e9;
+  background: #12191d;
+}
+.app-shell[data-theme='dark'] .ebook-category-dialog-actions button {
+  border-color: #354149;
+  color: #c8d2d8;
+}
+.app-shell[data-theme='dark'] .ebook-category-dialog-actions button.is-primary {
+  border-color: #b94d34;
+  color: #fff;
+  background: #b94d34;
+}
+@media (max-width: 900px) {
+  .ebook-shelf-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    column-gap: 16px;
+  }
+}
+@media (max-width: 720px) {
+  .ebook-shelf-category-filter {
+    min-width: 0;
+    justify-content: space-between;
+  }
+  .ebook-shelf-category-filter select {
+    width: min(100%, 220px);
+  }
+  .ebook-shelf-grid {
+    grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+    column-gap: 18px;
+  }
+}
+.ebook-category-content-heading {
+  width: 100%;
+  max-width: 1100px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 10px auto 0;
+}
+.ebook-category-content-heading > button {
+  min-height: 28px;
+  padding: 0 9px;
+  border: 1px solid #dbe1e4;
+  color: #53616a;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+}
+.ebook-category-content-heading > div {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+.ebook-category-content-heading h2 {
+  margin: 0;
+  color: #28343b;
+  font-size: 14px;
+}
+.ebook-category-content-heading span {
+  color: #87939b;
+  font-size: 10px;
+}
+.ebook-category-folder {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  justify-items: stretch;
+  gap: 7px;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.ebook-category-folder-preview {
+  width: 100%;
+  aspect-ratio: 0.71;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid #d8dfe2;
+  background: #fff;
+  box-sizing: border-box;
+}
+.ebook-category-folder-cover {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: block;
+  border: 1px solid rgb(30 44 51 / 12%);
+  background: #fff;
+}
+.ebook-category-folder-cover > img,
+.ebook-category-folder-cover > span {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  object-fit: cover;
+}
+.ebook-category-folder-cover > span {
+  color: #344148;
+  font-size: 24px;
+  font-weight: 650;
+}
+.ebook-category-folder-cover > span.cover-1 {
+  color: #fff;
+  background: #3f5b71;
+}
+.ebook-category-folder-cover > span.cover-2 {
+  color: #3d3328;
+  background: #e9ddc8;
+}
+.ebook-category-folder-cover > span.cover-3 {
+  color: #f6f1eb;
+  background: #705b54;
+}
+.ebook-category-folder-cover > span.cover-4 {
+  color: #263f3c;
+  background: #c6ddd5;
+}
+.ebook-category-folder-cover > span.cover-5 {
+  color: #fff;
+  background: #4e4d70;
+}
+.ebook-category-folder-preview.has-1 .ebook-category-folder-cover:first-child {
+  grid-area: 1 / 1 / 3 / 3;
+}
+.ebook-category-folder-empty {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: 4px;
+  border: 1px solid #d8dfe2;
+  color: #7b8991;
+  background: #edf0f1;
+  font-size: 9px;
+  line-height: 1.4;
+  text-align: center;
+}
+.ebook-category-folder-empty.is-wide {
+  grid-column: 1 / -1;
+}
+.ebook-category-folder-cover em {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: rgb(15 23 27 / 58%);
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 650;
+}
+.ebook-category-folder > strong {
+  overflow: hidden;
+  color: #28343b;
+  font-size: 11px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ebook-category-folder-count {
+  color: #89949a;
+  font-size: 9px;
+}
+.ebook-category-folder:hover .ebook-category-folder-preview {
+  border-color: #ba5b42;
+}
+.app-shell[data-theme='dark'] .ebook-category-content-heading > button {
+  border-color: #354149;
+  color: #c8d2d8;
+}
+.app-shell[data-theme='dark'] .ebook-category-content-heading h2,
+.app-shell[data-theme='dark'] .ebook-category-folder > strong {
+  color: #dce5e9;
+}
+.app-shell[data-theme='dark'] .ebook-category-folder-preview {
+  border-color: #354149;
+  background: #202a30;
+}
+.app-shell[data-theme='dark'] .ebook-category-folder-empty {
+  border-color: #354149;
+  color: #8f9da5;
+  background: #1a2328;
 }

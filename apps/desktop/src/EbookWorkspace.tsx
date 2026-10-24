@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { EpubBookDocument, LibrarySnapshot } from './library';
+import { EpubExamLibraryPanel, EpubExamWorkspace } from './EpubExamLibrary';
+import type { EpubExamSummary } from './epub-exams';
+import { listEpubExams } from './epub-exams';
 import {
   clearEpubReaderData,
   deleteEpubReadingPlan,
@@ -8,6 +11,7 @@ import {
   loadEpubBookMetadata,
   loadEpubReadingActivity,
   loadEpubReadingPlan,
+  saveEpubBookMetadata,
   saveEpubReadingPlan,
 } from './ebook-storage';
 import type { EpubReadingPlan } from './ebook-storage';
@@ -16,6 +20,8 @@ import type { EbookDashboardBook } from './EbookReadingDashboard';
 import EbookReadingHeatmap from './EbookReadingHeatmap';
 
 type ShelfSort = 'recent' | 'title' | 'added';
+
+const NEW_BOOK_CATEGORY = '__new_book_category__';
 
 export default function EbookWorkspace({
   snapshot,
@@ -36,6 +42,12 @@ export default function EbookWorkspace({
 }) {
   const books = snapshot?.books ?? [];
   const [query, setQuery] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [categoryError, setCategoryError] = useState('');
+  const [categoryTarget, setCategoryTarget] = useState<EpubBookDocument | null>(
+    null,
+  );
+  const [newCategoryName, setNewCategoryName] = useState('');
   const [sortBy, setSortBy] = useState<ShelfSort>('recent');
   const [deleteTarget, setDeleteTarget] = useState<EpubBookDocument | null>(
     null,
@@ -51,6 +63,34 @@ export default function EbookWorkspace({
   const [dashboardOpen, setDashboardOpen] = useState(false);
   const [dashboardCollapsed, setDashboardCollapsed] = useState(false);
   const [dashboardRevision, setDashboardRevision] = useState(0);
+  const [exams, setExams] = useState<EpubExamSummary[]>([]);
+  const [examsLoading, setExamsLoading] = useState(true);
+  const [examsError, setExamsError] = useState('');
+  const [examLibraryOpen, setExamLibraryOpen] = useState(false);
+  const [filteredExamBookKey, setFilteredExamBookKey] = useState('');
+  const [selectedExam, setSelectedExam] = useState<EpubExamSummary | null>(
+    null,
+  );
+
+  useEffect(() => {
+    let active = true;
+    setExamsLoading(true);
+    setExamsError('');
+    void listEpubExams()
+      .then((items) => {
+        if (active) setExams(items);
+      })
+      .catch((error) => {
+        if (active)
+          setExamsError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        if (active) setExamsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [snapshot?.books]);
 
   useEffect(() => {
     if (!openMenuPath) return;
@@ -88,14 +128,36 @@ export default function EbookWorkspace({
     [books, dashboardRevision],
   );
 
+  const bookCategories = useMemo(() => {
+    const assigned = books
+      .map(
+        (book) => loadEpubBookMetadata(epubProgressKey(book))?.manualCategory,
+      )
+      .filter((category): category is string => Boolean(category));
+    return [...new Set(assigned)];
+  }, [books, dashboardRevision]);
+
   const visibleBooks = useMemo(() => {
     const search = query.trim().toLocaleLowerCase();
     const rows = books
-      .map((book) => ({
-        book,
-        metadata: loadEpubBookMetadata(epubProgressKey(book)),
-      }))
-      .filter(({ book, metadata }) => {
+      .map((book) => {
+        const metadata = loadEpubBookMetadata(epubProgressKey(book));
+        return {
+          book,
+          metadata,
+          manualCategory: metadata?.manualCategory ?? '',
+        };
+      })
+      .filter(({ book, metadata, manualCategory }) => {
+        if (categoryFilter === '__uncategorized__' && manualCategory) {
+          return false;
+        }
+        if (
+          categoryFilter.startsWith('category:') &&
+          manualCategory !== categoryFilter.slice('category:'.length)
+        ) {
+          return false;
+        }
         if (!search) return true;
         return [
           book.title,
@@ -103,6 +165,7 @@ export default function EbookWorkspace({
           metadata?.author,
           book.relativePath,
           book.category,
+          manualCategory,
         ]
           .filter(Boolean)
           .some((value) => value!.toLocaleLowerCase().includes(search));
@@ -124,7 +187,64 @@ export default function EbookWorkspace({
         (b.metadata?.lastReadAt ?? 0) - (a.metadata?.lastReadAt ?? 0) ||
         b.book.updatedAt - a.book.updatedAt,
     );
-  }, [books, query, sortBy]);
+  }, [books, categoryFilter, dashboardRevision, query, sortBy]);
+
+  const categoryGroups = useMemo(() => {
+    const groups = new Map<string, typeof visibleBooks>();
+    for (const row of visibleBooks) {
+      if (!row.manualCategory) continue;
+      const group = groups.get(row.manualCategory) ?? [];
+      group.push(row);
+      groups.set(row.manualCategory, group);
+    }
+    return [...groups].map(([category, groupedBooks]) => ({
+      category,
+      books: groupedBooks,
+    }));
+  }, [visibleBooks]);
+
+  const ungroupedBooks =
+    categoryFilter === 'all'
+      ? visibleBooks.filter((row) => !row.manualCategory)
+      : visibleBooks;
+
+  const persistBookCategory = (book: EpubBookDocument, category: string) => {
+    setCategoryError('');
+    const progressKey = epubProgressKey(book);
+    saveEpubBookMetadata(progressKey, { manualCategory: category });
+    const savedCategory =
+      loadEpubBookMetadata(progressKey)?.manualCategory ?? '';
+    if (savedCategory !== category) {
+      setCategoryError('分类没有保存成功，请检查本地存储空间后重试。');
+      return false;
+    }
+    setDashboardRevision((revision) => revision + 1);
+    return true;
+  };
+
+  const assignBookCategory = (book: EpubBookDocument, value: string) => {
+    if (value === NEW_BOOK_CATEGORY) {
+      setCategoryError('');
+      setCategoryTarget(book);
+      setNewCategoryName('');
+      return;
+    }
+    persistBookCategory(book, value);
+  };
+
+  const saveNewBookCategory = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!categoryTarget) return;
+    const category = newCategoryName.trim();
+    if (!category || category.length > 24) {
+      setCategoryError('分类名称不能为空，且最多 24 个字符。');
+      return;
+    }
+    if (persistBookCategory(categoryTarget, category)) {
+      setCategoryTarget(null);
+      setNewCategoryName('');
+    }
+  };
 
   const confirmDelete = async () => {
     if (!deleteTarget || deletingPath) return;
@@ -133,6 +253,9 @@ export default function EbookWorkspace({
     try {
       await onDeleteBook(deleteTarget);
       clearEpubReaderData(epubProgressKey(deleteTarget));
+      setExams((current) =>
+        current.filter((exam) => exam.bookKey !== deleteTarget.relativePath),
+      );
       setDeleteTarget(null);
       setDashboardRevision((value) => value + 1);
     } catch (error) {
@@ -220,9 +343,41 @@ export default function EbookWorkspace({
       planEditorMetadata?.currentChapterIndex === undefined &&
       (planEditorMetadata?.progress ?? 0) > 0);
 
+  const returnToExamLibrary = () => {
+    setSelectedExam(null);
+    setExamsLoading(true);
+    void listEpubExams()
+      .then((items) => {
+        setExams(items);
+        setExamsError('');
+      })
+      .catch((error) => {
+        setExamsError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => setExamsLoading(false));
+  };
+
+  if (selectedExam) {
+    return (
+      <EpubExamWorkspace
+        examId={selectedExam.id}
+        bookKey={selectedExam.bookKey}
+        onBack={returnToExamLibrary}
+      />
+    );
+  }
+
+  const examCounts = new Map<string, number>();
+  for (const exam of exams) {
+    examCounts.set(exam.bookKey, (examCounts.get(exam.bookKey) ?? 0) + 1);
+  }
+  const linkedExamCount = deleteTarget
+    ? (examCounts.get(deleteTarget.relativePath) ?? 0)
+    : 0;
+
   return (
     <main
-      className={`ebook-shelf${dashboardCollapsed ? ' is-dashboard-collapsed' : ''}`}
+      className={`ebook-shelf${dashboardCollapsed ? ' is-dashboard-collapsed' : ''}${examLibraryOpen ? ' is-exam-library-open' : ''}`}
       aria-label="电子书书架"
     >
       <EbookReadingDashboard
@@ -252,6 +407,16 @@ export default function EbookWorkspace({
             </p>
           </div>
           <div className="ebook-shelf-actions">
+            <button
+              type="button"
+              className="ebook-exam-library-toggle"
+              aria-expanded={examLibraryOpen}
+              onClick={() => setExamLibraryOpen((open) => !open)}
+            >
+              {examLibraryOpen
+                ? '收起试卷库'
+                : `试卷库${exams.length ? ` · ${exams.length}` : ''}`}
+            </button>
             <button
               type="button"
               className="ebook-dashboard-toggle"
@@ -324,13 +489,104 @@ export default function EbookWorkspace({
                   <option value="title">书名</option>
                 </select>
               </label>
+              <label className="ebook-shelf-category-filter">
+                <span>分类</span>
+                <select
+                  value={categoryFilter}
+                  onChange={(event) => setCategoryFilter(event.target.value)}
+                  aria-label="按书籍分类筛选"
+                >
+                  <option value="all">全部分类</option>
+                  <option value="__uncategorized__">未分类</option>
+                  {bookCategories.map((category) => (
+                    <option key={category} value={`category:${category}`}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
+
+            {categoryError && !categoryTarget && (
+              <p className="ebook-category-error" role="alert">
+                {categoryError}
+              </p>
+            )}
 
             <EbookReadingHeatmap books={dashboardBooks} />
 
+            {categoryFilter.startsWith('category:') && (
+              <header className="ebook-category-content-heading">
+                <button type="button" onClick={() => setCategoryFilter('all')}>
+                  ← 返回书架
+                </button>
+                <div>
+                  <h2>{categoryFilter.slice('category:'.length)}</h2>
+                  <span>{visibleBooks.length} 本书</span>
+                </div>
+              </header>
+            )}
+
             {visibleBooks.length ? (
               <section className="ebook-shelf-grid" aria-label="已导入的电子书">
-                {visibleBooks.map(({ book, metadata }, index) => {
+                {categoryFilter === 'all' &&
+                  categoryGroups.map(({ category, books: groupedBooks }) => {
+                    const previewBooks = groupedBooks.slice(0, 4);
+                    return (
+                      <button
+                        type="button"
+                        className="ebook-category-folder"
+                        key={`category:${category}`}
+                        aria-label={`打开分类 ${category}，共 ${groupedBooks.length} 本书`}
+                        title={`打开分类 ${category}`}
+                        onClick={() =>
+                          setCategoryFilter(`category:${category}`)
+                        }
+                      >
+                        <span
+                          className={`ebook-category-folder-preview has-${previewBooks.length}`}
+                          aria-hidden="true"
+                        >
+                          {previewBooks.map(
+                            ({ book, metadata }, previewIndex) => (
+                              <span
+                                className="ebook-category-folder-cover"
+                                key={`${book.relativePath}:${previewIndex}`}
+                              >
+                                {metadata?.coverDataUrl ? (
+                                  <img src={metadata.coverDataUrl} alt="" />
+                                ) : (
+                                  <span className={`cover-${previewIndex % 6}`}>
+                                    {(metadata?.title || book.title).slice(
+                                      0,
+                                      1,
+                                    )}
+                                  </span>
+                                )}
+                                {previewIndex === 3 &&
+                                  groupedBooks.length > 4 && (
+                                    <em>+{groupedBooks.length - 3}</em>
+                                  )}
+                              </span>
+                            ),
+                          )}
+                          {previewBooks.length > 1 &&
+                            previewBooks.length < 4 && (
+                              <span
+                                className={`ebook-category-folder-empty${previewBooks.length === 2 ? ' is-wide' : ''}`}
+                              >
+                                已全部展示
+                              </span>
+                            )}
+                        </span>
+                        <strong>{category}</strong>
+                        <span className="ebook-category-folder-count">
+                          {groupedBooks.length} 本书
+                        </span>
+                      </button>
+                    );
+                  })}
+                {ungroupedBooks.map(({ book, metadata }, index) => {
                   const title = metadata?.title || book.title;
                   const progress = metadata?.progress ?? 0;
                   const progressKey = epubProgressKey(book);
@@ -354,10 +610,8 @@ export default function EbookWorkspace({
                             <img src={metadata.coverDataUrl} alt="" />
                           ) : (
                             <>
-                              <span className="ebook-book-cover-mark">S</span>
                               <span className="ebook-book-cover-rule" />
                               <strong>{title}</strong>
-                              <small>EPUB · SEAMIND</small>
                             </>
                           )}
                         </span>
@@ -381,47 +635,80 @@ export default function EbookWorkspace({
                             : `${formatBookSize(book.fileSize)} · ${formatBookDate(book.updatedAt)}`}
                         </span>
                       </button>
-                      <div className="ebook-book-actions">
+                      <div className="ebook-book-card-footer">
                         <button
                           type="button"
-                          className="ebook-book-menu-trigger"
-                          aria-label={`${title}的更多操作`}
-                          aria-haspopup="menu"
-                          aria-expanded={openMenuPath === book.relativePath}
-                          title="更多操作"
-                          onClick={() =>
-                            setOpenMenuPath((path) =>
-                              path === book.relativePath
-                                ? ''
-                                : book.relativePath,
-                            )
-                          }
+                          className={`ebook-book-exam-count${examCounts.has(book.relativePath) ? ' has-exams' : ''}`}
+                          onClick={() => {
+                            setFilteredExamBookKey(book.relativePath);
+                            setExamLibraryOpen(true);
+                          }}
+                          aria-label={`查看《${title}》的 ${examCounts.get(book.relativePath) ?? 0} 份试卷`}
                         >
-                          ···
+                          试卷 {examCounts.get(book.relativePath) ?? 0}
                         </button>
-                        {openMenuPath === book.relativePath && (
-                          <div className="ebook-book-menu" role="menu">
-                            <button
-                              type="button"
-                              role="menuitem"
-                              onClick={() => openReadingPlan(book, title)}
-                            >
-                              {plan ? '编辑阅读计划' : '阅读计划'}
-                            </button>
-                            <button
-                              type="button"
-                              role="menuitem"
-                              className="is-danger"
-                              onClick={() => {
-                                setOpenMenuPath('');
-                                setDeleteError('');
-                                setDeleteTarget(book);
-                              }}
-                            >
-                              删除电子书
-                            </button>
-                          </div>
-                        )}
+                        <div className="ebook-book-category-control">
+                          <select
+                            value={metadata?.manualCategory ?? ''}
+                            aria-label={`为《${title}》设置分类`}
+                            title={metadata?.manualCategory || '设置书籍分类'}
+                            onChange={(event) =>
+                              assignBookCategory(book, event.target.value)
+                            }
+                          >
+                            <option value="">设置分类</option>
+                            {bookCategories.map((category) => (
+                              <option key={category} value={category}>
+                                {category}
+                              </option>
+                            ))}
+                            <option value={NEW_BOOK_CATEGORY}>
+                              ＋ 新建分类
+                            </option>
+                          </select>
+                        </div>
+                        <div className="ebook-book-actions">
+                          <button
+                            type="button"
+                            className="ebook-book-menu-trigger"
+                            aria-label={`${title}的更多操作`}
+                            aria-haspopup="menu"
+                            aria-expanded={openMenuPath === book.relativePath}
+                            title="更多操作"
+                            onClick={() =>
+                              setOpenMenuPath((path) =>
+                                path === book.relativePath
+                                  ? ''
+                                  : book.relativePath,
+                              )
+                            }
+                          >
+                            ···
+                          </button>
+                          {openMenuPath === book.relativePath && (
+                            <div className="ebook-book-menu" role="menu">
+                              <button
+                                type="button"
+                                role="menuitem"
+                                onClick={() => openReadingPlan(book, title)}
+                              >
+                                {plan ? '编辑阅读计划' : '阅读计划'}
+                              </button>
+                              <button
+                                type="button"
+                                role="menuitem"
+                                className="is-danger"
+                                onClick={() => {
+                                  setOpenMenuPath('');
+                                  setDeleteError('');
+                                  setDeleteTarget(book);
+                                }}
+                              >
+                                删除电子书
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </article>
                   );
@@ -469,7 +756,11 @@ export default function EbookWorkspace({
               <h2 id="ebook-delete-title">删除这本电子书？</h2>
               <p>
                 “{deleteTarget.title}
-                ”会从当前文件库中移除，阅读位置、书签、标注、热力图记录和单书阅读计划也会清除。技能阅读路径中会保留这本书的位置并标记为已移出书架。
+                ”会从当前文件库中移除，阅读位置、书签、标注、热力图记录和单书阅读计划也会清除。
+                {linkedExamCount > 0
+                  ? `关联的 ${linkedExamCount} 份试卷、答案和自评也会一起删除。`
+                  : '关联的试卷和作答也会一起删除。'}
+                技能阅读路径中会保留这本书的位置并标记为已移出书架。
               </p>
               {deleteError && (
                 <p className="ebook-delete-error" role="alert">
@@ -496,7 +787,82 @@ export default function EbookWorkspace({
             </section>
           </div>
         )}
+
+        {categoryTarget && (
+          <div
+            className="ebook-category-backdrop"
+            role="presentation"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                setCategoryTarget(null);
+                setCategoryError('');
+              }
+            }}
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) {
+                setCategoryTarget(null);
+                setCategoryError('');
+              }
+            }}
+          >
+            <form
+              className="ebook-category-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="ebook-category-title"
+              onSubmit={saveNewBookCategory}
+            >
+              <h2 id="ebook-category-title">新建书籍分类</h2>
+              <p>为《{categoryTarget.title}》创建并应用一个分类。</p>
+              <label>
+                <span>分类名称</span>
+                <input
+                  value={newCategoryName}
+                  onChange={(event) => setNewCategoryName(event.target.value)}
+                  maxLength={24}
+                  autoFocus
+                  required
+                />
+              </label>
+              {categoryError && (
+                <p className="ebook-category-error" role="alert">
+                  {categoryError}
+                </p>
+              )}
+              <div className="ebook-category-dialog-actions">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCategoryTarget(null);
+                    setCategoryError('');
+                  }}
+                >
+                  取消
+                </button>
+                <button type="submit" className="is-primary">
+                  保存分类
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
       </div>
+
+      <EpubExamLibraryPanel
+        books={books.map((book) => ({
+          relativePath: book.relativePath,
+          title:
+            loadEpubBookMetadata(epubProgressKey(book))?.title || book.title,
+        }))}
+        exams={exams}
+        filteredBookKey={filteredExamBookKey}
+        loading={examsLoading}
+        error={examsError}
+        open={examLibraryOpen}
+        onClose={() => setExamLibraryOpen(false)}
+        onFilterBook={setFilteredExamBookKey}
+        onOpenExam={(exam) => setSelectedExam(exam)}
+      />
 
       {planTarget && (
         <div

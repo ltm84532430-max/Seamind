@@ -1,4 +1,5 @@
 mod epub;
+mod epub_exam;
 mod library;
 mod media_resolver;
 mod plantuml;
@@ -6,6 +7,7 @@ mod player;
 mod player_store;
 mod terminal;
 mod youtube;
+mod youtube_botguard;
 mod youtube_eval;
 mod youtube_net;
 mod youtube_proxy;
@@ -22,6 +24,7 @@ pub fn run() {
         .manage(terminal::TerminalState::default())
         .manage(agent_bridge::AgentBridgeState::default())
         .manage(youtube::YouTubeJobs::default())
+        .manage(youtube_botguard::YouTubeBotGuardState::default())
         .manage(youtube_net::YouTubeNet::default())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -39,6 +42,13 @@ pub fn run() {
             plantuml::render_plantuml,
             summarize_epub_chapters,
             analyze_epub_highlight,
+            epub_exam::generate_epub_exam,
+            epub_exam::save_epub_exam,
+            epub_exam::list_epub_exams,
+            epub_exam::get_epub_exam,
+            epub_exam::save_epub_exam_progress,
+            epub_exam::restart_epub_exam,
+            epub_exam::delete_epub_exam,
             agent_completion,
             agent_bridge::agent_bridge_set_tools,
             agent_bridge::agent_bridge_resolve,
@@ -82,6 +92,9 @@ pub fn run() {
             youtube::youtube_cancel,
             youtube::youtube_open_with_mpv,
             youtube::youtube_open_media_with_mpv,
+            youtube_botguard::youtube_botguard_snapshot,
+            youtube_botguard::youtube_botguard_mint,
+            youtube_botguard::youtube_botguard_discard,
             youtube_net::youtube_get_settings,
             youtube_net::youtube_set_settings,
             youtube_net::youtube_install_ytdlp,
@@ -547,9 +560,8 @@ async fn analyze_epub_highlight(
     if selection_text.chars().count() > 2_000 {
         return Err("选中文字超过 2,000 字，请缩小选区后重试。".to_string());
     }
-    let input_chars = selection_text.chars().count()
-        + context.chars().count()
-        + chapter_label.chars().count();
+    let input_chars =
+        selection_text.chars().count() + context.chars().count() + chapter_label.chars().count();
     if input_chars > MAX_EPUB_HIGHLIGHT_INPUT_CHARS {
         return Err("选区和附近上下文超过 6,000 字，未发送到 AI 服务。".to_string());
     }
@@ -577,7 +589,10 @@ async fn analyze_epub_highlight(
     if content.is_empty() {
         return Err("AI 服务没有返回可用的分析内容。".to_string());
     }
-    Ok(content.chars().take(MAX_EPUB_HIGHLIGHT_OUTPUT_CHARS).collect())
+    Ok(content
+        .chars()
+        .take(MAX_EPUB_HIGHLIGHT_OUTPUT_CHARS)
+        .collect())
 }
 
 async fn request_chat_completion(

@@ -71,8 +71,7 @@ async function timed<T>(
 }
 
 function describeError(error: unknown): string {
-  if (error instanceof NativePlaybackError)
-    return error.detail ? `${error.message}（${error.detail}）` : error.message;
+  if (error instanceof NativePlaybackError) return error.message;
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -104,15 +103,27 @@ async function reachability(
 ): Promise<ConnectivityCheck> {
   const result = await timed(async () => {
     const response = await proxiedFetch(url, { cache: 'no-store' });
-    await response.body?.cancel();
-    return response.status;
+    let upstreamError: string | undefined;
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as {
+        error?: unknown;
+      } | null;
+      if (typeof payload?.error === 'string') upstreamError = payload.error;
+    } else {
+      await response.body?.cancel();
+    }
+    return { status: response.status, upstreamError };
   });
-  const status = result.value;
+  const status = result.value?.status ?? null;
+  const upstreamError = result.value?.upstreamError;
   return {
     id,
     label,
-    ok: status !== null && status < 500,
-    detail: status !== null ? `HTTP ${status}` : describeError(result.error),
+    ok: status !== null && status >= 200 && status < 400,
+    detail:
+      status !== null
+        ? `HTTP ${status}${upstreamError ? ` — ${upstreamError}` : ''}`
+        : describeError(result.error),
     milliseconds: result.milliseconds,
   };
 }
@@ -129,7 +140,7 @@ async function resolution(
         id,
         label,
         ok: true,
-        detail: `可以解析（${result.value.client} 客户端，最高 ${result.value.heights[0] ?? '—'}p）`,
+        detail: `已解析（${result.value.client} / ${result.value.source.kind}，最高 ${result.value.heights[0] ?? '—'}p）`,
         milliseconds: result.milliseconds,
       }
     : {

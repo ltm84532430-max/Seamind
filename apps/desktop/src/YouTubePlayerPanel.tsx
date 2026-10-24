@@ -131,6 +131,7 @@ export default function YouTubePlayerPanel({
   const resumeRef = useRef(selection.startSeconds);
   const requestIdRef = useRef(newRequestId());
   const autoFallbackTriedRef = useRef(false);
+  const embedPlayedRef = useRef(false);
   const hadPlaybackRef = useRef(preloaded !== null);
   const lastReloadRef = useRef(0);
   const latest = useRef({ mode, status });
@@ -205,14 +206,12 @@ export default function YouTubePlayerPanel({
           ? error
           : new NativePlaybackError('unknown', messageOf(error, ''));
       setNative({ phase: 'failed', error: reason });
-      setFailure(
-        reason.detail
-          ? `${reason.message}（${reason.detail}）`
-          : reason.message,
-      );
+      // NativePlaybackError.message already includes its detail.
+      setFailure(reason.message);
       setMessage(reason.message);
       if (latest.current.mode === 'native' && !hadPlaybackRef.current) {
         // Native was the first choice and never produced a picture: fall back to YouTube's player.
+        autoFallbackTriedRef.current = true;
         setMode('embed');
         setEmbedSession((session) => session + 1);
       } else {
@@ -333,7 +332,29 @@ export default function YouTubePlayerPanel({
     }
     setNotice(playerFailure.message);
     setFailure(playerFailure.message);
+    if (!autoFallbackTriedRef.current) {
+      autoFallbackTriedRef.current = true;
+      setNotice('');
+      setMessage('内置播放器启动失败，正在切回 YouTube 内嵌播放器…');
+      setStatus('loading');
+      setMode('embed');
+      setEmbedSession((session) => session + 1);
+      return;
+    }
     setStatus('error');
+  };
+
+  const handleNativePlaybackFallback = (
+    fallbackPlayback: NativePlayback,
+    resumeAt: number,
+  ) => {
+    if (Number.isFinite(resumeAt) && resumeAt > 1)
+      resumeRef.current = Math.floor(resumeAt);
+    setNotice('');
+    setFailure(null);
+    setMessage('正在切换到 WEB 客户端和 PO Token 重试…');
+    setStatus('loading');
+    setNative({ phase: 'ready', playback: fallbackPlayback });
   };
 
   // The YouTube IFrame player lives in an element this component creates, so the API can remove it
@@ -373,6 +394,8 @@ export default function YouTubePlayerPanel({
               if (cancelled) return;
               switch (event.data) {
                 case api.PlayerState.PLAYING:
+                  embedPlayedRef.current = true;
+                  setAutoplayStalled(false);
                   setStatus('playing');
                   break;
                 case api.PlayerState.PAUSED:
@@ -443,17 +466,28 @@ export default function YouTubePlayerPanel({
     return () => window.clearTimeout(timeout);
   }, [mode, status, native.phase]);
 
-  // On the player page the embedded video starts by itself. When it has not after a while, say what
-  // the other ways of playing are: YouTube's check that asks the viewer to sign in is drawn inside
-  // the frame, where the page cannot see it, and the player reports nothing wrong.
+  // A ready iframe can still be showing YouTube's sign-in or bot check, which the API cannot read.
   const [autoplayStalled, setAutoplayStalled] = useState(false);
   useEffect(() => {
+    embedPlayedRef.current = false;
     setAutoplayStalled(false);
-    if (isDialog || mode !== 'embed' || status !== 'ready') return undefined;
-    const timer = window.setTimeout(
-      () => setAutoplayStalled(true),
-      AUTOPLAY_HINT_MS,
-    );
+  }, [mode, embedSession, selection.id]);
+
+  useEffect(() => {
+    if (
+      mode !== 'embed' ||
+      (status !== 'ready' && status !== 'paused') ||
+      embedPlayedRef.current
+    )
+      return undefined;
+    const timer = window.setTimeout(() => {
+      if (embedPlayedRef.current) return;
+      setAutoplayStalled(true);
+      if (!isDialog && status === 'ready' && !autoFallbackTriedRef.current) {
+        autoFallbackTriedRef.current = true;
+        void startNativeRef.current(true);
+      }
+    }, AUTOPLAY_HINT_MS);
     return () => window.clearTimeout(timer);
   }, [isDialog, mode, status]);
 
@@ -661,6 +695,7 @@ export default function YouTubePlayerPanel({
                 startSeconds={resumeRef.current}
                 onState={setStatus}
                 onFailure={handleNativeFailure}
+                onPlaybackFallback={handleNativePlaybackFallback}
                 onTime={(seconds) => {
                   resumeRef.current = Math.floor(seconds);
                 }}
@@ -713,8 +748,18 @@ export default function YouTubePlayerPanel({
         )}
         {!message && autoplayStalled && (
           <div className="youtube-player-route-message" role="status">
-            视频没有自动开始播放。如果画面里要求登录验证（YouTube
-            对当前网络的风控），可以点下面的“内置播放器”或“本地解析”换一种方式播放。
+            <span>
+              视频没有自动开始。YouTube
+              可能正在要求登录或网络验证。点击“内置播放器”尝试备用播放方式。
+            </span>
+            <button
+              type="button"
+              className="youtube-player-action"
+              onClick={() => void startNative(false)}
+              disabled={resolvingNative}
+            >
+              {resolvingNative ? '正在解析…' : '立即尝试内置播放器'}
+            </button>
           </div>
         )}
         <div className="youtube-player-actions">

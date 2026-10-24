@@ -7,6 +7,7 @@ export interface YouTubeProxyEndpoint {
 
 const debugStorageKey = 'seamind.debug.youtube';
 const proxiedHostSuffixes = ['googlevideo.com', 'youtube.com', 'ytimg.com'];
+const proxiedExactHosts = new Set(['jnn-pa.googleapis.com', 'www.google.com']);
 
 /**
  * Headers the loopback proxy accepts from the page; anything else (cookies, authorization) is
@@ -19,7 +20,9 @@ const forwardedHeaders = new Set([
   'range',
   'if-range',
   'x-goog-visitor-id',
+  'x-goog-api-key',
   'x-goog-api-format-version',
+  'x-user-agent',
   'x-youtube-client-name',
   'x-youtube-client-version',
 ]);
@@ -61,10 +64,11 @@ export function isProxiedYouTubeUrl(value: string): boolean {
     return true;
   return (
     url.protocol === 'https:' &&
-    proxiedHostSuffixes.some(
-      (suffix) =>
-        url.hostname === suffix || url.hostname.endsWith(`.${suffix}`),
-    )
+    (proxiedExactHosts.has(url.hostname) ||
+      proxiedHostSuffixes.some(
+        (suffix) =>
+          url.hostname === suffix || url.hostname.endsWith(`.${suffix}`),
+      ))
   );
 }
 
@@ -83,7 +87,8 @@ export function toProxyHeaders(
   const outgoing = new Headers();
   headers.forEach((value, key) => {
     const name = key.toLowerCase();
-    if (name === 'user-agent') outgoing.set('x-seamind-ua', value);
+    if (name === 'user-agent' || name === 'x-seamind-ua')
+      outgoing.set('x-seamind-ua', value);
     else if (forwardedHeaders.has(name)) outgoing.set(name, value);
   });
   outgoing.set('x-seamind-token', endpoint.token);

@@ -18,6 +18,12 @@ import type {
   EpubAnnotationStyle,
   EpubBookmark,
 } from './ebook-storage';
+import type {
+  EpubExam,
+  EpubExamDifficulty,
+  EpubExamGenerationResult,
+} from './epub-exams';
+import { extractEpubSectionText } from './epub-exams';
 // @ts-expect-error Foliate ships as an untyped JavaScript submodule.
 import { Overlayer } from '../../../packages/foliate-js/overlayer.js';
 
@@ -533,6 +539,8 @@ export default function EpubReader({
     kind: 'success' | 'warning' | 'error';
   } | null>(null);
   const [fraction, setFraction] = useState(0);
+  const [sectionIndex, setSectionIndex] = useState(0);
+  const [sectionHref, setSectionHref] = useState('');
   const [footerVisible, setFooterVisible] = useState(true);
   const [currentCfi, setCurrentCfi] = useState('');
   const [locationText, setLocationText] = useState('正在载入…');
@@ -557,6 +565,13 @@ export default function EpubReader({
   );
   const [aiAnalysisBusy, setAiAnalysisBusy] = useState(false);
   const [aiAnalysisError, setAiAnalysisError] = useState('');
+  const [examDialogOpen, setExamDialogOpen] = useState(false);
+  const [examQuestionCount, setExamQuestionCount] = useState('10');
+  const [examDifficulty, setExamDifficulty] =
+    useState<EpubExamDifficulty>('medium');
+  const [examGenerating, setExamGenerating] = useState(false);
+  const [examError, setExamError] = useState('');
+  const [unsavedExam, setUnsavedExam] = useState<EpubExam | null>(null);
   const [aiAnalysisPreview, setAiAnalysisPreview] =
     useState<AiAnalysisPreview | null>(null);
   const [activeAiFootnote, setActiveAiFootnote] =
@@ -583,6 +598,8 @@ export default function EpubReader({
     fraction,
     chapterTitle,
     locationText,
+    sectionIndex,
+    sectionHref,
   });
   const metadataRef = useRef({ title: selection.title, author: '' });
   const tocRef = useRef<FoliateTocItem[]>(toc);
@@ -603,6 +620,8 @@ export default function EpubReader({
     fraction,
     chapterTitle,
     locationText,
+    sectionIndex,
+    sectionHref,
   };
 
   const readerPositionForRange = (range: Range) => {
@@ -1023,6 +1042,76 @@ export default function EpubReader({
     }
   };
 
+  const createExamFromCurrentSection = async () => {
+    if (examGenerating) return;
+    const location = currentLocationRef.current;
+    const section = viewRef.current?.book?.sections?.[location.sectionIndex];
+    if (!section?.loadText) {
+      setExamError('无法读取当前阅读段落，请翻到正文页面后重试。');
+      return;
+    }
+    setExamGenerating(true);
+    setExamError('');
+    setUnsavedExam(null);
+    try {
+      const source = await section.loadText();
+      if (!source) throw new Error('当前阅读段落没有可用于出题的正文。');
+      const sectionText = extractEpubSectionText(source);
+      const result = await invoke<EpubExamGenerationResult>(
+        'generate_epub_exam',
+        {
+          bookKey: selection.relativePath,
+          bookTitle: title,
+          sourceFileFingerprint: selection.progressKey,
+          sourceSectionIndex: location.sectionIndex,
+          sourceSectionHref: location.sectionHref,
+          sourceSectionLabel:
+            location.chapterTitle || `第 ${location.sectionIndex + 1} 节`,
+          sectionText,
+          questionCount: Number(examQuestionCount),
+          difficulty: examDifficulty,
+          baseUrl: provider.baseUrl,
+          model: provider.model,
+        },
+      );
+      if (!result.saved) {
+        setUnsavedExam(result.exam);
+        setExamError(
+          `试卷已生成，但保存失败：${result.saveError || '本地存储不可用。'} 可以重试保存，不会再次调用 AI。`,
+        );
+        return;
+      }
+      setExamDialogOpen(false);
+      setNavigationNotice({
+        message: '试卷已生成并保存，返回书架后可继续作答。',
+        kind: 'success',
+      });
+    } catch (cause) {
+      setExamError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setExamGenerating(false);
+    }
+  };
+
+  const retrySaveGeneratedExam = async () => {
+    if (!unsavedExam || examGenerating) return;
+    setExamGenerating(true);
+    setExamError('');
+    try {
+      await invoke('save_epub_exam', { exam: unsavedExam });
+      setUnsavedExam(null);
+      setExamDialogOpen(false);
+      setNavigationNotice({
+        message: '试卷已保存，返回书架后可继续作答。',
+        kind: 'success',
+      });
+    } catch (cause) {
+      setExamError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setExamGenerating(false);
+    }
+  };
+
   const saveAiAnalysisAsFootnote = () => {
     const preview = aiAnalysisPreview;
     const selected = selectionDraft;
@@ -1364,6 +1453,8 @@ export default function EpubReader({
         displayLabel(flatToc[chapterIndex]?.label) ||
         (chapterCount ? `第 ${chapterIndex + 1} 章` : '');
       const chapterHref = tocHref || flatToc[chapterIndex]?.href || '';
+      setSectionIndex(Math.max(0, detail.section?.current ?? 0));
+      setSectionHref(chapterHref);
       if (typeof detail.fraction === 'number') {
         setFraction(Math.min(1, Math.max(0, detail.fraction)));
         if (!hasInitialActivityBaseline) {
@@ -1662,6 +1753,20 @@ export default function EpubReader({
                 : mindmapExists
                   ? '并排导图'
                   : '生成导图'}
+          </button>
+          <button
+            type="button"
+            className="epub-reader-tool epub-reader-exam-generate"
+            onClick={() => {
+              setExamQuestionCount('10');
+              setExamDifficulty('medium');
+              setExamError('');
+              setExamDialogOpen(true);
+            }}
+            disabled={loading || examGenerating}
+            title="根据当前阅读段落生成试卷"
+          >
+            {unsavedExam ? '重试保存试卷' : '生成试卷'}
           </button>
           <button
             type="button"
@@ -2397,6 +2502,118 @@ export default function EpubReader({
           下一页
         </button>
       </footer>
+      {examDialogOpen && (
+        <div
+          className="epub-exam-generate-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !examGenerating) {
+              setExamDialogOpen(false);
+            }
+          }}
+        >
+          <section
+            className="epub-exam-generate-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="epub-exam-generate-title"
+          >
+            <header>
+              <div>
+                <span className="ebook-shelf-kicker">
+                  GENERATE FROM CURRENT SECTION
+                </span>
+                <h2 id="epub-exam-generate-title">生成本段试卷</h2>
+              </div>
+              <button
+                type="button"
+                aria-label="关闭生成试卷窗口"
+                onClick={() => setExamDialogOpen(false)}
+                disabled={examGenerating}
+              >
+                ×
+              </button>
+            </header>
+            <dl>
+              <div>
+                <dt>书籍</dt>
+                <dd>{title}</dd>
+              </div>
+              <div>
+                <dt>阅读段落</dt>
+                <dd>{chapterTitle || `第 ${sectionIndex + 1} 节`}</dd>
+              </div>
+              <div>
+                <dt>内容范围</dt>
+                <dd>仅使用当前 spine section 的正文</dd>
+              </div>
+            </dl>
+            <p className="epub-exam-generation-privacy">
+              提交后，该段正文会发送给当前配置的 AI 服务生成题目、答案和解析。
+            </p>
+            <label>
+              <span>题数</span>
+              <select
+                value={examQuestionCount}
+                onChange={(event) => setExamQuestionCount(event.target.value)}
+                disabled={examGenerating || Boolean(unsavedExam)}
+              >
+                <option value="5">5 题</option>
+                <option value="10">10 题</option>
+                <option value="15">15 题</option>
+                <option value="20">20 题</option>
+              </select>
+            </label>
+            <label>
+              <span>难度</span>
+              <select
+                value={examDifficulty}
+                onChange={(event) =>
+                  setExamDifficulty(event.target.value as EpubExamDifficulty)
+                }
+                disabled={examGenerating || Boolean(unsavedExam)}
+              >
+                <option value="easy">简单</option>
+                <option value="medium">中等</option>
+                <option value="hard">困难</option>
+              </select>
+            </label>
+            {examError && (
+              <p className="epub-exam-generation-error" role="alert">
+                {examError}
+              </p>
+            )}
+            <footer>
+              <button
+                type="button"
+                onClick={() => setExamDialogOpen(false)}
+                disabled={examGenerating}
+              >
+                取消
+              </button>
+              {unsavedExam ? (
+                <button
+                  type="button"
+                  className="is-primary"
+                  onClick={() => void retrySaveGeneratedExam()}
+                  disabled={examGenerating}
+                >
+                  {examGenerating ? '正在保存…' : '重试保存'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="is-primary"
+                  onClick={() => void createExamFromCurrentSection()}
+                  disabled={examGenerating}
+                >
+                  {examGenerating ? '正在生成…' : '生成并保存'}
+                </button>
+              )}
+            </footer>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

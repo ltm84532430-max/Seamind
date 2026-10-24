@@ -9,6 +9,7 @@ export type NativeFailureCode =
   | 'notFound'
   | 'liveOffline'
   | 'noStreams'
+  | 'expired'
   | 'network'
   | 'unknown';
 
@@ -28,6 +29,7 @@ export const nativeFailureMessages: Record<NativeFailureCode, string> = {
     'YouTube 没有返回内置播放器能用的媒体流（可能该视频只提供 SABR 流）。',
   network: '无法连接 YouTube，请检查网络或代理设置。',
   unknown: 'YouTube 返回了无法识别的播放状态。',
+  expired: '播放会话已过期，请重新解析视频。',
 };
 
 export class NativePlaybackError extends Error {
@@ -35,7 +37,11 @@ export class NativePlaybackError extends Error {
   readonly detail?: string;
 
   constructor(code: NativeFailureCode, detail?: string) {
-    super(nativeFailureMessages[code]);
+    super(
+      detail
+        ? `${nativeFailureMessages[code]} (${detail.slice(0, 720)})`
+        : nativeFailureMessages[code],
+    );
     this.name = 'NativePlaybackError';
     this.code = code;
     this.detail = detail;
@@ -120,6 +126,7 @@ const failurePriority: NativeFailureCode[] = [
   'loginRequired',
   'unavailable',
   'noStreams',
+  'expired',
   'network',
   'unknown',
 ];

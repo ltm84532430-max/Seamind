@@ -132,9 +132,10 @@ const preferNativeKey = 'seamind.youtube.preferNative';
 
 export function readPreferNative(): boolean {
   try {
-    return localStorage.getItem(preferNativeKey) === '1';
+    const preference = localStorage.getItem(preferNativeKey);
+    return preference === null || preference === '1';
   } catch {
-    return false;
+    return true;
   }
 }
 

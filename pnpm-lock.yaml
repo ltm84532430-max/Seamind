@@ -107,6 +107,9 @@ importers:
       '@xterm/xterm':
         specifier: 6.0.0
         version: 6.0.0
+      bgutils-js:
+        specifier: 4.0.3
+        version: 4.0.3
       codemirror:
         specifier: 6.0.2
         version: 6.0.2
@@ -116,6 +119,9 @@ importers:
       echarts:
         specifier: 6.1.0
         version: 6.1.0
+      googlevideo:
+        specifier: 4.1.1
+        version: 4.1.1
       katex:
         specifier: ^0.16.8
         version: 0.16.18
@@ -2932,6 +2938,9 @@ packages:
         integrity: sha512-NzUnlZexiaH/46WDhANlyR2bXRopNg4F/zuSA3OpZnllCUgRaOF2znDioDWrmbNVsuZk6l9pMquQB38cfBZwkQ==,
       }
 
+  bgutils-js@4.0.3:
+    resolution: {integrity: sha512-nvhrzqRYqFcC3AJbf1fENc/jzyMk95wH9UC9ruQzTZCq+itYWuHi2a9leK/bC1lLfi+R4a28wJZxpD5KiTFf+w==}
+
   bin-links@4.0.4:
     resolution:
       {
@@ -4782,6 +4791,11 @@ packages:
         integrity: sha512-0Ia46fDOaT7k4og1PDW4YbodWWr3scS2vAr2lTbsplOt2WkKp0vQbkI9wKis/T5LV/dqPjO3bpS/z6GTJB82LA==,
       }
     engines: { node: ">=18" }
+
+  googlevideo@4.1.1:
+    resolution: {integrity: sha512-14o64O+CXXlQ1stYZK/+ypCEwZb25lzEuzhbFYYEzf26R+HhBDOR+Dkdk7MKkZ3qXeIjvZfeC0AJlVKjwQCFjw==}
+    dependencies:
+      '@bufbuild/protobuf': 2.16.0
 
   gopd@1.2.0:
     resolution:
@@ -10216,6 +10230,8 @@ snapshots:
 
   before-after-hook@2.2.3: {}
 
+  bgutils-js@4.0.3: {}
+
   bin-links@4.0.4:
     dependencies:
       cmd-shim: 6.0.3
@@ -11413,6 +11429,10 @@ snapshots:
       path-type: 6.0.0
       slash: 5.1.0
       unicorn-magic: 0.3.0
+
+  googlevideo@4.1.1:
+    dependencies:
+      '@bufbuild/protobuf': 2.16.0
 
   gopd@1.2.0: {}
 
