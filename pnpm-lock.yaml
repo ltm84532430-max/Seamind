@@ -131,6 +131,9 @@ importers:
       mermaid:
         specifier: 12.2.0
         version: 12.2.0
+      pele:
+        specifier: 1.7.0
+        version: 1.7.0
       pyodide:
         specifier: 314.0.7
         version: 314.0.7
@@ -6250,6 +6253,13 @@ packages:
       }
     engines: { node: ">= 14.16" }
 
+  pele@1.7.0:
+    resolution:
+      {
+        integrity: sha512-nkYb5VnxsTgwD4NThF6j4pJEC4AhGLJ9ptiL4q/vIzGr9q6ZtoRE3hFr94LgHpZ/xy56d1pw42UAQGaZkjM5XA==,
+      }
+    engines: { node: ">=20" }
+
   perfect-debounce@1.0.0:
     resolution:
       {
@@ -12017,6 +12027,8 @@ snapshots:
   pathe@2.0.3: {}
 
   pathval@2.0.0: {}
+
+  pele@1.7.0: {}
 
   perfect-debounce@1.0.0: {}
 
