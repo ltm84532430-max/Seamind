@@ -26,6 +26,7 @@ import type { CodeBlockSourceRange } from './code-blocks';
 import MarkdownEditor from './MarkdownEditor';
 import type { MarkdownEditorHandle, MarkdownSelection } from './MarkdownEditor';
 import MarkdownPreview from './MarkdownPreview';
+import KnowledgeWorkspace from './KnowledgeWorkspace';
 import PlantUmlWorkspace, {
   openPlantUmlWorkspace,
   plantUmlWorkspaceEventName,
@@ -102,7 +103,7 @@ import type {
 
 type ProviderSettings = { baseUrl: string; model: string };
 type Theme = 'light' | 'dark';
-type ActiveWorkspace = 'mindmap' | 'reader' | 'player';
+type ActiveWorkspace = 'mindmap' | 'reader' | 'player' | 'knowledge';
 const ACTIVE_WORKSPACE_KEY = 'seamind:active-workspace:v1';
 const LAST_READER_BOOK_KEY = 'seamind:last-reader-book:v1';
 const RECOVERABLE_DRAFT_KEY = 'seamind:recoverable-mindmap-draft:v1';
@@ -110,7 +111,9 @@ const RECOVERABLE_DRAFT_KEY = 'seamind:recoverable-mindmap-draft:v1';
 function readActiveWorkspace(): ActiveWorkspace {
   try {
     const stored = localStorage.getItem(ACTIVE_WORKSPACE_KEY);
-    return stored === 'reader' || stored === 'player' ? stored : 'mindmap';
+    return stored === 'reader' || stored === 'player' || stored === 'knowledge'
+      ? stored
+      : 'mindmap';
   } catch {
     return 'mindmap';
   }
@@ -3403,6 +3406,29 @@ export default function App() {
       setActiveWorkspace('mindmap');
   };
 
+  // The knowledge page has its own layout, so opening or creating a note there stays on that page.
+  const openKnowledgeNote = async (note: MapDocument) => {
+    if (!leavePlantUmlSession()) return;
+    if (!(await canLeaveMindmapDraft())) return;
+    await workbench.controller.openMarkdown(note);
+  };
+
+  const createKnowledgeNote = async (folder: string) => {
+    if (!librarySnapshotRef.current?.rootPath) {
+      setLibraryError('请先选择文件库目录，再新建笔记。');
+      return;
+    }
+    if (!leavePlantUmlSession()) return;
+    if (draftRef.current.dirty && !(await saveDraft())) return;
+    await workbench.controller.createDocument('doc', folder);
+  };
+
+  // Opening a note as a mind map from the knowledge page shows the mind map on its own workspace.
+  const openKnowledgeNoteAsMindmap = async () => {
+    await openActiveDocumentAsMindmap();
+    setActiveWorkspace('mindmap');
+  };
+
   const deleteLibraryTextDocument = async (file: TextDocument) => {
     try {
       // A save that is still running must not bring the file back once it is deleted.
@@ -5095,10 +5121,12 @@ export default function App() {
                   ? 'YouTube 播放器'
                   : activeWorkspace === 'reader'
                     ? (epubReader?.title ?? '电子书书架')
-                    : (activeDocument?.relativePath ??
-                      plantUmlSession?.request.documentTitle ??
-                      editorDraft.relativePath ??
-                      '')
+                    : activeWorkspace === 'knowledge'
+                      ? (activeDocument?.title ?? '知识库')
+                      : (activeDocument?.relativePath ??
+                        plantUmlSession?.request.documentTitle ??
+                        editorDraft.relativePath ??
+                        '')
               }
             >
               <span>
@@ -5106,10 +5134,12 @@ export default function App() {
                   ? 'YouTube 播放器'
                   : activeWorkspace === 'reader'
                     ? (epubReader?.title ?? '电子书书架')
-                    : (activeDocument?.title ??
-                        plantUmlSession?.request.documentTitle ??
-                        editorDraft.title) ||
-                      '未命名思维导图'}
+                    : activeWorkspace === 'knowledge'
+                      ? (activeDocument?.title ?? '知识库')
+                      : (activeDocument?.title ??
+                          plantUmlSession?.request.documentTitle ??
+                          editorDraft.title) ||
+                        '未命名思维导图'}
               </span>
               {activeWorkspace === 'mindmap' && !plantUmlSession && (
                 <i
@@ -5147,6 +5177,14 @@ export default function App() {
             onClick={() => setActiveWorkspace('player')}
           >
             播放器
+          </button>
+          <button
+            type="button"
+            className={activeWorkspace === 'knowledge' ? 'is-active' : ''}
+            aria-pressed={activeWorkspace === 'knowledge'}
+            onClick={() => setActiveWorkspace('knowledge')}
+          >
+            知识库
           </button>
         </nav>
         <div className="topbar-actions">
@@ -5207,6 +5245,7 @@ export default function App() {
         <LibraryPanel
           snapshot={librarySnapshot}
           documents={libraryDocuments}
+          currentMarkdown={editorDraft.markdown}
           selectedPath={
             activeDocument
               ? activeDocument.kind === 'doc'
@@ -5256,9 +5295,19 @@ export default function App() {
           onToggleCollapse={() =>
             setLibraryCollapsed((collapsed) => !collapsed)
           }
+          onNavigateToLine={(lineIndex) => {
+            const selectLine = () =>
+              markdownEditorRef.current?.selectLine(lineIndex, true);
+            if (markdownPaneModeRef.current === 'preview') {
+              setMarkdownPaneMode('edit');
+              window.requestAnimationFrame(selectLine);
+            } else {
+              selectLine();
+            }
+          }}
         />
 
-        {activeDocument && (
+        {activeDocument && activeWorkspace !== 'knowledge' && (
           <DocumentWorkbench
             document={activeDocument}
             dirty={workbench.dirty}
@@ -6205,6 +6254,32 @@ export default function App() {
           </Suspense>
         )}
       </section>
+
+      {activeWorkspace === 'knowledge' && (
+        <section
+          className="knowledge-workspace-stage"
+          aria-label="知识库工作区"
+        >
+          <KnowledgeWorkspace
+            documents={libraryDocuments}
+            activeDocument={activeDocument}
+            onOpenNote={(note) => void openKnowledgeNote(note)}
+            onCreateNote={(folder) => void createKnowledgeNote(folder)}
+            onDeleteNote={(note) => void deleteMap(note)}
+            workbench={{
+              dirty: workbench.dirty,
+              statusText: saveMessage,
+              theme,
+              renderMarkdownPreview: renderDocumentPreview,
+              onSourceChange: (source) => workbench.controller.edit(source),
+              onSave: () => void workbench.controller.save({ manual: true }),
+              onRename: (title) => workbench.controller.rename(title),
+              onOpenAsMindmap: () => void openKnowledgeNoteAsMindmap(),
+              onConvertToMindmap: () => void convertActiveDocumentToMindmap(),
+            }}
+          />
+        </section>
+      )}
 
       {readerSplitActive && (
         <div
