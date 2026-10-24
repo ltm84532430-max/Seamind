@@ -37,4 +37,6 @@ const configJs = defineConfig({
   },
 });
 
-export default process.env.TARGET === 'es' ? configEs : configJs;
+// The target is chosen with `vite build --mode`, which works in every shell (see build:js).
+export default ({ mode }: { mode: string }) =>
+  mode === 'es' ? configEs : configJs;

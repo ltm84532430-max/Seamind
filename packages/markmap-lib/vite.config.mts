@@ -130,4 +130,6 @@ const configMap = {
   browserJs: configBrowserJs,
 };
 
-export default configMap[process.env.TARGET] || configMap.node;
+// The target is chosen with `vite build --mode`, which works in every shell (see build:js).
+export default ({ mode }: { mode: string }) =>
+  configMap[mode as keyof typeof configMap] || configMap.node;
