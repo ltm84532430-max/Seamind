@@ -8,8 +8,8 @@ use tauri::{
 };
 use tokio::sync::{oneshot, watch, Mutex};
 
-const PAGE_URL: &str = "https://www.youtube.com/";
-const PAGE_LOAD_TIMEOUT: Duration = Duration::from_secs(30);
+const PAGE_URL: &str = "https://www.youtube.com/robots.txt";
+const PAGE_LOAD_TIMEOUT: Duration = Duration::from_secs(15);
 const SCRIPT_TIMEOUT: Duration = Duration::from_secs(20);
 const POLL_INTERVAL: Duration = Duration::from_millis(150);
 const BOTGUARD_RUNTIME: &str =
@@ -127,7 +127,10 @@ fn window_label(request_id: &str) -> Result<String, String> {
 
 // YouTube may redirect to consent or another canonical subdomain; mirror the runtime allowlist.
 fn is_youtube_host(host: &str) -> bool {
-    host == "youtube.com" || host.ends_with(".youtube.com")
+    host == "youtube.com"
+        || host.ends_with(".youtube.com")
+        || host == "google.com"
+        || host.ends_with(".google.com")
 }
 
 async fn get_or_create_window(
@@ -211,7 +214,11 @@ async fn evaluate_json(window: &WebviewWindow, script: String) -> Result<Value, 
         .await
         .map_err(|_| "Timed out evaluating BotGuard script.".to_string())?
         .map_err(|_| "YouTube WebView closed before returning a result.".to_string())?;
-    serde_json::from_str(&result)
+    let trimmed = result.trim();
+    if trimmed.is_empty() || trimmed == "null" || trimmed == "undefined" {
+        return Ok(Value::Null);
+    }
+    serde_json::from_str(trimmed)
         .map_err(|error| format!("Invalid result from YouTube BotGuard WebView: {error}"))
 }
 

@@ -17,24 +17,20 @@ import { ShakaPlayerAdapter } from './youtube-sabr-shaka-adapter';
 export type NativeClient =
   | 'WEB'
   | 'VISIONOS'
-  | 'IOS'
   | 'ANDROID_VR'
   | 'ANDROID'
   | 'WEB_EMBEDDED';
 
 /**
- * InnerTube clients that, as of yt-dlp's October 2026 client table, return googlevideo addresses
- * without a PO token. visionOS and iOS need no JavaScript player; Android's ciphered formats do, so
- * it goes last. YouTube retires these every few months — keep this list in step with yt-dlp.
+ * InnerTube clients to attempt for playback.
+ * With the BotGuard PO token generator active, WEB is prioritized as the most stable official
+ * client, while VISIONOS, ANDROID_VR, and WEB_EMBEDDED serve as secondary fallbacks.
  */
 export const defaultNativeClients: NativeClient[] = [
-  'VISIONOS',
-  'IOS',
-  'ANDROID_VR',
-  'ANDROID',
-  // The current WEB client returns SABR-only formats. Keep it last so direct native-client
-  // formats remain the first choice, while still having the same web-token path FreeTube uses.
   'WEB',
+  'VISIONOS',
+  'ANDROID_VR',
+  'WEB_EMBEDDED',
 ];
 
 const RESOLVE_TIMEOUT_MS = 45_000;
@@ -694,6 +690,7 @@ export async function resolveNativePlayback(
       );
       if (playback.source.kind === 'sabr') {
         if (client === 'WEB' || !sabrCandidate) sabrCandidate = playback;
+        if (client === 'WEB') return playback;
         continue;
       }
       return playback;

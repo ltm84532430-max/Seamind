@@ -179,16 +179,27 @@ export function buildYouTubeEmbedUrl(
   options: { autoplay?: boolean } = {},
 ): string | null {
   if (!videoIdPattern.test(videoId)) return null;
-  const url = new URL(`https://www.youtube.com/embed/${videoId}`);
+  const url = new URL(`https://www.youtube-nocookie.com/embed/${videoId}`);
   url.searchParams.set('playsinline', '1');
   url.searchParams.set('rel', '0');
   url.searchParams.set('enablejsapi', '1');
+  url.searchParams.set('widget_referrer', 'https://www.youtube.com');
   if (
     typeof window !== 'undefined' &&
     window.location.origin &&
     window.location.origin !== 'null'
-  )
-    url.searchParams.set('origin', window.location.origin);
+  ) {
+    const hostname = window.location.hostname;
+    const protocol = window.location.protocol;
+    const isLocalTauri =
+      hostname === 'localhost' ||
+      hostname.endsWith('.localhost') ||
+      protocol === 'tauri:' ||
+      protocol === 'file:';
+    if (!isLocalTauri) {
+      url.searchParams.set('origin', window.location.origin);
+    }
+  }
   if (Number.isSafeInteger(startSeconds) && startSeconds > 0)
     url.searchParams.set('start', String(Math.floor(startSeconds)));
   if (options.autoplay) url.searchParams.set('autoplay', '1');

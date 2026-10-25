@@ -6,6 +6,7 @@ import { proxiedFetch } from './youtube-proxy';
 
 const WAA_REQUEST_KEY = 'O43z0dpjhgX20SCx4KAo';
 const TOKEN_CACHE_MS = 4 * 60_000;
+const interpreterCache = new Map<string, string>();
 
 interface CachedToken {
   token: string;
@@ -76,22 +77,55 @@ export async function loadYouTubeAttestationContext(
         throw new Error(`YouTube page request failed (${response.status}).`);
 
       const html = await response.text();
-      const configText = html.match(
-        /ytcfg\.set\s*\(\s*(\{[\s\S]*?\})\s*\)\s*;/,
-      )?.[1];
-      const attestationText = html.match(
-        /window\.ytAtN\(\s*(\{[\s\S]*?\})\s*\)/,
-      )?.[1];
-      if (!configText || !attestationText)
-        throw new Error('YouTube page did not include ytcfg and ytAtN data.');
+      const configMatches = html.matchAll(
+        /ytcfg\.set\s*\(\s*(\{[\s\S]*?\})\s*\)/g,
+      );
+      const ytConfig: Record<string, any> = {};
+      for (const match of configMatches) {
+        try {
+          Object.assign(ytConfig, JSON.parse(match[1]));
+        } catch {
+          try {
+            Object.assign(ytConfig, parseLooseJSON(match[1]));
+          } catch {
+            // ignore malformed fragment
+          }
+        }
+      }
 
-      const ytConfig = JSON.parse(configText) as Record<string, any>;
-      const initialAttestationData = parseLooseJSON(attestationText);
+      const attestationMatch = html.match(
+        /(?:window\.)?ytAtN\s*\(\s*(\{[\s\S]*?\})\s*\)/,
+      );
+      const attestationText = attestationMatch?.[1];
+
+      let initialAttestationData: Record<string, any> = {};
+      if (attestationText) {
+        try {
+          initialAttestationData = parseLooseJSON(attestationText);
+        } catch {
+          try {
+            initialAttestationData = JSON.parse(attestationText);
+          } catch {
+            // ignore
+          }
+        }
+      }
+
+      if (typeof initialAttestationData.R === 'string') {
+        try {
+          initialAttestationData.R = JSON.parse(initialAttestationData.R);
+        } catch {
+          try {
+            initialAttestationData.R = parseLooseJSON(initialAttestationData.R);
+          } catch {
+            // ignore
+          }
+        }
+      }
+
       const context = ytConfig.INNERTUBE_CONTEXT;
-      if (!context?.client || !initialAttestationData.R)
-        throw new Error(
-          'YouTube returned incomplete playback attestation data.',
-        );
+      if (!context?.client)
+        throw new Error('YouTube page did not include INNERTUBE_CONTEXT.');
 
       return { context, initialAttestationData, ytConfig };
     } catch (error) {
@@ -165,7 +199,23 @@ class YouTubeBotGuard {
     contentBinding: string,
     attestation?: YouTubeAttestationContext,
   ) {
-    let pageChallenge = attestation?.initialAttestationData.R?.bgChallenge;
+    let rData = attestation?.initialAttestationData?.R;
+    if (typeof rData === 'string') {
+      try {
+        rData = JSON.parse(rData);
+      } catch {
+        try {
+          rData = parseLooseJSON(rData);
+        } catch {
+          // ignore
+        }
+      }
+    }
+    let pageChallenge =
+      rData?.bgChallenge ??
+      attestation?.initialAttestationData?.bgChallenge ??
+      (rData?.globalName && rData?.program ? rData : undefined);
+
     if (!pageChallenge && attestation) {
       try {
         pageChallenge = await fetchPageBotGuardChallenge(attestation);
@@ -187,39 +237,63 @@ class YouTubeBotGuard {
       throw new Error('YouTube returned an incomplete BotGuard challenge.');
 
     let interpreter =
-      challenge.interpreterJavascript
-        ?.privateDoNotAccessOrElseSafeScriptWrappedValue;
+      typeof challenge.interpreterJavascript === 'string'
+        ? challenge.interpreterJavascript
+        : challenge.interpreterJavascript
+            ?.privateDoNotAccessOrElseSafeScriptWrappedValue;
+
     if (!interpreter) {
-      const rawUrl =
-        challenge.interpreterUrl
-          ?.privateDoNotAccessOrElseTrustedResourceUrlWrappedValue;
+      let rawUrl: string | undefined;
+      if (typeof challenge.interpreterUrl === 'string') {
+        rawUrl = challenge.interpreterUrl;
+      } else if (
+        challenge.interpreterUrl &&
+        typeof challenge.interpreterUrl === 'object'
+      ) {
+        rawUrl =
+          challenge.interpreterUrl
+            .privateDoNotAccessOrElseTrustedResourceUrlWrappedValue ??
+          challenge.interpreterUrl.url ??
+          challenge.interpreterUrl.src;
+      }
       if (!rawUrl)
         throw new Error('YouTube did not return a BotGuard interpreter.');
-      const url = rawUrl.startsWith('http') ? rawUrl : `https:${rawUrl}`;
-      const response = await proxiedFetch(url);
-      if (!response.ok) {
-        let reason = response.statusText;
-        try {
-          const body: unknown = await response.clone().json();
-          if (
-            body &&
-            typeof body === 'object' &&
-            'error' in body &&
-            typeof body.error === 'string'
-          )
-            reason = body.error;
-        } catch {
-          // Upstream error pages may be HTML; keep the diagnostic limited to safe metadata.
+
+      const url =
+        rawUrl.startsWith('http://') || rawUrl.startsWith('https://')
+          ? rawUrl
+          : `https:${rawUrl.startsWith('//') ? '' : '//'}${rawUrl}`;
+
+      const cached = interpreterCache.get(url);
+      if (cached) {
+        interpreter = cached;
+      } else {
+        const response = await proxiedFetch(url);
+        if (!response.ok) {
+          let reason = response.statusText;
+          try {
+            const body: unknown = await response.clone().json();
+            if (
+              body &&
+              typeof body === 'object' &&
+              'error' in body &&
+              typeof body.error === 'string'
+            )
+              reason = body.error;
+          } catch {
+            // Upstream error pages may be HTML; keep the diagnostic limited to safe metadata.
+          }
+          const safeReason = reason
+            .replace(/https?:\/\/[^\s"'<>]+/gi, '[URL redacted]')
+            .replace(/[\r\n\t]+/g, ' ')
+            .slice(0, 140);
+          throw new Error(
+            `BotGuard interpreter request failed (${response.status}) at ${new URL(url).hostname}: ${safeReason}`,
+          );
         }
-        const safeReason = reason
-          .replace(/https?:\/\/[^\s"'<>]+/gi, '[URL redacted]')
-          .replace(/[\r\n\t]+/g, ' ')
-          .slice(0, 140);
-        throw new Error(
-          `BotGuard interpreter request failed (${response.status}) at ${new URL(url).hostname}: ${safeReason}`,
-        );
+        interpreter = await response.text();
+        interpreterCache.set(url, interpreter);
       }
-      interpreter = await response.text();
     }
 
     const requestId = crypto.randomUUID();
@@ -240,9 +314,17 @@ class YouTubeBotGuard {
           userAgent: navigator.userAgent,
         },
       );
-      const integrityResponse = await proxiedFetch(
-        buildURL('GenerateIT', true),
-        {
+      let integrityResponse = await proxiedFetch(buildURL('GenerateIT', true), {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json+protobuf',
+          'x-goog-api-key': GOOG_API_KEY,
+          'x-user-agent': 'grpc-web-javascript/0.1',
+        },
+        body: JSON.stringify([WAA_REQUEST_KEY, botguardResponse]),
+      });
+      if (!integrityResponse.ok) {
+        integrityResponse = await proxiedFetch(buildURL('GenerateIT', false), {
           method: 'POST',
           headers: {
             'content-type': 'application/json+protobuf',
@@ -250,8 +332,8 @@ class YouTubeBotGuard {
             'x-user-agent': 'grpc-web-javascript/0.1',
           },
           body: JSON.stringify([WAA_REQUEST_KEY, botguardResponse]),
-        },
-      );
+        });
+      }
       if (!integrityResponse.ok)
         throw new Error(
           `BotGuard token request failed (${integrityResponse.status}).`,
