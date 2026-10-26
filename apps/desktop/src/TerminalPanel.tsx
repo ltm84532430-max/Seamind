@@ -22,12 +22,20 @@ interface PendingTerminalCommand {
   source: string;
 }
 
+export interface PendingTerminalRawInput {
+  id: string;
+  text: string;
+  execute?: boolean;
+}
+
 interface TerminalPanelProps {
   cwd: string;
   theme: AppTheme;
   pendingCommand: PendingTerminalCommand | null;
+  pendingRawInput?: PendingTerminalRawInput | null;
   onCommandSubmitted: (id: string) => void;
   onCommandOutput: (id: string, output: string) => void;
+  onRawInputSent?: (id: string) => void;
   onClose: () => void;
 }
 
@@ -73,22 +81,54 @@ export default function TerminalPanel({
   cwd,
   theme,
   pendingCommand,
+  pendingRawInput = null,
   onCommandSubmitted,
   onCommandOutput,
+  onRawInputSent,
   onClose,
 }: TerminalPanelProps) {
   const terminalHostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const pendingCommandRef = useRef(pendingCommand);
+  const pendingRawInputRef = useRef(pendingRawInput);
   const onCommandSubmittedRef = useRef(onCommandSubmitted);
   const onCommandOutputRef = useRef(onCommandOutput);
+  const onRawInputSentRef = useRef(onRawInputSent);
   const submittedCommandIdsRef = useRef(new Set<string>());
+  const submittedRawIdsRef = useRef(new Set<string>());
   const commandCaptureRef = useRef<CommandCapture | null>(null);
   const [status, setStatus] = useState('正在启动…');
   pendingCommandRef.current = pendingCommand;
+  pendingRawInputRef.current = pendingRawInput;
   onCommandSubmittedRef.current = onCommandSubmitted;
   onCommandOutputRef.current = onCommandOutput;
+  onRawInputSentRef.current = onRawInputSent;
+
+  const writeRawToSession = (
+    sessionId: string,
+    text: string,
+    execute = false,
+  ) => {
+    const payload = execute ? `${text}\r` : text;
+    const bytes = Array.from(new TextEncoder().encode(payload));
+    void invoke('terminal_write', { sessionId, data: bytes })
+      .then(() => {
+        terminalRef.current?.focus();
+      })
+      .catch((error: unknown) => {
+        setStatus(error instanceof Error ? error.message : '输入失败');
+      });
+  };
+
+  const sendPendingRawRef = useRef<(sessionId: string) => void>(() => {});
+  sendPendingRawRef.current = (sessionId) => {
+    const raw = pendingRawInputRef.current;
+    if (!raw || submittedRawIdsRef.current.has(raw.id)) return;
+    submittedRawIdsRef.current.add(raw.id);
+    writeRawToSession(sessionId, raw.text, Boolean(raw.execute));
+    onRawInputSentRef.current?.(raw.id);
+  };
 
   const appendCapturedOutput = (capture: CommandCapture, value: string) => {
     if (!value) return;
@@ -342,6 +382,7 @@ export default function TerminalPanel({
         terminal?.write(Uint8Array.from(data));
       });
       sendPendingCommandRef.current(sessionId);
+      sendPendingRawRef.current(sessionId);
       disposeInput = terminal.onData((data) => {
         if (!sessionId) return;
         const bytes = Array.from(new TextEncoder().encode(data));
@@ -391,14 +432,46 @@ export default function TerminalPanel({
     if (sessionId && pendingCommand) sendPendingCommandRef.current(sessionId);
   }, [pendingCommand]);
 
+  useEffect(() => {
+    const sessionId = sessionIdRef.current;
+    if (sessionId && pendingRawInput) sendPendingRawRef.current(sessionId);
+  }, [pendingRawInput]);
+
+  const sendQuickCli = (cliCommand: string) => {
+    const sessionId = sessionIdRef.current;
+    if (!sessionId) return;
+    writeRawToSession(sessionId, cliCommand, true);
+  };
+
   return (
     <section className="seamind-terminal" aria-label="Seamind 终端">
       <header className="seamind-terminal-heading">
         <div>
-          <strong>终端</strong>
+          <strong>终端 · CLI</strong>
           <span title={cwd}>{status}</span>
         </div>
         <div className="seamind-terminal-actions">
+          <button
+            type="button"
+            onClick={() => sendQuickCli('gemini')}
+            title="在当前终端启动已接入 Seamind MCP 的 Gemini CLI"
+          >
+            gemini
+          </button>
+          <button
+            type="button"
+            onClick={() => sendQuickCli('claude')}
+            title="在当前终端启动已接入 Seamind MCP 的 Claude Code"
+          >
+            claude
+          </button>
+          <button
+            type="button"
+            onClick={() => sendQuickCli('codex')}
+            title="在当前终端启动已接入 Seamind MCP 的 Codex CLI"
+          >
+            codex
+          </button>
           <button
             type="button"
             onClick={() => terminalRef.current?.clear()}
@@ -419,7 +492,9 @@ export default function TerminalPanel({
       </header>
       <div className="seamind-terminal-host" ref={terminalHostRef} />
       <div className="seamind-terminal-note">
-        Shell 命令会以当前 Windows 用户权限运行。关闭终端会结束 Shell 进程。
+        已自动注入 Seamind MCP 工具（导图 · 知识库 ·
+        播放器学习路径）。可直接输入 <code>gemini</code>、<code>claude</code> 或{' '}
+        <code>codex</code> 调用。
       </div>
     </section>
   );

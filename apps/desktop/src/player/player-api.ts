@@ -5,6 +5,8 @@ import type {
   FeedFetchResult,
   FeedQuery,
   ImportSummary,
+  LearningPathDetail,
+  LearningPathInput,
   PlayerChannel,
   PlayerOverview,
   PlayerPlaylist,
@@ -84,6 +86,13 @@ export const playerApi = {
       channelName,
       videos,
     }),
+
+  learningPathGet: (pathId: string) =>
+    invoke<LearningPathDetail | null>('player_learning_path_get', { pathId }),
+  learningPathSave: (input: LearningPathInput) =>
+    invoke<LearningPathDetail>('player_learning_path_save', { input }),
+  learningPathDelete: (pathId: string) =>
+    invoke<void>('player_learning_path_delete', { pathId }),
 
   exportBackup: () => invoke<string>('player_export_backup'),
   importBackup: (text: string) =>

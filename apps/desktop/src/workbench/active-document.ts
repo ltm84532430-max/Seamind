@@ -332,6 +332,28 @@ export class ActiveDocumentController {
   /** Creates a file of `kind` in `category` from its template and opens it. */
   createDocument(kind: WorkbenchKind, category: string): Promise<boolean> {
     const template = NEW_FILE_TEMPLATES[kind];
+    return this.createCustomDocument({
+      kind,
+      category,
+      title: template.title,
+      source: template.source,
+    });
+  }
+
+  /** Creates a file with custom title, source, and optional tags in `category` and opens it. */
+  createCustomDocument(options: {
+    kind?: WorkbenchKind;
+    category: string;
+    title: string;
+    source: string;
+    tags?: string[];
+  }): Promise<boolean> {
+    const kind = options.kind ?? 'doc';
+    const category = options.category.trim() || '未分类';
+    const title = options.title.trim() || NEW_FILE_TEMPLATES[kind].title;
+    const source = options.source;
+    const tags = options.tags ?? [];
+
     return this.replaceWith('新建失败', async () => {
       if (kind === 'mermaid') {
         const created = await this.invoke<OpenedTextDocument>(
@@ -339,8 +361,8 @@ export class ActiveDocumentController {
           {
             kind: 'mermaid',
             category,
-            title: template.title,
-            source: template.source,
+            title,
+            source,
           },
         );
         this.upsertTextDocument(created.document);
@@ -349,11 +371,11 @@ export class ActiveDocumentController {
       const input: SaveDocumentInput = {
         id: null,
         relativePath: null,
-        title: template.title,
+        title,
         category,
         mapType: DOCUMENT_MAP_TYPE,
-        tags: [],
-        markdown: template.source,
+        tags,
+        markdown: source,
         historySource: 'manual',
         kind: 'doc',
       };
@@ -370,11 +392,46 @@ export class ActiveDocumentController {
         category: created.category || '未分类',
         mapType: created.mapType || DOCUMENT_MAP_TYPE,
         tags: created.tags,
-        source: template.source,
+        source,
         revision: 0,
         savedRevision: 0,
       };
     });
+  }
+
+  /** Moves the open Markdown document to another category folder and saves immediately. */
+  async setCategory(category: string): Promise<boolean> {
+    const current = this.state;
+    const next = category.trim() || '未分类';
+    if (!current || current.kind !== 'doc' || next === current.category) {
+      return true;
+    }
+    const previousCategory = current.category;
+    this.set({ ...current, category: next, revision: current.revision + 1 });
+    const saved = await this.save({ manual: true });
+    if (!saved && this.state?.category === next) {
+      this.set({ ...this.state, category: previousCategory });
+    }
+    return saved;
+  }
+
+  /** Updates the open Markdown document's tags and saves immediately. */
+  async setTags(tags: string[]): Promise<boolean> {
+    const current = this.state;
+    if (!current || current.kind !== 'doc') return true;
+    const normalized = [
+      ...new Set(
+        tags.map((tag) => tag.trim().replace(/^#+/, '')).filter(Boolean),
+      ),
+    ].slice(0, 20);
+    if (
+      normalized.length === current.tags.length &&
+      normalized.every((tag, idx) => tag === current.tags[idx])
+    ) {
+      return true;
+    }
+    this.set({ ...current, tags: normalized, revision: current.revision + 1 });
+    return this.save({ manual: true });
   }
 
   /**

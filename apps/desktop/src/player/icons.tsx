@@ -148,3 +148,32 @@ export function WarningIcon() {
     </Svg>
   );
 }
+
+export function PathTreeIcon() {
+  return (
+    <Svg>
+      <circle cx="3.2" cy="8" r="1.5" />
+      <circle cx="12.6" cy="4.2" r="1.5" />
+      <circle cx="12.6" cy="11.8" r="1.5" />
+      <path d="M4.7 8h2.6c1.2 0 1.6-3.8 3.8-3.8M7.3 8c1.2 0 1.6 3.8 3.8 3.8" />
+    </Svg>
+  );
+}
+
+export function SparkleIcon() {
+  return (
+    <Svg>
+      <path d="M8 1.8l1.4 4.1 4.1 1.4-4.1 1.4L8 12.8 6.6 8.7 2.5 7.3l4.1-1.4z" />
+      <path d="M12.8 11.2l.6 1.6 1.6.6-1.6.6-.6 1.6-.6-1.6-1.6-.6 1.6-.6z" />
+    </Svg>
+  );
+}
+
+export function TerminalBoxIcon() {
+  return (
+    <Svg>
+      <rect x="1.8" y="2.6" width="12.4" height="10.8" rx="1.5" />
+      <path d="M4.5 6.2L6.8 8 4.5 9.8M8.2 10h3.2" />
+    </Svg>
+  );
+}

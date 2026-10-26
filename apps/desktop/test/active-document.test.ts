@@ -643,3 +643,65 @@ describe('subscribing', () => {
     expect(notified).toBe(2);
   });
 });
+
+describe('custom templates, category switching, and tag editing', () => {
+  it('creates a custom note with template source and tags', async () => {
+    const { controller, commandsCalled } = harness({
+      save_document: (args) => {
+        const input = args.input as SaveDocumentInput;
+        return mapDocument({
+          relativePath: `${input.category}/${input.title}.md`,
+          title: input.title,
+          category: input.category,
+          tags: input.tags,
+        });
+      },
+    });
+    expect(
+      await controller.createCustomDocument({
+        category: '数学',
+        title: '概念笔记',
+        source: '# 概念笔记\n\n$$a+b$$\n',
+        tags: ['公式'],
+      }),
+    ).toBe(true);
+    const input = commandsCalled('save_document')[0].args
+      .input as SaveDocumentInput;
+    expect(input).toMatchObject({
+      category: '数学',
+      title: '概念笔记',
+      tags: ['公式'],
+      kind: 'doc',
+    });
+    expect(controller.getState()).toMatchObject({
+      category: '数学',
+      title: '概念笔记',
+      tags: ['公式'],
+    });
+  });
+
+  it('moves category and updates deduplicated tags on an open document', async () => {
+    const { controller, commandsCalled } = harness({
+      open_document: () => openedDoc(),
+      save_document: (args) => {
+        const input = args.input as SaveDocumentInput;
+        return mapDocument({
+          category: input.category,
+          relativePath: `${input.category}/${input.title}.md`,
+          tags: input.tags,
+        });
+      },
+    });
+    await controller.openMarkdown(mapDocument());
+
+    expect(await controller.setCategory('研究/论文')).toBe(true);
+    expect(controller.getState()).toMatchObject({
+      category: '研究/论文',
+      relativePath: '研究/论文/说明.md',
+    });
+
+    expect(await controller.setTags(['#AI', '论文', 'AI'])).toBe(true);
+    expect(controller.getState()?.tags).toEqual(['AI', '论文']);
+    expect(commandsCalled('save_document')).toHaveLength(2);
+  });
+});

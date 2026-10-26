@@ -86,4 +86,23 @@ describe('groupKnowledgeNotes', () => {
     expect(groupKnowledgeNotes(documents, '数学')[0].name).toBe('数学');
     expect(groupKnowledgeNotes(documents, '不存在')).toEqual([]);
   });
+
+  it('includes empty categories when query is blank and matches #tag queries', () => {
+    const documents = [
+      note({
+        relativePath: 'math/calc.md',
+        title: '微积分',
+        category: '数学',
+        tags: ['极限', '导数'],
+      }),
+    ];
+
+    const withEmpty = groupKnowledgeNotes(documents, '', ['物理', '数学']);
+    expect(withEmpty.map((group) => group.name)).toEqual(['数学', '物理']);
+    expect(withEmpty[1].notes).toEqual([]);
+
+    const byTag = groupKnowledgeNotes(documents, '#极限', ['物理', '数学']);
+    expect(byTag).toHaveLength(1);
+    expect(byTag[0].notes[0].title).toBe('微积分');
+  });
 });

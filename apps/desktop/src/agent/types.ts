@@ -1,3 +1,5 @@
+import type { LearningPathInput } from '../player/types';
+
 export interface MindmapNodeSnapshot {
   path: string;
   nodeId: string | null;
@@ -54,6 +56,19 @@ export interface NodeEditProposal {
   analysisMode?: AgentAnalysisMode;
   branchMarkdown?: string;
   htmlAssets?: GeneratedHtmlAsset[];
+}
+
+export type LearningPathProposalMode = 'create' | 'replace' | 'append_nodes';
+
+export interface LearningPathProposal {
+  mode: LearningPathProposalMode;
+  existingTitle?: string | null;
+  existingNodeCount?: number;
+  input: LearningPathInput;
+  addedNodeCount: number;
+  videoCount: number;
+  stageCount: number;
+  rationale: string;
 }
 
 export interface AgentToolCall {

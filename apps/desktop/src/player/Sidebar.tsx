@@ -7,6 +7,7 @@ import {
   CourseIcon,
   FeedIcon,
   HistoryIcon,
+  PathTreeIcon,
   PlusIcon,
   SettingsIcon,
   StarIcon,
@@ -14,7 +15,11 @@ import {
 } from './icons';
 import { sortChannels } from './queue';
 import { FAVORITES_ID, WATCH_LATER_ID } from './types';
-import type { PlayerChannel, PlayerPlaylist } from './types';
+import type {
+  LearningPathSummary,
+  PlayerChannel,
+  PlayerPlaylist,
+} from './types';
 import { SLOW_LOOKUP_TEXT, useSlowHint } from './use-slow-hint';
 
 /** More subscriptions than this get a box to filter them by name. */
@@ -26,6 +31,8 @@ function isCurrent(view: PlayerView, other: PlayerView): boolean {
     return view.playlistId === other.playlistId;
   if (view.kind === 'channel' && other.kind === 'channel')
     return view.channelId === other.channelId;
+  if (view.kind === 'learning-path' && other.kind === 'learning-path')
+    return view.pathId === other.pathId;
   return true;
 }
 
@@ -64,6 +71,7 @@ export default function Sidebar({
   view,
   channels,
   playlists,
+  learningPaths,
   opening,
   openError,
   onGo,
@@ -74,6 +82,7 @@ export default function Sidebar({
   view: PlayerView;
   channels: PlayerChannel[];
   playlists: PlayerPlaylist[];
+  learningPaths: LearningPathSummary[];
   /** A pasted link is being looked up. */
   opening: boolean;
   openError: string;
@@ -174,6 +183,29 @@ export default function Sidebar({
           label="历史"
           onGo={onGo}
         />
+
+        <h3 className="player-nav-heading">学习路径</h3>
+        <NavItem
+          view={view}
+          target={{ kind: 'learning-paths-home' }}
+          icon={<PathTreeIcon />}
+          label="全部路径"
+          badge={
+            learningPaths.length ? String(learningPaths.length) : undefined
+          }
+          onGo={onGo}
+        />
+        {learningPaths.map((path) => (
+          <NavItem
+            key={path.pathId}
+            view={view}
+            target={{ kind: 'learning-path', pathId: path.pathId }}
+            icon={<PathTreeIcon />}
+            label={path.title}
+            badge={`${path.finishedCount}/${path.videoCount}`}
+            onGo={onGo}
+          />
+        ))}
 
         {courses.length > 0 && (
           <>

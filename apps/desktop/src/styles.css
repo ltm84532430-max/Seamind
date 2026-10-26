@@ -807,19 +807,15 @@ button {
   --col-library: 240px;
   --col-source: minmax(280px, 32%);
   --col-ai: 320px;
-  --row-terminal: 0px;
   display: grid;
   grid-template-columns:
     var(--col-library) var(--col-source) minmax(0, 1fr)
     var(--col-ai);
-  grid-template-rows: minmax(0, 1fr) var(--row-terminal);
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   padding: 0;
   gap: 0;
   background: #fff;
-}
-.workspace.is-terminal-open {
-  --row-terminal: 250px;
 }
 .workspace.is-library-collapsed {
   --col-library: 42px;
@@ -875,23 +871,16 @@ button {
   grid-row: 1 / -1;
 }
 #seamind-terminal-panel {
-  grid-column: 2 / 4;
-  grid-row: 2;
   min-width: 0;
   min-height: 0;
   height: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border-top: 1px solid var(--line);
-  border-right: 1px solid var(--line);
   background: #fff;
 }
 .workspace.is-source-collapsed .editor-pane {
   grid-row: 1 / -1;
-}
-.workspace.is-source-collapsed #seamind-terminal-panel {
-  grid-column: 3 / 4;
 }
 
 .editor-pane {
@@ -10997,8 +10986,7 @@ button {
   grid-template-columns: 42px minmax(0, 1fr) !important;
 }
 .app-shell.is-reader-split .library-sidebar,
-.app-shell.is-reader-split .ai-sidebar,
-.app-shell.is-reader-split #seamind-terminal-panel {
+.app-shell.is-reader-split .ai-sidebar {
   display: none !important;
 }
 .app-shell.is-reader-split .editor-pane {
@@ -12702,4 +12690,115 @@ button {
   border-color: #354149;
   color: #8f9da5;
   background: #1a2328;
+}
+
+/* The terminal lives at the application level so its PTY survives workspace switches. */
+.app-shell > .topbar {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+.app-shell > .workspace,
+.app-shell > .ebook-workspace-stage,
+.app-shell > .player-workspace-stage,
+.app-shell > .knowledge-workspace-stage {
+  grid-row: 2;
+}
+.app-shell > .statusbar {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+.app-shell.is-terminal-open {
+  grid-template-rows:
+    52px minmax(0, 1fr) minmax(160px, var(--terminal-height, 280px))
+    29px;
+}
+.app-shell.is-terminal-open > .statusbar {
+  grid-row: 4;
+}
+.app-shell > .seamind-terminal-drawer {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 8px minmax(0, 1fr);
+  overflow: hidden;
+  border-top: 1px solid var(--line);
+  background: #fff;
+}
+.terminal-drawer-resize-handle {
+  position: relative;
+  z-index: 2;
+  min-width: 0;
+  min-height: 8px;
+  cursor: row-resize;
+  touch-action: none;
+  user-select: none;
+  background: #f3f5f6;
+}
+.terminal-drawer-resize-handle::after {
+  position: absolute;
+  top: 3px;
+  left: 50%;
+  width: 34px;
+  height: 2px;
+  border-radius: 2px;
+  background: #aeb8bd;
+  content: '';
+  transform: translateX(-50%);
+}
+.terminal-drawer-resize-handle:hover,
+.terminal-drawer-resize-handle:focus-visible {
+  background: #e9edef;
+  outline: none;
+}
+.terminal-drawer-resize-handle:hover::after,
+.terminal-drawer-resize-handle:focus-visible::after {
+  background: #78878e;
+}
+.terminal-global-panel {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.seamind-terminal-loading {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  color: #75828a;
+  font: 11px var(--mono);
+}
+.app-shell.is-reader-split.is-terminal-open {
+  grid-template-rows:
+    52px minmax(0, 1fr) minmax(160px, var(--terminal-height, 280px))
+    29px;
+}
+.app-shell.is-reader-split.is-terminal-open > .seamind-terminal-drawer {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+.app-shell.is-reader-split.is-terminal-open > .statusbar {
+  grid-column: 1 / -1;
+  grid-row: 4;
+}
+.app-shell[data-theme='dark'] > .seamind-terminal-drawer {
+  border-color: #34414a;
+  background: #171e23;
+}
+.app-shell[data-theme='dark'] .terminal-drawer-resize-handle {
+  background: #202a30;
+}
+.app-shell[data-theme='dark'] .terminal-drawer-resize-handle::after {
+  background: #5d6b73;
+}
+.app-shell[data-theme='dark'] .seamind-terminal-loading {
+  color: #9aa8af;
+}
+
+@media (max-height: 560px) {
+  .app-shell.is-terminal-open,
+  .app-shell.is-reader-split.is-terminal-open {
+    grid-template-rows: 52px minmax(0, 1fr) minmax(136px, 44vh) 29px;
+  }
 }

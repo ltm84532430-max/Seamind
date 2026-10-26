@@ -9,7 +9,7 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use uuid::Uuid;
 
@@ -83,6 +83,28 @@ CREATE TABLE IF NOT EXISTS playlist_items (
     UNIQUE (playlist_id, video_id)
 );
 CREATE INDEX IF NOT EXISTS idx_playlist_items_video ON playlist_items(video_id);
+CREATE TABLE IF NOT EXISTS learning_paths (
+    path_id TEXT PRIMARY KEY NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS learning_path_nodes (
+    path_id TEXT NOT NULL REFERENCES learning_paths(path_id) ON DELETE CASCADE,
+    node_id TEXT NOT NULL,
+    parent_id TEXT,
+    position INTEGER NOT NULL DEFAULT 0,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    note TEXT,
+    video_id TEXT,
+    start_seconds INTEGER NOT NULL DEFAULT 0,
+    optional INTEGER NOT NULL DEFAULT 0,
+    prerequisites_json TEXT NOT NULL DEFAULT '[]',
+    PRIMARY KEY (path_id, node_id)
+);
+CREATE INDEX IF NOT EXISTS idx_learning_path_nodes_video ON learning_path_nodes(video_id);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY NOT NULL,
     value TEXT NOT NULL
@@ -198,7 +220,70 @@ impl Default for PlayerSettings {
 pub struct Overview {
     pub channels: Vec<Channel>,
     pub playlists: Vec<Playlist>,
+    pub learning_paths: Vec<LearningPathSummary>,
     pub settings: PlayerSettings,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LearningPathSummary {
+    pub path_id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub node_count: i64,
+    pub video_count: i64,
+    pub finished_count: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LearningPathNodeInput {
+    pub node_id: String,
+    pub parent_id: Option<String>,
+    pub position: i64,
+    /// "stage" | "video" | "checkpoint"
+    pub kind: String,
+    pub title: String,
+    pub note: Option<String>,
+    pub video_id: Option<String>,
+    pub start_seconds: i64,
+    pub optional: bool,
+    pub prerequisite_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LearningPathInput {
+    pub path_id: Option<String>,
+    pub title: String,
+    pub description: Option<String>,
+    pub nodes: Vec<LearningPathNodeInput>,
+    pub videos: Vec<VideoInput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LearningPathNode {
+    pub node_id: String,
+    pub parent_id: Option<String>,
+    pub position: i64,
+    pub kind: String,
+    pub title: String,
+    pub note: Option<String>,
+    pub video_id: Option<String>,
+    pub start_seconds: i64,
+    pub optional: bool,
+    pub prerequisite_ids: Vec<String>,
+    pub video: Option<VideoItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LearningPathDetail {
+    pub summary: LearningPathSummary,
+    pub nodes: Vec<LearningPathNode>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -623,6 +708,7 @@ pub fn prune(connection: &Connection, now: i64) -> Result<(), String> {
              WHERE video_id NOT IN (SELECT video_id FROM playlist_items)
                AND video_id NOT IN (SELECT video_id FROM history)
                AND video_id NOT IN (SELECT video_id FROM watch_state)
+               AND video_id NOT IN (SELECT video_id FROM learning_path_nodes WHERE video_id IS NOT NULL)
                AND (channel_id IS NULL
                     OR channel_id NOT IN (SELECT channel_id FROM channels)
                     OR COALESCE(published_at, updated_at) < ?1)",
@@ -1027,6 +1113,459 @@ pub fn course_save(
     playlist(connection, &playlist_id)?.ok_or_else(|| "保存课程失败。".to_string())
 }
 
+// ---- learning paths -----------------------------------------------------------------------------
+
+const MAX_LEARNING_PATH_NODES: usize = 200;
+
+fn is_path_or_node_id(value: &str) -> bool {
+    (1..=64).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-' || byte == b':')
+}
+
+fn normalize_node_kind(kind: &str, has_video: bool) -> Result<&'static str, String> {
+    match kind.trim() {
+        "" => Ok(if has_video { "video" } else { "stage" }),
+        "stage" => Ok("stage"),
+        "video" => Ok("video"),
+        "checkpoint" => Ok("checkpoint"),
+        other => Err(format!("不支持的学习路径节点类型：{other}")),
+    }
+}
+
+fn learning_path_summary_columns() -> String {
+    format!(
+        "p.path_id, p.title, p.description, p.created_at, p.updated_at,
+         (SELECT COUNT(*) FROM learning_path_nodes n WHERE n.path_id = p.path_id),
+         (SELECT COUNT(*) FROM learning_path_nodes n WHERE n.path_id = p.path_id AND n.video_id IS NOT NULL),
+         (SELECT COALESCE(SUM(CASE WHEN {FINISHED_SQL} != 0 THEN 1 ELSE 0 END), 0)
+          FROM learning_path_nodes n
+          LEFT JOIN videos v ON v.video_id = n.video_id
+          LEFT JOIN watch_state ws ON ws.video_id = n.video_id
+          WHERE n.path_id = p.path_id AND n.video_id IS NOT NULL)"
+    )
+}
+
+fn learning_path_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LearningPathSummary> {
+    Ok(LearningPathSummary {
+        path_id: row.get(0)?,
+        title: row.get(1)?,
+        description: row.get(2)?,
+        created_at: row.get(3)?,
+        updated_at: row.get(4)?,
+        node_count: row.get(5)?,
+        video_count: row.get(6)?,
+        finished_count: row.get(7)?,
+    })
+}
+
+pub fn learning_paths(connection: &Connection) -> Result<Vec<LearningPathSummary>, String> {
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT {} FROM learning_paths p ORDER BY p.updated_at DESC, p.created_at DESC, p.path_id",
+            learning_path_summary_columns()
+        ))
+        .map_err(db_error)?;
+    let rows = statement
+        .query_map([], learning_path_summary_from_row)
+        .map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
+fn learning_path_summary(
+    connection: &Connection,
+    path_id: &str,
+) -> Result<Option<LearningPathSummary>, String> {
+    connection
+        .query_row(
+            &format!(
+                "SELECT {} FROM learning_paths p WHERE p.path_id = ?1",
+                learning_path_summary_columns()
+            ),
+            params![path_id],
+            learning_path_summary_from_row,
+        )
+        .optional()
+        .map_err(db_error)
+}
+
+pub fn learning_path_get(
+    connection: &Connection,
+    path_id: &str,
+) -> Result<Option<LearningPathDetail>, String> {
+    let Some(summary) = learning_path_summary(connection, path_id)? else {
+        return Ok(None);
+    };
+    let mut statement = connection
+        .prepare(
+            "SELECT node_id, parent_id, position, kind, title, note, video_id,
+                    start_seconds, optional, prerequisites_json
+             FROM learning_path_nodes
+             WHERE path_id = ?1
+             ORDER BY position ASC, node_id ASC",
+        )
+        .map_err(db_error)?;
+    let raw_nodes = statement
+        .query_map(params![path_id], |row| {
+            let prereq_text: String = row.get(9)?;
+            let prerequisite_ids =
+                serde_json::from_str::<Vec<String>>(&prereq_text).unwrap_or_default();
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, i64>(8)? != 0,
+                prerequisite_ids,
+            ))
+        })
+        .map_err(db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)?;
+
+    let mut video_ids = Vec::new();
+    for entry in &raw_nodes {
+        if let Some(ref vid) = entry.6 {
+            if !video_ids.contains(vid) {
+                video_ids.push(vid.clone());
+            }
+        }
+    }
+    let items = video_items(connection, &video_ids)?;
+    let item_map: HashMap<String, VideoItem> = items
+        .into_iter()
+        .map(|item| (item.video.video_id.clone(), item))
+        .collect();
+
+    let nodes = raw_nodes
+        .into_iter()
+        .map(
+            |(
+                node_id,
+                parent_id,
+                position,
+                kind,
+                title,
+                note,
+                video_id,
+                start_seconds,
+                optional,
+                prerequisite_ids,
+            )| {
+                let video = video_id.as_ref().and_then(|id| item_map.get(id).cloned());
+                LearningPathNode {
+                    node_id,
+                    parent_id,
+                    position,
+                    kind,
+                    title,
+                    note,
+                    video_id,
+                    start_seconds,
+                    optional,
+                    prerequisite_ids,
+                    video,
+                }
+            },
+        )
+        .collect();
+
+    Ok(Some(LearningPathDetail { summary, nodes }))
+}
+
+struct ValidatedPathNode {
+    node_id: String,
+    parent_id: Option<String>,
+    position: i64,
+    kind: &'static str,
+    title: String,
+    note: Option<String>,
+    video_id: Option<String>,
+    start_seconds: i64,
+    optional: bool,
+    prerequisite_ids: Vec<String>,
+}
+
+fn validate_learning_path_nodes(
+    nodes: &[LearningPathNodeInput],
+) -> Result<Vec<ValidatedPathNode>, String> {
+    if nodes.len() > MAX_LEARNING_PATH_NODES {
+        return Err(format!(
+            "单个学习路径最多包含 {MAX_LEARNING_PATH_NODES} 个节点。"
+        ));
+    }
+    let mut seen_ids = HashSet::with_capacity(nodes.len());
+    let mut normalized = Vec::with_capacity(nodes.len());
+
+    for (index, raw) in nodes.iter().enumerate() {
+        let node_id = raw.node_id.trim().to_string();
+        if !is_path_or_node_id(&node_id) {
+            return Err(format!(
+                "第 {} 个节点的编号无效（仅限字母、数字、_、-、:，长度 1–64）。",
+                index + 1
+            ));
+        }
+        if !seen_ids.insert(node_id.clone()) {
+            return Err(format!("学习路径存在重复的节点编号：{node_id}"));
+        }
+
+        let video_id = match raw.video_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(vid) => {
+                if !is_video_id(vid) {
+                    return Err(format!("节点「{}」的视频编号无效：{vid}", raw.title.trim()));
+                }
+                Some(vid.to_string())
+            }
+            None => None,
+        };
+
+        let kind = normalize_node_kind(&raw.kind, video_id.is_some())?;
+        let title_clean = clean(&raw.title, MAX_TEXT_CHARS);
+        let title = if title_clean.is_empty() {
+            video_id.clone().unwrap_or_else(|| format!("节点 {}", index + 1))
+        } else {
+            title_clean
+        };
+
+        let parent_id = raw
+            .parent_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+
+        let mut prerequisite_ids = Vec::new();
+        for req in &raw.prerequisite_ids {
+            let trimmed = req.trim();
+            if !trimmed.is_empty() && !prerequisite_ids.iter().any(|existing| existing == trimmed) {
+                prerequisite_ids.push(trimmed.to_string());
+            }
+        }
+
+        normalized.push(ValidatedPathNode {
+            node_id,
+            parent_id,
+            position: raw.position,
+            kind,
+            title,
+            note: clean_option(&raw.note, MAX_DESCRIPTION_CHARS),
+            video_id,
+            start_seconds: raw.start_seconds.max(0),
+            optional: raw.optional,
+            prerequisite_ids,
+        });
+    }
+
+    // Verify all parent_id and prerequisite_ids exist and do not self-loop.
+    let mut outgoing: HashMap<&str, Vec<&str>> = HashMap::with_capacity(normalized.len());
+    for node in &normalized {
+        outgoing.entry(node.node_id.as_str()).or_default();
+    }
+    for node in &normalized {
+        if let Some(ref pid) = node.parent_id {
+            if pid == &node.node_id {
+                return Err(format!("节点「{}」不能将自身设为父节点。", node.title));
+            }
+            if !seen_ids.contains(pid) {
+                return Err(format!(
+                    "节点「{}」引用了不存在的父节点：{pid}",
+                    node.title
+                ));
+            }
+            outgoing
+                .entry(pid.as_str())
+                .or_default()
+                .push(node.node_id.as_str());
+        }
+        for req in &node.prerequisite_ids {
+            if req == &node.node_id {
+                return Err(format!("节点「{}」不能将自身设为前置依赖。", node.title));
+            }
+            if !seen_ids.contains(req) {
+                return Err(format!(
+                    "节点「{}」引用了不存在的前置依赖节点：{req}",
+                    node.title
+                ));
+            }
+            outgoing
+                .entry(req.as_str())
+                .or_default()
+                .push(node.node_id.as_str());
+        }
+    }
+
+    // 3-color DFS cycle check across parent + prerequisite edges.
+    let mut color: HashMap<&str, u8> = HashMap::with_capacity(normalized.len());
+    fn has_cycle<'a>(
+        current: &'a str,
+        outgoing: &HashMap<&'a str, Vec<&'a str>>,
+        color: &mut HashMap<&'a str, u8>,
+    ) -> bool {
+        match color.get(current).copied().unwrap_or(0) {
+            1 => return true,
+            2 => return false,
+            _ => {}
+        }
+        color.insert(current, 1);
+        if let Some(neighbors) = outgoing.get(current) {
+            for &next in neighbors {
+                if has_cycle(next, outgoing, color) {
+                    return true;
+                }
+            }
+        }
+        color.insert(current, 2);
+        false
+    }
+
+    for node in &normalized {
+        if color.get(node.node_id.as_str()).copied().unwrap_or(0) == 0
+            && has_cycle(node.node_id.as_str(), &outgoing, &mut color)
+        {
+            return Err("学习路径节点之间存在循环依赖（父子或前置关系成环）。".to_string());
+        }
+    }
+
+    Ok(normalized)
+}
+
+pub fn learning_path_save(
+    connection: &Connection,
+    input: &LearningPathInput,
+    now: i64,
+) -> Result<LearningPathDetail, String> {
+    let title = clean(&input.title, 120);
+    if title.is_empty() {
+        return Err("请填写学习路径标题。".to_string());
+    }
+    let description = clean_option(&input.description, MAX_DESCRIPTION_CHARS);
+    let nodes = validate_learning_path_nodes(&input.nodes)?;
+
+    let requested_id = input
+        .path_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    if let Some(id) = requested_id {
+        if !is_path_or_node_id(id) {
+            return Err("学习路径编号格式无效。".to_string());
+        }
+    }
+
+    let transaction = connection.unchecked_transaction().map_err(db_error)?;
+
+    for video in &input.videos {
+        upsert_video(&transaction, video, now)?;
+    }
+    for node in &nodes {
+        if let Some(ref vid) = node.video_id {
+            if !video_is_known(&transaction, vid)? {
+                upsert_video(
+                    &transaction,
+                    &VideoInput {
+                        video_id: vid.clone(),
+                        title: node.title.clone(),
+                        ..VideoInput::default()
+                    },
+                    now,
+                )?;
+            }
+        }
+    }
+
+    let path_id = match requested_id {
+        Some(id) => {
+            let exists: bool = transaction
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM learning_paths WHERE path_id = ?1)",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .map_err(db_error)?;
+            if exists {
+                transaction
+                    .execute(
+                        "UPDATE learning_paths SET title = ?2, description = ?3, updated_at = ?4 WHERE path_id = ?1",
+                        params![id, title, description, now],
+                    )
+                    .map_err(db_error)?;
+            } else {
+                transaction
+                    .execute(
+                        "INSERT INTO learning_paths(path_id, title, description, created_at, updated_at)
+                         VALUES (?1, ?2, ?3, ?4, ?4)",
+                        params![id, title, description, now],
+                    )
+                    .map_err(db_error)?;
+            }
+            id.to_string()
+        }
+        None => {
+            let id = Uuid::new_v4().to_string();
+            transaction
+                .execute(
+                    "INSERT INTO learning_paths(path_id, title, description, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?4)",
+                    params![id, title, description, now],
+                )
+                .map_err(db_error)?;
+            id
+        }
+    };
+
+    transaction
+        .execute(
+            "DELETE FROM learning_path_nodes WHERE path_id = ?1",
+            params![path_id],
+        )
+        .map_err(db_error)?;
+
+    for node in &nodes {
+        let prereq_json =
+            serde_json::to_string(&node.prerequisite_ids).map_err(|error| error.to_string())?;
+        transaction
+            .execute(
+                "INSERT INTO learning_path_nodes(
+                     path_id, node_id, parent_id, position, kind, title, note,
+                     video_id, start_seconds, optional, prerequisites_json
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    path_id,
+                    node.node_id,
+                    node.parent_id,
+                    node.position,
+                    node.kind,
+                    node.title,
+                    node.note,
+                    node.video_id,
+                    node.start_seconds,
+                    i64::from(node.optional),
+                    prereq_json,
+                ],
+            )
+            .map_err(db_error)?;
+    }
+
+    transaction.commit().map_err(db_error)?;
+    prune(connection, now)?;
+    learning_path_get(connection, &path_id)?.ok_or_else(|| "保存学习路径失败。".to_string())
+}
+
+pub fn learning_path_delete(connection: &Connection, path_id: &str, now: i64) -> Result<(), String> {
+    connection
+        .execute(
+            "DELETE FROM learning_paths WHERE path_id = ?1",
+            params![path_id],
+        )
+        .map_err(db_error)?;
+    prune(connection, now)
+}
+
 // ---- settings and overview ----------------------------------------------------------------------
 
 pub fn settings(connection: &Connection) -> Result<PlayerSettings, String> {
@@ -1058,6 +1597,7 @@ pub fn overview(connection: &Connection) -> Result<Overview, String> {
     Ok(Overview {
         channels: channels(connection)?,
         playlists: playlists(connection)?,
+        learning_paths: learning_paths(connection)?,
         settings: settings(connection)?,
     })
 }
@@ -1105,6 +1645,17 @@ pub struct BackupHistory {
     pub play_count: i64,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BackupLearningPath {
+    pub path_id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub nodes: Vec<LearningPathNodeInput>,
+}
+
 /// Everything the user made, as one document that can be kept or moved to another machine. The
 /// cached feed is not part of it: the next refresh brings it back.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1115,6 +1666,7 @@ pub struct Backup {
     pub exported_at: i64,
     pub channels: Vec<BackupChannel>,
     pub playlists: Vec<BackupPlaylist>,
+    pub learning_paths: Vec<BackupLearningPath>,
     pub videos: Vec<VideoInput>,
     pub states: Vec<BackupState>,
     pub history: Vec<BackupHistory>,
@@ -1156,13 +1708,44 @@ pub fn export_backup(connection: &Connection, now: i64) -> Result<Backup, String
         });
     }
 
-    // The videos the lists, the history and the watch states refer to, so they keep their titles.
+    let mut learning_paths_out = Vec::new();
+    for path in learning_paths(connection)? {
+        if let Some(detail) = learning_path_get(connection, &path.path_id)? {
+            let nodes = detail
+                .nodes
+                .into_iter()
+                .map(|node| LearningPathNodeInput {
+                    node_id: node.node_id,
+                    parent_id: node.parent_id,
+                    position: node.position,
+                    kind: node.kind,
+                    title: node.title,
+                    note: node.note,
+                    video_id: node.video_id,
+                    start_seconds: node.start_seconds,
+                    optional: node.optional,
+                    prerequisite_ids: node.prerequisite_ids,
+                })
+                .collect();
+            learning_paths_out.push(BackupLearningPath {
+                path_id: detail.summary.path_id,
+                title: detail.summary.title,
+                description: detail.summary.description,
+                created_at: detail.summary.created_at,
+                updated_at: detail.summary.updated_at,
+                nodes,
+            });
+        }
+    }
+
+    // The videos the lists, the learning paths, the history and the watch states refer to, so they keep their titles.
     let mut statement = connection
         .prepare(
             "SELECT video_id, channel_id, channel_name, title, published_at, published_approx,
                     duration_seconds, view_count, view_text, thumbnail_url
              FROM videos
              WHERE video_id IN (SELECT video_id FROM playlist_items)
+                OR video_id IN (SELECT video_id FROM learning_path_nodes WHERE video_id IS NOT NULL)
                 OR video_id IN (SELECT video_id FROM history)
                 OR video_id IN (SELECT video_id FROM watch_state)
              ORDER BY video_id",
@@ -1226,6 +1809,7 @@ pub fn export_backup(connection: &Connection, now: i64) -> Result<Backup, String
         exported_at: now,
         channels,
         playlists: playlists_out,
+        learning_paths: learning_paths_out,
         videos,
         states,
         history,
@@ -1238,6 +1822,7 @@ pub fn export_backup(connection: &Connection, now: i64) -> Result<Backup, String
 pub struct BackupSummary {
     pub channels_added: usize,
     pub playlists_added: usize,
+    pub learning_paths_added: usize,
     pub videos: usize,
 }
 
@@ -1348,6 +1933,87 @@ pub fn import_backup(connection: &Connection, backup: &Backup, now: i64) -> Resu
                 playlist_add(&transaction, &target, video_id, now)?;
             }
         }
+    }
+
+    for path in &backup.learning_paths {
+        let title = clean(&path.title, 120);
+        if title.is_empty() {
+            continue;
+        }
+        let Ok(nodes) = validate_learning_path_nodes(&path.nodes) else {
+            continue;
+        };
+        let candidate_id = if is_path_or_node_id(path.path_id.trim()) {
+            path.path_id.trim().to_string()
+        } else {
+            Uuid::new_v4().to_string()
+        };
+        let exists: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM learning_paths WHERE path_id = ?1)",
+                params![candidate_id],
+                |row| row.get(0),
+            )
+            .map_err(db_error)?;
+        if exists {
+            continue;
+        }
+        for node in &nodes {
+            if let Some(ref vid) = node.video_id {
+                if !video_is_known(&transaction, vid)? {
+                    upsert_video(
+                        &transaction,
+                        &VideoInput {
+                            video_id: vid.clone(),
+                            title: node.title.clone(),
+                            ..VideoInput::default()
+                        },
+                        now,
+                    )?;
+                }
+            }
+        }
+        let created_at = if path.created_at > 0 { path.created_at } else { now };
+        let updated_at = if path.updated_at > 0 { path.updated_at } else { created_at };
+        transaction
+            .execute(
+                "INSERT INTO learning_paths(path_id, title, description, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    candidate_id,
+                    title,
+                    clean_option(&path.description, MAX_DESCRIPTION_CHARS),
+                    created_at,
+                    updated_at,
+                ],
+            )
+            .map_err(db_error)?;
+        for node in &nodes {
+            let prereq_json =
+                serde_json::to_string(&node.prerequisite_ids).map_err(|error| error.to_string())?;
+            transaction
+                .execute(
+                    "INSERT INTO learning_path_nodes(
+                         path_id, node_id, parent_id, position, kind, title, note,
+                         video_id, start_seconds, optional, prerequisites_json
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                    params![
+                        candidate_id,
+                        node.node_id,
+                        node.parent_id,
+                        node.position,
+                        node.kind,
+                        node.title,
+                        node.note,
+                        node.video_id,
+                        node.start_seconds,
+                        i64::from(node.optional),
+                        prereq_json,
+                    ],
+                )
+                .map_err(db_error)?;
+        }
+        summary.learning_paths_added += 1;
     }
 
     for state in &backup.states {
@@ -2286,5 +2952,165 @@ mod tests {
         assert_eq!(video.duration_seconds, Some(5));
         let query: FeedQuery = serde_json::from_str(r#"{"hideFinished":true,"limit":10}"#).unwrap();
         assert!(query.hide_finished);
+    }
+
+    #[test]
+    fn learning_paths_save_track_progress_survive_prune_and_round_trip_backup() {
+        let connection = database();
+        let detail = learning_path_save(
+            &connection,
+            &LearningPathInput {
+                path_id: Some("rust-systems".to_string()),
+                title: "  Rust 系统编程进阶  ".to_string(),
+                description: Some("从所有权到异步运行时".to_string()),
+                nodes: vec![
+                    LearningPathNodeInput {
+                        node_id: "stage-1".to_string(),
+                        parent_id: None,
+                        position: 0,
+                        kind: "stage".to_string(),
+                        title: "第一阶段：内存与所有权".to_string(),
+                        note: Some("核心基石".to_string()),
+                        video_id: None,
+                        start_seconds: 0,
+                        optional: false,
+                        prerequisite_ids: vec![],
+                    },
+                    LearningPathNodeInput {
+                        node_id: "n-1".to_string(),
+                        parent_id: Some("stage-1".to_string()),
+                        position: 1,
+                        kind: "video".to_string(),
+                        title: "所有权与借用".to_string(),
+                        note: None,
+                        video_id: Some(V1.to_string()),
+                        start_seconds: 15,
+                        optional: false,
+                        prerequisite_ids: vec![],
+                    },
+                    LearningPathNodeInput {
+                        node_id: "n-2".to_string(),
+                        parent_id: Some("stage-1".to_string()),
+                        position: 2,
+                        kind: "video".to_string(),
+                        title: "生命周期标注".to_string(),
+                        note: None,
+                        video_id: Some(V2.to_string()),
+                        start_seconds: 0,
+                        optional: true,
+                        prerequisite_ids: vec!["n-1".to_string()],
+                    },
+                    LearningPathNodeInput {
+                        node_id: "n-merge".to_string(),
+                        parent_id: None,
+                        position: 3,
+                        kind: "checkpoint".to_string(),
+                        title: "阶段汇合实战".to_string(),
+                        note: None,
+                        video_id: Some(V3.to_string()),
+                        start_seconds: 0,
+                        optional: false,
+                        // Diamond convergence: depends on both n-1 and n-2 (not a cycle).
+                        prerequisite_ids: vec!["n-1".to_string(), "n-2".to_string()],
+                    },
+                ],
+                videos: vec![
+                    VideoInput {
+                        duration_seconds: Some(600),
+                        ..video(V1, CHANNEL_A, "Ownership Deep Dive", NOW - 200 * DAY)
+                    },
+                    VideoInput {
+                        duration_seconds: Some(800),
+                        ..video(V2, CHANNEL_A, "Lifetimes Explained", NOW - 200 * DAY)
+                    },
+                ],
+            },
+            NOW,
+        )
+        .unwrap();
+
+        assert_eq!(detail.summary.path_id, "rust-systems");
+        assert_eq!(detail.summary.title, "Rust 系统编程进阶");
+        assert_eq!(detail.summary.node_count, 4);
+        assert_eq!(detail.summary.video_count, 3);
+        assert_eq!(detail.summary.finished_count, 0);
+        // V3 was not in `input.videos`, yet fallback row was created so `video` is populated.
+        assert_eq!(
+            detail.nodes[3].video.as_ref().unwrap().video.title,
+            "阶段汇合实战"
+        );
+
+        // Mark V1 watched and verify finished_count updates in summary + overview.
+        set_watched(&connection, V1, true, NOW + 5).unwrap();
+        let ov = overview(&connection).unwrap();
+        assert_eq!(ov.learning_paths.len(), 1);
+        assert_eq!(ov.learning_paths[0].finished_count, 1);
+
+        // Prune must NOT delete old videos referenced by learning_path_nodes.
+        prune(&connection, NOW + 100 * DAY).unwrap();
+        assert_eq!(
+            video_items(&connection, &[V1.to_string(), V2.to_string(), V3.to_string()])
+                .unwrap()
+                .len(),
+            3
+        );
+
+        // Backup round-trip into an empty database.
+        let backup = export_backup(&connection, NOW + 10).unwrap();
+        assert_eq!(backup.learning_paths.len(), 1);
+        let restored = database();
+        let summary = import_backup(&restored, &backup, NOW + 20).unwrap();
+        assert_eq!(summary.learning_paths_added, 1);
+        let loaded = learning_path_get(&restored, "rust-systems").unwrap().unwrap();
+        assert_eq!(loaded.nodes.len(), 4);
+        assert_eq!(loaded.nodes[1].start_seconds, 15);
+        assert_eq!(loaded.nodes[3].prerequisite_ids, vec!["n-1", "n-2"]);
+
+        // Deleting removes the path and cascades nodes.
+        learning_path_delete(&connection, "rust-systems", NOW + 30).unwrap();
+        assert!(learning_paths(&connection).unwrap().is_empty());
+        assert!(learning_path_get(&connection, "rust-systems").unwrap().is_none());
+    }
+
+    #[test]
+    fn learning_paths_reject_cycles_and_missing_references() {
+        let connection = database();
+        // Prerequisite cycle: a -> b -> a
+        let cyclic = LearningPathInput {
+            path_id: None,
+            title: "环路测试".to_string(),
+            description: None,
+            nodes: vec![
+                LearningPathNodeInput {
+                    node_id: "a".to_string(),
+                    title: "A".to_string(),
+                    prerequisite_ids: vec!["b".to_string()],
+                    ..LearningPathNodeInput::default()
+                },
+                LearningPathNodeInput {
+                    node_id: "b".to_string(),
+                    title: "B".to_string(),
+                    prerequisite_ids: vec!["a".to_string()],
+                    ..LearningPathNodeInput::default()
+                },
+            ],
+            videos: vec![],
+        };
+        assert!(learning_path_save(&connection, &cyclic, NOW).is_err());
+
+        // Missing parent reference
+        let missing_parent = LearningPathInput {
+            path_id: None,
+            title: "缺失父节点".to_string(),
+            description: None,
+            nodes: vec![LearningPathNodeInput {
+                node_id: "a".to_string(),
+                parent_id: Some("ghost".to_string()),
+                title: "A".to_string(),
+                ..LearningPathNodeInput::default()
+            }],
+            videos: vec![],
+        };
+        assert!(learning_path_save(&connection, &missing_parent, NOW).is_err());
     }
 }

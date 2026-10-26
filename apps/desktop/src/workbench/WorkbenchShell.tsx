@@ -14,6 +14,8 @@ export interface WorkbenchShellProps {
   path: string;
   dirty: boolean;
   statusText: string;
+  /** Optional inline metadata controls shown beside the title (e.g. category & tags). */
+  meta?: ReactNode;
   /** Shown at the right end of the status line, e.g. the size of the source. */
   summary?: string;
   layout: WorkbenchLayout;
@@ -58,7 +60,7 @@ function TitleField({
       maxLength={120}
       spellCheck={false}
       aria-label="标题（改名会同时改文件名）"
-      title="改名会同时改文件名"
+      title="点击修改标题（同时重命名文件）"
       onChange={(event) => setDraft(event.target.value)}
       onBlur={commit}
       onKeyDown={(event) => {
@@ -74,40 +76,9 @@ function TitleField({
   );
 }
 
-/** The AI column's place in the layout. It stays folded away until documents of this kind get AI. */
-function AiRail() {
-  const [open, setOpen] = useState(false);
-  return (
-    <aside
-      className={`workbench-ai-rail${open ? ' is-open' : ''}`}
-      aria-label="AI 助手（暂未接入）"
-    >
-      <button
-        type="button"
-        className="workbench-ai-toggle"
-        aria-expanded={open}
-        title={open ? '收起 AI 栏' : '展开 AI 栏'}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <span className="workbench-ai-glyph" aria-hidden="true">
-          AI
-        </span>
-        {!open && <span className="workbench-ai-label">助手</span>}
-      </button>
-      {open && (
-        <div className="workbench-ai-body">
-          <strong>AI 助手</strong>
-          <p>这类文件暂时还没有接入 AI。</p>
-          <p>思维导图里的“节点下探”和“可视化分析”仍可在导图中使用。</p>
-        </div>
-      )}
-    </aside>
-  );
-}
-
 /**
- * The frame every document kind shares: a header with the title, the kind's own actions, the
- * panes in the chosen layout, the AI column and the status line.
+ * The frame every document kind shares: a 52px header aligned with the sidebar, the panes in the
+ * chosen layout, and a quiet status line.
  */
 export default function WorkbenchShell({
   badge,
@@ -116,6 +87,7 @@ export default function WorkbenchShell({
   path,
   dirty,
   statusText,
+  meta,
   summary,
   layout,
   actions,
@@ -150,18 +122,26 @@ export default function WorkbenchShell({
           role="img"
           aria-label={dirty ? '有未保存的修改' : '已保存'}
         />
-        <span className="workbench-path" title={path}>
-          {path}
-        </span>
+        {meta ? (
+          <div className="workbench-meta-bar">{meta}</div>
+        ) : (
+          <span className="workbench-path" title={path}>
+            {path}
+          </span>
+        )}
         <div className="workbench-actions">{actions}</div>
       </header>
       <div className="workbench-body">
         <div className="workbench-panes">{children}</div>
-        <AiRail />
       </div>
       <footer className="workbench-status">
         <span>{statusText}</span>
-        {summary && <span>{summary}</span>}
+        <span className="workbench-status-right">
+          <span className="workbench-status-path" title={path}>
+            {path}
+          </span>
+          {summary && <span>{summary}</span>}
+        </span>
       </footer>
     </section>
   );

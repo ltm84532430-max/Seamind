@@ -120,7 +120,8 @@ pub fn terminal_start(
         .openpty(terminal_size(cols, rows))
         .map_err(|error| format!("创建终端失败：{error}"))?;
 
-    let mcp_config_path = agent_bridge.create_cli_config()?;
+    let cli_session = agent_bridge.create_cli_session()?;
+    let mcp_config_path = cli_session.config_path.clone();
     let cleanup_paths = vec![mcp_config_path.clone()];
 
     #[cfg(windows)]
@@ -129,7 +130,10 @@ pub fn terminal_start(
         command.arg("-NoLogo");
         command.arg("-NoExit");
         command.arg("-Command");
-        command.arg(create_powershell_bootstrap(&mcp_config_path));
+        command.arg(create_powershell_bootstrap(
+            &mcp_config_path,
+            &cli_session.endpoint,
+        ));
         command
     };
     #[cfg(not(windows))]
@@ -142,10 +146,11 @@ pub fn terminal_start(
     command.cwd(working_directory);
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
-    command.env(
-        "SEAMIND_CLAUDE_MCP_CONFIG",
-        mcp_config_path.to_string_lossy().to_string(),
-    );
+    let config_path_text = mcp_config_path.to_string_lossy().to_string();
+    command.env("SEAMIND_CLAUDE_MCP_CONFIG", &config_path_text);
+    command.env("GEMINI_CLI_SYSTEM_DEFAULTS_PATH", &config_path_text);
+    command.env("SEAMIND_MCP_URL", &cli_session.endpoint);
+    command.env("SEAMIND_MCP_TOKEN", &cli_session.token);
 
     let mut child = match pair.slave.spawn_command(command) {
         Ok(child) => child,
@@ -277,10 +282,11 @@ pub fn terminal_close(state: State<'_, TerminalState>, session_id: String) -> Re
 }
 
 #[cfg(windows)]
-fn create_powershell_bootstrap(config_path: &PathBuf) -> String {
+fn create_powershell_bootstrap(config_path: &PathBuf, endpoint: &str) -> String {
     let config_path = config_path.to_string_lossy().replace('\'', "''");
+    let endpoint = endpoint.replace('\'', "''");
     format!(
-        r#"$env:SEAMIND_CLAUDE_MCP_CONFIG = '{config_path}'; $global:SeamindClaudeExecutable = Get-Command claude -All -ErrorAction SilentlyContinue | Where-Object {{ $_.CommandType -in @('Application', 'ExternalScript') }} | Select-Object -First 1; function global:seamind-claude {{ if (-not $global:SeamindClaudeExecutable) {{ Write-Error 'Claude Code CLI 未安装或不在 PATH 中。'; return }}; & $global:SeamindClaudeExecutable.Source --mcp-config $env:SEAMIND_CLAUDE_MCP_CONFIG @args }}; function global:claude {{ seamind-claude @args }}; Write-Host 'Seamind MCP 已接入当前终端会话。运行 claude 即可使用导图和文件库工具。' -ForegroundColor DarkCyan"#
+        r#"$env:SEAMIND_CLAUDE_MCP_CONFIG = '{config_path}'; $env:GEMINI_CLI_SYSTEM_DEFAULTS_PATH = '{config_path}'; $env:SEAMIND_MCP_URL = '{endpoint}'; $global:SeamindClaudeExecutable = Get-Command claude -All -ErrorAction SilentlyContinue | Where-Object {{ $_.CommandType -in @('Application', 'ExternalScript') }} | Select-Object -First 1; function global:seamind-claude {{ if (-not $global:SeamindClaudeExecutable) {{ Write-Error 'Claude Code CLI 未安装或不在 PATH 中。'; return }}; & $global:SeamindClaudeExecutable.Source --mcp-config $env:SEAMIND_CLAUDE_MCP_CONFIG @args }}; function global:claude {{ seamind-claude @args }}; $global:SeamindGeminiExecutable = Get-Command gemini -All -ErrorAction SilentlyContinue | Where-Object {{ $_.CommandType -in @('Application', 'ExternalScript') }} | Select-Object -First 1; function global:seamind-gemini {{ if (-not $global:SeamindGeminiExecutable) {{ Write-Error 'Gemini CLI 未安装或不在 PATH 中（可通过 npm i -g @google/gemini-cli 安装）。'; return }}; & $global:SeamindGeminiExecutable.Source @args }}; function global:gemini {{ seamind-gemini @args }}; $global:SeamindCodexExecutable = Get-Command codex -All -ErrorAction SilentlyContinue | Where-Object {{ $_.CommandType -in @('Application', 'ExternalScript') }} | Select-Object -First 1; function global:seamind-codex {{ if (-not $global:SeamindCodexExecutable) {{ Write-Error 'Codex CLI 未安装或不在 PATH 中。'; return }}; & $global:SeamindCodexExecutable.Source -c "mcp_servers.seamind.url=""$env:SEAMIND_MCP_URL""" -c 'mcp_servers.seamind.bearer_token_env_var="SEAMIND_MCP_TOKEN"' @args }}; function global:codex {{ seamind-codex @args }}; Write-Host 'Seamind MCP 已接入当前终端会话。运行 gemini / claude / codex 即可调用导图、知识库与播放器学习路径工具。' -ForegroundColor DarkCyan"#
     )
 }
 

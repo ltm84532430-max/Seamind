@@ -7,11 +7,17 @@ import {
   useState,
 } from 'react';
 import type { ReactNode } from 'react';
+import type { AgentCapabilities } from '../agent/capabilities';
+import type { AgentProviderSettings } from '../agent/runtime';
+import type { LearningPathProposal } from '../agent/types';
 import ChannelView from './ChannelView';
 import CollectionView from './CollectionView';
 import FeedView from './FeedView';
 import { PlayerHostContext, viewKey } from './host';
 import type { PlayerHost, PlayerView } from './host';
+import LearningPathProposalDialog from './LearningPathProposalDialog';
+import LearningPathView, { LearningPathsHomeView } from './LearningPathView';
+import type { LearningPathExternalBridges } from './LearningPathView';
 import { ImportDialog, SettingsDialog } from './PlayerDialogs';
 import { errorText, playerApi } from './player-api';
 import { inputFromItem, patchOverlay } from './queue';
@@ -33,6 +39,7 @@ import { StateMessage } from './VideoList';
 import WatchView from './WatchView';
 import type { Watching } from './WatchView';
 import { describeDataError, resolveChannelId } from './youtube-data';
+import './learning-path.css';
 
 interface Notice {
   text: string;
@@ -60,6 +67,13 @@ function viewLabel(view: PlayerView, overview: PlayerOverview | null): string {
         overview?.channels.find((entry) => entry.channelId === view.channelId)
           ?.name ?? '频道'
       );
+    case 'learning-paths-home':
+      return '学习路径';
+    case 'learning-path':
+      return (
+        overview?.learningPaths.find((entry) => entry.pathId === view.pathId)
+          ?.title ?? '学习路径'
+      );
     case 'remote-playlist':
       return '播放列表';
   }
@@ -69,7 +83,23 @@ function viewLabel(view: PlayerView, overview: PlayerOverview | null): string {
  * The player page: the channels the user follows and their new videos, favorites, courses and the
  * history on the left and in the middle, and the player itself once a video is chosen.
  */
-export default function PlayerWorkspace({ active }: { active: boolean }) {
+export default function PlayerWorkspace({
+  active,
+  provider,
+  capabilities,
+  openLearningPathRequest = null,
+  onOpenLearningPathRequestHandled,
+  onSendTerminalCommand,
+  onExportMarkdownToMindmap,
+}: {
+  active: boolean;
+  provider: AgentProviderSettings;
+  capabilities: AgentCapabilities;
+  openLearningPathRequest?: { id: number; pathId: string } | null;
+  onOpenLearningPathRequestHandled?(id: number): void;
+  onSendTerminalCommand?: (text: string, execute?: boolean) => void;
+  onExportMarkdownToMindmap?: (title: string, markdown: string) => void;
+}) {
   const [overview, setOverview] = useState<PlayerOverview | null>(null);
   const [loadError, setLoadError] = useState('');
   const [view, setView] = useState<PlayerView>({ kind: 'feed' });
@@ -81,6 +111,11 @@ export default function PlayerWorkspace({ active }: { active: boolean }) {
   const [feedToken, setFeedToken] = useState(0);
   const [opening, setOpening] = useState(false);
   const [openError, setOpenError] = useState('');
+  const [pathReloadToken, setPathReloadToken] = useState(0);
+  const [learningPathProposal, setLearningPathProposal] =
+    useState<LearningPathProposal | null>(null);
+  const [proposalBusy, setProposalBusy] = useState(false);
+  const [proposalError, setProposalError] = useState('');
 
   const mainRef = useRef<HTMLElement | null>(null);
   const savedScrollRef = useRef(0);
@@ -89,6 +124,7 @@ export default function PlayerWorkspace({ active }: { active: boolean }) {
   const tokenRef = useRef(0);
   const noticeTimerRef = useRef<number | null>(null);
   const autoRefreshedRef = useRef(false);
+  const handledOpenRequestRef = useRef<number | null>(null);
   useEffect(() => {
     watchingRef.current = watching;
     viewRef.current = view;
@@ -181,6 +217,22 @@ export default function PlayerWorkspace({ active }: { active: boolean }) {
     setWatching(null);
     setView(next);
   }, []);
+
+  useEffect(() => {
+    const request = openLearningPathRequest;
+    if (!request || handledOpenRequestRef.current === request.id) return;
+    handledOpenRequestRef.current = request.id;
+    void (async () => {
+      await reloadOverview();
+      go({ kind: 'learning-path', pathId: request.pathId });
+      onOpenLearningPathRequestHandled?.(request.id);
+    })();
+  }, [
+    openLearningPathRequest,
+    reloadOverview,
+    go,
+    onOpenLearningPathRequestHandled,
+  ]);
 
   const openVideo = useCallback(
     async (item: VideoItem, queue: QueueSource, startOverride?: number) => {
@@ -379,14 +431,16 @@ export default function PlayerWorkspace({ active }: { active: boolean }) {
       settings: overview?.settings ?? defaultPlayerSettings,
       channels: overview?.channels ?? [],
       playlists: overview?.playlists ?? [],
-      openVideo: (item, queue) => void openVideo(item, queue),
+      learningPaths: overview?.learningPaths ?? [],
+      openVideo: (item, queue, startOverride) =>
+        void openVideo(item, queue, startOverride),
       openChannel,
       go,
       toggleFavorite: (item) =>
         void toggleInList(item, FAVORITES_ID, 'favorite'),
       toggleWatchLater: (item) =>
         void toggleInList(item, WATCH_LATER_ID, 'watchLater'),
-      toggleWatched: (item) => void toggleWatched(item),
+      toggleWatched,
       notify,
       reloadOverview,
     }),
@@ -430,10 +484,67 @@ export default function PlayerWorkspace({ active }: { active: boolean }) {
           <RemotePlaylistView key={viewKey(view)} listId={view.listId} />
         );
         break;
+      case 'learning-paths-home':
+        listView = (
+          <LearningPathsHomeView
+            bridges={{
+              aiProvider: provider,
+              agentCapabilities: capabilities,
+              onSendTerminalCommand,
+              onPreviewLearningPathProposal: (proposal) => {
+                setLearningPathProposal(proposal);
+                setProposalError('');
+              },
+              onExportMarkdownToMindmap,
+            }}
+          />
+        );
+        break;
+      case 'learning-path': {
+        const bridges: LearningPathExternalBridges = {
+          aiProvider: provider,
+          agentCapabilities: capabilities,
+          onSendTerminalCommand,
+          onPreviewLearningPathProposal: (proposal) => {
+            setLearningPathProposal(proposal);
+            setProposalError('');
+          },
+          onExportMarkdownToMindmap,
+        };
+        listView = (
+          <LearningPathView
+            key={viewKey(view)}
+            pathId={view.pathId}
+            reloadToken={pathReloadToken}
+            bridges={bridges}
+          />
+        );
+        break;
+      }
       default:
         listView = <CollectionView key={viewKey(view)} collection={view} />;
     }
   }
+
+  const confirmLearningPathProposal = async () => {
+    if (!learningPathProposal || proposalBusy) return;
+    setProposalBusy(true);
+    setProposalError('');
+    try {
+      const saved = await playerApi.learningPathSave(
+        learningPathProposal.input,
+      );
+      setLearningPathProposal(null);
+      await reloadOverview();
+      setPathReloadToken((v) => v + 1);
+      go({ kind: 'learning-path', pathId: saved.summary.pathId });
+      notify(`已保存学习路径「${saved.summary.title}」。`);
+    } catch (error) {
+      setProposalError(errorText(error, '保存学习路径失败。'));
+    } finally {
+      setProposalBusy(false);
+    }
+  };
 
   return (
     <PlayerHostContext.Provider value={host}>
@@ -442,6 +553,7 @@ export default function PlayerWorkspace({ active }: { active: boolean }) {
           view={view}
           channels={host.channels}
           playlists={host.playlists}
+          learningPaths={host.learningPaths}
           opening={opening}
           openError={openError}
           onGo={go}
@@ -451,7 +563,9 @@ export default function PlayerWorkspace({ active }: { active: boolean }) {
         />
         <main
           ref={mainRef}
-          className={`player-main${watching ? ' is-watching' : ''}`}
+          className={`player-main${watching ? ' is-watching' : ''}${
+            !watching && view.kind === 'learning-path' ? ' is-canvas' : ''
+          }`}
         >
           {loadError && !overview && (
             <StateMessage
@@ -514,6 +628,16 @@ export default function PlayerWorkspace({ active }: { active: boolean }) {
             onClose={() => setDialog(null)}
             onChange={(next) => void saveSettings(next)}
             onRestored={refetchAll}
+          />
+        )}
+        {learningPathProposal && (
+          <LearningPathProposalDialog
+            proposal={learningPathProposal}
+            sourceLabel="ai"
+            busy={proposalBusy}
+            error={proposalError}
+            onCancel={() => setLearningPathProposal(null)}
+            onConfirm={() => void confirmLearningPathProposal()}
           />
         )}
       </div>

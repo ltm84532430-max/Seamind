@@ -126,6 +126,9 @@ pub fn run() {
             player::player_playlist_toggle,
             player::player_playlist_items,
             player::player_course_save,
+            player::player_learning_path_get,
+            player::player_learning_path_save,
+            player::player_learning_path_delete,
             player::player_export_backup,
             player::player_import_backup,
             player::player_fetch_feed,
@@ -143,7 +146,7 @@ const MAX_RESPONSE_BYTES: usize = 1_048_576;
 const MAX_PROVIDER_MODELS: usize = 500;
 const MAX_AGENT_MESSAGES: usize = 32;
 const MAX_AGENT_CONTEXT_BYTES: usize = 250_000;
-const MAX_AGENT_TOOLS: usize = 5;
+const MAX_AGENT_TOOLS: usize = 12;
 const MAX_AGENT_TOOLS_BYTES: usize = 32_000;
 const MAX_EPUB_SUMMARY_PROMPT_CHARS: usize = 60_000;
 const MAX_EPUB_HIGHLIGHT_PROMPT_CHARS: usize = 10_000;
@@ -746,6 +749,10 @@ async fn agent_completion(
         "library_read_document",
         "mindmap_propose_node_edit",
         "mindmap_propose_node_branch",
+        "player_search_youtube",
+        "learning_path_list",
+        "learning_path_get",
+        "learning_path_propose",
     ];
     let mut tool_names = Vec::with_capacity(tools.len());
     for tool in &tools {

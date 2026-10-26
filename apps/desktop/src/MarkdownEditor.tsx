@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { undo, redo } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
-import { Annotation, Transaction } from '@codemirror/state';
+import { Annotation, Extension, Transaction } from '@codemirror/state';
 import { basicSetup, EditorView } from 'codemirror';
 import { createMarkdownMinimap } from './markdown-minimap';
 import type { MarkdownMinimapController } from './markdown-minimap';
@@ -35,6 +35,8 @@ interface MarkdownEditorProps {
   /** "plain" edits text that is not Markdown, such as a diagram's source, without highlighting. */
   language?: 'markdown' | 'plain';
   ariaLabel?: string;
+  extraExtensions?: Extension[];
+  hideMinimap?: boolean;
 }
 
 function findChange(
@@ -86,6 +88,8 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
       onSelectionChange,
       language = 'markdown',
       ariaLabel = 'Markdown 源文本',
+      extraExtensions,
+      hideMinimap = false,
     },
     ref,
   ) {
@@ -94,9 +98,11 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
     const valueRef = useRef(value);
     const onChangeRef = useRef(onChange);
     const onSelectionChangeRef = useRef(onSelectionChange);
+    const extraExtensionsRef = useRef(extraExtensions);
     valueRef.current = value;
     onChangeRef.current = onChange;
     onSelectionChangeRef.current = onSelectionChange;
+    extraExtensionsRef.current = extraExtensions;
 
     useEffect(() => {
       if (!hostRef.current) return;
@@ -106,6 +112,7 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
         extensions: [
           basicSetup,
           ...(language === 'markdown' ? [markdown()] : []),
+          ...(extraExtensionsRef.current ?? []),
           EditorView.lineWrapping,
           EditorView.editorAttributes.of({
             id,
@@ -134,13 +141,15 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
         parent: hostRef.current,
       });
       viewRef.current = view;
-      minimap = createMarkdownMinimap(view, hostRef.current);
+      if (!hideMinimap) {
+        minimap = createMarkdownMinimap(view, hostRef.current);
+      }
       return () => {
         minimap?.destroy();
         view.destroy();
         viewRef.current = null;
       };
-    }, [id, language, ariaLabel]);
+    }, [id, language, ariaLabel, hideMinimap]);
 
     useEffect(() => {
       const view = viewRef.current;
@@ -253,7 +262,12 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
       [],
     );
 
-    return <div ref={hostRef} className="markdown-editor" />;
+    return (
+      <div
+        ref={hostRef}
+        className={`markdown-editor${hideMinimap ? ' is-minimap-hidden' : ''}`}
+      />
+    );
   },
 );
 

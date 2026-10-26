@@ -185,6 +185,27 @@ pub fn player_course_save(
 }
 
 #[tauri::command(async)]
+pub fn player_learning_path_get(
+    app: AppHandle,
+    path_id: String,
+) -> Result<Option<store::LearningPathDetail>, String> {
+    store::learning_path_get(&open(&app)?, &path_id)
+}
+
+#[tauri::command(async)]
+pub fn player_learning_path_save(
+    app: AppHandle,
+    input: store::LearningPathInput,
+) -> Result<store::LearningPathDetail, String> {
+    store::learning_path_save(&open(&app)?, &input, now())
+}
+
+#[tauri::command(async)]
+pub fn player_learning_path_delete(app: AppHandle, path_id: String) -> Result<(), String> {
+    store::learning_path_delete(&open(&app)?, &path_id, now())
+}
+
+#[tauri::command(async)]
 pub fn player_export_backup(app: AppHandle) -> Result<String, String> {
     let backup = store::export_backup(&open(&app)?, now())?;
     serde_json::to_string_pretty(&backup).map_err(|error| format!("无法生成备份：{error}"))

@@ -174,7 +174,7 @@ impl AgentBridgeState {
         }
     }
 
-    pub fn create_cli_config(&self) -> Result<PathBuf, String> {
+    pub fn create_cli_session(&self) -> Result<CliMcpSession, String> {
         let (endpoint, token) = self.credentials()?;
         let path = std::env::temp_dir().join(format!("seamind-mcp-{}.json", Uuid::new_v4()));
         let config = json!({
@@ -187,18 +187,31 @@ impl AgentBridgeState {
             }
         });
         let bytes =
-            serde_json::to_vec(&config).map_err(|_| "无法生成 Claude MCP 配置。".to_string())?;
+            serde_json::to_vec(&config).map_err(|_| "无法生成 CLI MCP 配置。".to_string())?;
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&path)
-            .map_err(|_| "无法创建 Claude MCP 临时配置。".to_string())?;
+            .map_err(|_| "无法创建 CLI MCP 临时配置。".to_string())?;
         if file.write_all(&bytes).is_err() {
             let _ = std::fs::remove_file(&path);
-            return Err("无法写入 Claude MCP 临时配置。".to_string());
+            return Err("无法写入 CLI MCP 临时配置。".to_string());
         }
-        Ok(path)
+        Ok(CliMcpSession {
+            endpoint,
+            token,
+            config_path: path,
+        })
     }
+}
+
+pub struct CliMcpSession {
+    pub endpoint: String,
+    pub token: String,
+    pub config_path: PathBuf,
+}
+
+impl AgentBridgeState {
 
     async fn request_tool(
         &self,
@@ -349,7 +362,7 @@ async fn handle_mcp(
                 "protocolVersion": requested,
                 "capabilities": { "tools": { "listChanged": false } },
                 "serverInfo": { "name": "seamind", "version": "0.1.0" },
-                "instructions": "读取和搜索是只读操作。导图修改会回到 Seamind 应用中展示预览，并等待用户确认后才会应用。"
+                "instructions": "读取、搜索知识库和搜索 YouTube 视频（player_search_youtube）均为只读操作。思维导图修改和播放器学习路径生成（learning_path_propose）会回到 Seamind 应用中弹出预览对话框，等待用户确认后才会应用。生成学习路径时请先用 player_search_youtube 搜索真实视频，切勿编造视频编号。"
             })
         }
         "ping" => json!({}),

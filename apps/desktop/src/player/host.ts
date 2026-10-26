@@ -1,6 +1,7 @@
 import { createContext, useContext } from 'react';
 import type { Overlay, QueueSource } from './queue';
 import type {
+  LearningPathSummary,
   PlayerChannel,
   PlayerPlaylist,
   PlayerSettings,
@@ -15,7 +16,9 @@ export type PlayerView =
   | { kind: 'history' }
   | { kind: 'course'; playlistId: string }
   | { kind: 'channel'; channelId: string }
-  | { kind: 'remote-playlist'; listId: string };
+  | { kind: 'remote-playlist'; listId: string }
+  | { kind: 'learning-paths-home' }
+  | { kind: 'learning-path'; pathId: string };
 
 /** What the views of the player page ask of the page that holds them. */
 export interface PlayerHost {
@@ -25,12 +28,13 @@ export interface PlayerHost {
   settings: PlayerSettings;
   channels: PlayerChannel[];
   playlists: PlayerPlaylist[];
-  openVideo(item: VideoItem, queue: QueueSource): void;
+  learningPaths: LearningPathSummary[];
+  openVideo(item: VideoItem, queue: QueueSource, startOverride?: number): void;
   openChannel(channelId: string): void;
   go(view: PlayerView): void;
   toggleFavorite(item: VideoItem): void;
   toggleWatchLater(item: VideoItem): void;
-  toggleWatched(item: VideoItem): void;
+  toggleWatched(item: VideoItem): Promise<void>;
   notify(text: string, kind?: 'info' | 'error'): void;
   reloadOverview(): Promise<void>;
 }
@@ -52,6 +56,8 @@ export function viewKey(view: PlayerView): string {
       return `channel:${view.channelId}`;
     case 'remote-playlist':
       return `remote:${view.listId}`;
+    case 'learning-path':
+      return `learning-path:${view.pathId}`;
     default:
       return view.kind;
   }

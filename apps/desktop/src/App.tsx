@@ -27,6 +27,10 @@ import MarkdownEditor from './MarkdownEditor';
 import type { MarkdownEditorHandle, MarkdownSelection } from './MarkdownEditor';
 import MarkdownPreview from './MarkdownPreview';
 import KnowledgeWorkspace from './KnowledgeWorkspace';
+import {
+  findWikilinkTarget,
+  type KnowledgeNoteTemplate,
+} from './knowledge-markdown';
 import PlantUmlWorkspace, {
   openPlantUmlWorkspace,
   plantUmlWorkspaceEventName,
@@ -53,6 +57,8 @@ import MindmapMiniTree from './MindmapMiniTree';
 import type { MindmapMiniTreeNode } from './MindmapMiniTree';
 import './ebook-workspace.css';
 import './player/player-workspace.css';
+import './player/learning-path.css';
+import type { PendingTerminalRawInput } from './TerminalPanel';
 import type {
   EpubChapterNavigationRequest,
   EpubReaderSelection,
@@ -60,9 +66,14 @@ import type {
 import { epubProgressKey } from './ebook-storage';
 import { resolveBookMindmapTarget as resolveBookMindmapTargetFromLibrary } from './book-mindmap-target';
 import AgentPanel from './AgentPanel';
-import { agentToolCatalog, executeAgentTool } from './agent/capabilities';
+import {
+  agentToolCatalog,
+  buildValidatedLearningPathNodes,
+  executeAgentTool,
+} from './agent/capabilities';
 import type {
   AgentCapabilities,
+  ProposeLearningPathInput,
   ProposeNodeEditInput,
 } from './agent/capabilities';
 import type {
@@ -72,7 +83,12 @@ import type {
   MindmapNodeSnapshot,
   NodeEditOperation,
   NodeEditProposal,
+  LearningPathProposal,
 } from './agent/types';
+import LearningPathProposalDialog from './player/LearningPathProposalDialog';
+import { playerApi } from './player/player-api';
+import type { VideoInput } from './player/types';
+import { searchYouTubeVideos } from './player/youtube-data';
 import {
   applyMarkdownNodeBranch,
   applyMarkdownNodeCommand,
@@ -107,6 +123,18 @@ type ActiveWorkspace = 'mindmap' | 'reader' | 'player' | 'knowledge';
 const ACTIVE_WORKSPACE_KEY = 'seamind:active-workspace:v1';
 const LAST_READER_BOOK_KEY = 'seamind:last-reader-book:v1';
 const RECOVERABLE_DRAFT_KEY = 'seamind:recoverable-mindmap-draft:v1';
+const TERMINAL_HEIGHT_KEY = 'seamind:terminal-height:v1';
+
+function readTerminalHeight(): number {
+  try {
+    const stored = Number(localStorage.getItem(TERMINAL_HEIGHT_KEY));
+    return Number.isFinite(stored) && stored >= 160 && stored <= 900
+      ? stored
+      : 280;
+  } catch {
+    return 280;
+  }
+}
 
 function readActiveWorkspace(): ActiveWorkspace {
   try {
@@ -304,6 +332,11 @@ interface CliAgentToolRequest {
 interface CliAgentProposal {
   requestId: string;
   proposal: NodeEditProposal;
+}
+
+interface CliLearningPathProposal {
+  requestId: string;
+  proposal: LearningPathProposal;
 }
 
 interface EpubOutline {
@@ -1584,13 +1617,21 @@ export default function App() {
   const [markdownFullscreen, setMarkdownFullscreen] = useState(false);
   const [libraryCollapsed, setLibraryCollapsed] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalHeight, setTerminalHeight] = useState(readTerminalHeight);
   const [terminalCommandConfirmation, setTerminalCommandConfirmation] =
     useState<TerminalCommandRequest | null>(null);
   const [pendingTerminalCommand, setPendingTerminalCommand] =
     useState<TerminalCommandRequest | null>(null);
+  const [pendingTerminalRawInput, setPendingTerminalRawInput] =
+    useState<PendingTerminalRawInput | null>(null);
   const terminalCommandResultsRef = useRef(
     new Map<string, (output: string) => void>(),
   );
+  const terminalResizeRef = useRef<{
+    pointerId: number;
+    startY: number;
+    startHeight: number;
+  } | null>(null);
   const [aiCollapsed, setAiCollapsed] = useState<boolean>(readAiCollapsed);
   const [librarySnapshot, setLibrarySnapshot] =
     useState<LibrarySnapshot | null>(null);
@@ -1686,6 +1727,14 @@ export default function App() {
   const [lastUpdated, setLastUpdated] = useState('已同步');
   const [cliAgentProposal, setCliAgentProposal] =
     useState<CliAgentProposal | null>(null);
+  const [cliLearningPathProposal, setCliLearningPathProposal] =
+    useState<CliLearningPathProposal | null>(null);
+  const [cliLearningPathProposalBusy, setCliLearningPathProposalBusy] =
+    useState(false);
+  const [cliLearningPathProposalError, setCliLearningPathProposalError] =
+    useState('');
+  const [playerOpenLearningPathRequest, setPlayerOpenLearningPathRequest] =
+    useState<{ id: number; pathId: string } | null>(null);
   const [activeMapPath, setActiveMapPath] = useState<string | null>(null);
   const [nodeNoteDialog, setNodeNoteDialog] = useState<{
     nodeId: string | null;
@@ -1704,6 +1753,11 @@ export default function App() {
   const [sourceMapVersion, setSourceMapVersion] = useState(0);
   const [markdownEditorSession, setMarkdownEditorSession] = useState(0);
   const cliAgentProposalRef = useRef<CliAgentProposal | null>(null);
+  const cliLearningPathProposalRef = useRef<CliLearningPathProposal | null>(
+    null,
+  );
+  const playerOpenLearningPathRequestIdRef = useRef(0);
+  const youtubeSearchResultsRef = useRef(new Map<string, VideoInput>());
   const svgRef = useRef<SVGSVGElement>(null);
   const markdownEditorRef = useRef<MarkdownEditorHandle | null>(null);
   const markdownPaneModeRef = useRef(markdownPaneMode);
@@ -2434,6 +2488,103 @@ export default function App() {
     };
   };
 
+  const proposeLearningPath = async (
+    input: ProposeLearningPathInput,
+  ): Promise<LearningPathProposal> => {
+    const requestedPathId = input.pathId?.trim() || undefined;
+    if (
+      (input.mode === 'replace' || input.mode === 'append_nodes') &&
+      !requestedPathId
+    ) {
+      throw new Error('替换或扩展路径时必须指定目标路径。');
+    }
+    const existingDetail = requestedPathId
+      ? await playerApi.learningPathGet(requestedPathId)
+      : null;
+    if (
+      (input.mode === 'replace' || input.mode === 'append_nodes') &&
+      !existingDetail
+    ) {
+      throw new Error(`找不到目标学习路径：${requestedPathId}`);
+    }
+    if (input.mode === 'create' && existingDetail) {
+      throw new Error(`路径编号已存在：${requestedPathId}`);
+    }
+
+    const nodes = buildValidatedLearningPathNodes(
+      input.nodes,
+      existingDetail,
+      input.mode,
+    );
+    const videoIds = Array.from(
+      new Set(
+        nodes
+          .map((node) => node.videoId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+    const videosById = new Map<string, VideoInput>();
+    for (const id of videoIds) {
+      const cached = youtubeSearchResultsRef.current.get(id);
+      if (cached) videosById.set(id, cached);
+    }
+    const knownVideos = await playerApi.videoItems(videoIds).catch(() => []);
+    for (const video of knownVideos) {
+      if (!videosById.has(video.videoId)) {
+        videosById.set(video.videoId, {
+          videoId: video.videoId,
+          channelId: video.channelId,
+          channelName: video.channelName,
+          title: video.title,
+          publishedAt: video.publishedAt,
+          publishedApprox: video.publishedApprox,
+          durationSeconds: video.durationSeconds,
+          viewCount: video.viewCount,
+          viewText: video.viewText,
+          thumbnailUrl: video.thumbnailUrl,
+        });
+      }
+    }
+    for (const id of videoIds) {
+      if (videosById.has(id)) continue;
+      const basics = await playerApi.fetchVideoInfo(id);
+      if (!basics.title.trim()) {
+        throw new Error(`无法从 YouTube 读取视频 ${id} 的标题。`);
+      }
+      videosById.set(id, {
+        videoId: id,
+        title: basics.title,
+        channelName: basics.channelName,
+      });
+    }
+
+    const videos = videoIds.map((id) => videosById.get(id)!);
+    const newNodeCount =
+      input.mode === 'append_nodes'
+        ? Math.max(0, nodes.length - (existingDetail?.nodes.length ?? 0))
+        : nodes.length;
+    return {
+      mode: input.mode,
+      existingTitle: existingDetail?.summary.title ?? null,
+      existingNodeCount: existingDetail?.nodes.length ?? 0,
+      input: {
+        ...(input.mode === 'create'
+          ? requestedPathId
+            ? { pathId: requestedPathId }
+            : {}
+          : { pathId: requestedPathId }),
+        title: input.title.trim(),
+        description: input.description?.trim() || null,
+        nodes,
+        videos,
+      },
+      addedNodeCount: newNodeCount,
+      videoCount: videoIds.length,
+      stageCount: nodes.filter((node) => node.kind === 'stage').length,
+      rationale: input.rationale.trim(),
+    };
+  };
+
   const agentCapabilities: AgentCapabilities = {
     getCurrentMindmap: getAgentMindmap,
     searchLibrary: (query, category) =>
@@ -2445,6 +2596,15 @@ export default function App() {
       invoke<OpenedDocument>('open_document', { relativePath }),
     proposeNodeEdit: proposeAgentNodeEdit,
     proposeNodeBranch: proposeAgentNodeBranch,
+    searchYouTubeVideos: async (query, limit) => {
+      const videos = await searchYouTubeVideos(query, limit);
+      for (const video of videos)
+        youtubeSearchResultsRef.current.set(video.videoId, video);
+      return videos;
+    },
+    listLearningPaths: async () => (await playerApi.overview()).learningPaths,
+    getLearningPath: (pathId) => playerApi.learningPathGet(pathId),
+    proposeLearningPath,
   };
   agentCapabilitiesRef.current = agentCapabilities;
 
@@ -2493,8 +2653,34 @@ export default function App() {
             JSON.stringify(input ?? {}),
             capabilities,
           );
+          if (execution.learningPathProposal) {
+            if (
+              cliAgentProposalRef.current ||
+              cliLearningPathProposalRef.current
+            ) {
+              await invoke('agent_bridge_resolve', {
+                requestId,
+                result: {},
+                error: 'Seamind 正在等待你确认另一条提案。',
+              }).catch(() => undefined);
+              return;
+            }
+            const pending = {
+              requestId,
+              proposal: execution.learningPathProposal,
+            };
+            cliLearningPathProposalRef.current = pending;
+            setCliLearningPathProposal(pending);
+            setCliLearningPathProposalError('');
+            setActiveWorkspace('player');
+            setPlayerOpened(true);
+            return;
+          }
           if (execution.proposal) {
-            if (cliAgentProposalRef.current) {
+            if (
+              cliAgentProposalRef.current ||
+              cliLearningPathProposalRef.current
+            ) {
               await invoke('agent_bridge_resolve', {
                 requestId,
                 result: {},
@@ -2629,6 +2815,65 @@ export default function App() {
       },
       error: null,
     }).catch(() => undefined);
+  };
+
+  const resolveCliLearningPathProposal = async (apply: boolean) => {
+    const pending = cliLearningPathProposalRef.current;
+    if (!pending || cliLearningPathProposalBusy) return;
+    if (!apply) {
+      cliLearningPathProposalRef.current = null;
+      setCliLearningPathProposal(null);
+      setCliLearningPathProposalError('');
+      await invoke('agent_bridge_resolve', {
+        requestId: pending.requestId,
+        result: {},
+        error: '用户拒绝了学习路径提案；数据库没有变化。',
+      }).catch(() => undefined);
+      return;
+    }
+
+    setCliLearningPathProposalBusy(true);
+    setCliLearningPathProposalError('');
+    try {
+      const saved = await playerApi.learningPathSave(pending.proposal.input);
+      cliLearningPathProposalRef.current = null;
+      setCliLearningPathProposal(null);
+      setPlayerOpened(true);
+      setActiveWorkspace('player');
+      playerOpenLearningPathRequestIdRef.current += 1;
+      setPlayerOpenLearningPathRequest({
+        id: playerOpenLearningPathRequestIdRef.current,
+        pathId: saved.summary.pathId,
+      });
+      const structuredContent = {
+        status: 'applied',
+        permission: 'user_approval',
+        name: 'learning_path_propose',
+        pathId: saved.summary.pathId,
+        title: saved.summary.title,
+        nodeCount: saved.summary.nodeCount,
+        videoCount: saved.summary.videoCount,
+      };
+      await invoke('agent_bridge_resolve', {
+        requestId: pending.requestId,
+        result: {
+          content: [
+            {
+              type: 'text',
+              text: `用户已确认并保存学习路径「${saved.summary.title}」。`,
+            },
+          ],
+          structuredContent,
+        },
+        error: null,
+      }).catch(() => undefined);
+    } catch (error) {
+      setCliLearningPathProposalError(
+        errorMessage(error, '保存学习路径失败。'),
+      );
+    } finally {
+      setCliLearningPathProposalBusy(false);
+    }
   };
 
   const undoAgentProposal = async (
@@ -3121,6 +3366,7 @@ export default function App() {
       if (typeof selected !== 'string') return;
       if (!leavePlantUmlSession()) return;
       if (!(await workbench.controller.leave())) return;
+      const keepKnowledgeWorkspace = activeWorkspace === 'knowledge';
       setLibraryBusy(true);
       const snapshot = await invoke<LibrarySnapshot>('set_library_root', {
         path: selected,
@@ -3129,7 +3375,11 @@ export default function App() {
       setLibraryError('');
       setCategoryFilter('');
       setLibraryQuery('');
-      if (snapshot.documents[0]) {
+      if (keepKnowledgeWorkspace) {
+        const firstNote = snapshot.documents.find((doc) => doc.kind === 'doc');
+        if (firstNote) await workbench.controller.openMarkdown(firstNote);
+        setSaveMessage('文件库已设置');
+      } else if (snapshot.documents[0]) {
         await openMap(snapshot.documents[0]);
       } else {
         installDraft(
@@ -3413,14 +3663,83 @@ export default function App() {
     await workbench.controller.openMarkdown(note);
   };
 
-  const createKnowledgeNote = async (folder: string) => {
+  const createKnowledgeNote = async (
+    folder: string,
+    template?: KnowledgeNoteTemplate,
+  ) => {
     if (!librarySnapshotRef.current?.rootPath) {
       setLibraryError('请先选择文件库目录，再新建笔记。');
       return;
     }
     if (!leavePlantUmlSession()) return;
     if (draftRef.current.dirty && !(await saveDraft())) return;
+    if (template) {
+      await workbench.controller.createCustomDocument({
+        kind: 'doc',
+        category: folder,
+        title: template.titlePrefix,
+        source: template.source,
+        tags: template.tags,
+      });
+      return;
+    }
     await workbench.controller.createDocument('doc', folder);
+  };
+
+  const createKnowledgeCategory = async (
+    rawCategory: string,
+  ): Promise<boolean> => {
+    const clean = rawCategory.trim();
+    if (!clean) return false;
+    if (!librarySnapshotRef.current?.rootPath) {
+      setLibraryError('请先选择文件库目录，再新建分类。');
+      return false;
+    }
+    try {
+      const snapshot = await invoke<LibrarySnapshot>('create_category', {
+        category: clean,
+      });
+      installLibrarySnapshot(snapshot);
+      setLibraryError('');
+      setSaveMessage(`已创建分类「${clean}」`);
+      return true;
+    } catch (error) {
+      setLibraryError(errorMessage(error, '创建分类失败'));
+      return false;
+    }
+  };
+
+  const openWikilinkTarget = async (rawTarget: string) => {
+    const cleanTarget = rawTarget.trim();
+    if (!cleanTarget) return;
+    const found = findWikilinkTarget(cleanTarget, libraryDocuments);
+    if (found?.kind === 'doc') {
+      if (activeWorkspace === 'knowledge') {
+        await openKnowledgeNote(found);
+      } else {
+        await openMap(found);
+      }
+      return;
+    }
+    if (found?.kind === 'mindmap') {
+      await openMap(found);
+      setActiveWorkspace('mindmap');
+      return;
+    }
+    if (!librarySnapshotRef.current?.rootPath) {
+      setLibraryError('请先选择文件库目录，再创建双链笔记。');
+      return;
+    }
+    if (!leavePlantUmlSession()) return;
+    if (draftRef.current.dirty && !(await saveDraft())) return;
+    const currentCategory =
+      workbench.controller.getState()?.category || categoryFilter || '未分类';
+    await workbench.controller.createCustomDocument({
+      kind: 'doc',
+      category: currentCategory,
+      title: cleanTarget,
+      source: `# ${cleanTarget}\n\n`,
+    });
   };
 
   // Opening a note as a mind map from the knowledge page shows the mind map on its own workspace.
@@ -3868,8 +4187,12 @@ export default function App() {
     }
   };
 
-  const deleteMap = async (document: MapDocument) => {
+  const deleteMap = async (
+    document: MapDocument,
+    options: { skipConfirm?: boolean } = {},
+  ) => {
     if (
+      !options.skipConfirm &&
       !window.confirm(
         `确定删除“${document.title}”吗？此操作会删除文件库中的 Markdown 文件。`,
       )
@@ -5012,6 +5335,67 @@ export default function App() {
           title: epubReader.title,
         })
       : null;
+  const clampTerminalHeight = (height: number) =>
+    Math.round(Math.max(160, Math.min(window.innerHeight * 0.72, height)));
+  const onTerminalResizePointerDown = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    terminalResizeRef.current = {
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      startHeight: terminalHeight,
+    };
+  };
+  const onTerminalResizePointerMove = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    const drag = terminalResizeRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    setTerminalHeight(
+      clampTerminalHeight(drag.startHeight + drag.startY - event.clientY),
+    );
+  };
+  const onTerminalResizePointerUp = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    if (terminalResizeRef.current?.pointerId !== event.pointerId) return;
+    terminalResizeRef.current = null;
+    const height = clampTerminalHeight(terminalHeight);
+    setTerminalHeight(height);
+    try {
+      localStorage.setItem(TERMINAL_HEIGHT_KEY, String(height));
+    } catch {
+      // Keep the resized height in memory for this session.
+    }
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+  const onTerminalResizeKeyDown = (
+    event: ReactKeyboardEvent<HTMLDivElement>,
+  ) => {
+    const change =
+      event.key === 'ArrowUp' ? 24 : event.key === 'ArrowDown' ? -24 : 0;
+    if (event.key === 'Home') {
+      event.preventDefault();
+      setTerminalHeight(280);
+      try {
+        localStorage.setItem(TERMINAL_HEIGHT_KEY, '280');
+      } catch {
+        // Keep the default height in memory for this session.
+      }
+    } else if (change !== 0) {
+      event.preventDefault();
+      const height = clampTerminalHeight(terminalHeight + change);
+      setTerminalHeight(height);
+      try {
+        localStorage.setItem(TERMINAL_HEIGHT_KEY, String(height));
+      } catch {
+        // Keep the resized height in memory for this session.
+      }
+    }
+  };
   const focusedMindmapPath = focusedMapPath
     ? findNavigationPath(mindmapNavigationTree, focusedMapPath)
     : [];
@@ -5019,10 +5403,15 @@ export default function App() {
   return (
     <main
       ref={appShellRef}
-      className={`app-shell${readerSplitActive ? ' is-reader-split' : ''}`}
+      className={`app-shell${readerSplitActive ? ' is-reader-split' : ''}${terminalOpen ? ' is-terminal-open' : ''}`}
       data-theme={theme}
       data-map-style={mindmapStyle}
-      style={readerSplitStyle}
+      style={
+        {
+          ...readerSplitStyle,
+          '--terminal-height': `${terminalHeight}px`,
+        } as CSSProperties
+      }
     >
       <header
         className={`topbar${activeWorkspace === 'reader' ? ' is-ebook-workspace' : ''}`}
@@ -5238,7 +5627,7 @@ export default function App() {
       </header>
 
       <section
-        className={`workspace${sourceCollapsed ? ' is-source-collapsed' : ''}${libraryCollapsed ? ' is-library-collapsed' : ''}${aiCollapsed ? ' is-ai-collapsed' : ''}${terminalOpen ? ' is-terminal-open' : ''}${markdownFullscreen ? ' is-markdown-fullscreen' : ''}${activeDocument ? ' is-document-open' : ''}${activeWorkspace !== 'mindmap' && !readerSplitActive ? ' is-workspace-hidden' : ''}`}
+        className={`workspace${sourceCollapsed ? ' is-source-collapsed' : ''}${libraryCollapsed ? ' is-library-collapsed' : ''}${aiCollapsed ? ' is-ai-collapsed' : ''}${markdownFullscreen ? ' is-markdown-fullscreen' : ''}${activeDocument ? ' is-document-open' : ''}${activeWorkspace !== 'mindmap' && !readerSplitActive ? ' is-workspace-hidden' : ''}`}
         aria-label="Markdown 思维导图编辑器"
         aria-hidden={activeWorkspace !== 'mindmap' && !readerSplitActive}
       >
@@ -5313,10 +5702,17 @@ export default function App() {
             dirty={workbench.dirty}
             statusText={saveMessage}
             theme={theme}
+            documents={libraryDocuments}
+            categories={librarySnapshot?.categories ?? []}
             renderMarkdownPreview={renderDocumentPreview}
             onSourceChange={(source) => workbench.controller.edit(source)}
             onSave={() => void workbench.controller.save({ manual: true })}
             onRename={(title) => workbench.controller.rename(title)}
+            onChangeCategory={(category) =>
+              workbench.controller.setCategory(category)
+            }
+            onChangeTags={(tags) => workbench.controller.setTags(tags)}
+            onOpenWikilink={(target) => void openWikilinkTarget(target)}
             onOpenAsMindmap={() => void openActiveDocumentAsMindmap()}
             onConvertToMindmap={() => void convertActiveDocumentToMindmap()}
           />
@@ -6158,51 +6554,6 @@ export default function App() {
             </div>
           </div>
         </aside>
-
-        {terminalOpen && (
-          <Suspense
-            fallback={
-              <div
-                id="seamind-terminal-panel"
-                className="seamind-terminal-loading"
-              >
-                正在加载终端…
-              </div>
-            }
-          >
-            <div id="seamind-terminal-panel">
-              <TerminalPanel
-                key={librarySnapshot?.rootPath ?? 'default-terminal-directory'}
-                cwd={librarySnapshot?.rootPath ?? ''}
-                theme={theme}
-                pendingCommand={pendingTerminalCommand}
-                onCommandSubmitted={(id) =>
-                  setPendingTerminalCommand((current) =>
-                    current?.id === id ? null : current,
-                  )
-                }
-                onCommandOutput={(id, output) => {
-                  const callback = terminalCommandResultsRef.current.get(id);
-                  if (!callback) return;
-                  terminalCommandResultsRef.current.delete(id);
-                  callback(output);
-                }}
-                onClose={() => {
-                  const request = pendingTerminalCommand;
-                  if (request) {
-                    const callback = terminalCommandResultsRef.current.get(
-                      request.id,
-                    );
-                    terminalCommandResultsRef.current.delete(request.id);
-                    callback?.('终端已关闭，命令未执行。');
-                  }
-                  setPendingTerminalCommand(null);
-                  setTerminalOpen(false);
-                }}
-              />
-            </div>
-          </Suspense>
-        )}
       </section>
 
       <section
@@ -6250,7 +6601,49 @@ export default function App() {
           <Suspense
             fallback={<div className="player-loading">正在载入播放器…</div>}
           >
-            <PlayerWorkspace active={activeWorkspace === 'player'} />
+            <PlayerWorkspace
+              active={activeWorkspace === 'player'}
+              provider={providerSettings}
+              capabilities={agentCapabilities}
+              openLearningPathRequest={playerOpenLearningPathRequest}
+              onOpenLearningPathRequestHandled={(id) =>
+                setPlayerOpenLearningPathRequest((request) =>
+                  request?.id === id ? null : request,
+                )
+              }
+              onSendTerminalCommand={(text, execute = false) => {
+                setTerminalOpen(true);
+                if (text) {
+                  setPendingTerminalRawInput({
+                    id: `raw-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                    text,
+                    execute,
+                  });
+                }
+              }}
+              onExportMarkdownToMindmap={(title, md) => {
+                void (async () => {
+                  if (!leavePlantUmlSession()) return;
+                  if (!(await workbench.controller.leave())) return;
+                  if (draftRef.current.dirty && !(await saveDraft())) return;
+                  const revision = draftRef.current.revision + 1;
+                  const category = categoryFilter || '未分类';
+                  installDraft(
+                    createDraft({
+                      title: title.trim() || '学习路径',
+                      category,
+                      mapType: '学习路径',
+                      tags: '学习路径, 视频',
+                      markdown: md,
+                      dirty: true,
+                      revision,
+                    }),
+                  );
+                  setSaveMessage('已从学习路径导出为思维导图草稿');
+                  setActiveWorkspace('mindmap');
+                })();
+              }}
+            />
           </Suspense>
         )}
       </section>
@@ -6261,11 +6654,21 @@ export default function App() {
           aria-label="知识库工作区"
         >
           <KnowledgeWorkspace
+            rootPath={librarySnapshot?.rootPath ?? null}
             documents={libraryDocuments}
+            categories={librarySnapshot?.categories ?? []}
             activeDocument={activeDocument}
+            errorMessage={libraryError}
+            busy={libraryBusy}
+            onChooseRoot={() => void chooseLibraryRoot()}
+            onRefresh={() => void loadLibrary(false)}
+            onCreateCategory={(category) => createKnowledgeCategory(category)}
             onOpenNote={(note) => void openKnowledgeNote(note)}
-            onCreateNote={(folder) => void createKnowledgeNote(folder)}
-            onDeleteNote={(note) => void deleteMap(note)}
+            onCloseNote={() => void workbench.controller.leave()}
+            onCreateNote={(folder, template) =>
+              void createKnowledgeNote(folder, template)
+            }
+            onDeleteNote={(note) => void deleteMap(note, { skipConfirm: true })}
             workbench={{
               dirty: workbench.dirty,
               statusText: saveMessage,
@@ -6274,10 +6677,79 @@ export default function App() {
               onSourceChange: (source) => workbench.controller.edit(source),
               onSave: () => void workbench.controller.save({ manual: true }),
               onRename: (title) => workbench.controller.rename(title),
+              onChangeCategory: (category) =>
+                workbench.controller.setCategory(category),
+              onChangeTags: (tags) => workbench.controller.setTags(tags),
+              onOpenWikilink: (target) => void openWikilinkTarget(target),
               onOpenAsMindmap: () => void openKnowledgeNoteAsMindmap(),
               onConvertToMindmap: () => void convertActiveDocumentToMindmap(),
             }}
           />
+        </section>
+      )}
+
+      {terminalOpen && (
+        <section className="seamind-terminal-drawer" aria-label="全局终端抽屉">
+          <div
+            className="terminal-drawer-resize-handle"
+            role="separator"
+            aria-label="调整终端高度"
+            aria-orientation="horizontal"
+            aria-valuemin={160}
+            aria-valuemax={Math.round(window.innerHeight * 0.72)}
+            aria-valuenow={terminalHeight}
+            aria-controls="seamind-terminal-panel"
+            tabIndex={0}
+            onPointerDown={onTerminalResizePointerDown}
+            onPointerMove={onTerminalResizePointerMove}
+            onPointerUp={onTerminalResizePointerUp}
+            onPointerCancel={onTerminalResizePointerUp}
+            onKeyDown={onTerminalResizeKeyDown}
+            title="拖动调整高度；方向键微调；Home 恢复默认高度"
+          />
+          <div id="seamind-terminal-panel" className="terminal-global-panel">
+            <Suspense
+              fallback={
+                <div className="seamind-terminal-loading">正在加载终端…</div>
+              }
+            >
+              <TerminalPanel
+                key={librarySnapshot?.rootPath ?? 'default-terminal-directory'}
+                cwd={librarySnapshot?.rootPath ?? ''}
+                theme={theme}
+                pendingCommand={pendingTerminalCommand}
+                pendingRawInput={pendingTerminalRawInput}
+                onCommandSubmitted={(id) =>
+                  setPendingTerminalCommand((current) =>
+                    current?.id === id ? null : current,
+                  )
+                }
+                onRawInputSent={(id) =>
+                  setPendingTerminalRawInput((current) =>
+                    current?.id === id ? null : current,
+                  )
+                }
+                onCommandOutput={(id, output) => {
+                  const callback = terminalCommandResultsRef.current.get(id);
+                  if (!callback) return;
+                  terminalCommandResultsRef.current.delete(id);
+                  callback(output);
+                }}
+                onClose={() => {
+                  const request = pendingTerminalCommand;
+                  if (request) {
+                    const callback = terminalCommandResultsRef.current.get(
+                      request.id,
+                    );
+                    terminalCommandResultsRef.current.delete(request.id);
+                    callback?.('终端已关闭，命令未执行。');
+                  }
+                  setPendingTerminalCommand(null);
+                  setTerminalOpen(false);
+                }}
+              />
+            </Suspense>
+          </div>
         </section>
       )}
 
@@ -7062,6 +7534,16 @@ export default function App() {
             </div>
           </section>
         </div>
+      )}
+      {cliLearningPathProposal && (
+        <LearningPathProposalDialog
+          proposal={cliLearningPathProposal.proposal}
+          sourceLabel="cli"
+          busy={cliLearningPathProposalBusy}
+          error={cliLearningPathProposalError}
+          onCancel={() => void resolveCliLearningPathProposal(false)}
+          onConfirm={() => void resolveCliLearningPathProposal(true)}
+        />
       )}
       {terminalCommandConfirmation && (
         <div

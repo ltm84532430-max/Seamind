@@ -5,6 +5,7 @@ export interface KnowledgeNoteSource {
   title: string;
   category: string;
   updatedAt: number;
+  tags?: readonly string[];
 }
 
 export interface KnowledgeFolder<T extends KnowledgeNoteSource> {
@@ -16,21 +17,38 @@ export interface KnowledgeFolder<T extends KnowledgeNoteSource> {
 export const UNFILED_FOLDER = '未分类';
 
 /**
- * Groups the Markdown notes by folder, keeping only the ones whose title, path or folder contains
- * `query` (case-insensitive). Mind maps are left out. Folders sort by name and each folder's notes
- * sort newest first.
+ * Groups the Markdown notes by folder, keeping only the ones whose title, path, folder or tags
+ * contain `query` (case-insensitive). Mind maps are left out. Folders sort by name and each
+ * folder's notes sort newest first. When `query` is blank, `extraCategories` are also included as
+ * empty folders so newly created categories appear immediately.
  */
 export function groupKnowledgeNotes<T extends KnowledgeNoteSource>(
   documents: readonly T[],
   query: string,
+  extraCategories: readonly string[] = [],
 ): KnowledgeFolder<T>[] {
-  const needle = query.trim().toLocaleLowerCase();
+  const needle = query.trim().replace(/^#/, '').toLocaleLowerCase();
   const folders = new Map<string, T[]>();
+
+  if (!needle) {
+    for (const rawCategory of extraCategories) {
+      const clean = rawCategory.trim();
+      if (clean && !folders.has(clean)) {
+        folders.set(clean, []);
+      }
+    }
+  }
+
   for (const document of documents) {
     if (document.kind !== 'doc') continue;
     const name = document.category || UNFILED_FOLDER;
     if (needle) {
-      const searchable = [document.title, document.relativePath, name];
+      const searchable = [
+        document.title,
+        document.relativePath,
+        name,
+        ...(document.tags ?? []),
+      ];
       if (!searchable.some((text) => text.toLocaleLowerCase().includes(needle)))
         continue;
     }
@@ -38,6 +56,7 @@ export function groupKnowledgeNotes<T extends KnowledgeNoteSource>(
     notes.push(document);
     folders.set(name, notes);
   }
+
   return [...folders.entries()]
     .sort(([left], [right]) => left.localeCompare(right, 'zh-CN'))
     .map(([name, notes]) => ({

@@ -4,7 +4,7 @@ import { proxiedFetch } from '../youtube-proxy';
 import { errorText } from './player-api';
 import { withRetries } from './retry-fetch';
 import type { ChannelInput, VideoInput } from './types';
-import { channelUrl, isChannelId } from './video-links';
+import { channelUrl, isChannelId, thumbnailUrl } from './video-links';
 import type { YouTubeTarget } from './video-links';
 import { videoFromItem } from './youtube-mapping';
 
@@ -234,6 +234,39 @@ export async function fetchPlaylist(listId: string): Promise<PlaylistListing> {
     videos: videos.slice(0, MAX_PLAYLIST_VIDEOS),
     truncated,
   };
+}
+
+/** Searches YouTube for long-form playable videos matching `query`, returning real metadata. */
+export async function searchYouTubeVideos(
+  query: string,
+  limit = 8,
+): Promise<VideoInput[]> {
+  const cleaned = query.trim();
+  if (!cleaned) return [];
+  const cappedLimit = Math.max(1, Math.min(20, Math.floor(limit) || 8));
+  const { innertube } = await session();
+  const search = await innertube.search(cleaned, { type: 'video' });
+  const now = Math.floor(Date.now() / 1000);
+  const candidates: unknown[] = [
+    ...((search.videos as unknown[]) ?? []),
+    ...((search.results as unknown[]) ?? []),
+  ];
+  const seen = new Set<string>();
+  const out: VideoInput[] = [];
+  for (const item of candidates) {
+    if (!item || typeof item !== 'object') continue;
+    const nodeType = (item as { type?: string }).type;
+    if (nodeType === 'ReelItem' || nodeType === 'ShortsLockupView') continue;
+    const mapped = videoFromItem(item, { now });
+    if (!mapped || seen.has(mapped.videoId)) continue;
+    seen.add(mapped.videoId);
+    out.push({
+      ...mapped,
+      thumbnailUrl: mapped.thumbnailUrl ?? thumbnailUrl(mapped.videoId, 'mq'),
+    });
+    if (out.length >= cappedLimit) break;
+  }
+  return out;
 }
 
 /** The input the database takes for a channel the page found out about. */

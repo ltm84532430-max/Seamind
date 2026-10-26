@@ -82,9 +82,63 @@ export interface PlayerSettings {
   pauseWhenHidden: boolean;
 }
 
+export type LearningPathNodeKind = 'stage' | 'video' | 'checkpoint';
+
+export interface LearningPathSummary {
+  pathId: string;
+  title: string;
+  description: string | null;
+  createdAt: number;
+  updatedAt: number;
+  nodeCount: number;
+  videoCount: number;
+  finishedCount: number;
+}
+
+export interface LearningPathNodeInput {
+  nodeId: string;
+  parentId?: string | null;
+  position: number;
+  kind: LearningPathNodeKind;
+  title: string;
+  note?: string | null;
+  videoId?: string | null;
+  startSeconds?: number;
+  optional?: boolean;
+  prerequisiteIds?: string[];
+}
+
+export interface LearningPathInput {
+  pathId?: string | null;
+  title: string;
+  description?: string | null;
+  nodes: LearningPathNodeInput[];
+  videos?: VideoInput[];
+}
+
+export interface LearningPathNode {
+  nodeId: string;
+  parentId: string | null;
+  position: number;
+  kind: LearningPathNodeKind;
+  title: string;
+  note: string | null;
+  videoId: string | null;
+  startSeconds: number;
+  optional: boolean;
+  prerequisiteIds: string[];
+  video: VideoItem | null;
+}
+
+export interface LearningPathDetail {
+  summary: LearningPathSummary;
+  nodes: LearningPathNode[];
+}
+
 export interface PlayerOverview {
   channels: PlayerChannel[];
   playlists: PlayerPlaylist[];
+  learningPaths: LearningPathSummary[];
   settings: PlayerSettings;
 }
 
@@ -110,6 +164,7 @@ export interface ImportSummary {
 export interface BackupSummary {
   channelsAdded: number;
   playlistsAdded: number;
+  learningPathsAdded?: number;
   videos: number;
 }
 
