@@ -40,6 +40,19 @@ import {
   resolveExamSourcePlan,
 } from './epub-exam-source';
 import type { ExamSourceSegment } from './epub-exam-source';
+import {
+  getChapterTranslation,
+  saveChapterTranslation,
+  deleteChapterTranslation,
+} from './epub-translation-store';
+import type { EpubChapterTranslationRecord } from './epub-translation-store';
+import {
+  extractTranslatableElements,
+  injectTranslationsIntoDoc,
+  toggleBilingualDisplay,
+  removeTranslationsFromDoc,
+} from './epub-translation-dom';
+import { translateChapterAll } from './epub-translator';
 import './epub-exam-v2.css';
 // @ts-expect-error Foliate ships as an untyped JavaScript submodule.
 import { Overlayer } from '../../../packages/foliate-js/overlayer.js';
@@ -118,6 +131,7 @@ type ReaderSettings = {
 
 type FoliateRendererElement = HTMLElement & {
   setStyles?: (styles: string) => void;
+  getContents?: () => Array<{ doc?: Document; index?: number }>;
 };
 
 type FoliateViewElement = HTMLElement & {
@@ -736,6 +750,46 @@ export default function EpubReader({
   const [isFixedLayout, setIsFixedLayout] = useState(false);
   const bridgeChangeRef = useRef(onAgentBridgeChange);
   bridgeChangeRef.current = onAgentBridgeChange;
+
+  const [bilingualActive, setBilingualActive] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('seamind:epub:bilingual-enabled') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const bilingualActiveRef = useRef(bilingualActive);
+  bilingualActiveRef.current = bilingualActive;
+
+  const [hasTranslation, setHasTranslation] = useState(false);
+  const [translating, setTranslating] = useState(false);
+  const translatingRef = useRef(false);
+  const [transProgress, setTransProgress] = useState({ done: 0, total: 0 });
+  const currentChapterTransRef = useRef<EpubChapterTranslationRecord | null>(
+    null,
+  );
+  const currentSectionIndexRef = useRef(0);
+  const loadedDocsMapRef = useRef<Map<number, Document>>(new Map());
+  const bilingualMenuRef = useRef<HTMLDetailsElement>(null);
+
+  useEffect(() => {
+    const handleDocumentClick = (e: MouseEvent) => {
+      if (
+        bilingualMenuRef.current?.hasAttribute('open') &&
+        !bilingualMenuRef.current.contains(e.target as Node)
+      ) {
+        bilingualMenuRef.current.removeAttribute('open');
+      }
+    };
+    document.addEventListener('click', handleDocumentClick);
+    return () => document.removeEventListener('click', handleDocumentClick);
+  }, []);
+
+  useEffect(() => {
+    loadedDocsMapRef.current.clear();
+    setHasTranslation(false);
+    currentChapterTransRef.current = null;
+  }, [selection.progressKey]);
 
   bookmarksRef.current = bookmarks;
   annotationsRef.current = annotations;
@@ -1541,6 +1595,199 @@ export default function EpubReader({
     );
   };
 
+  const startTranslateCurrentChapter = async (force = false) => {
+    if (translatingRef.current) return;
+    const curIndex = currentSectionIndexRef.current;
+    const curTitle = chapterTitle || `第 ${curIndex + 1} 节`;
+
+    let targetDoc: Document | null =
+      loadedDocsMapRef.current.get(curIndex) ?? null;
+    if (!targetDoc && viewRef.current?.renderer?.getContents) {
+      const contents = (viewRef.current.renderer.getContents() ?? []) as Array<{
+        doc?: Document;
+        index?: number;
+      }>;
+      const found = contents.find((c) => c.index === curIndex);
+      if (found?.doc) targetDoc = found.doc;
+    }
+    if (!targetDoc) {
+      setNavigationNotice({
+        message: '无法获取当前章节文档，请稍候重试。',
+        kind: 'warning',
+      });
+      return;
+    }
+
+    if (!force) {
+      const cached = await getChapterTranslation(
+        selection.progressKey,
+        curIndex,
+      );
+      if (cached && cached.paragraphs && cached.paragraphs.length > 0) {
+        extractTranslatableElements(targetDoc);
+        injectTranslationsIntoDoc(targetDoc, cached.paragraphs);
+        toggleBilingualDisplay(targetDoc, true);
+        setBilingualActive(true);
+        bilingualActiveRef.current = true;
+        try {
+          localStorage.setItem('seamind:epub:bilingual-enabled', 'true');
+        } catch {
+          // ignore storage error
+        }
+        setHasTranslation(true);
+        currentChapterTransRef.current = cached;
+        setNavigationNotice({
+          message: '已加载已保存的章节译文。',
+          kind: 'success',
+        });
+        return;
+      }
+    }
+
+    const transBlocks = extractTranslatableElements(targetDoc);
+    if (transBlocks.length === 0) {
+      setNavigationNotice({
+        message: '当前章节未检测到需要翻译的正文段落。',
+        kind: 'warning',
+      });
+      return;
+    }
+
+    setTranslating(true);
+    translatingRef.current = true;
+    setTransProgress({ done: 0, total: transBlocks.length });
+    setNavigationNotice({
+      message: `开始逐段翻译本章（共 ${transBlocks.length} 段）...`,
+      kind: 'success',
+    });
+
+    try {
+      const paragraphsToTranslate = transBlocks.map((b) => ({
+        id: b.id,
+        text: b.text,
+      }));
+      const translated = await translateChapterAll({
+        bookTitle: title,
+        chapterTitle: curTitle,
+        paragraphs: paragraphsToTranslate,
+        provider,
+        batchSize: 10,
+        onProgress: (done, total) => {
+          setTransProgress({ done, total });
+        },
+      });
+
+      const savedRecord = await saveChapterTranslation({
+        bookKey: selection.progressKey,
+        sectionIndex: curIndex,
+        sectionHref,
+        chapterTitle: curTitle,
+        model: provider.model,
+        paragraphs: translated,
+      });
+
+      injectTranslationsIntoDoc(targetDoc, savedRecord.paragraphs);
+      toggleBilingualDisplay(targetDoc, true);
+      setBilingualActive(true);
+      bilingualActiveRef.current = true;
+      try {
+        localStorage.setItem('seamind:epub:bilingual-enabled', 'true');
+      } catch {
+        // ignore storage error
+      }
+
+      setHasTranslation(true);
+      currentChapterTransRef.current = savedRecord;
+      setNavigationNotice({
+        message: `本章翻译完成并已保存（共 ${translated.length} 段）！`,
+        kind: 'success',
+      });
+    } catch (err) {
+      setNavigationNotice({
+        message: `翻译失败：${err instanceof Error ? err.message : String(err)}`,
+        kind: 'error',
+      });
+    } finally {
+      setTranslating(false);
+      translatingRef.current = false;
+    }
+  };
+
+  const toggleBilingualMode = () => {
+    if (!hasTranslation) {
+      void startTranslateCurrentChapter();
+      return;
+    }
+    const nextActive = !bilingualActive;
+    setBilingualActive(nextActive);
+    bilingualActiveRef.current = nextActive;
+    try {
+      localStorage.setItem(
+        'seamind:epub:bilingual-enabled',
+        String(nextActive),
+      );
+    } catch {
+      // ignore storage error
+    }
+
+    for (const doc of loadedDocsMapRef.current.values()) {
+      toggleBilingualDisplay(doc, nextActive);
+    }
+    if (viewRef.current?.renderer?.getContents) {
+      const contents = (viewRef.current.renderer.getContents() ?? []) as Array<{
+        doc?: Document;
+        index?: number;
+      }>;
+      for (const item of contents) {
+        if (item.doc) {
+          toggleBilingualDisplay(item.doc, nextActive);
+        }
+      }
+    }
+  };
+
+  const handleClearChapterTranslation = async () => {
+    const curIndex = currentSectionIndexRef.current;
+    await deleteChapterTranslation(selection.progressKey, curIndex);
+    const targetDoc = loadedDocsMapRef.current.get(curIndex);
+    if (targetDoc) {
+      removeTranslationsFromDoc(targetDoc);
+    }
+    setHasTranslation(false);
+    currentChapterTransRef.current = null;
+    setNavigationNotice({
+      message: '当前章节译文已清除。',
+      kind: 'success',
+    });
+  };
+
+  const handleCopyChapterTranslation = async () => {
+    const record = currentChapterTransRef.current;
+    if (!record || !record.paragraphs || record.paragraphs.length === 0) {
+      setNavigationNotice({
+        message: '当前章节暂无译文可复制。',
+        kind: 'warning',
+      });
+      return;
+    }
+    const text = record.paragraphs
+      .map((p) => p.translation)
+      .filter(Boolean)
+      .join('\n\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      setNavigationNotice({
+        message: '本章译文已复制到剪贴板！',
+        kind: 'success',
+      });
+    } catch {
+      setNavigationNotice({
+        message: '复制失败，请重试。',
+        kind: 'error',
+      });
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
     let view: FoliateViewElement | null = null;
@@ -1698,7 +1945,24 @@ export default function EpubReader({
         .detail;
       const doc = detail?.doc;
       const sectionIndex = detail?.index;
-      if (!doc || pageDocuments.has(doc)) return;
+      if (!doc) return;
+      if (typeof sectionIndex === 'number') {
+        loadedDocsMapRef.current.set(sectionIndex, doc);
+        getChapterTranslation(selection.progressKey, sectionIndex)
+          .then((record) => {
+            if (record && record.paragraphs && record.paragraphs.length > 0) {
+              extractTranslatableElements(doc);
+              injectTranslationsIntoDoc(doc, record.paragraphs);
+              toggleBilingualDisplay(doc, bilingualActiveRef.current);
+              if (currentSectionIndexRef.current === sectionIndex) {
+                setHasTranslation(true);
+                currentChapterTransRef.current = record;
+              }
+            }
+          })
+          .catch(() => {});
+      }
+      if (pageDocuments.has(doc)) return;
       pageDocuments.add(doc);
       doc.addEventListener('wheel', onReaderWheel, {
         passive: false,
@@ -1886,8 +2150,20 @@ export default function EpubReader({
       setActiveTocId(typeof currentTocId === 'number' ? currentTocId : null);
       setActiveTocHref(chapterHref);
       setCurrentPageLabel(displayLabel(detail.pageItem?.label));
-      setSectionIndex(Math.max(0, detail.section?.current ?? 0));
+      const relSec = Math.max(0, detail.section?.current ?? 0);
+      currentSectionIndexRef.current = relSec;
+      setSectionIndex(relSec);
       setSectionHref(chapterHref);
+      getChapterTranslation(selection.progressKey, relSec)
+        .then((record) => {
+          if (currentSectionIndexRef.current === relSec) {
+            setHasTranslation(
+              !!(record && record.paragraphs && record.paragraphs.length > 0),
+            );
+            currentChapterTransRef.current = record;
+          }
+        })
+        .catch(() => {});
       if (typeof detail.fraction === 'number') {
         setFraction(Math.min(1, Math.max(0, detail.fraction)));
         if (!hasInitialActivityBaseline) {
@@ -2237,6 +2513,91 @@ export default function EpubReader({
           >
             {unsavedExam ? '重试保存试卷' : '生成试卷'}
           </button>
+          {translating ? (
+            <button
+              type="button"
+              className="epub-reader-tool epub-reader-bilingual-btn is-translating"
+              disabled
+              title={`正在逐段翻译本章（${transProgress.done}/${transProgress.total}）`}
+            >
+              <span
+                className="epub-reader-bilingual-spinner"
+                aria-hidden="true"
+              />
+              翻译中 {transProgress.done}/{transProgress.total}
+            </button>
+          ) : !hasTranslation ? (
+            <button
+              type="button"
+              className="epub-reader-tool epub-reader-bilingual-btn"
+              onClick={() => void startTranslateCurrentChapter()}
+              disabled={loading}
+              title="翻译当前章节（逐段双语对照，自动本地持久化保存）"
+            >
+              <span className="epub-reader-bilingual-icon" aria-hidden="true">
+                文/A
+              </span>
+              翻译本章
+            </button>
+          ) : (
+            <div className="epub-reader-bilingual-group">
+              <button
+                type="button"
+                className={`epub-reader-tool epub-reader-bilingual-btn ${bilingualActive ? 'is-active' : ''}`}
+                onClick={toggleBilingualMode}
+                title={
+                  bilingualActive ? '隐藏双语对照译文' : '显示双语对照译文'
+                }
+              >
+                <span className="epub-reader-bilingual-icon" aria-hidden="true">
+                  文/A
+                </span>
+                双语 · {bilingualActive ? '开' : '关'}
+              </button>
+              <details
+                className="epub-reader-bilingual-menu"
+                ref={bilingualMenuRef}
+              >
+                <summary
+                  className="epub-reader-tool epub-reader-bilingual-menu-trigger"
+                  title="译文管理选项"
+                  aria-label="译文管理选项"
+                >
+                  ▾
+                </summary>
+                <div className="epub-reader-bilingual-dropdown">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      bilingualMenuRef.current?.removeAttribute('open');
+                      void startTranslateCurrentChapter(true);
+                    }}
+                  >
+                    重新翻译本章
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      bilingualMenuRef.current?.removeAttribute('open');
+                      void handleCopyChapterTranslation();
+                    }}
+                  >
+                    复制本章译文
+                  </button>
+                  <button
+                    type="button"
+                    className="is-danger"
+                    onClick={() => {
+                      bilingualMenuRef.current?.removeAttribute('open');
+                      void handleClearChapterTranslation();
+                    }}
+                  >
+                    清除本章译文
+                  </button>
+                </div>
+              </details>
+            </div>
+          )}
           <button
             type="button"
             className="epub-reader-tool epub-reader-sidebar-toggle"

@@ -5,6 +5,7 @@ mod epub;
 mod epub_exam;
 mod epub_exam_generation;
 mod epub_exam_grading;
+mod epub_translation;
 mod learning_tasks;
 mod library;
 mod literature;
@@ -66,6 +67,11 @@ pub fn run() {
             epub_exam_grading::run_epub_exam_code,
             epub_exam_grading::grade_epub_exam_subjective,
             epub_exam_grading::override_epub_exam_grade,
+            epub_translation::translate_epub_paragraphs,
+            epub_translation::save_epub_chapter_translation,
+            epub_translation::get_epub_chapter_translation,
+            epub_translation::delete_epub_chapter_translation,
+            epub_translation::list_epub_book_translations,
             agent_completion,
             agent_bridge::agent_bridge_set_tools,
             agent_bridge::agent_bridge_resolve,
@@ -658,7 +664,7 @@ async fn analyze_epub_highlight(
         .collect())
 }
 
-async fn request_chat_completion(
+pub(crate) async fn request_chat_completion(
     base_url: &str,
     model: &str,
     system_prompt: &str,
