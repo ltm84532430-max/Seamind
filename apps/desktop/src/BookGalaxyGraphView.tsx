@@ -15,16 +15,12 @@ export interface BookGalaxyGraphViewProps {
   theme?: 'light' | 'dark';
   onSelectNode: (node: GalaxyNode) => void;
   onSwitchToEditor?: () => void;
-  density?: 'spacious' | 'compact';
-  onToggleDensity?: (density: 'spacious' | 'compact') => void;
 }
 
 export function BookGalaxyGraphView({
   graph,
   onSelectNode,
   onSwitchToEditor,
-  density,
-  onToggleDensity,
 }: BookGalaxyGraphViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
@@ -47,7 +43,7 @@ export function BookGalaxyGraphView({
     const gh = Math.max(300, graph.bounds.maxY - graph.bounds.minY);
     const scaleX = (width - 80) / gw;
     const scaleY = (height - 80) / gh;
-    const fitScale = Math.min(1.15, Math.max(0.3, Math.min(scaleX, scaleY)));
+    const fitScale = Math.min(1.15, Math.max(0.28, Math.min(scaleX, scaleY)));
     return {
       scale: fitScale,
       pan: { x: width / 2, y: height / 2 },
@@ -115,7 +111,7 @@ export function BookGalaxyGraphView({
   const handleWheel = (e: ReactWheelEvent<HTMLDivElement>) => {
     e.preventDefault();
     const zoomFactor = e.deltaY < 0 ? 1.12 : 0.89;
-    const nextScale = Math.min(3.2, Math.max(0.2, scale * zoomFactor));
+    const nextScale = Math.min(3.2, Math.max(0.18, scale * zoomFactor));
 
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) {
@@ -168,16 +164,15 @@ export function BookGalaxyGraphView({
   }, [graph.nodes]);
 
   const sunNode = graph.nodes.find((n) => n.kind === 'sun');
-  const sunRadius = sunNode ? sunNode.radius : 36;
+  const sunRadius = sunNode ? sunNode.radius : 40;
   const coverUrl = sunNode?.coverDataUrl || graph.coverDataUrl;
-  const currentDensity = density || graph.layoutDensity;
 
   return (
     <div className="book-galaxy-container" ref={containerRef}>
       {/* Top Header Controls */}
       <div className="book-galaxy-header">
         <div className="book-galaxy-title-wrap">
-          <span className="book-galaxy-badge">全书星系图</span>
+          <span className="book-galaxy-badge">全书知识星系</span>
           <span className="book-galaxy-title">《{graph.bookTitle}》</span>
           <div className="book-galaxy-stats">
             <span className="book-galaxy-stat-pill">
@@ -192,24 +187,10 @@ export function BookGalaxyGraphView({
         </div>
 
         <div className="book-galaxy-actions">
-          {onToggleDensity && (
-            <button
-              type="button"
-              className="book-galaxy-btn"
-              title="切换星系间距：宽松（舒展呼吸）与紧凑（全局俯瞰）"
-              onClick={() =>
-                onToggleDensity(
-                  currentDensity === 'spacious' ? 'compact' : 'spacious',
-                )
-              }
-            >
-              布局: {currentDensity === 'spacious' ? '宽松模式' : '紧凑模式'}
-            </button>
-          )}
           <input
             type="text"
             className="lit-text-input"
-            style={{ width: 130, height: 26, fontSize: 11 }}
+            style={{ width: 140, height: 26, fontSize: 11 }}
             placeholder="搜索章节或知识点…"
             value={searchFilter}
             onChange={(e) => setSearchFilter(e.target.value)}
@@ -217,7 +198,7 @@ export function BookGalaxyGraphView({
           <button
             type="button"
             className="book-galaxy-btn"
-            title="居中自适应缩放全景"
+            title="自适应居中缩放全景"
             onClick={handleResetView}
           >
             重置视角
@@ -248,10 +229,30 @@ export function BookGalaxyGraphView({
           height={dimensions.height}
         >
           <defs>
-            {/* Center Book Cover Circular Clip Path */}
-            <clipPath id={`sunCoverClip-${graph.bookKey || 'root'}`}>
+            {/* Center Book Cover: True SVG Circular Clip and Pattern (Sanitized Identifiers) */}
+            <clipPath id="galaxy-sun-cover-clip">
               <circle cx={0} cy={0} r={sunRadius} />
             </clipPath>
+
+            {coverUrl && (
+              <pattern
+                id="galaxy-sun-cover-pattern"
+                patternUnits="userSpaceOnUse"
+                x={-sunRadius}
+                y={-sunRadius}
+                width={sunRadius * 2}
+                height={sunRadius * 2}
+              >
+                <image
+                  href={coverUrl}
+                  x={0}
+                  y={0}
+                  width={sunRadius * 2}
+                  height={sunRadius * 2}
+                  preserveAspectRatio="xMidYMid slice"
+                />
+              </pattern>
+            )}
 
             <radialGradient id="sunGradient" cx="50%" cy="50%" r="50%">
               <stop offset="0%" stopColor="#ff7b54" />
@@ -321,7 +322,7 @@ export function BookGalaxyGraphView({
                   className={`galaxy-link-orbit ${isIntraCluster ? 'is-intra' : ''}`}
                   style={
                     strokeColor
-                      ? { stroke: strokeColor, opacity: 0.32 }
+                      ? { stroke: strokeColor, opacity: 0.35 }
                       : undefined
                   }
                 />
@@ -368,37 +369,22 @@ export function BookGalaxyGraphView({
                     />
                   )}
 
-                  {/* Central Node: Circular cover image cut-out */}
+                  {/* Central Node: Inherently circular book cover */}
                   {isSun ? (
                     <>
-                      <circle
-                        cx={0}
-                        cy={0}
-                        r={node.radius + 5}
-                        className="galaxy-sun-halo"
-                      />
                       {coverUrl ? (
-                        <>
-                          <image
-                            href={coverUrl}
-                            x={-node.radius}
-                            y={-node.radius}
-                            width={node.radius * 2}
-                            height={node.radius * 2}
-                            preserveAspectRatio="xMidYMid slice"
-                            clipPath={`url(#sunCoverClip-${graph.bookKey || 'root'})`}
-                            className="galaxy-sun-cover-image"
-                          />
-                          <circle
-                            cx={0}
-                            cy={0}
-                            r={node.radius}
-                            fill="none"
-                            stroke="rgba(255, 255, 255, 0.45)"
-                            strokeWidth={2}
-                            className="galaxy-sun-rim"
-                          />
-                        </>
+                        <circle
+                          cx={0}
+                          cy={0}
+                          r={node.radius}
+                          fill="url(#galaxy-sun-cover-pattern)"
+                          clipPath="url(#galaxy-sun-cover-clip)"
+                          className="galaxy-sun-circle"
+                          style={{
+                            stroke: 'rgba(255, 255, 255, 0.45)',
+                            strokeWidth: 1.5,
+                          }}
+                        />
                       ) : (
                         <>
                           <circle
@@ -413,10 +399,10 @@ export function BookGalaxyGraphView({
                           </text>
                         </>
                       )}
-                      {/* Name of the book below the center node */}
+                      {/* Name of the book strictly below the center node */}
                       <text
                         x={0}
-                        y={node.radius + 18}
+                        y={node.radius + 20}
                         className="galaxy-sun-title"
                       >
                         《{graph.bookTitle}》

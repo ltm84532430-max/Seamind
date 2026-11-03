@@ -194,36 +194,14 @@
 }
 
 /* Central Book Sun Node Styling */
-.galaxy-node-group.is-sun:hover .galaxy-sun-cover-image,
+.galaxy-sun-circle {
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.galaxy-node-group.is-sun:hover .galaxy-sun-circle,
 .galaxy-node-group.is-sun:hover .galaxy-node-circle {
-  filter: drop-shadow(0 0 14px rgba(224, 86, 56, 0.6));
-}
-
-.galaxy-sun-halo {
-  fill: none;
-  stroke: rgba(224, 86, 56, 0.45);
-  stroke-width: 2;
-  stroke-dasharray: 3 3;
-  animation: galaxySunSpin 30s linear infinite;
-}
-
-@keyframes galaxySunSpin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.galaxy-sun-rim {
-  pointer-events: none;
-  filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.4));
-}
-
-.galaxy-sun-cover-image {
-  pointer-events: none;
-  user-select: none;
+  filter: drop-shadow(0 0 16px rgba(224, 86, 56, 0.75));
 }
 
 .galaxy-sun-monogram {

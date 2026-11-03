@@ -43,7 +43,6 @@ export interface BookGalaxyGraph {
   bookTitle: string;
   bookKey: string;
   coverDataUrl?: string;
-  layoutDensity: 'spacious' | 'compact';
   nodes: GalaxyNode[];
   links: GalaxyLink[];
   bounds: {
@@ -117,6 +116,58 @@ export const CHAPTER_GALAXY_PALETTE = [
   '#b45309', // Warm Bronze (Ch 16)
 ];
 
+/**
+ * Calculates generous outward petal layout coordinates for subnodes (planets).
+ * Ensures every single subnode has at least 35px - 75px of clear clearance from all neighbors.
+ */
+function calculateSubnodeCoords(
+  subIndex: number,
+  subCount: number,
+  clusterX: number,
+  clusterY: number,
+  clusterAngle: number,
+) {
+  if (subCount === 1) {
+    const dist = 110;
+    return {
+      x: Math.round(clusterX + dist * Math.cos(clusterAngle)),
+      y: Math.round(clusterY + dist * Math.sin(clusterAngle)),
+      dist,
+      angle: clusterAngle,
+    };
+  }
+
+  // Multi-tier layered fan-out: max 3 items per layer to guarantee ample spacing
+  const itemsPerLayer = subCount <= 4 ? 2 : subCount <= 8 ? 3 : 4;
+  const layerIndex = Math.floor(subIndex / itemsPerLayer);
+  const indexInLayer = subIndex % itemsPerLayer;
+  const countInLayer = Math.min(
+    itemsPerLayer,
+    subCount - layerIndex * itemsPerLayer,
+  );
+
+  const baseDist = 110;
+  const layerDistStep = 75; // 75px radial separation between layers
+  const dist = baseDist + layerIndex * layerDistStep;
+
+  // Generous angular fan for items in the same layer
+  const totalArc =
+    countInLayer === 1 ? 0 : Math.min(1.1, 0.48 * (countInLayer - 1));
+  const angle =
+    countInLayer === 1
+      ? clusterAngle
+      : clusterAngle -
+        totalArc / 2 +
+        (indexInLayer / (countInLayer - 1)) * totalArc;
+
+  return {
+    x: Math.round(clusterX + dist * Math.cos(angle)),
+    y: Math.round(clusterY + dist * Math.sin(angle)),
+    dist,
+    angle,
+  };
+}
+
 export function buildBookGalaxyGraph(
   bookTitle: string,
   bookKey: string,
@@ -124,7 +175,6 @@ export function buildBookGalaxyGraph(
   snapshot: LibrarySnapshot,
   currentChapterHref?: string,
   coverDataUrl?: string,
-  layoutDensity: 'spacious' | 'compact' = 'spacious',
 ): BookGalaxyGraph {
   const cleanBook = bookMindmapTitle(bookTitle);
   const normalizedBookCategory = normalizePath(`读书笔记/${cleanBook}`);
@@ -142,7 +192,7 @@ export function buildBookGalaxyGraph(
   const nodes: GalaxyNode[] = [];
   const links: GalaxyLink[] = [];
 
-  // 1. Central Book Node (Circular Cover Cutout)
+  // 1. Central Book Node (Circular Cover Cutout, radius 40 for crisp clear presentation)
   const sunNode: GalaxyNode = {
     id: 'sun-root',
     label: cleanBook,
@@ -158,33 +208,30 @@ export function buildBookGalaxyGraph(
     noteTitle: `${cleanBook} 读书笔记`,
     x: 0,
     y: 0,
-    radius: 36,
+    radius: 40,
     color: '#e05638',
     coverDataUrl,
   };
   nodes.push(sunNode);
 
-  // 2. Multi-tier spacious orbital calculations
+  // 2. Multi-tier spacious orbital calculations (Permanent Wide Mode)
   let totalChapterCount = 0;
   let notesCount = 0;
 
   const N = Math.max(1, toc.length);
-  const densityMultiplier = layoutDensity === 'spacious' ? 1.4 : 1.0;
 
-  // Determine base orbits according to chapter count to completely avoid crowding
+  // Generous orbits: wide mode is permanent and default
   const getClusterOrbitRadius = (index: number): number => {
     if (N <= 8) {
-      return Math.round(300 * densityMultiplier);
+      return 360;
     }
     if (N <= 18) {
       // 2 alternating orbits
-      const r = index % 2 === 0 ? 270 : 420;
-      return Math.round(r * densityMultiplier);
+      return index % 2 === 0 ? 340 : 540;
     }
     // 3 alternating orbits for dense chapter sets (e.g. 20-35 chapters)
     const tier = index % 3;
-    const baseR = tier === 0 ? 260 : tier === 1 ? 400 : 550;
-    return Math.round(baseR * densityMultiplier);
+    return tier === 0 ? 340 : tier === 1 ? 520 : 700;
   };
 
   toc.forEach((topItem, topIndex) => {
@@ -255,47 +302,22 @@ export function buildBookGalaxyGraph(
       color: chapterColor,
     });
 
-    // Sub-items (Planets): Fan outward away from the center along clusterAngle
+    // Sub-items (Planets): Fan outward with generous clearance
     const subitems = topItem.subitems ?? [];
     const subCount = subitems.length;
-    const basePlanetDist = Math.round(75 * densityMultiplier);
 
     subitems.forEach((subItem, subIndex) => {
       totalChapterCount++;
       const subLabel = resolveTocLabel(subItem.label);
       const subIndexStr = extractChapterIndex(subLabel);
 
-      // Radial outward fan-out: keep planet cone narrow and pointing away from center
-      let planetX: number;
-      let planetY: number;
-      let planetAngle = clusterAngle;
-      let planetDist = basePlanetDist;
-
-      if (subCount === 1) {
-        planetX = Math.round(
-          clusterX + basePlanetDist * Math.cos(clusterAngle),
-        );
-        planetY = Math.round(
-          clusterY + basePlanetDist * Math.sin(clusterAngle),
-        );
-      } else {
-        // Limit total angle spread to never interfere with neighboring chapters
-        const maxSpread = Math.min(
-          0.38,
-          (2 * Math.PI) / (Math.max(6, N) * 1.3),
-        );
-        const angleStep = (2 * maxSpread) / Math.max(1, subCount - 1);
-        planetAngle = clusterAngle - maxSpread + subIndex * angleStep;
-
-        // Radial staggering for multiple subnodes prevents collisions within the chapter
-        const radialOffset =
-          (subIndex % 2 === 0 ? 0 : 32 * densityMultiplier) +
-          Math.floor(subIndex / 4) * (28 * densityMultiplier);
-        planetDist = basePlanetDist + radialOffset;
-
-        planetX = Math.round(clusterX + planetDist * Math.cos(planetAngle));
-        planetY = Math.round(clusterY + planetDist * Math.sin(planetAngle));
-      }
+      const subLayout = calculateSubnodeCoords(
+        subIndex,
+        subCount,
+        clusterX,
+        clusterY,
+        clusterAngle,
+      );
 
       const subHierarchy = [clusterLabel, subLabel];
       const subExpectedTitle = bookChapterKnowledgeNoteTitle(subLabel);
@@ -333,11 +355,11 @@ export function buildBookGalaxyGraph(
         noteTitle: subDoc?.title,
         noteUpdatedAt: subDoc?.updatedAt,
         isCurrent: isSubCurrent,
-        x: planetX,
-        y: planetY,
+        x: subLayout.x,
+        y: subLayout.y,
         radius: 12,
-        orbitRadius: Math.round(planetDist),
-        orbitAngle: planetAngle,
+        orbitRadius: Math.round(subLayout.dist),
+        orbitAngle: subLayout.angle,
         color: chapterColor, // Strictly inherit Chapter Color!
       };
       nodes.push(planetNode);
@@ -354,19 +376,23 @@ export function buildBookGalaxyGraph(
       const deepSubitems = subItem.subitems ?? [];
       const deepCount = deepSubitems.length;
       if (deepCount > 0) {
-        const satelliteDist = Math.round(45 * densityMultiplier);
+        const satelliteDist = 55;
         deepSubitems.forEach((deepItem, deepIndex) => {
           totalChapterCount++;
           const deepLabel = resolveTocLabel(deepItem.label);
           const deepIndexStr = extractChapterIndex(deepLabel);
           const satAngle =
             deepCount === 1
-              ? planetAngle
-              : planetAngle -
-                0.25 +
-                (0.5 * deepIndex) / Math.max(1, deepCount - 1);
-          const satX = Math.round(planetX + satelliteDist * Math.cos(satAngle));
-          const satY = Math.round(planetY + satelliteDist * Math.sin(satAngle));
+              ? subLayout.angle
+              : subLayout.angle -
+                0.35 +
+                (0.7 * deepIndex) / Math.max(1, deepCount - 1);
+          const satX = Math.round(
+            subLayout.x + satelliteDist * Math.cos(satAngle),
+          );
+          const satY = Math.round(
+            subLayout.y + satelliteDist * Math.sin(satAngle),
+          );
 
           const satHierarchy = [clusterLabel, subLabel, deepLabel];
           const satExpectedTitle = bookChapterKnowledgeNoteTitle(deepLabel);
@@ -453,14 +479,13 @@ export function buildBookGalaxyGraph(
     bookTitle: cleanBook,
     bookKey,
     coverDataUrl,
-    layoutDensity,
     nodes,
     links,
     bounds: {
-      minX: Math.floor(minX - 50),
-      maxX: Math.ceil(maxX + 50),
-      minY: Math.floor(minY - 50),
-      maxY: Math.ceil(maxY + 50),
+      minX: Math.floor(minX - 60),
+      maxX: Math.ceil(maxX + 60),
+      minY: Math.floor(minY - 60),
+      maxY: Math.ceil(maxY + 60),
     },
     stats: {
       totalChapters: totalChapterCount,

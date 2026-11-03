@@ -69,16 +69,15 @@ describe('Book Galaxy Model', () => {
       snapshot,
       'text/ch08.xhtml#sec8_1',
       fakeCover,
-      'spacious',
     );
 
-    // Verify Sun node: displays book title and holds cover url
+    // Verify Sun node: displays book title, radius 40 and holds cover url
     const sun = graph.nodes.find((n) => n.kind === 'sun');
     expect(sun).toBeDefined();
     expect(sun?.label).toBe('C Primer Plus');
     expect(sun?.bookTitle).toBe('C Primer Plus');
     expect(sun?.coverDataUrl).toBe(fakeCover);
-    expect(sun?.radius).toBe(36);
+    expect(sun?.radius).toBe(40);
 
     // Verify Clusters (2 top level chapters)
     const clusters = graph.nodes.filter((n) => n.kind === 'cluster');
@@ -121,7 +120,54 @@ describe('Book Galaxy Model', () => {
     expect(graph.stats.completionPercentage).toBe(17);
   });
 
-  it('distributes dense chapter sets across multi-tier orbits in spacious mode', () => {
+  it('guarantees ample spacing and no collisions among child nodes', () => {
+    // Generate a chapter with 6 subitems simulating user Chapter 2
+    const toc: TocLikeItem[] = [
+      {
+        href: 'text/ch02.xhtml',
+        label: '第2章 文本操作与处理',
+        subitems: [
+          { href: 'text/ch02.xhtml#sec1', label: '2.1 正则基础' },
+          { href: 'text/ch02.xhtml#sec2', label: '2.2 grep 检索' },
+          { href: 'text/ch02.xhtml#sec3', label: '2.3 sed 流编辑' },
+          { href: 'text/ch02.xhtml#sec4', label: '2.4 awk 脚本' },
+          { href: 'text/ch02.xhtml#sec5', label: '2.5 cut 裁剪' },
+          { href: 'text/ch02.xhtml#sec6', label: '2.6 paste 拼接' },
+        ],
+      },
+    ];
+
+    const snapshot: LibrarySnapshot = {
+      rootPath: 'C:/books',
+      documents: [],
+      books: [],
+      plantumlFiles: [],
+      textDocuments: [],
+      categories: [],
+    };
+
+    const graph = buildBookGalaxyGraph(
+      'Text Tools',
+      'text-tools',
+      toc,
+      snapshot,
+    );
+    const planets = graph.nodes.filter((n) => n.kind === 'planet');
+    expect(planets.length).toBe(6);
+
+    // Pairwise distance check: every pair of child nodes must have distance >= 40px
+    for (let i = 0; i < planets.length; i++) {
+      for (let j = i + 1; j < planets.length; j++) {
+        const p1 = planets[i];
+        const p2 = planets[j];
+        const dist = Math.hypot(p1.x - p2.x, p1.y - p2.y);
+        // Both have radius 12, so diameter sum is 24px. Minimum center distance >= 40 ensures clearance >= 16px!
+        expect(dist).toBeGreaterThanOrEqual(40);
+      }
+    }
+  });
+
+  it('distributes dense chapter sets across multi-tier orbits in permanent wide mode', () => {
     // Generate 24 chapters simulating a dense technical book
     const toc: TocLikeItem[] = Array.from({ length: 24 }, (_, i) => ({
       href: `text/ch${i + 1}.xhtml`,
@@ -141,43 +187,22 @@ describe('Book Galaxy Model', () => {
       categories: [],
     };
 
-    const spaciousGraph = buildBookGalaxyGraph(
+    const graph = buildBookGalaxyGraph(
       'Large Book',
       'large-key',
       toc,
       snapshot,
-      undefined,
-      undefined,
-      'spacious',
     );
+    const clusters = graph.nodes.filter((n) => n.kind === 'cluster');
 
-    const compactGraph = buildBookGalaxyGraph(
-      'Large Book',
-      'large-key',
-      toc,
-      snapshot,
-      undefined,
-      undefined,
-      'compact',
-    );
-
-    const spaciousClusters = spaciousGraph.nodes.filter(
-      (n) => n.kind === 'cluster',
-    );
-
-    // Clusters must have 3 distinct orbital tiers in spacious mode
-    const distinctOrbits = new Set(spaciousClusters.map((c) => c.orbitRadius));
+    // Clusters must have 3 distinct orbital tiers
+    const distinctOrbits = new Set(clusters.map((c) => c.orbitRadius));
     expect(distinctOrbits.size).toBe(3);
 
-    // Spacious mode should have larger bounding box than compact mode
-    const spaciousWidth = spaciousGraph.bounds.maxX - spaciousGraph.bounds.minX;
-    const compactWidth = compactGraph.bounds.maxX - compactGraph.bounds.minX;
-    expect(spaciousWidth).toBeGreaterThan(compactWidth);
-
     // Subnodes must fan outward: distance from sun must be greater than cluster distance
-    spaciousClusters.forEach((cluster) => {
+    clusters.forEach((cluster) => {
       const clusterDist = Math.hypot(cluster.x, cluster.y);
-      const childPlanets = spaciousGraph.nodes.filter(
+      const childPlanets = graph.nodes.filter(
         (n) => n.kind === 'planet' && n.parentChapter === cluster.label,
       );
       childPlanets.forEach((planet) => {
