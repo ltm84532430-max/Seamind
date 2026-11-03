@@ -80,6 +80,8 @@ function viewLabel(view: PlayerView, overview: PlayerOverview | null): string {
   }
 }
 
+const SIDEBAR_COLLAPSED_KEY = 'seamind:player-sidebar-collapsed:v1';
+
 /**
  * The player page: the channels the user follows and their new videos, favorites, courses and the
  * history on the left and in the middle, and the player itself once a video is chosen.
@@ -121,6 +123,46 @@ export default function PlayerWorkspace({
     useState<LearningPathProposal | null>(null);
   const [proposalBusy, setProposalBusy] = useState(false);
   const [proposalError, setProposalError] = useState('');
+
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+        const target = e.target as HTMLElement | null;
+        if (
+          target &&
+          (target.tagName === 'INPUT' ||
+            target.tagName === 'TEXTAREA' ||
+            target.isContentEditable)
+        ) {
+          return;
+        }
+        e.preventDefault();
+        toggleSidebar();
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [toggleSidebar]);
 
   const mainRef = useRef<HTMLElement | null>(null);
   const savedScrollRef = useRef(0);
@@ -594,7 +636,9 @@ export default function PlayerWorkspace({
 
   return (
     <PlayerHostContext.Provider value={host}>
-      <div className="player-page">
+      <div
+        className={`player-page${sidebarCollapsed ? ' is-sidebar-collapsed' : ''}`}
+      >
         <Sidebar
           view={view}
           channels={host.channels}
@@ -606,7 +650,30 @@ export default function PlayerWorkspace({
           onOpenLink={openLink}
           onImport={() => setDialog('import')}
           onSettings={() => setDialog('settings')}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={toggleSidebar}
         />
+        {sidebarCollapsed && (
+          <button
+            type="button"
+            className="player-sidebar-expand-tab"
+            onClick={toggleSidebar}
+            title="展开侧边栏 (快捷键 Ctrl+B)"
+            aria-label="展开侧边栏"
+          >
+            <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+              <path
+                d="M6 3l5 5-5 5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            <span className="player-sidebar-expand-text">展开导航</span>
+          </button>
+        )}
         <main
           ref={mainRef}
           className={`player-main${watching ? ' is-watching' : ''}${

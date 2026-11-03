@@ -78,6 +78,8 @@ export default function Sidebar({
   onOpenLink,
   onImport,
   onSettings,
+  collapsed,
+  onToggleCollapse,
 }: {
   view: PlayerView;
   channels: PlayerChannel[];
@@ -91,6 +93,8 @@ export default function Sidebar({
   onOpenLink(text: string): Promise<boolean>;
   onImport(): void;
   onSettings(): void;
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
 }) {
   const [link, setLink] = useState('');
   const [filter, setFilter] = useState('');
@@ -117,7 +121,11 @@ export default function Sidebar({
   };
 
   return (
-    <aside className="player-sidebar" aria-label="播放器导航">
+    <aside
+      className={`player-sidebar${collapsed ? ' is-collapsed' : ''}`}
+      aria-label="播放器导航"
+      aria-expanded={!collapsed}
+    >
       <form className="player-open" onSubmit={(event) => void submit(event)}>
         <input
           type="text"
@@ -137,6 +145,26 @@ export default function Sidebar({
         >
           {opening ? '…' : '打开'}
         </button>
+        {onToggleCollapse && (
+          <button
+            type="button"
+            className="player-sidebar-collapse-btn"
+            onClick={onToggleCollapse}
+            title="收起侧边栏 (快捷键 Ctrl+B)"
+            aria-label="收起侧边栏"
+          >
+            <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+              <path
+                d="M10 3L5 8l5 5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        )}
       </form>
       {opening && slowOpen && (
         <p className="player-open-hint" role="status">
@@ -299,6 +327,27 @@ export default function Sidebar({
           设置
         </button>
       </div>
+
+      {onToggleCollapse && (
+        <button
+          type="button"
+          className="player-sidebar-edge-notch"
+          onClick={onToggleCollapse}
+          title="收起侧边栏 (快捷键 Ctrl+B)"
+          aria-label="收起侧边栏"
+        >
+          <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">
+            <path
+              d="M10 3L5 8l5 5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      )}
     </aside>
   );
 }
