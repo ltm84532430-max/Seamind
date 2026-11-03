@@ -41,9 +41,15 @@ export function ClockIcon({ filled = false }: { filled?: boolean }) {
   );
 }
 
-export function CheckIcon({ filled = false }: { filled?: boolean }) {
+export function CheckIcon({
+  filled = false,
+  size,
+}: {
+  filled?: boolean;
+  size?: number;
+}) {
   return (
-    <Svg>
+    <Svg size={size}>
       <circle cx="8" cy="8" r="5.8" fill={filled ? 'currentColor' : 'none'} />
       <path
         d="M5.4 8.2l1.8 1.8 3.4-3.6"

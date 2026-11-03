@@ -92,6 +92,10 @@ export default function PlayerWorkspace({
   capabilities,
   openLearningPathRequest = null,
   onOpenLearningPathRequestHandled,
+  openTaskVideoRequest = null,
+  onOpenTaskVideoRequestHandled,
+  onCreateVideoTask,
+  onOpenTask,
   openFavoritesRequestId = null,
   onOpenFavoritesRequestHandled,
   onSendTerminalCommand,
@@ -102,12 +106,22 @@ export default function PlayerWorkspace({
   capabilities: AgentCapabilities;
   openLearningPathRequest?: { id: number; pathId: string } | null;
   onOpenLearningPathRequestHandled?(id: number): void;
+  openTaskVideoRequest?: {
+    id: number;
+    videoId: string;
+    title: string;
+    startSeconds: number;
+  } | null;
+  onOpenTaskVideoRequestHandled?(id: number): void;
+  onCreateVideoTask(item: VideoItem, startSeconds: number): void;
+  onOpenTask(id: string): void;
   openFavoritesRequestId?: number | null;
   onOpenFavoritesRequestHandled?(id: number): void;
   onSendTerminalCommand?: (text: string, execute?: boolean) => void;
   onExportMarkdownToMindmap?: (title: string, markdown: string) => void;
 }) {
   const [overview, setOverview] = useState<PlayerOverview | null>(null);
+  const handledTaskVideoRef = useRef<number | null>(null);
   const [loadError, setLoadError] = useState('');
   const [view, setView] = useState<PlayerView>({ kind: 'feed' });
   const [watching, setWatching] = useState<Watching | null>(null);
@@ -328,6 +342,32 @@ export default function PlayerWorkspace({
     },
     [],
   );
+
+  useEffect(() => {
+    const request = openTaskVideoRequest;
+    if (!request || handledTaskVideoRef.current === request.id) return;
+    handledTaskVideoRef.current = request.id;
+    void (async () => {
+      try {
+        let [video] = await playerApi.videoItems([request.videoId]);
+        if (!video) {
+          [video] = await playerApi.storeVideos([
+            { videoId: request.videoId, title: request.title },
+          ]);
+        }
+        if (!video) throw new Error('无法找到任务关联的视频。');
+        await openVideo(
+          video,
+          { title: '任务', items: [video] },
+          request.startSeconds,
+        );
+      } catch (reason) {
+        notify(errorText(reason, '打开任务视频失败'), 'error');
+      } finally {
+        onOpenTaskVideoRequestHandled?.(request.id);
+      }
+    })();
+  }, [openTaskVideoRequest, onOpenTaskVideoRequestHandled, openVideo, notify]);
 
   const openChannel = useCallback(
     (channelId: string) => go({ kind: 'channel', channelId }),
@@ -690,6 +730,8 @@ export default function PlayerWorkspace({
               backLabel={`返回${viewLabel(view, overview)}`}
               onBack={() => setWatching(null)}
               onSaved={onProgressSaved}
+              onCreateTask={onCreateVideoTask}
+              onOpenTask={onOpenTask}
             />
           )}
         </main>

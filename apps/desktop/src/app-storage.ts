@@ -8,7 +8,8 @@ export type ActiveWorkspace =
   | 'reader'
   | 'player'
   | 'knowledge'
-  | 'literature';
+  | 'literature'
+  | 'tasks';
 export type MindmapStyle =
   | 'gray'
   | 'roots'
@@ -142,7 +143,11 @@ export function readTerminalHeight(): number {
 export function readActiveWorkspace(): ActiveWorkspace {
   try {
     const stored = localStorage.getItem(ACTIVE_WORKSPACE_KEY);
-    return stored === 'reader' || stored === 'player' || stored === 'knowledge'
+    return stored === 'reader' ||
+      stored === 'player' ||
+      stored === 'knowledge' ||
+      stored === 'literature' ||
+      stored === 'tasks'
       ? stored
       : 'mindmap';
   } catch {

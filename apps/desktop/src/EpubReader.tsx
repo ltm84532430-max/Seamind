@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { notifyResourceProgress } from './tasks/task-api';
+import ResourceTaskLinks from './tasks/ResourceTaskLinks';
 import type { KeyboardEvent } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
@@ -509,6 +511,8 @@ export default function EpubReader({
   mindmapExists,
   mindmapBusy,
   chapterNavigationRequest,
+  onCreateTask,
+  onOpenTask,
   onToggleMindmap,
   onClose,
 }: {
@@ -520,6 +524,8 @@ export default function EpubReader({
   mindmapExists: boolean;
   mindmapBusy: boolean;
   chapterNavigationRequest: EpubChapterNavigationRequest | null;
+  onCreateTask: (chapter: { href: string; label: string }) => void;
+  onOpenTask: (id: string) => void;
   onToggleMindmap: () => void;
   onClose: () => void;
 }) {
@@ -1482,6 +1488,7 @@ export default function EpubReader({
           chapterHref,
           label,
         );
+        notifyResourceProgress();
       }
       if (detail.cfi) {
         setCurrentCfi(detail.cfi);
@@ -1738,6 +1745,22 @@ export default function EpubReader({
           )}
         </div>
         <div className="epub-reader-header-actions">
+          <ResourceTaskLinks
+            kind="ebook"
+            identity={selection.progressKey}
+            onOpenTask={onOpenTask}
+          />
+          <button
+            type="button"
+            className="epub-reader-tool"
+            onClick={() =>
+              onCreateTask({ href: sectionHref, label: chapterTitle })
+            }
+            disabled={loading}
+            title="将当前章节加入任务工作台"
+          >
+            添加任务
+          </button>
           <button
             type="button"
             className={`epub-reader-tool epub-reader-mindmap-toggle${mindmapOpen ? ' is-active' : ''}`}

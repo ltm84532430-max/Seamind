@@ -2,6 +2,7 @@ mod epub;
 mod epub_exam;
 mod bibtex;
 mod library;
+mod learning_tasks;
 mod literature;
 mod literature_store;
 mod media_resolver;
@@ -144,6 +145,11 @@ pub fn run() {
             player::player_import_backup,
             player::player_fetch_feed,
             player::player_fetch_video_info,
+            learning_tasks::learning_tasks_snapshot,
+            learning_tasks::learning_tasks_save_plan,
+            learning_tasks::learning_tasks_save_task,
+            learning_tasks::learning_tasks_delete_task,
+            learning_tasks::learning_tasks_import_plan,
             zlib_bridge::zlib_check_environment,
             zlib_bridge::zlib_get_profile,
             zlib_bridge::zlib_search,

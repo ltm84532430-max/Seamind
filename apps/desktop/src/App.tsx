@@ -104,6 +104,9 @@ import {
 } from './mindmap/commands';
 const TerminalPanel = lazy(() => import('./TerminalPanel'));
 const PlayerWorkspace = lazy(() => import('./player/PlayerWorkspace'));
+const TaskWorkspace = lazy(() => import('./tasks/TaskWorkspace'));
+import type { TaskCreateRequest } from './tasks/TaskWorkspace';
+import type { TaskResource } from './tasks/types';
 const LiteratureWorkspace = lazy(
   () => import('./literature/LiteratureWorkspace'),
 );
@@ -442,6 +445,16 @@ export default function App() {
     useState('');
   const [playerOpenLearningPathRequest, setPlayerOpenLearningPathRequest] =
     useState<{ id: number; pathId: string } | null>(null);
+  const [taskCreateRequest, setTaskCreateRequest] =
+    useState<TaskCreateRequest | null>(null);
+  const [taskOpenId, setTaskOpenId] = useState<string | null>(null);
+  const [playerOpenTaskVideoRequest, setPlayerOpenTaskVideoRequest] = useState<{
+    id: number;
+    videoId: string;
+    title: string;
+    startSeconds: number;
+  } | null>(null);
+  const taskRequestIdRef = useRef(0);
   const [playerOpenFavoritesRequestId, setPlayerOpenFavoritesRequestId] =
     useState<number | null>(null);
   const [activeMapPath, setActiveMapPath] = useState<string | null>(null);
@@ -2360,7 +2373,7 @@ export default function App() {
   };
 
   const openLibraryEpub = async (book: EpubBookDocument) => {
-    if (!leavePlantUmlSession()) return;
+    if (!leavePlantUmlSession()) return false;
     try {
       const path = await invoke<string>('open_epub_book', {
         relativePath: book.relativePath,
@@ -2380,9 +2393,87 @@ export default function App() {
       setEpubChapterNavigation(null);
       setActiveWorkspace('reader');
       setLibraryError('');
+      return true;
     } catch (error) {
       setLibraryError(errorMessage(error, '打开 EPUB 电子书失败'));
+      return false;
     }
+  };
+
+  const createResourceTask = (resource: TaskResource, title?: string) => {
+    taskRequestIdRef.current += 1;
+    setTaskCreateRequest({ id: taskRequestIdRef.current, resource, title });
+    setActiveWorkspace('tasks');
+  };
+
+  const openLinkedTask = (id: string) => {
+    setTaskOpenId(id);
+    setActiveWorkspace('tasks');
+  };
+
+  const createBookTask = (
+    book: EpubBookDocument,
+    chapter?: { href: string; label: string },
+  ) => {
+    const rootPath = librarySnapshot?.rootPath;
+    if (!rootPath) {
+      setLibraryError('请先选择电子书所在的文件库。');
+      return;
+    }
+    createResourceTask(
+      {
+        kind: 'ebook',
+        resourceId: crypto.randomUUID(),
+        title: book.title,
+        rootPath,
+        relativePath: book.relativePath,
+        progressKey: epubProgressKey(book),
+        href: chapter?.href || null,
+      },
+      chapter?.label ? `阅读 ${book.title} · ${chapter.label}` : undefined,
+    );
+  };
+
+  const openTaskResource = async (resource: TaskResource): Promise<boolean> => {
+    if (resource.kind === 'ebook') {
+      if (
+        !librarySnapshot?.rootPath ||
+        librarySnapshot.rootPath !== resource.rootPath
+      ) {
+        throw new Error('请先切换到这项任务对应的电子书文件库。');
+      }
+      const book = librarySnapshot.books.find(
+        (item) => item.relativePath === resource.relativePath,
+      );
+      if (!book) throw new Error('找不到关联电子书，请编辑任务并重新选择。');
+      if (
+        resource.progressKey &&
+        epubProgressKey(book) !== resource.progressKey
+      ) {
+        throw new Error('电子书文件已变化，请编辑任务并确认重新关联。');
+      }
+      const opened = await openLibraryEpub(book);
+      if (opened && resource.href) {
+        taskRequestIdRef.current += 1;
+        setEpubChapterNavigation({
+          id: taskRequestIdRef.current,
+          progressKey: epubProgressKey(book),
+          href: resource.href,
+          label: resource.title,
+        });
+      }
+      return opened;
+    }
+    taskRequestIdRef.current += 1;
+    setPlayerOpenTaskVideoRequest({
+      id: taskRequestIdRef.current,
+      videoId: resource.resourceId,
+      title: resource.title,
+      startSeconds: resource.startSeconds ?? 0,
+    });
+    setPlayerOpened(true);
+    setActiveWorkspace('player');
+    return true;
   };
 
   const openLibraryPlantUml = async (file: PlantUmlDocument) => {
@@ -4312,10 +4403,12 @@ export default function App() {
                       ? (activeDocument?.title ?? '知识库')
                       : activeWorkspace === 'literature'
                         ? '论文工作台'
-                        : (activeDocument?.relativePath ??
-                          plantUmlSession?.request.documentTitle ??
-                          editorDraft.relativePath ??
-                          '')
+                        : activeWorkspace === 'tasks'
+                          ? '任务工作台'
+                          : (activeDocument?.relativePath ??
+                            plantUmlSession?.request.documentTitle ??
+                            editorDraft.relativePath ??
+                            '')
               }
             >
               <span>
@@ -4327,10 +4420,12 @@ export default function App() {
                       ? (activeDocument?.title ?? '知识库')
                       : activeWorkspace === 'literature'
                         ? '论文工作台'
-                        : (activeDocument?.title ??
-                            plantUmlSession?.request.documentTitle ??
-                            editorDraft.title) ||
-                          '未命名思维导图'}
+                        : activeWorkspace === 'tasks'
+                          ? '任务工作台'
+                          : (activeDocument?.title ??
+                              plantUmlSession?.request.documentTitle ??
+                              editorDraft.title) ||
+                            '未命名思维导图'}
               </span>
               {activeWorkspace === 'mindmap' && !plantUmlSession && (
                 <i
@@ -4376,6 +4471,14 @@ export default function App() {
             onClick={() => setActiveWorkspace('knowledge')}
           >
             知识库
+          </button>
+          <button
+            type="button"
+            className={activeWorkspace === 'tasks' ? 'is-active' : ''}
+            aria-pressed={activeWorkspace === 'tasks'}
+            onClick={() => setActiveWorkspace('tasks')}
+          >
+            任务
           </button>
           <button
             type="button"
@@ -5382,6 +5485,14 @@ export default function App() {
             mindmapExists={Boolean(activeBookMindmapTarget?.document)}
             mindmapBusy={bookMindmapBusy}
             chapterNavigationRequest={epubChapterNavigation}
+            onOpenTask={openLinkedTask}
+            onCreateTask={(chapter) => {
+              const book = librarySnapshot?.books.find(
+                (item) => item.relativePath === epubReader.relativePath,
+              );
+              if (book) createBookTask(book, chapter);
+              else setLibraryError('找不到当前电子书，请刷新文件库。');
+            }}
             onToggleMindmap={() => void toggleBookMindmap()}
             onClose={() => {
               setReaderSplitOpen(false);
@@ -5397,6 +5508,7 @@ export default function App() {
             onRefresh={() => void loadLibrary(false)}
             onChooseRoot={() => void chooseLibraryRoot()}
             onOpenBook={(book) => void openLibraryEpub(book)}
+            onCreateTask={(book) => createBookTask(book)}
             onDeleteBook={deleteLibraryEpubBook}
           />
         )}
@@ -5416,6 +5528,21 @@ export default function App() {
               provider={providerSettings}
               capabilities={agentCapabilities}
               openLearningPathRequest={playerOpenLearningPathRequest}
+              openTaskVideoRequest={playerOpenTaskVideoRequest}
+              onOpenTaskVideoRequestHandled={(id) =>
+                setPlayerOpenTaskVideoRequest((request) =>
+                  request?.id === id ? null : request,
+                )
+              }
+              onCreateVideoTask={(item, startSeconds) =>
+                createResourceTask({
+                  kind: 'youtube',
+                  resourceId: item.videoId,
+                  title: item.title,
+                  startSeconds: Math.floor(startSeconds),
+                })
+              }
+              onOpenTask={openLinkedTask}
               onOpenLearningPathRequestHandled={(id) =>
                 setPlayerOpenLearningPathRequest((request) =>
                   request?.id === id ? null : request,
@@ -5501,6 +5628,38 @@ export default function App() {
               onConvertToMindmap: () => void convertActiveDocumentToMindmap(),
             }}
           />
+        </section>
+      )}
+
+      {activeWorkspace === 'tasks' && (
+        <section
+          className="task-workspace-stage"
+          aria-label="任务工作区"
+          style={{
+            flex: 1,
+            minWidth: 0,
+            minHeight: 0,
+            height: '100%',
+            overflow: 'hidden',
+            display: 'flex',
+          }}
+        >
+          <Suspense
+            fallback={<div className="player-loading">正在载入任务工作台…</div>}
+          >
+            <TaskWorkspace
+              library={librarySnapshot}
+              createRequest={taskCreateRequest}
+              openTaskId={taskOpenId}
+              onOpenTaskHandled={() => setTaskOpenId(null)}
+              onCreateRequestHandled={(id) =>
+                setTaskCreateRequest((request) =>
+                  request?.id === id ? null : request,
+                )
+              }
+              onOpenResource={openTaskResource}
+            />
+          </Suspense>
         </section>
       )}
 

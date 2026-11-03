@@ -31,6 +31,7 @@ export default function EbookWorkspace({
   onRefresh,
   onChooseRoot,
   onOpenBook,
+  onCreateTask,
   onDeleteBook,
 }: {
   snapshot: LibrarySnapshot | null;
@@ -39,6 +40,7 @@ export default function EbookWorkspace({
   onRefresh: () => void;
   onChooseRoot: () => void;
   onOpenBook: (book: EpubBookDocument) => void;
+  onCreateTask: (book: EpubBookDocument) => void;
   onDeleteBook: (book: EpubBookDocument) => Promise<void>;
 }) {
   const books = snapshot?.books ?? [];
@@ -757,6 +759,16 @@ export default function EbookWorkspace({
                                 onClick={() => openReadingPlan(book, title)}
                               >
                                 {plan ? '编辑阅读计划' : '阅读计划'}
+                              </button>
+                              <button
+                                type="button"
+                                role="menuitem"
+                                onClick={() => {
+                                  setOpenMenuPath('');
+                                  onCreateTask(book);
+                                }}
+                              >
+                                添加到任务
                               </button>
                               <button
                                 type="button"

@@ -13,6 +13,8 @@ import { applyOverlay, nextVideo } from './queue';
 import type { QueueSource } from './queue';
 import type { VideoItem, WatchState } from './types';
 import { isWorthSaving } from './watch-state';
+import { notifyResourceProgress } from '../tasks/task-api';
+import ResourceTaskLinks from '../tasks/ResourceTaskLinks';
 import VideoList from './VideoList';
 import {
   TranscriptPanel,
@@ -61,6 +63,8 @@ export default function WatchView({
   backLabel,
   onBack,
   onSaved,
+  onCreateTask,
+  onOpenTask,
 }: {
   watching: Watching;
   /** Whether the player page is the workspace in front. */
@@ -68,6 +72,8 @@ export default function WatchView({
   backLabel: string;
   onBack(): void;
   onSaved(videoId: string, state: WatchState): void;
+  onCreateTask(item: VideoItem, startSeconds: number): void;
+  onOpenTask(id: string): void;
 }) {
   const host = usePlayerHost();
   const { queue } = watching;
@@ -175,7 +181,10 @@ export default function WatchView({
     playerApi
       .saveProgress(videoId, progress.seconds, progress.duration)
       .then((state) => {
-        if (state) onSavedRef.current(videoId, state);
+        if (state) {
+          onSavedRef.current(videoId, state);
+          notifyResourceProgress();
+        }
       })
       .catch(() => undefined);
   }, [videoId]);
@@ -377,9 +386,21 @@ export default function WatchView({
     >
       <div className="player-watch-main">
         <div className="player-watch-bar">
+          <ResourceTaskLinks
+            kind="youtube"
+            identity={item.videoId}
+            onOpenTask={onOpenTask}
+          />
           <button type="button" className="player-button" onClick={onBack}>
             <BackIcon />
             {backLabel}
+          </button>
+          <button
+            type="button"
+            className="player-button"
+            onClick={() => onCreateTask(item, currentTime)}
+          >
+            添加任务
           </button>
         </div>
         <YouTubePlayerPanel
