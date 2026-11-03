@@ -1,15 +1,39 @@
-use std::path::PathBuf;
+use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, USER_AGENT};
+use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Manager};
-use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT, ACCEPT};
-
-use crate::bibtex::{
-    clean_doi, generate_cite_key, parse_bibtex, serialize_bibtex, ParsedBibEntry,
+use std::{
+    fs,
+    io::Read,
+    path::{Component, Path, PathBuf},
 };
+use tauri::{AppHandle, Manager};
+use tauri_plugin_dialog::DialogExt;
+use uuid::Uuid;
+
+use crate::bibtex::{clean_doi, generate_cite_key, parse_bibtex, serialize_bibtex, ParsedBibEntry};
 use crate::literature_store as store;
 
 const DATABASE_FILE: &str = "literature.sqlite3";
+const PDF_DIRECTORY: &str = "paper-pdfs";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+const MAX_DOWNLOADED_PDF_BYTES: u64 = 100 * 1024 * 1024;
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenedPaperPdf {
+    pub path: String,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiteratureSearchResult {
+    pub paper: store::PaperInput,
+    pub source: String,
+    pub pdf_url: Option<String>,
+    pub existing_paper_id: Option<String>,
+}
 
 fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
     let directory = app
@@ -37,7 +61,10 @@ fn http_client() -> Result<reqwest::Client, String> {
         USER_AGENT,
         HeaderValue::from_static("Seamind-Desktop/0.1.0 (mailto:seamind@markmap.org)"),
     );
-    headers.insert(ACCEPT, HeaderValue::from_static("application/json, text/xml, */*"));
+    headers.insert(
+        ACCEPT,
+        HeaderValue::from_static("application/json, text/xml, */*"),
+    );
 
     reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
@@ -78,12 +105,31 @@ pub fn literature_save(
 
 #[tauri::command(async)]
 pub fn literature_delete(app: AppHandle, id: String) -> Result<(), String> {
-    store::delete_paper(&open_db(&app)?, &id)
+    let conn = open_db(&app)?;
+    let pdf_path = store::get_paper(&conn, &id)?.and_then(|paper| paper.pdf_path);
+    store::delete_paper(&conn, &id)?;
+    if let Some(path) = pdf_path.as_deref() {
+        remove_managed_pdf(&app, path);
+    }
+    Ok(())
 }
 
 #[tauri::command(async)]
 pub fn literature_batch_delete(app: AppHandle, ids: Vec<String>) -> Result<(), String> {
-    store::batch_delete_papers(&open_db(&app)?, &ids)
+    let conn = open_db(&app)?;
+    let mut pdf_paths = Vec::new();
+    for id in &ids {
+        if let Some(paper) = store::get_paper(&conn, id)? {
+            if let Some(path) = paper.pdf_path {
+                pdf_paths.push(path);
+            }
+        }
+    }
+    store::batch_delete_papers(&conn, &ids)?;
+    for path in pdf_paths {
+        remove_managed_pdf(&app, &path);
+    }
+    Ok(())
 }
 
 #[tauri::command(async)]
@@ -103,6 +149,288 @@ pub fn literature_update_rating(app: AppHandle, id: String, rating: u8) -> Resul
 #[tauri::command(async)]
 pub fn literature_update_notes(app: AppHandle, id: String, notes: String) -> Result<(), String> {
     store::update_notes(&open_db(&app)?, &id, &notes, now())
+}
+
+#[tauri::command(async)]
+pub fn literature_attach_pdf(
+    app: AppHandle,
+    id: String,
+) -> Result<Option<store::PaperItem>, String> {
+    let conn = open_db(&app)?;
+    let existing =
+        store::get_paper(&conn, &id)?.ok_or_else(|| "找不到要关联 PDF 的文献记录。".to_string())?;
+    let Some(selected_path) = app
+        .dialog()
+        .file()
+        .add_filter("PDF 文档", &["pdf"])
+        .blocking_pick_file()
+    else {
+        return Ok(None);
+    };
+    let source_path = selected_path
+        .into_path()
+        .map_err(|e| format!("无法读取所选 PDF 路径：{e}"))?;
+    let source = fs::canonicalize(source_path).map_err(|e| format!("无法读取所选 PDF：{e}"))?;
+    if !source.is_file()
+        || source
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| !extension.eq_ignore_ascii_case("pdf"))
+            .unwrap_or(true)
+    {
+        return Err("请选择有效的 PDF 文件。".to_string());
+    }
+
+    let mut header = [0_u8; 1024];
+    let header_size = fs::File::open(&source)
+        .and_then(|mut file| file.read(&mut header))
+        .map_err(|e| format!("读取 PDF 文件失败：{e}"))?;
+    if !header[..header_size]
+        .windows(5)
+        .any(|window| window == b"%PDF-")
+    {
+        return Err("所选文件没有有效的 PDF 文件头。".to_string());
+    }
+
+    let app_data = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("无法定位文献附件目录：{e}"))?;
+    let directory = app_data.join(PDF_DIRECTORY);
+    fs::create_dir_all(&directory).map_err(|e| format!("无法创建 PDF 附件目录：{e}"))?;
+    let filename = format!("{}.pdf", Uuid::new_v4());
+    let destination = directory.join(&filename);
+    if let Err(error) = fs::copy(&source, &destination) {
+        let _ = fs::remove_file(&destination);
+        return Err(format!("复制 PDF 到文献库失败：{error}"));
+    }
+    let sha256 = match hash_file(&destination) {
+        Ok(hash) => hash,
+        Err(error) => {
+            let _ = fs::remove_file(&destination);
+            return Err(error);
+        }
+    };
+    let relative_path = Path::new(PDF_DIRECTORY)
+        .join(&filename)
+        .to_string_lossy()
+        .replace('\\', "/");
+    if let Err(error) = store::update_paper_pdf(&conn, &id, &relative_path, &sha256, now()) {
+        let _ = fs::remove_file(&destination);
+        return Err(error);
+    }
+
+    if let Some(old_path) = existing.pdf_path.as_deref() {
+        if old_path != relative_path {
+            remove_managed_pdf(&app, old_path);
+        }
+    }
+    store::get_paper(&conn, &id)?
+        .map(Some)
+        .ok_or_else(|| "关联 PDF 后无法读取文献记录。".to_string())
+}
+
+#[tauri::command(async)]
+pub async fn literature_download_arxiv_pdf(
+    app: AppHandle,
+    id: String,
+) -> Result<store::PaperItem, String> {
+    let conn = open_db(&app)?;
+    let existing =
+        store::get_paper(&conn, &id)?.ok_or_else(|| "找不到要下载 PDF 的文献记录。".to_string())?;
+    let arxiv_id = existing
+        .arxiv_id
+        .as_deref()
+        .ok_or_else(|| "这篇文献没有 arXiv ID，无法自动下载开放 PDF。".to_string())?;
+    let arxiv_id = validate_arxiv_id(arxiv_id)?;
+    let pdf_url = format!("https://arxiv.org/pdf/{arxiv_id}.pdf");
+    let client = http_client()?;
+    let mut response = client
+        .get(&pdf_url)
+        .send()
+        .await
+        .map_err(|e| format!("请求 arXiv PDF 失败：{e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("arXiv PDF 返回错误状态码：{}", response.status()));
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_DOWNLOADED_PDF_BYTES)
+    {
+        return Err("PDF 文件超过 100 MB，已取消下载。".to_string());
+    }
+
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| format!("读取 arXiv PDF 失败：{e}"))?
+    {
+        if bytes.len() as u64 + chunk.len() as u64 > MAX_DOWNLOADED_PDF_BYTES {
+            return Err("PDF 文件超过 100 MB，已取消下载。".to_string());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if !bytes
+        .get(..bytes.len().min(1024))
+        .is_some_and(|header| header.windows(5).any(|window| window == b"%PDF-"))
+    {
+        return Err("arXiv 返回内容不是有效的 PDF 文件。".to_string());
+    }
+
+    let app_data = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("无法定位文献附件目录：{e}"))?;
+    let directory = app_data.join(PDF_DIRECTORY);
+    fs::create_dir_all(&directory).map_err(|e| format!("无法创建 PDF 附件目录：{e}"))?;
+    let filename = format!("{}.pdf", Uuid::new_v4());
+    let destination = directory.join(&filename);
+    if let Err(error) = fs::write(&destination, &bytes) {
+        let _ = fs::remove_file(&destination);
+        return Err(format!("保存下载的 PDF 失败：{error}"));
+    }
+    let sha256 = match hash_file(&destination) {
+        Ok(hash) => hash,
+        Err(error) => {
+            let _ = fs::remove_file(&destination);
+            return Err(error);
+        }
+    };
+    let relative_path = Path::new(PDF_DIRECTORY)
+        .join(&filename)
+        .to_string_lossy()
+        .replace('\\', "/");
+    if let Err(error) = store::update_paper_pdf(&conn, &id, &relative_path, &sha256, now()) {
+        let _ = fs::remove_file(&destination);
+        return Err(error);
+    }
+    if let Some(old_path) = existing.pdf_path.as_deref() {
+        if old_path != relative_path {
+            remove_managed_pdf(&app, old_path);
+        }
+    }
+
+    store::get_paper(&conn, &id)?.ok_or_else(|| "保存 PDF 后无法读取文献记录。".to_string())
+}
+
+#[tauri::command(async)]
+pub fn literature_open_pdf(app: AppHandle, id: String) -> Result<OpenedPaperPdf, String> {
+    let paper =
+        store::get_paper(&open_db(&app)?, &id)?.ok_or_else(|| "找不到该文献记录。".to_string())?;
+    let relative_path = paper
+        .pdf_path
+        .as_deref()
+        .ok_or_else(|| "这篇文献还没有添加 PDF 原文。".to_string())?;
+    let path = resolve_managed_pdf(&app, relative_path)?;
+    let sha256 = hash_file(&path)?;
+    app.asset_protocol_scope()
+        .allow_file(&path)
+        .map_err(|e| format!("无法授权阅读该 PDF：{e}"))?;
+    Ok(OpenedPaperPdf {
+        path: path.to_string_lossy().into_owned(),
+        sha256,
+    })
+}
+
+#[tauri::command(async)]
+pub fn literature_list_annotations(
+    app: AppHandle,
+    paper_id: String,
+) -> Result<Vec<store::PaperAnnotation>, String> {
+    let conn = open_db(&app)?;
+    if store::get_paper(&conn, &paper_id)?.is_none() {
+        return Err("找不到该文献记录。".to_string());
+    }
+    store::list_paper_annotations(&conn, &paper_id)
+}
+
+#[tauri::command(async)]
+pub fn literature_save_annotation(
+    app: AppHandle,
+    mut annotation: store::PaperAnnotationInput,
+) -> Result<store::PaperAnnotation, String> {
+    let conn = open_db(&app)?;
+    let paper = store::get_paper(&conn, &annotation.paper_id)?
+        .ok_or_else(|| "找不到该文献记录。".to_string())?;
+    let relative_path = paper
+        .pdf_path
+        .as_deref()
+        .ok_or_else(|| "请先为这篇文献添加 PDF 原文。".to_string())?;
+    let path = resolve_managed_pdf(&app, relative_path)?;
+    annotation.pdf_sha256 = Some(hash_file(&path)?);
+    store::save_paper_annotation(&conn, &annotation, now())
+}
+
+#[tauri::command(async)]
+pub fn literature_delete_annotation(
+    app: AppHandle,
+    paper_id: String,
+    annotation_id: String,
+) -> Result<(), String> {
+    store::delete_paper_annotation(&open_db(&app)?, &paper_id, &annotation_id)
+}
+
+#[tauri::command(async)]
+pub fn literature_get_reading_progress(
+    app: AppHandle,
+    paper_id: String,
+) -> Result<Option<store::PaperReadingProgress>, String> {
+    store::get_paper_reading_progress(&open_db(&app)?, &paper_id)
+}
+
+#[tauri::command(async)]
+pub fn literature_save_reading_progress(
+    app: AppHandle,
+    paper_id: String,
+    page_number: i64,
+    scale: f64,
+) -> Result<store::PaperReadingProgress, String> {
+    store::save_paper_reading_progress(&open_db(&app)?, &paper_id, page_number, scale, now())
+}
+
+fn resolve_managed_pdf(app: &AppHandle, relative_path: &str) -> Result<PathBuf, String> {
+    let relative = Path::new(relative_path);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err("文献 PDF 路径无效，请重新关联原文。".to_string());
+    }
+    let app_data = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("无法定位文献附件目录：{e}"))?;
+    let root = fs::canonicalize(&app_data).map_err(|e| format!("文献附件目录不可用：{e}"))?;
+    let resolved = fs::canonicalize(root.join(relative))
+        .map_err(|e| format!("找不到文献 PDF，请重新关联原文：{e}"))?;
+    if !resolved.starts_with(&root) || !resolved.is_file() {
+        return Err("文献 PDF 路径超出应用附件目录，请重新关联原文。".to_string());
+    }
+    Ok(resolved)
+}
+
+fn remove_managed_pdf(app: &AppHandle, relative_path: &str) {
+    if let Ok(path) = resolve_managed_pdf(app, relative_path) {
+        let _ = fs::remove_file(path);
+    }
+}
+
+fn hash_file(path: &Path) -> Result<String, String> {
+    let mut file = fs::File::open(path).map_err(|e| format!("打开 PDF 文件失败：{e}"))?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .map_err(|e| format!("读取 PDF 文件失败：{e}"))?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
 }
 
 #[tauri::command(async)]
@@ -266,9 +594,7 @@ pub async fn literature_fetch_arxiv(arxiv_id: String) -> Result<store::PaperInpu
     }
 
     let encoded = url::form_urlencoded::byte_serialize(cleaned.as_bytes()).collect::<String>();
-    let url = format!(
-        "http://export.arxiv.org/api/query?id_list={encoded}&max_results=1"
-    );
+    let url = format!("http://export.arxiv.org/api/query?id_list={encoded}&max_results=1");
     let client = http_client()?;
     let resp = client
         .get(&url)
@@ -285,8 +611,7 @@ pub async fn literature_fetch_arxiv(arxiv_id: String) -> Result<store::PaperInpu
         .await
         .map_err(|e| format!("读取 arXiv 响应内容失败：{e}"))?;
 
-    let doc = roxmltree::Document::parse(&xml)
-        .map_err(|e| format!("解析 arXiv XML 失败：{e}"))?;
+    let doc = roxmltree::Document::parse(&xml).map_err(|e| format!("解析 arXiv XML 失败：{e}"))?;
 
     let entry = doc
         .descendants()
@@ -374,6 +699,357 @@ pub async fn literature_fetch_arxiv(arxiv_id: String) -> Result<store::PaperInpu
         bibtex: None,
         collection_ids: None,
     })
+}
+
+fn validate_arxiv_id(input: &str) -> Result<String, String> {
+    let cleaned = input
+        .trim()
+        .trim_start_matches("https://arxiv.org/abs/")
+        .trim_start_matches("http://arxiv.org/abs/")
+        .trim_start_matches("arXiv:")
+        .trim_start_matches("arxiv:");
+    let valid = !cleaned.is_empty()
+        && cleaned.len() <= 128
+        && !cleaned.contains("..")
+        && cleaned.split('/').count() <= 2
+        && cleaned.split('/').all(|part| {
+            !part.is_empty()
+                && part
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || ".-".contains(character))
+        });
+    if !valid {
+        return Err("无效的 arXiv ID。".to_string());
+    }
+    Ok(cleaned.to_string())
+}
+
+fn crossref_first_string(item: &serde_json::Value, field: &str) -> Option<String> {
+    item.get(field)
+        .and_then(|value| value.as_array())
+        .and_then(|values| values.first())
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn crossref_search_result(item: &serde_json::Value) -> Option<LiteratureSearchResult> {
+    let title = crossref_first_string(item, "title")?;
+    let mut authors = Vec::new();
+    if let Some(items) = item.get("author").and_then(|value| value.as_array()) {
+        for author in items {
+            let given = author
+                .get("given")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let family = author
+                .get("family")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            if !family.is_empty() {
+                authors.push(if given.is_empty() {
+                    family.to_string()
+                } else {
+                    format!("{given} {family}")
+                });
+            } else if let Some(name) = author.get("name").and_then(|value| value.as_str()) {
+                authors.push(name.to_string());
+            }
+        }
+    }
+    let year = ["published", "published-print", "published-online", "issued"]
+        .iter()
+        .find_map(|field| {
+            item.get(*field)
+                .and_then(|value| value.get("date-parts"))
+                .and_then(|value| value.as_array())
+                .and_then(|parts| parts.first())
+                .and_then(|part| part.as_array())
+                .and_then(|date| date.first())
+                .and_then(|value| value.as_i64())
+                .map(|year| year as i32)
+        });
+    let doi = item
+        .get("DOI")
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let arxiv_id = doi.as_ref().and_then(|value| {
+        value
+            .to_ascii_lowercase()
+            .strip_prefix("10.48550/arxiv.")
+            .map(str::to_string)
+    });
+    let venue = crossref_first_string(item, "container-title");
+    let volume = item
+        .get("volume")
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    let number = item
+        .get("issue")
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    let pages = item
+        .get("page")
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    let publisher = item
+        .get("publisher")
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    let url = item
+        .get("URL")
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+        .or_else(|| doi.as_ref().map(|doi| format!("https://doi.org/{doi}")));
+    let abstract_text = item
+        .get("abstract")
+        .and_then(|value| value.as_str())
+        .map(crate::bibtex::strip_latex_curlies);
+    let keywords = item
+        .get("subject")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|value| value.as_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let cite_key = generate_cite_key(&authors, year, &title);
+    let pdf_url = arxiv_id
+        .as_ref()
+        .map(|arxiv_id| format!("https://arxiv.org/pdf/{arxiv_id}.pdf"));
+
+    Some(LiteratureSearchResult {
+        paper: store::PaperInput {
+            id: None,
+            cite_key: Some(cite_key),
+            entry_type: Some("article".to_string()),
+            title,
+            authors,
+            year,
+            venue,
+            volume,
+            number,
+            pages,
+            publisher,
+            doi,
+            url,
+            arxiv_id,
+            abstract_text,
+            keywords: Some(keywords),
+            pdf_path: None,
+            read_status: Some("unread".to_string()),
+            rating: Some(0),
+            notes: None,
+            bibtex: None,
+            collection_ids: None,
+        },
+        source: "Crossref".to_string(),
+        pdf_url,
+        existing_paper_id: None,
+    })
+}
+
+async fn search_crossref(query: &str) -> Result<Vec<LiteratureSearchResult>, String> {
+    let client = http_client()?;
+    let response = client
+        .get("https://api.crossref.org/works")
+        .query(&[("query.bibliographic", query), ("rows", "16")])
+        .send()
+        .await
+        .map_err(|e| format!("请求 Crossref 搜索失败：{e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Crossref 搜索返回状态码：{}", response.status()));
+    }
+    let json: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("解析 Crossref 搜索结果失败：{e}"))?;
+    let items = json
+        .get("message")
+        .and_then(|value| value.get("items"))
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| "Crossref 返回的搜索结果格式异常。".to_string())?;
+    Ok(items.iter().filter_map(crossref_search_result).collect())
+}
+
+async fn search_arxiv(query: &str) -> Result<Vec<LiteratureSearchResult>, String> {
+    let client = http_client()?;
+    let search_query = format!("all:{query}");
+    let response = client
+        .get("https://export.arxiv.org/api/query")
+        .query(&[
+            ("search_query", search_query.as_str()),
+            ("start", "0"),
+            ("max_results", "16"),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("请求 arXiv 搜索失败：{e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("arXiv 搜索返回状态码：{}", response.status()));
+    }
+    let xml = response
+        .text()
+        .await
+        .map_err(|e| format!("读取 arXiv 搜索结果失败：{e}"))?;
+    let doc =
+        roxmltree::Document::parse(&xml).map_err(|e| format!("解析 arXiv 搜索结果失败：{e}"))?;
+    let mut results = Vec::new();
+    for entry in doc.descendants().filter(|node| node.has_tag_name("entry")) {
+        let entry_id = entry
+            .children()
+            .find(|node| node.has_tag_name("id"))
+            .and_then(|node| node.text())
+            .unwrap_or("")
+            .trim();
+        let Some(raw_arxiv_id) = entry_id.rsplit("/abs/").next() else {
+            continue;
+        };
+        let Ok(arxiv_id) = validate_arxiv_id(raw_arxiv_id) else {
+            continue;
+        };
+        let title = entry
+            .children()
+            .find(|node| node.has_tag_name("title"))
+            .and_then(|node| node.text())
+            .unwrap_or("")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if title.is_empty() {
+            continue;
+        }
+        let abstract_text = entry
+            .children()
+            .find(|node| node.has_tag_name("summary"))
+            .and_then(|node| node.text())
+            .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "));
+        let authors = entry
+            .children()
+            .filter(|node| node.has_tag_name("author"))
+            .filter_map(|author| {
+                author
+                    .children()
+                    .find(|node| node.has_tag_name("name"))
+                    .and_then(|node| node.text())
+                    .map(|name| name.trim().to_string())
+            })
+            .collect::<Vec<_>>();
+        let year = entry
+            .children()
+            .find(|node| node.has_tag_name("published"))
+            .and_then(|node| node.text())
+            .and_then(|text| text.get(0..4))
+            .and_then(|text| text.parse::<i32>().ok());
+        let doi = entry
+            .children()
+            .find(|node| node.has_tag_name("doi"))
+            .and_then(|node| node.text())
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty());
+        let keywords = entry
+            .children()
+            .filter(|node| node.has_tag_name("category"))
+            .filter_map(|node| node.attribute("term").map(str::to_string))
+            .collect::<Vec<_>>();
+        let pdf_url = entry
+            .children()
+            .filter(|node| node.has_tag_name("link"))
+            .find(|node| node.attribute("title") == Some("pdf"))
+            .and_then(|node| node.attribute("href"))
+            .map(str::to_string)
+            .or_else(|| Some(format!("https://arxiv.org/pdf/{arxiv_id}.pdf")));
+        let cite_key = generate_cite_key(&authors, year, &title);
+        results.push(LiteratureSearchResult {
+            paper: store::PaperInput {
+                id: None,
+                cite_key: Some(cite_key),
+                entry_type: Some("article".to_string()),
+                title,
+                authors,
+                year,
+                venue: Some("arXiv preprint".to_string()),
+                volume: None,
+                number: None,
+                pages: None,
+                publisher: Some("arXiv".to_string()),
+                doi,
+                url: Some(format!("https://arxiv.org/abs/{arxiv_id}")),
+                arxiv_id: Some(arxiv_id),
+                abstract_text,
+                keywords: Some(keywords),
+                pdf_path: None,
+                read_status: Some("unread".to_string()),
+                rating: Some(0),
+                notes: None,
+                bibtex: None,
+                collection_ids: None,
+            },
+            source: "arXiv".to_string(),
+            pdf_url,
+            existing_paper_id: None,
+        });
+    }
+    Ok(results)
+}
+
+#[tauri::command(async)]
+pub async fn literature_search(
+    app: AppHandle,
+    query: String,
+    source: String,
+) -> Result<Vec<LiteratureSearchResult>, String> {
+    let query = query.trim();
+    if query.chars().count() < 2 || query.chars().count() > 160 {
+        return Err("搜索词长度需为 2 到 160 个字符。".to_string());
+    }
+    let mut results = match source.as_str() {
+        "crossref" => search_crossref(query).await?,
+        "arxiv" => search_arxiv(query).await?,
+        _ => return Err("请选择 Crossref 或 arXiv 搜索源。".to_string()),
+    };
+
+    let conn = open_db(&app)?;
+    for result in &mut results {
+        result.existing_paper_id = store::find_existing_paper_id(
+            &conn,
+            result.paper.doi.as_deref(),
+            result.paper.arxiv_id.as_deref(),
+        )?;
+    }
+
+    let mut seen = HashSet::new();
+    results.retain(|result| {
+        let key = result
+            .paper
+            .doi
+            .as_ref()
+            .map(|value| format!("doi:{}", value.to_ascii_lowercase()))
+            .or_else(|| {
+                result
+                    .paper
+                    .arxiv_id
+                    .as_ref()
+                    .map(|value| format!("arxiv:{}", value.to_ascii_lowercase()))
+            })
+            .unwrap_or_else(|| {
+                format!(
+                    "title:{}",
+                    result
+                        .paper
+                        .title
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .to_lowercase()
+                )
+            });
+        seen.insert(key)
+    });
+    Ok(results)
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -489,13 +1165,9 @@ pub fn literature_export_bibtex_text(
 #[tauri::command(async)]
 pub fn literature_generate_mindmap(app: AppHandle, id: String) -> Result<String, String> {
     let conn = open_db(&app)?;
-    let paper = store::get_paper(&conn, &id)?
-        .ok_or_else(|| "未找到指定文献".to_string())?;
+    let paper = store::get_paper(&conn, &id)?.ok_or_else(|| "未找到指定文献".to_string())?;
 
-    let year_str = paper
-        .year
-        .map(|y| format!(" ({y})"))
-        .unwrap_or_default();
+    let year_str = paper.year.map(|y| format!(" ({y})")).unwrap_or_default();
     let authors_str = if paper.authors.is_empty() {
         "佚名".to_string()
     } else {

@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS papers (
     abstract TEXT,
     keywords TEXT NOT NULL DEFAULT '[]',
     pdf_path TEXT,
+    pdf_sha256 TEXT,
     read_status TEXT NOT NULL DEFAULT 'unread',
     rating INTEGER NOT NULL DEFAULT 0,
     notes TEXT,
@@ -61,7 +62,20 @@ CREATE TABLE IF NOT EXISTS paper_annotations (
     selected_text TEXT NOT NULL,
     comment TEXT,
     color TEXT,
+    rects_json TEXT NOT NULL DEFAULT '[]',
+    context_before TEXT,
+    context_after TEXT,
+    pdf_sha256 TEXT,
     created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY(paper_id) REFERENCES papers(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS paper_reading_progress (
+    paper_id TEXT PRIMARY KEY NOT NULL,
+    page_number INTEGER NOT NULL DEFAULT 1,
+    scale REAL NOT NULL DEFAULT 1.0,
+    updated_at INTEGER NOT NULL,
     FOREIGN KEY(paper_id) REFERENCES papers(id) ON DELETE CASCADE
 );
 ";
@@ -86,6 +100,7 @@ pub struct PaperItem {
     pub abstract_text: Option<String>,
     pub keywords: Vec<String>,
     pub pdf_path: Option<String>,
+    pub pdf_sha256: Option<String>,
     pub read_status: String, // "unread", "reading", "completed"
     pub rating: u8,
     pub notes: Option<String>,
@@ -120,6 +135,56 @@ pub struct PaperInput {
     pub notes: Option<String>,
     pub bibtex: Option<String>,
     pub collection_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaperAnnotationRect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaperAnnotation {
+    pub id: String,
+    pub paper_id: String,
+    pub page_number: i64,
+    pub selected_text: String,
+    pub comment: Option<String>,
+    pub color: Option<String>,
+    pub rects: Vec<PaperAnnotationRect>,
+    pub context_before: Option<String>,
+    pub context_after: Option<String>,
+    pub pdf_sha256: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaperAnnotationInput {
+    pub id: Option<String>,
+    pub paper_id: String,
+    pub page_number: i64,
+    pub selected_text: String,
+    pub comment: Option<String>,
+    pub color: Option<String>,
+    pub rects: Vec<PaperAnnotationRect>,
+    pub context_before: Option<String>,
+    pub context_after: Option<String>,
+    pub pdf_sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaperReadingProgress {
+    pub paper_id: String,
+    pub page_number: i64,
+    pub scale: f64,
+    pub updated_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,16 +243,53 @@ pub struct TagCount {
 
 pub fn open(path: &std::path::Path) -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(|e| format!("无法打开文献数据库：{e}"))?;
+    conn.execute_batch("PRAGMA foreign_keys = ON;")
+        .map_err(|e| format!("启用文献数据库关联约束失败：{e}"))?;
     conn.execute_batch(SCHEMA)
         .map_err(|e| format!("初始化文献数据库结构失败：{e}"))?;
+    ensure_column(&conn, "papers", "pdf_sha256", "TEXT")?;
+    ensure_column(
+        &conn,
+        "paper_annotations",
+        "rects_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    ensure_column(&conn, "paper_annotations", "context_before", "TEXT")?;
+    ensure_column(&conn, "paper_annotations", "context_after", "TEXT")?;
+    ensure_column(&conn, "paper_annotations", "pdf_sha256", "TEXT")?;
+    ensure_column(
+        &conn,
+        "paper_annotations",
+        "updated_at",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
     Ok(conn)
 }
 
-pub fn upsert_paper(
+fn ensure_column(
     conn: &Connection,
-    input: &PaperInput,
-    now: i64,
-) -> Result<PaperItem, String> {
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|e| format!("检查文献数据库字段失败：{e}"))?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| format!("读取文献数据库字段失败：{e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("读取文献数据库字段失败：{e}"))?;
+    if !columns.iter().any(|name| name == column) {
+        conn.execute_batch(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+        ))
+        .map_err(|e| format!("升级文献数据库字段失败：{e}"))?;
+    }
+    Ok(())
+}
+
+pub fn upsert_paper(conn: &Connection, input: &PaperInput, now: i64) -> Result<PaperItem, String> {
     let id = input
         .id
         .clone()
@@ -265,7 +367,7 @@ pub fn upsert_paper(
             arxiv_id = excluded.arxiv_id,
             abstract = excluded.abstract,
             keywords = excluded.keywords,
-            pdf_path = excluded.pdf_path,
+            pdf_path = COALESCE(excluded.pdf_path, papers.pdf_path),
             read_status = excluded.read_status,
             rating = excluded.rating,
             notes = excluded.notes,
@@ -339,8 +441,8 @@ pub fn get_paper(conn: &Connection, id: &str) -> Result<Option<PaperItem>, Strin
     let mut stmt = conn
         .prepare(
             "SELECT id, cite_key, entry_type, title, authors, year, venue, volume, number, pages,
-                    publisher, doi, url, arxiv_id, abstract, keywords, pdf_path, read_status, rating,
-                    notes, bibtex, created_at, updated_at
+                    publisher, doi, url, arxiv_id, abstract, keywords, pdf_path, pdf_sha256,
+                    read_status, rating, notes, bibtex, created_at, updated_at
              FROM papers WHERE id = ?1",
         )
         .map_err(|e| format!("准备查询语句失败：{e}"))?;
@@ -370,13 +472,14 @@ pub fn get_paper(conn: &Connection, id: &str) -> Result<Option<PaperItem>, Strin
                 abstract_text: row.get(14)?,
                 keywords,
                 pdf_path: row.get(16)?,
-                read_status: row.get(17)?,
-                rating: row.get(18)?,
-                notes: row.get(19)?,
-                bibtex: row.get(20)?,
+                pdf_sha256: row.get(17)?,
+                read_status: row.get(18)?,
+                rating: row.get(19)?,
+                notes: row.get(20)?,
+                bibtex: row.get(21)?,
                 collection_ids: Vec::new(),
-                created_at: row.get(21)?,
-                updated_at: row.get(22)?,
+                created_at: row.get(22)?,
+                updated_at: row.get(23)?,
             })
         })
         .optional()
@@ -401,11 +504,29 @@ pub fn get_paper(conn: &Connection, id: &str) -> Result<Option<PaperItem>, Strin
     Ok(Some(paper))
 }
 
+pub fn find_existing_paper_id(
+    conn: &Connection,
+    doi: Option<&str>,
+    arxiv_id: Option<&str>,
+) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT id FROM papers
+         WHERE (?1 IS NOT NULL AND lower(doi) = lower(?1))
+            OR (?2 IS NOT NULL AND lower(arxiv_id) = lower(?2))
+         LIMIT 1",
+        params![doi, arxiv_id],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(|e| format!("鏌ヨ鏂囩尞鏍囪瘑绗﹀け璐ワ細{e}"))
+}
+
 pub fn list_papers(conn: &Connection, filter: &PaperFilter) -> Result<Vec<PaperItem>, String> {
     let mut sql = String::from(
         "SELECT p.id, p.cite_key, p.entry_type, p.title, p.authors, p.year, p.venue, p.volume,
                 p.number, p.pages, p.publisher, p.doi, p.url, p.arxiv_id, p.abstract, p.keywords,
-                p.pdf_path, p.read_status, p.rating, p.notes, p.bibtex, p.created_at, p.updated_at
+                p.pdf_path, p.pdf_sha256, p.read_status, p.rating, p.notes, p.bibtex,
+                p.created_at, p.updated_at
          FROM papers p ",
     );
 
@@ -506,13 +627,14 @@ pub fn list_papers(conn: &Connection, filter: &PaperFilter) -> Result<Vec<PaperI
                 abstract_text: row.get(14)?,
                 keywords,
                 pdf_path: row.get(16)?,
-                read_status: row.get(17)?,
-                rating: row.get(18)?,
-                notes: row.get(19)?,
-                bibtex: row.get(20)?,
+                pdf_sha256: row.get(17)?,
+                read_status: row.get(18)?,
+                rating: row.get(19)?,
+                notes: row.get(20)?,
+                bibtex: row.get(21)?,
                 collection_ids: Vec::new(),
-                created_at: row.get(21)?,
-                updated_at: row.get(22)?,
+                created_at: row.get(22)?,
+                updated_at: row.get(23)?,
             })
         })
         .map_err(|e| format!("执行文献列表查询失败：{e}"))?;
@@ -540,7 +662,12 @@ pub fn batch_delete_papers(conn: &Connection, ids: &[String]) -> Result<(), Stri
     Ok(())
 }
 
-pub fn update_read_status(conn: &Connection, id: &str, status: &str, now: i64) -> Result<(), String> {
+pub fn update_read_status(
+    conn: &Connection,
+    id: &str,
+    status: &str,
+    now: i64,
+) -> Result<(), String> {
     conn.execute(
         "UPDATE papers SET read_status = ?1, updated_at = ?2 WHERE id = ?3",
         params![status, now, id],
@@ -565,6 +692,199 @@ pub fn update_notes(conn: &Connection, id: &str, notes: &str, now: i64) -> Resul
     )
     .map_err(|e| format!("更新文献笔记失败：{e}"))?;
     Ok(())
+}
+
+pub fn update_paper_pdf(
+    conn: &Connection,
+    id: &str,
+    relative_path: &str,
+    sha256: &str,
+    now: i64,
+) -> Result<(), String> {
+    let changed = conn
+        .execute(
+            "UPDATE papers SET pdf_path = ?1, pdf_sha256 = ?2, updated_at = ?3 WHERE id = ?4",
+            params![relative_path, sha256, now, id],
+        )
+        .map_err(|e| format!("关联论文 PDF 失败：{e}"))?;
+    if changed == 0 {
+        return Err("找不到要关联 PDF 的文献记录。".to_string());
+    }
+    Ok(())
+}
+
+pub fn list_paper_annotations(
+    conn: &Connection,
+    paper_id: &str,
+) -> Result<Vec<PaperAnnotation>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, paper_id, page_number, selected_text, comment, color, rects_json,
+                    context_before, context_after, pdf_sha256, created_at, updated_at
+             FROM paper_annotations WHERE paper_id = ?1 ORDER BY page_number, created_at",
+        )
+        .map_err(|e| format!("准备查询论文批注失败：{e}"))?;
+    let rows = stmt
+        .query_map(params![paper_id], |row| {
+            let rects_json: String = row.get(6)?;
+            Ok(PaperAnnotation {
+                id: row.get(0)?,
+                paper_id: row.get(1)?,
+                page_number: row.get(2)?,
+                selected_text: row.get(3)?,
+                comment: row.get(4)?,
+                color: row.get(5)?,
+                rects: serde_json::from_str(&rects_json).unwrap_or_default(),
+                context_before: row.get(7)?,
+                context_after: row.get(8)?,
+                pdf_sha256: row.get(9)?,
+                created_at: row.get(10)?,
+                updated_at: row.get(11)?,
+            })
+        })
+        .map_err(|e| format!("查询论文批注失败：{e}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("读取论文批注失败：{e}"))
+}
+
+pub fn save_paper_annotation(
+    conn: &Connection,
+    input: &PaperAnnotationInput,
+    now: i64,
+) -> Result<PaperAnnotation, String> {
+    if input.page_number < 1 {
+        return Err("批注页码必须从 1 开始。".to_string());
+    }
+    if input.selected_text.trim().is_empty() {
+        return Err("请先选中 PDF 中的文字。".to_string());
+    }
+    if input.rects.is_empty() || input.rects.len() > 256 {
+        return Err("批注位置无效，请重新选择文字。".to_string());
+    }
+    if input.rects.iter().any(|rect| {
+        !rect.x.is_finite()
+            || !rect.y.is_finite()
+            || !rect.width.is_finite()
+            || !rect.height.is_finite()
+            || rect.x < 0.0
+            || rect.y < 0.0
+            || rect.width <= 0.0
+            || rect.height <= 0.0
+            || rect.x + rect.width > 1.02
+            || rect.y + rect.height > 1.02
+    }) {
+        return Err("批注坐标超出页面范围，请重新选择文字。".to_string());
+    }
+
+    let id = input
+        .id
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let rects_json =
+        serde_json::to_string(&input.rects).map_err(|e| format!("序列化批注位置失败：{e}"))?;
+    conn.execute(
+        "INSERT INTO paper_annotations (
+            id, paper_id, page_number, selected_text, comment, color, rects_json,
+            context_before, context_after, pdf_sha256, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)
+        ON CONFLICT(id) DO UPDATE SET
+            page_number = excluded.page_number,
+            selected_text = excluded.selected_text,
+            comment = excluded.comment,
+            color = excluded.color,
+            rects_json = excluded.rects_json,
+            context_before = excluded.context_before,
+            context_after = excluded.context_after,
+            pdf_sha256 = excluded.pdf_sha256,
+            updated_at = excluded.updated_at
+        WHERE paper_annotations.paper_id = excluded.paper_id",
+        params![
+            id,
+            input.paper_id,
+            input.page_number,
+            input.selected_text,
+            input.comment,
+            input.color,
+            rects_json,
+            input.context_before,
+            input.context_after,
+            input.pdf_sha256,
+            now
+        ],
+    )
+    .map_err(|e| format!("保存论文批注失败：{e}"))?;
+
+    list_paper_annotations(conn, &input.paper_id)?
+        .into_iter()
+        .find(|annotation| annotation.id == id)
+        .ok_or_else(|| "论文批注保存后无法读取。".to_string())
+}
+
+pub fn delete_paper_annotation(
+    conn: &Connection,
+    paper_id: &str,
+    annotation_id: &str,
+) -> Result<(), String> {
+    let changed = conn
+        .execute(
+            "DELETE FROM paper_annotations WHERE paper_id = ?1 AND id = ?2",
+            params![paper_id, annotation_id],
+        )
+        .map_err(|e| format!("删除论文批注失败：{e}"))?;
+    if changed == 0 {
+        return Err("找不到要删除的论文批注。".to_string());
+    }
+    Ok(())
+}
+
+pub fn get_paper_reading_progress(
+    conn: &Connection,
+    paper_id: &str,
+) -> Result<Option<PaperReadingProgress>, String> {
+    conn.query_row(
+        "SELECT paper_id, page_number, scale, updated_at
+         FROM paper_reading_progress WHERE paper_id = ?1",
+        params![paper_id],
+        |row| {
+            Ok(PaperReadingProgress {
+                paper_id: row.get(0)?,
+                page_number: row.get(1)?,
+                scale: row.get(2)?,
+                updated_at: row.get(3)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| format!("查询论文阅读进度失败：{e}"))
+}
+
+pub fn save_paper_reading_progress(
+    conn: &Connection,
+    paper_id: &str,
+    page_number: i64,
+    scale: f64,
+    now: i64,
+) -> Result<PaperReadingProgress, String> {
+    if page_number < 1 || !scale.is_finite() || !(0.5..=3.0).contains(&scale) {
+        return Err("论文阅读进度参数无效。".to_string());
+    }
+    let changed = conn
+        .execute(
+            "INSERT INTO paper_reading_progress (paper_id, page_number, scale, updated_at)
+             SELECT ?1, ?2, ?3, ?4 WHERE EXISTS (SELECT 1 FROM papers WHERE id = ?1)
+             ON CONFLICT(paper_id) DO UPDATE SET
+                page_number = excluded.page_number,
+                scale = excluded.scale,
+                updated_at = excluded.updated_at",
+            params![paper_id, page_number, scale, now],
+        )
+        .map_err(|e| format!("保存论文阅读进度失败：{e}"))?;
+    if changed == 0 {
+        return Err("找不到要保存阅读进度的文献记录。".to_string());
+    }
+    get_paper_reading_progress(conn, paper_id)?
+        .ok_or_else(|| "论文阅读进度保存后无法读取。".to_string())
 }
 
 pub fn set_paper_collections(
@@ -645,7 +965,14 @@ pub fn save_collection(
             description = excluded.description,
             color = excluded.color,
             icon = excluded.icon;",
-        params![id, input.name, input.description, input.color, input.icon, now],
+        params![
+            id,
+            input.name,
+            input.description,
+            input.color,
+            input.icon,
+            now
+        ],
     )
     .map_err(|e| format!("保存群组失败：{e}"))?;
 
@@ -691,11 +1018,9 @@ pub fn overview(conn: &Connection) -> Result<LiteratureOverview, String> {
         .unwrap_or(0);
 
     let starred_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM papers WHERE rating > 0",
-            [],
-            |row| row.get(0),
-        )
+        .query_row("SELECT COUNT(*) FROM papers WHERE rating > 0", [], |row| {
+            row.get(0)
+        })
         .unwrap_or(0);
 
     let collections = list_collections(conn)?;

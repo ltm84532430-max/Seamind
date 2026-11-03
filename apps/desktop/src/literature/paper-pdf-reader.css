@@ -1,0 +1,452 @@
+.paper-reader-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  display: flex;
+  background: var(--panel);
+  color: var(--ink);
+  font-family: inherit;
+}
+
+.paper-reader-shell {
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.paper-reader-header {
+  min-height: 54px;
+  flex: 0 0 54px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.paper-reader-heading {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.paper-reader-kicker {
+  color: var(--muted);
+  font: 10px var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.paper-reader-heading strong {
+  overflow: hidden;
+  max-width: min(76vw, 1100px);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.paper-reader-close,
+.paper-reader-toolbar button,
+.paper-reader-selection-actions button,
+.paper-reader-edit-note button,
+.paper-reader-annotation-actions button {
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+}
+
+.paper-reader-close {
+  flex: 0 0 auto;
+  padding: 7px 11px;
+  font-size: 11px;
+}
+
+.paper-reader-close:hover,
+.paper-reader-toolbar button:hover:not(:disabled),
+.paper-reader-selection-actions button:hover:not(:disabled),
+.paper-reader-edit-note button:hover:not(:disabled),
+.paper-reader-annotation-actions button:hover {
+  border-color: var(--accent);
+}
+
+.paper-reader-toolbar {
+  min-height: 44px;
+  flex: 0 0 44px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.paper-reader-pages,
+.paper-reader-zoom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.paper-reader-toolbar button {
+  width: 27px;
+  height: 27px;
+  padding: 0;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.paper-reader-toolbar button:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.paper-reader-pages input {
+  width: 52px;
+  height: 27px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  outline: none;
+  background: transparent;
+  color: var(--ink);
+  text-align: center;
+  font: 11px var(--mono);
+}
+
+.paper-reader-zoom > span {
+  min-width: 42px;
+  text-align: center;
+  font: 10px var(--mono);
+}
+
+.paper-reader-toolbar .paper-reader-fit {
+  width: auto;
+  padding: 0 8px;
+  font-size: 10px;
+}
+
+.paper-reader-hint {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.paper-reader-body {
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+}
+
+.paper-reader-stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  background: color-mix(in srgb, var(--panel) 88%, #000);
+}
+
+.app-shell[data-theme='light'] .paper-reader-stage {
+  background: #e8eaed;
+}
+
+.paper-reader-page-scroller {
+  min-width: 100%;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+.paper-pdf-page {
+  position: relative;
+  flex: 0 0 auto;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 12%);
+  --total-scale-factor: 1;
+}
+
+.paper-pdf-page canvas {
+  display: block;
+  max-width: none;
+}
+
+.paper-pdf-page .textLayer {
+  z-index: 2;
+}
+
+.paper-pdf-annotation-layer {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.paper-pdf-highlight {
+  position: absolute;
+  border-radius: 1px;
+  opacity: 0.48;
+  mix-blend-mode: multiply;
+}
+
+.paper-pdf-highlight.is-active {
+  opacity: 0.72;
+  outline: 1px solid rgb(34 44 55 / 45%);
+}
+
+.paper-reader-message,
+.paper-reader-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  font-size: 12px;
+}
+
+.paper-reader-message {
+  color: var(--muted);
+}
+
+.paper-reader-error {
+  color: var(--accent);
+}
+
+.paper-reader-scan-note {
+  max-width: 720px;
+  padding: 8px 12px;
+  border: 1px solid rgb(147 105 0 / 25%);
+  border-radius: 3px;
+  background: #fff6d9;
+  color: #725500;
+  font-size: 11px;
+}
+
+.paper-reader-notes {
+  width: 340px;
+  min-width: 300px;
+  max-width: 390px;
+  min-height: 0;
+  flex: 0 0 340px;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.paper-reader-notes-head {
+  height: 42px;
+  flex: 0 0 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+}
+
+.paper-reader-notes-head strong {
+  font-weight: 600;
+}
+
+.paper-reader-notes-head span {
+  color: var(--muted);
+  font: 10px var(--mono);
+}
+
+.paper-reader-selection {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 92%, var(--accent));
+}
+
+.paper-reader-selection-title,
+.paper-reader-annotation-meta {
+  color: var(--muted);
+  font: 10px var(--mono);
+}
+
+.paper-reader-selection blockquote,
+.paper-reader-annotation blockquote {
+  margin: 0;
+  color: var(--ink);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.paper-reader-selection textarea,
+.paper-reader-edit-note textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  outline: none;
+  background: var(--panel);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.paper-reader-selection textarea:focus,
+.paper-reader-edit-note textarea:focus {
+  border-color: var(--accent);
+}
+
+.paper-reader-color-row {
+  display: flex;
+  gap: 7px;
+}
+
+.paper-reader-color-row button {
+  width: 17px;
+  height: 17px;
+  border: 1px solid rgb(0 0 0 / 18%);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.paper-reader-color-row button.is-selected {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.paper-reader-selection-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.paper-reader-selection-actions button,
+.paper-reader-edit-note button {
+  padding: 5px 8px;
+  font-size: 10px;
+}
+
+.paper-reader-selection-actions button.is-primary,
+.paper-reader-edit-note button {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--panel);
+}
+
+.paper-reader-selection-actions button:disabled,
+.paper-reader-edit-note button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.paper-reader-annotation-list {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 8px;
+}
+
+.paper-reader-empty {
+  padding: 20px 12px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.paper-reader-annotation {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-bottom: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.paper-reader-annotation.is-active {
+  border-color: var(--accent);
+}
+
+.paper-reader-annotation.is-stale {
+  cursor: default;
+}
+
+.paper-reader-annotation-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.paper-reader-annotation-color {
+  width: 9px;
+  height: 9px;
+  border: 1px solid rgb(0 0 0 / 15%);
+  border-radius: 50%;
+}
+
+.paper-reader-annotation-comment,
+.paper-reader-stale-message {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.paper-reader-stale-message {
+  color: var(--accent);
+}
+
+.paper-reader-annotation-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.paper-reader-annotation-actions button {
+  padding: 3px 6px;
+  color: var(--muted);
+  font-size: 9.5px;
+}
+
+.paper-reader-edit-note {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+@media (max-width: 900px) {
+  .paper-reader-notes {
+    width: 290px;
+    min-width: 250px;
+    flex-basis: 290px;
+  }
+
+  .paper-reader-toolbar {
+    gap: 12px;
+  }
+
+  .paper-reader-hint {
+    display: none;
+  }
+}

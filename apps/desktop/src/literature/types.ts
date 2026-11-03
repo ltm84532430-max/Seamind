@@ -16,6 +16,7 @@ export interface PaperItem {
   abstractText: string | null;
   keywords: string[];
   pdfPath: string | null;
+  pdfSha256: string | null;
   readStatus: 'unread' | 'reading' | 'completed';
   rating: number;
   notes: string | null;
@@ -48,6 +49,59 @@ export interface PaperInput {
   notes?: string | null;
   bibtex?: string | null;
   collectionIds?: string[];
+}
+
+export interface LiteratureSearchResult {
+  paper: PaperInput;
+  source: 'Crossref' | 'arXiv';
+  pdfUrl: string | null;
+  existingPaperId: string | null;
+}
+
+export interface PaperAnnotationRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface PaperAnnotation {
+  id: string;
+  paperId: string;
+  pageNumber: number;
+  selectedText: string;
+  comment: string | null;
+  color: string | null;
+  rects: PaperAnnotationRect[];
+  contextBefore: string | null;
+  contextAfter: string | null;
+  pdfSha256: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface PaperAnnotationInput {
+  id?: string;
+  paperId: string;
+  pageNumber: number;
+  selectedText: string;
+  comment?: string | null;
+  color?: string | null;
+  rects: PaperAnnotationRect[];
+  contextBefore?: string | null;
+  contextAfter?: string | null;
+}
+
+export interface PaperReadingProgress {
+  paperId: string;
+  pageNumber: number;
+  scale: number;
+  updatedAt: number;
+}
+
+export interface OpenedPaperPdf {
+  path: string;
+  sha256: string;
 }
 
 export interface PaperCollection {

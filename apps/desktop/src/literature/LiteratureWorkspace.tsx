@@ -5,8 +5,11 @@ import type {
   PaperFilter,
   PaperInput,
   PaperItem,
+  LiteratureSearchResult,
 } from './types';
 import './literature-workspace.css';
+
+const PaperPdfReader = React.lazy(() => import('./PaperPdfReader'));
 
 export interface LiteratureWorkspaceProps {
   onOpenMindmap?: (markdown: string, title: string) => void;
@@ -21,6 +24,9 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
   const [overview, setOverview] = useState<LiteratureOverview | null>(null);
   const [papers, setPapers] = useState<PaperItem[]>([]);
   const [selectedPaperId, setSelectedPaperId] = useState<string | null>(null);
+  const [compactPane, setCompactPane] = useState<'list' | 'detail'>('list');
+  const [readerPaper, setReaderPaper] = useState<PaperItem | null>(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -42,6 +48,9 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
 
   // Modals
   const [showFetchModal, setShowFetchModal] = useState(false);
+  const [fetchMode, setFetchMode] = useState<'identifier' | 'discovery'>(
+    'identifier',
+  );
   const [showBibtexModal, setShowBibtexModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingPaper, setEditingPaper] = useState<PaperInput | null>(null);
@@ -54,6 +63,15 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
   const [fetchLoading, setFetchLoading] = useState(false);
   const [fetchedPreview, setFetchedPreview] = useState<PaperInput | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [discoveryQuery, setDiscoveryQuery] = useState('');
+  const [discoverySource, setDiscoverySource] = useState<'crossref' | 'arxiv'>(
+    'arxiv',
+  );
+  const [discoveryLoading, setDiscoveryLoading] = useState(false);
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
+  const [discoveryResults, setDiscoveryResults] = useState<
+    LiteratureSearchResult[]
+  >([]);
 
   // Bibtex paste modal state
   const [bibtexDraft, setBibtexDraft] = useState('');
@@ -225,6 +243,47 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
     window.open(url, '_blank');
   };
 
+  const handleAttachPdf = async (replaceExisting = false) => {
+    if (!selectedPaper || pdfBusy) return;
+    setPdfBusy(true);
+    try {
+      const updatedPaper = await literatureApi.attachPdf(selectedPaper.id);
+      if (!updatedPaper) return;
+      setPapers((current) =>
+        current.map((paper) =>
+          paper.id === updatedPaper.id ? updatedPaper : paper,
+        ),
+      );
+      setReaderPaper(updatedPaper);
+      showToast(replaceExisting ? 'PDF 原文已更换' : 'PDF 已加入文献库');
+    } catch (attachError) {
+      alert(`添加 PDF 失败：${attachError}`);
+    } finally {
+      setPdfBusy(false);
+    }
+  };
+
+  const handleOpenPdfReader = () => {
+    if (!selectedPaper) return;
+    if (!selectedPaper.pdfPath) {
+      void handleAttachPdf();
+      return;
+    }
+    setReaderPaper(selectedPaper);
+  };
+
+  const handleReaderStarted = useCallback(
+    (paperId: string) => {
+      setPapers((current) =>
+        current.map((paper) =>
+          paper.id === paperId ? { ...paper, readStatus: 'reading' } : paper,
+        ),
+      );
+      void loadOverview();
+    },
+    [loadOverview],
+  );
+
   const handleExecuteFetch = async () => {
     if (!fetchInput.trim()) return;
     setFetchLoading(true);
@@ -242,6 +301,93 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
       setFetchError(e?.toString() || '未检索到对应元数据');
     } finally {
       setFetchLoading(false);
+    }
+  };
+
+  const handleSearchOnline = async () => {
+    const query = discoveryQuery.trim();
+    if (query.length < 2) return;
+    setDiscoveryLoading(true);
+    setDiscoveryError(null);
+    setDiscoveryResults([]);
+    try {
+      const results = await literatureApi.searchOnline(query, discoverySource);
+      setDiscoveryResults(results);
+      if (results.length === 0) setDiscoveryError('没有找到匹配的论文。');
+    } catch (e: any) {
+      setDiscoveryError(e?.toString() || '在线检索失败，请稍后重试。');
+    } finally {
+      setDiscoveryLoading(false);
+    }
+  };
+
+  const handleOpenDiscoveredPaper = async (result: LiteratureSearchResult) => {
+    if (!result.existingPaperId) return;
+    try {
+      const paper = await literatureApi.get(result.existingPaperId);
+      if (!paper) return;
+      setPapers((current) => [
+        paper,
+        ...current.filter((p) => p.id !== paper.id),
+      ]);
+      setSelectedPaperId(paper.id);
+      setCompactPane('detail');
+      setShowFetchModal(false);
+    } catch (e: any) {
+      setDiscoveryError(e?.toString() || '打开文献失败。');
+    }
+  };
+
+  const handleImportDiscoveredPaper = async (
+    result: LiteratureSearchResult,
+    downloadPdf = false,
+  ) => {
+    if (result.existingPaperId) {
+      await handleOpenDiscoveredPaper(result);
+      return;
+    }
+
+    try {
+      let paper = await literatureApi.save({
+        ...result.paper,
+        collectionIds: activeCollectionId ? [activeCollectionId] : undefined,
+      });
+      let pdfError: string | null = null;
+      if (downloadPdf && paper.arxivId) {
+        try {
+          paper = await literatureApi.downloadArxivPdf(paper.id);
+        } catch (e: any) {
+          pdfError = e?.toString() || 'PDF 下载失败';
+        }
+      }
+
+      setPapers((current) => [
+        paper,
+        ...current.filter((p) => p.id !== paper.id),
+      ]);
+      setSelectedPaperId(paper.id);
+      setCompactPane('detail');
+      setDiscoveryResults((current) =>
+        current.map((item) =>
+          item === result ? { ...item, existingPaperId: paper.id } : item,
+        ),
+      );
+      setShowFetchModal(false);
+      setStatusFilter('all');
+      setActiveTag(null);
+      setSearchQuery('');
+      void loadOverview();
+
+      if (downloadPdf && paper.pdfPath) {
+        setReaderPaper(paper);
+        showToast('论文已添加，开放 PDF 已下载。');
+      } else if (pdfError) {
+        showToast(`论文已添加，但 PDF 下载失败：${pdfError}`);
+      } else {
+        showToast('论文已添加到文献库。');
+      }
+    } catch (e: any) {
+      setDiscoveryError(e?.toString() || '添加论文失败。');
     }
   };
 
@@ -283,7 +429,7 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
   // Render
   // ---------------------------------------------------------------------------
   return (
-    <div className="literature-workspace">
+    <div className="literature-workspace" data-compact-pane={compactPane}>
       {/* -------------------------------------------------------------------- */}
       {/* Left Sidebar                                                         */}
       {/* -------------------------------------------------------------------- */}
@@ -466,6 +612,7 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
               type="button"
               className="lit-btn lit-btn-primary"
               onClick={() => {
+                setFetchMode('identifier');
                 setShowFetchModal(true);
                 setFetchedPreview(null);
                 setFetchError(null);
@@ -552,7 +699,10 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
                 <div
                   key={p.id}
                   className={`lit-card ${isSelected ? 'is-selected' : ''}`}
-                  onClick={() => setSelectedPaperId(p.id)}
+                  onClick={() => {
+                    setSelectedPaperId(p.id);
+                    setCompactPane('detail');
+                  }}
                 >
                   <div className="lit-card-row-1">
                     <span className="lit-card-title">{p.title}</span>
@@ -624,8 +774,18 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
       {selectedPaper && (
         <aside className="lit-inspector">
           <div className="lit-inspector-head">
+            <button
+              type="button"
+              className="lit-btn lit-compact-back"
+              onClick={() => setCompactPane('list')}
+            >
+              ‹ 文献列表
+            </button>
             <span className="lit-inspector-head-title">条目检视</span>
-            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+            <div
+              className="lit-inspector-actions"
+              style={{ display: 'flex', gap: '6px', alignItems: 'center' }}
+            >
               {onOpenMindmap && (
                 <button
                   type="button"
@@ -699,6 +859,38 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
             )}
 
             <div className="lit-doc-title">{selectedPaper.title}</div>
+
+            <div className="lit-pdf-source-actions">
+              {selectedPaper.pdfPath ? (
+                <>
+                  <button
+                    type="button"
+                    className="lit-btn lit-btn-primary"
+                    onClick={handleOpenPdfReader}
+                  >
+                    阅读 PDF 原文
+                  </button>
+                  <button
+                    type="button"
+                    className="lit-btn"
+                    disabled={pdfBusy}
+                    onClick={() => void handleAttachPdf(true)}
+                  >
+                    {pdfBusy ? '正在导入…' : '更换 PDF'}
+                  </button>
+                  <span>PDF 已保存在本机文献库</span>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="lit-btn lit-btn-primary"
+                  disabled={pdfBusy}
+                  onClick={handleOpenPdfReader}
+                >
+                  {pdfBusy ? '正在导入…' : '添加 PDF 原文'}
+                </button>
+              )}
+            </div>
 
             {/* Metadata Grid */}
             <div className="lit-kv-grid">
@@ -866,7 +1058,7 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
         >
           <div className="lit-dialog-box" onClick={(e) => e.stopPropagation()}>
             <div className="lit-dialog-head">
-              <span className="lit-dialog-title">通过标识符检索导入</span>
+              <span className="lit-dialog-title">在线文献检索</span>
               <button
                 type="button"
                 className="lit-btn"
@@ -878,116 +1070,270 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
             </div>
 
             <div className="lit-dialog-body">
-              <div style={{ display: 'flex', gap: '20px' }}>
-                <label
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    fontSize: '12px',
+              <div className="lit-search-mode-tabs">
+                <button
+                  type="button"
+                  className={`lit-btn ${fetchMode === 'identifier' ? 'is-active' : ''}`}
+                  onClick={() => setFetchMode('identifier')}
+                >
+                  DOI / arXiv ID
+                </button>
+                <button
+                  type="button"
+                  className={`lit-btn ${fetchMode === 'discovery' ? 'is-active' : ''}`}
+                  onClick={() => {
+                    setFetchMode('discovery');
+                    setDiscoveryError(null);
                   }}
                 >
-                  <input
-                    type="radio"
-                    name="fetchType"
-                    checked={fetchType === 'doi'}
-                    onChange={() => setFetchType('doi')}
-                  />
-                  DOI (Crossref)
-                </label>
-                <label
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    fontSize: '12px',
-                  }}
-                >
-                  <input
-                    type="radio"
-                    name="fetchType"
-                    checked={fetchType === 'arxiv'}
-                    onChange={() => setFetchType('arxiv')}
-                  />
-                  arXiv ID (如 1706.03762)
-                </label>
+                  关键词发现
+                </button>
               </div>
 
-              <div className="lit-field-group">
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <input
-                    type="text"
-                    className="lit-text-input"
-                    placeholder={
-                      fetchType === 'doi'
-                        ? '输入 DOI，例如 10.48550/arXiv.1706.03762'
-                        : '输入 arXiv ID，例如 1706.03762'
-                    }
-                    value={fetchInput}
-                    onChange={(e) => setFetchInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleExecuteFetch()}
-                  />
-                  <button
-                    type="button"
-                    className="lit-btn lit-btn-primary"
-                    disabled={fetchLoading || !fetchInput.trim()}
-                    onClick={handleExecuteFetch}
-                  >
-                    {fetchLoading ? '检索中...' : '检索'}
-                  </button>
-                </div>
-              </div>
-
-              {fetchError && (
-                <div style={{ color: 'var(--accent)', fontSize: '11.5px' }}>
-                  {fetchError}
-                </div>
-              )}
-
-              {fetchedPreview && (
-                <div
-                  style={{
-                    background: 'color-mix(in srgb, var(--panel) 94%, #000)',
-                    padding: '12px',
-                    borderRadius: '4px',
-                    border: '1px solid var(--line)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '6px',
-                  }}
-                >
-                  <div
-                    style={{
-                      fontWeight: 600,
-                      fontSize: '13px',
-                      color: 'var(--ink)',
-                    }}
-                  >
-                    {fetchedPreview.title}
-                  </div>
-                  <div style={{ fontSize: '11.5px', color: 'var(--muted)' }}>
-                    {fetchedPreview.authors.join(', ')} (
-                    {fetchedPreview.year || '年份未标注'})
-                  </div>
-                  {fetchedPreview.venue && (
-                    <div style={{ fontSize: '11.5px', color: 'var(--muted)' }}>
-                      刊物/会议: {fetchedPreview.venue}
-                    </div>
-                  )}
-                  {fetchedPreview.abstractText && (
-                    <div
+              {fetchMode === 'identifier' ? (
+                <>
+                  <div style={{ display: 'flex', gap: '20px' }}>
+                    <label
                       style={{
-                        fontSize: '11px',
-                        color: 'var(--muted)',
-                        maxHeight: '100px',
-                        overflowY: 'auto',
-                        lineHeight: 1.5,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        fontSize: '12px',
                       }}
                     >
-                      {fetchedPreview.abstractText}
+                      <input
+                        type="radio"
+                        name="fetchType"
+                        checked={fetchType === 'doi'}
+                        onChange={() => setFetchType('doi')}
+                      />
+                      DOI (Crossref)
+                    </label>
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        fontSize: '12px',
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name="fetchType"
+                        checked={fetchType === 'arxiv'}
+                        onChange={() => setFetchType('arxiv')}
+                      />
+                      arXiv ID (如 1706.03762)
+                    </label>
+                  </div>
+
+                  <div className="lit-field-group">
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <input
+                        type="text"
+                        className="lit-text-input"
+                        placeholder={
+                          fetchType === 'doi'
+                            ? '输入 DOI，例如 10.48550/arXiv.1706.03762'
+                            : '输入 arXiv ID，例如 1706.03762'
+                        }
+                        value={fetchInput}
+                        onChange={(e) => setFetchInput(e.target.value)}
+                        onKeyDown={(e) =>
+                          e.key === 'Enter' && handleExecuteFetch()
+                        }
+                      />
+                      <button
+                        type="button"
+                        className="lit-btn lit-btn-primary"
+                        disabled={fetchLoading || !fetchInput.trim()}
+                        onClick={handleExecuteFetch}
+                      >
+                        {fetchLoading ? '检索中...' : '检索'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {fetchError && (
+                    <div style={{ color: 'var(--accent)', fontSize: '11.5px' }}>
+                      {fetchError}
                     </div>
                   )}
-                </div>
+
+                  {fetchedPreview && (
+                    <div
+                      style={{
+                        background:
+                          'color-mix(in srgb, var(--panel) 94%, #000)',
+                        padding: '12px',
+                        borderRadius: '4px',
+                        border: '1px solid var(--line)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '6px',
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontWeight: 600,
+                          fontSize: '13px',
+                          color: 'var(--ink)',
+                        }}
+                      >
+                        {fetchedPreview.title}
+                      </div>
+                      <div
+                        style={{ fontSize: '11.5px', color: 'var(--muted)' }}
+                      >
+                        {fetchedPreview.authors.join(', ')} (
+                        {fetchedPreview.year || '年份未标注'})
+                      </div>
+                      {fetchedPreview.venue && (
+                        <div
+                          style={{ fontSize: '11.5px', color: 'var(--muted)' }}
+                        >
+                          刊物/会议: {fetchedPreview.venue}
+                        </div>
+                      )}
+                      {fetchedPreview.abstractText && (
+                        <div
+                          style={{
+                            fontSize: '11px',
+                            color: 'var(--muted)',
+                            maxHeight: '100px',
+                            overflowY: 'auto',
+                            lineHeight: 1.5,
+                          }}
+                        >
+                          {fetchedPreview.abstractText}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <div className="lit-field-group">
+                    <div className="lit-dialog-search-row">
+                      <input
+                        type="text"
+                        className="lit-text-input"
+                        placeholder="按论文主题、标题或作者搜索"
+                        value={discoveryQuery}
+                        onChange={(e) => setDiscoveryQuery(e.target.value)}
+                        onKeyDown={(e) =>
+                          e.key === 'Enter' && handleSearchOnline()
+                        }
+                      />
+                      <select
+                        className="lit-dialog-select"
+                        style={{ width: '108px', flex: '0 0 108px' }}
+                        value={discoverySource}
+                        onChange={(e) =>
+                          setDiscoverySource(
+                            e.target.value as 'crossref' | 'arxiv',
+                          )
+                        }
+                      >
+                        <option value="arxiv">arXiv</option>
+                        <option value="crossref">Crossref</option>
+                      </select>
+                      <button
+                        type="button"
+                        className="lit-btn lit-btn-primary"
+                        disabled={
+                          discoveryLoading || discoveryQuery.trim().length < 2
+                        }
+                        onClick={handleSearchOnline}
+                      >
+                        {discoveryLoading ? '搜索中…' : '搜索'}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="lit-search-result-meta">
+                    arXiv 提供论文摘要及开放 PDF；Crossref
+                    提供书目元数据。结果只在你选择后写入本地文献库。
+                  </div>
+
+                  {discoveryError && (
+                    <div style={{ color: 'var(--accent)', fontSize: '11.5px' }}>
+                      {discoveryError}
+                    </div>
+                  )}
+
+                  {discoveryResults.length > 0 && (
+                    <div className="lit-search-results">
+                      {discoveryResults.map((result, index) => (
+                        <article
+                          className="lit-search-result"
+                          key={
+                            result.paper.doi ||
+                            result.paper.arxivId ||
+                            `${result.paper.title}-${index}`
+                          }
+                        >
+                          <div className="lit-search-result-title">
+                            {result.paper.title}
+                          </div>
+                          <div className="lit-search-result-meta">
+                            {result.source} ·{' '}
+                            {result.paper.authors.slice(0, 4).join(', ')}
+                            {result.paper.authors.length > 4 ? ' et al.' : ''}
+                            {result.paper.year ? ` · ${result.paper.year}` : ''}
+                            {result.paper.venue
+                              ? ` · ${result.paper.venue}`
+                              : ''}
+                          </div>
+                          {result.paper.abstractText && (
+                            <div className="lit-search-result-abstract">
+                              {result.paper.abstractText}
+                            </div>
+                          )}
+                          <div className="lit-search-result-actions">
+                            {result.existingPaperId ? (
+                              <button
+                                type="button"
+                                className="lit-btn"
+                                onClick={() =>
+                                  void handleOpenDiscoveredPaper(result)
+                                }
+                              >
+                                已在文献库 · 打开
+                              </button>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  className="lit-btn lit-btn-primary"
+                                  onClick={() =>
+                                    void handleImportDiscoveredPaper(result)
+                                  }
+                                >
+                                  加入文献库
+                                </button>
+                                {result.pdfUrl && result.paper.arxivId && (
+                                  <button
+                                    type="button"
+                                    className="lit-btn"
+                                    onClick={() =>
+                                      void handleImportDiscoveredPaper(
+                                        result,
+                                        true,
+                                      )
+                                    }
+                                  >
+                                    加入并阅读开放 PDF
+                                  </button>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
             </div>
 
@@ -999,14 +1345,16 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
               >
                 取消
               </button>
-              <button
-                type="button"
-                className="lit-btn lit-btn-primary"
-                disabled={!fetchedPreview}
-                onClick={handleSaveFetchedPaper}
-              >
-                保存到文献库
-              </button>
+              {fetchMode === 'identifier' && (
+                <button
+                  type="button"
+                  className="lit-btn lit-btn-primary"
+                  disabled={!fetchedPreview}
+                  onClick={handleSaveFetchedPaper}
+                >
+                  保存到文献库
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -1308,6 +1656,22 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {readerPaper && (
+        <React.Suspense
+          fallback={
+            <div className="paper-reader-overlay">
+              <div className="paper-reader-message">正在加载 PDF 阅读器…</div>
+            </div>
+          }
+        >
+          <PaperPdfReader
+            paper={readerPaper}
+            onClose={() => setReaderPaper(null)}
+            onReadStarted={handleReaderStarted}
+          />
+        </React.Suspense>
       )}
     </div>
   );

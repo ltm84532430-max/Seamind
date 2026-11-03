@@ -2,10 +2,15 @@ import { invoke } from '@tauri-apps/api/core';
 import type {
   CollectionInput,
   LiteratureOverview,
+  LiteratureSearchResult,
+  OpenedPaperPdf,
+  PaperAnnotation,
+  PaperAnnotationInput,
   PaperCollection,
   PaperFilter,
   PaperInput,
   PaperItem,
+  PaperReadingProgress,
   ParsedBibEntry,
 } from './types';
 
@@ -33,6 +38,33 @@ export const literatureApi = {
   updateNotes: (id: string, notes: string) =>
     invoke<void>('literature_update_notes', { id, notes }),
 
+  attachPdf: (id: string) =>
+    invoke<PaperItem | null>('literature_attach_pdf', { id }),
+
+  openPdf: (id: string) =>
+    invoke<OpenedPaperPdf>('literature_open_pdf', { id }),
+
+  listAnnotations: (paperId: string) =>
+    invoke<PaperAnnotation[]>('literature_list_annotations', { paperId }),
+
+  saveAnnotation: (annotation: PaperAnnotationInput) =>
+    invoke<PaperAnnotation>('literature_save_annotation', { annotation }),
+
+  deleteAnnotation: (paperId: string, annotationId: string) =>
+    invoke<void>('literature_delete_annotation', { paperId, annotationId }),
+
+  getReadingProgress: (paperId: string) =>
+    invoke<PaperReadingProgress | null>('literature_get_reading_progress', {
+      paperId,
+    }),
+
+  saveReadingProgress: (paperId: string, pageNumber: number, scale: number) =>
+    invoke<PaperReadingProgress>('literature_save_reading_progress', {
+      paperId,
+      pageNumber,
+      scale,
+    }),
+
   listCollections: () =>
     invoke<PaperCollection[]>('literature_list_collections'),
 
@@ -47,6 +79,12 @@ export const literatureApi = {
 
   fetchArxiv: (arxivId: string) =>
     invoke<PaperInput>('literature_fetch_arxiv', { arxivId }),
+
+  searchOnline: (query: string, source: 'crossref' | 'arxiv') =>
+    invoke<LiteratureSearchResult[]>('literature_search', { query, source }),
+
+  downloadArxivPdf: (id: string) =>
+    invoke<PaperItem>('literature_download_arxiv_pdf', { id }),
 
   parseBibtexText: (content: string) =>
     invoke<ParsedBibEntry[]>('literature_parse_bibtex_text', { content }),
