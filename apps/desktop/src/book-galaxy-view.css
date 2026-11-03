@@ -1,0 +1,321 @@
+/* ==========================================================================
+   SeaMind Book Galaxy View — Topological Chapter Constellation & Knowledge Graph
+   ========================================================================== */
+
+.book-galaxy-container {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  position: relative;
+  background: radial-gradient(circle at center, #14171d 0%, #0a0c10 100%);
+  color: #e2e8f0;
+  overflow: hidden;
+  user-select: none;
+}
+
+.app-shell[data-theme='light'] .book-galaxy-container {
+  background: radial-gradient(circle at center, #ffffff 0%, #edf1f5 100%);
+  color: #1e293b;
+}
+
+/* Header toolbar */
+.book-galaxy-header {
+  height: 48px;
+  flex: 0 0 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(10, 12, 16, 0.7);
+  backdrop-filter: blur(8px);
+  z-index: 10;
+}
+
+.app-shell[data-theme='light'] .book-galaxy-header {
+  border-bottom-color: rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.book-galaxy-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.book-galaxy-badge {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(217, 87, 59, 0.15);
+  color: #d9573b;
+  border: 1px solid rgba(217, 87, 59, 0.3);
+}
+
+.book-galaxy-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: inherit;
+  white-space: nowrap;
+}
+
+.book-galaxy-stats {
+  font-size: 11.5px;
+  color: #94a3b8;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.app-shell[data-theme='light'] .book-galaxy-stats {
+  color: #64748b;
+}
+
+.book-galaxy-stat-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.book-galaxy-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.book-galaxy-btn {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+}
+
+.app-shell[data-theme='light'] .book-galaxy-btn {
+  border-color: rgba(0, 0, 0, 0.12);
+  background: #f1f5f9;
+}
+
+.book-galaxy-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.app-shell[data-theme='light'] .book-galaxy-btn:hover {
+  background: #e2e8f0;
+  border-color: #cbd5e1;
+}
+
+.book-galaxy-btn.is-primary {
+  background: #d9573b;
+  border-color: #d9573b;
+  color: #ffffff;
+}
+
+.book-galaxy-btn.is-primary:hover {
+  filter: brightness(1.1);
+}
+
+/* Canvas / SVG viewport */
+.book-galaxy-canvas {
+  flex: 1 1 0;
+  width: 100%;
+  height: 100%;
+  position: relative;
+  cursor: grab;
+}
+
+.book-galaxy-canvas.is-panning {
+  cursor: grabbing;
+}
+
+.book-galaxy-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* SVG Elements & Styling */
+.galaxy-orbit-ring {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.05);
+  stroke-dasharray: 4 4;
+}
+
+.app-shell[data-theme='light'] .galaxy-orbit-ring {
+  stroke: rgba(0, 0, 0, 0.06);
+}
+
+.galaxy-link-orbit {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.08);
+  stroke-width: 1;
+}
+
+.app-shell[data-theme='light'] .galaxy-link-orbit {
+  stroke: rgba(0, 0, 0, 0.08);
+}
+
+.galaxy-link-sequence {
+  fill: none;
+  stroke: rgba(217, 87, 59, 0.25);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 3;
+}
+
+/* Node styles */
+.galaxy-node-group {
+  cursor: pointer;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.galaxy-node-circle {
+  transition: all 0.2s ease;
+}
+
+.galaxy-node-group:hover .galaxy-node-circle {
+  filter: drop-shadow(0 0 10px var(--node-color, #d9573b));
+}
+
+.galaxy-node-label {
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  fill: #cbd5e1;
+  text-anchor: middle;
+  pointer-events: none;
+  user-select: none;
+}
+
+.app-shell[data-theme='light'] .galaxy-node-label {
+  fill: #334155;
+  font-weight: 550;
+}
+
+.galaxy-node-sublabel {
+  font-family: var(--mono, monospace);
+  font-size: 9px;
+  fill: #94a3b8;
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+.app-shell[data-theme='light'] .galaxy-node-sublabel {
+  fill: #64748b;
+}
+
+/* Note indicator halo */
+.galaxy-note-halo {
+  fill: none;
+  stroke: #10b981;
+  stroke-width: 2;
+  stroke-dasharray: 2 2;
+  opacity: 0.8;
+}
+
+/* Pulse animation for active reading chapter */
+@keyframes galaxyCurrentPulse {
+  0% {
+    r: 16px;
+    opacity: 0.9;
+  }
+  50% {
+    r: 28px;
+    opacity: 0.3;
+  }
+  100% {
+    r: 34px;
+    opacity: 0;
+  }
+}
+
+.galaxy-current-pulse {
+  fill: none;
+  stroke: #d9573b;
+  stroke-width: 2;
+  animation: galaxyCurrentPulse 2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+  pointer-events: none;
+}
+
+/* Interactive Floating Tooltip */
+.book-galaxy-tooltip {
+  position: absolute;
+  z-index: 50;
+  pointer-events: none;
+  background: rgba(15, 23, 42, 0.92);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  padding: 10px 14px;
+  min-width: 200px;
+  max-width: 280px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+  font-size: 12px;
+  line-height: 1.45;
+  color: #f1f5f9;
+  transform: translate(12px, 12px);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.app-shell[data-theme='light'] .book-galaxy-tooltip {
+  background: rgba(255, 255, 255, 0.96);
+  border-color: rgba(0, 0, 0, 0.12);
+  color: #0f172a;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15);
+}
+
+.book-galaxy-tooltip-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-weight: 650;
+  font-size: 12.5px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 4px;
+  margin-bottom: 2px;
+}
+
+.app-shell[data-theme='light'] .book-galaxy-tooltip-head {
+  border-bottom-color: rgba(0, 0, 0, 0.08);
+}
+
+.book-galaxy-tooltip-status {
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.book-galaxy-tooltip-status.is-has-note {
+  color: #34d399;
+}
+
+.book-galaxy-tooltip-status.is-no-note {
+  color: #94a3b8;
+}
+
+.book-galaxy-tooltip-hint {
+  font-size: 10.5px;
+  color: #cbd5e1;
+  opacity: 0.8;
+  margin-top: 4px;
+}
+
+.app-shell[data-theme='light'] .book-galaxy-tooltip-hint {
+  color: #475569;
+}

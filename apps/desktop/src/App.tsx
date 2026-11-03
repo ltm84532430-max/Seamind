@@ -67,6 +67,7 @@ import './player/player-workspace.css';
 import './player/learning-path.css';
 import type { PendingTerminalRawInput } from './TerminalPanel';
 import type {
+  EpubChapterChangeInfo,
   EpubChapterNavigationRequest,
   EpubReaderAgentBridge,
   EpubReaderSelection,
@@ -177,7 +178,13 @@ import {
   findPureNodeBySourcePath,
   prepareMindmapTree,
 } from './app-tree-utils';
-import { createBookKnowledgeStarter } from './book-knowledge-target';
+import {
+  createBookKnowledgeStarter,
+  createChapterKnowledgeStarter,
+  resolveBookChapterKnowledgeTarget,
+} from './book-knowledge-target';
+import { BookGalaxyGraphView } from './BookGalaxyGraphView';
+import { buildBookGalaxyGraph, type GalaxyNode } from './book-galaxy-model';
 import {
   addMarkdownNodeNoteCards,
   escapeHtmlText,
@@ -410,6 +417,9 @@ export default function App() {
     useState('');
   const [epubChapterNavigation, setEpubChapterNavigation] =
     useState<EpubChapterNavigationRequest | null>(null);
+  const [currentEpubChapter, setCurrentEpubChapter] =
+    useState<EpubChapterChangeInfo | null>(null);
+  const [galaxyViewActive, setGalaxyViewActive] = useState(false);
   const [focusedMapPath, setFocusedMapPath] = useState<string | null>(null);
   const [canvasNodeContextMenu, setCanvasNodeContextMenu] = useState<{
     path: string;
@@ -1389,7 +1399,7 @@ export default function App() {
       }
       return readerAgentBridgeRef.current.proposeFootnote(input);
     },
-    readCurrentBookKnowledgeNote: async () => {
+    readCurrentBookKnowledgeNote: async (input) => {
       if (activeWorkspace !== 'reader' || !epubReader) {
         throw new Error('请先在电子书阅读器中打开一本书。');
       }
@@ -1397,10 +1407,84 @@ export default function App() {
       if (!snapshot?.rootPath) {
         throw new Error('文件库尚未就绪。');
       }
-      const target = resolveBookKnowledgeTarget(snapshot, {
-        relativePath: epubReader.relativePath,
-        title: epubReader.title,
-      });
+      const book = snapshot.books.find(
+        (candidate) =>
+          normalizeLibraryPath(candidate.relativePath) ===
+          normalizeLibraryPath(epubReader.relativePath),
+      ) ?? { relativePath: epubReader.relativePath, title: epubReader.title };
+
+      const chapterQuery = input?.chapterTarget
+        ? { label: input.chapterTarget }
+        : currentEpubChapter
+          ? {
+              label: currentEpubChapter.chapterLabel,
+              href: currentEpubChapter.chapterHref,
+              hierarchy: currentEpubChapter.chapterHierarchy,
+              cfi: currentEpubChapter.cfi,
+            }
+          : null;
+
+      if (chapterQuery && chapterQuery.label) {
+        const chapterTarget = resolveBookChapterKnowledgeTarget(
+          snapshot,
+          book,
+          chapterQuery,
+        );
+        const currentDoc = workbench.controller.getState();
+        if (
+          currentDoc &&
+          currentDoc.kind === 'doc' &&
+          normalizeLibraryPath(currentDoc.relativePath) ===
+            normalizeLibraryPath(chapterTarget.relativePath)
+        ) {
+          return {
+            bookKey: epubReader.progressKey,
+            bookTitle: epubReader.title,
+            relativePath: currentDoc.relativePath,
+            category: currentDoc.category || chapterTarget.category,
+            title: currentDoc.title,
+            exists: true,
+            markdown: currentDoc.source,
+            isChapterLevel: true,
+            chapterLabel: chapterQuery.label,
+          };
+        }
+        if (chapterTarget.document) {
+          const opened = await invoke<OpenedDocument>('open_document', {
+            relativePath: chapterTarget.document.relativePath,
+          });
+          return {
+            bookKey: epubReader.progressKey,
+            bookTitle: epubReader.title,
+            relativePath: chapterTarget.document.relativePath,
+            category: chapterTarget.document.category || chapterTarget.category,
+            title: chapterTarget.document.title,
+            exists: true,
+            markdown: opened.markdown,
+            isChapterLevel: true,
+            chapterLabel: chapterQuery.label,
+          };
+        }
+        return {
+          bookKey: epubReader.progressKey,
+          bookTitle: epubReader.title,
+          relativePath: chapterTarget.relativePath,
+          category: chapterTarget.category,
+          title: chapterTarget.title,
+          exists: false,
+          markdown: createChapterKnowledgeStarter({
+            bookTitle: epubReader.title,
+            chapterTitle: chapterQuery.label,
+            parentChapter: chapterQuery.hierarchy?.[0],
+            chapterHref: chapterQuery.href,
+            cfi: chapterQuery.cfi,
+          }),
+          isChapterLevel: true,
+          chapterLabel: chapterQuery.label,
+        };
+      }
+
+      const target = resolveBookKnowledgeTarget(snapshot, book);
       const currentDoc = workbench.controller.getState();
       if (
         currentDoc &&
@@ -1416,6 +1500,7 @@ export default function App() {
           title: currentDoc.title,
           exists: true,
           markdown: currentDoc.source,
+          isChapterLevel: false,
         };
       }
       if (target.document) {
@@ -1430,6 +1515,7 @@ export default function App() {
           title: target.document.title,
           exists: true,
           markdown: opened.markdown,
+          isChapterLevel: false,
         };
       }
       return {
@@ -1442,9 +1528,15 @@ export default function App() {
         markdown: createBookKnowledgeStarter({
           title: epubReader.title,
         }),
+        isChapterLevel: false,
       };
     },
-    updateBookKnowledgeNote: async ({ content, mode, rationale }) => {
+    updateBookKnowledgeNote: async ({
+      content,
+      mode,
+      rationale,
+      chapterTarget: targetLabel,
+    }) => {
       if (activeWorkspace !== 'reader' || !epubReader) {
         throw new Error('请先在电子书阅读器中打开一本书。');
       }
@@ -1452,10 +1544,27 @@ export default function App() {
       if (!snapshot?.rootPath) {
         throw new Error('文件库尚未就绪。');
       }
-      const target = resolveBookKnowledgeTarget(snapshot, {
-        relativePath: epubReader.relativePath,
-        title: epubReader.title,
-      });
+      const book = snapshot.books.find(
+        (candidate) =>
+          normalizeLibraryPath(candidate.relativePath) ===
+          normalizeLibraryPath(epubReader.relativePath),
+      ) ?? { relativePath: epubReader.relativePath, title: epubReader.title };
+
+      const chapterQuery = targetLabel
+        ? { label: targetLabel }
+        : currentEpubChapter
+          ? {
+              label: currentEpubChapter.chapterLabel,
+              href: currentEpubChapter.chapterHref,
+              hierarchy: currentEpubChapter.chapterHierarchy,
+              cfi: currentEpubChapter.cfi,
+            }
+          : null;
+
+      const target =
+        chapterQuery && chapterQuery.label
+          ? resolveBookChapterKnowledgeTarget(snapshot, book, chapterQuery)
+          : resolveBookKnowledgeTarget(snapshot, book);
 
       let baseMarkdown = '';
       const currentDoc = workbench.controller.getState();
@@ -1472,6 +1581,14 @@ export default function App() {
           relativePath: target.document.relativePath,
         });
         baseMarkdown = opened.markdown;
+      } else if (chapterQuery && chapterQuery.label) {
+        baseMarkdown = createChapterKnowledgeStarter({
+          bookTitle: epubReader.title,
+          chapterTitle: chapterQuery.label,
+          parentChapter: chapterQuery.hierarchy?.[0],
+          chapterHref: chapterQuery.href,
+          cfi: chapterQuery.cfi,
+        });
       } else {
         baseMarkdown = createBookKnowledgeStarter({
           title: epubReader.title,
@@ -1524,6 +1641,99 @@ export default function App() {
         title: target.title,
         category: target.category,
         updated: true,
+        isChapterLevel: Boolean(chapterQuery?.label),
+      };
+    },
+    queryBookGalaxy: async () => {
+      if (activeWorkspace !== 'reader' || !epubReader) {
+        throw new Error('当前环境未处于电子书阅读状态，无法查询星系图数据。');
+      }
+      const snapshot = librarySnapshotRef.current;
+      if (!snapshot?.rootPath) {
+        throw new Error('文件库尚未就绪。');
+      }
+      const graph = buildBookGalaxyGraph(
+        epubReader.title,
+        epubReader.progressKey,
+        currentEpubChapter?.toc ?? [],
+        snapshot,
+        currentEpubChapter?.chapterHref,
+      );
+      return {
+        bookTitle: graph.bookTitle,
+        totalChapters: graph.stats.totalChapters,
+        notesCount: graph.stats.notesCount,
+        completionPercentage: graph.stats.completionPercentage,
+        currentChapter: currentEpubChapter?.chapterLabel,
+        nodes: graph.nodes.map((n) => ({
+          id: n.id,
+          label: n.label,
+          kind: n.kind,
+          chapterIndex: n.chapterIndex,
+          hasNote: n.hasNote,
+          notePath: n.notePath,
+          isCurrent: n.isCurrent,
+        })),
+      };
+    },
+    syncReaderChapter: async ({ chapterTarget, reason }) => {
+      if (activeWorkspace !== 'reader' || !epubReader) {
+        throw new Error('当前环境无法跳转电子书章节。');
+      }
+      const snapshot = librarySnapshotRef.current;
+      if (!snapshot?.rootPath) throw new Error('文件库尚未就绪。');
+      const book = snapshot.books.find(
+        (candidate) =>
+          normalizeLibraryPath(candidate.relativePath) ===
+          normalizeLibraryPath(epubReader.relativePath),
+      );
+
+      const flatToc = currentEpubChapter?.toc
+        ? currentEpubChapter.toc.flatMap((t) => [t, ...(t.subitems ?? [])])
+        : [];
+      const query = chapterTarget.trim().toLowerCase();
+      const matched = flatToc.find((item) => {
+        const label = typeof item.label === 'string' ? item.label : '';
+        return (
+          label.toLowerCase().includes(query) ||
+          item.href.toLowerCase().includes(query)
+        );
+      });
+
+      const targetLabel = matched
+        ? typeof matched.label === 'string'
+          ? matched.label
+          : chapterTarget
+        : chapterTarget;
+      const targetHref = matched?.href;
+
+      setEpubChapterNavigation({
+        id: ++epubChapterNavigationIdRef.current,
+        progressKey: epubReader.progressKey,
+        href: targetHref,
+        label: targetLabel,
+      });
+
+      let notePath: string | undefined;
+      if (book) {
+        const target = resolveBookChapterKnowledgeTarget(snapshot, book, {
+          label: targetLabel,
+          href: targetHref,
+        });
+        if (target.document) {
+          await openKnowledgeNote(target.document);
+          notePath = target.document.relativePath;
+        }
+      }
+
+      if (reason) {
+        setSaveMessage(`AI 同步阅读章节：${reason}`);
+      }
+
+      return {
+        synced: true,
+        targetChapter: targetLabel,
+        notePath,
       };
     },
     appendBookKnowledgeExcerpt: async ({
@@ -3030,6 +3240,73 @@ export default function App() {
     if (converted) await openMap(converted);
   };
 
+  const handleGalaxySelectNode = async (node: GalaxyNode) => {
+    if (epubReader && node.chapterHref) {
+      setEpubChapterNavigation({
+        id: ++epubChapterNavigationIdRef.current,
+        progressKey: epubReader.progressKey,
+        href: node.chapterHref,
+        label: node.label,
+      });
+    }
+
+    const snapshot = librarySnapshotRef.current;
+    if (!epubReader || !snapshot) return;
+
+    const book = snapshot.books.find(
+      (candidate) =>
+        normalizeLibraryPath(candidate.relativePath) ===
+        normalizeLibraryPath(epubReader.relativePath),
+    );
+    if (!book) return;
+
+    try {
+      if (node.kind === 'sun') {
+        const target = resolveBookKnowledgeTarget(snapshot, book);
+        if (target.document) {
+          await openKnowledgeNote(target.document);
+        } else {
+          const starter = createBookKnowledgeStarter({ title: book.title });
+          await workbench.controller.createCustomDocument({
+            kind: 'doc',
+            category: target.category,
+            title: target.title,
+            source: starter,
+            tags: ['读书笔记', '电子书'],
+          });
+        }
+      } else {
+        const target = resolveBookChapterKnowledgeTarget(snapshot, book, {
+          label: node.label,
+          href: node.chapterHref,
+          hierarchy: node.hierarchy,
+        });
+
+        if (target.document) {
+          await openKnowledgeNote(target.document);
+        } else {
+          const starter = createChapterKnowledgeStarter({
+            bookTitle: book.title,
+            chapterTitle: node.label,
+            parentChapter: node.parentChapter,
+            chapterHref: node.chapterHref,
+            chapterIndex: node.chapterIndex,
+          });
+          await workbench.controller.createCustomDocument({
+            kind: 'doc',
+            category: target.category,
+            title: target.title,
+            source: starter,
+            tags: ['读书笔记', '电子书'],
+          });
+        }
+      }
+      setGalaxyViewActive(false);
+    } catch (err) {
+      setLibraryError(errorMessage(err, '切换章节笔记失败。'));
+    }
+  };
+
   const toggleBookKnowledge = async () => {
     if (readerKnowledgeOpen) {
       setReaderKnowledgeOpen(false);
@@ -3055,7 +3332,19 @@ export default function App() {
     setBookKnowledgeBusy(true);
     setLibraryError('');
     try {
-      const target = resolveBookKnowledgeTarget(snapshot, book);
+      const chapterQuery = currentEpubChapter?.chapterLabel
+        ? {
+            label: currentEpubChapter.chapterLabel,
+            href: currentEpubChapter.chapterHref,
+            hierarchy: currentEpubChapter.chapterHierarchy,
+            cfi: currentEpubChapter.cfi,
+          }
+        : null;
+
+      const target = chapterQuery
+        ? resolveBookChapterKnowledgeTarget(snapshot, book, chapterQuery)
+        : resolveBookKnowledgeTarget(snapshot, book);
+
       if (target.document) {
         await openKnowledgeNote(target.document);
         saveEpubKnowledgePath(
@@ -3064,9 +3353,18 @@ export default function App() {
           target.document.relativePath,
         );
       } else {
-        const starter = createBookKnowledgeStarter({
-          title: book.title,
-        });
+        const starter = chapterQuery
+          ? createChapterKnowledgeStarter({
+              bookTitle: book.title,
+              creator: book.creator,
+              chapterTitle: chapterQuery.label,
+              parentChapter: chapterQuery.hierarchy?.[0],
+              chapterHref: chapterQuery.href,
+              cfi: chapterQuery.cfi,
+            })
+          : createBookKnowledgeStarter({
+              title: book.title,
+            });
         await workbench.controller.createCustomDocument({
           kind: 'doc',
           category: target.category,
@@ -5964,6 +6262,9 @@ export default function App() {
             onAgentBridgeChange={(bridge) => {
               readerAgentBridgeRef.current = bridge;
             }}
+            onChapterChange={(info) => {
+              setCurrentEpubChapter(info);
+            }}
             onClose={() => {
               setReaderKnowledgeOpen(false);
               setReaderSplitOpen(false);
@@ -6492,7 +6793,58 @@ export default function App() {
           className="reader-knowledge-dock"
           aria-label="电子书知识库笔记"
         >
-          {activeDocument ? (
+          {epubReader && (
+            <div className="reader-chapter-dock-bar">
+              <div className="reader-chapter-breadcrumbs">
+                <button
+                  type="button"
+                  className="reader-chapter-crumb-book"
+                  onClick={() => setGalaxyViewActive((v) => !v)}
+                  title="点击切换全书拓扑星系图"
+                >
+                  《{epubReader.title}》
+                </button>
+                {currentEpubChapter?.chapterHierarchy &&
+                  currentEpubChapter.chapterHierarchy.length > 0 &&
+                  currentEpubChapter.chapterHierarchy.map((crumb, idx) => (
+                    <span key={idx} className="reader-chapter-crumb-item">
+                      <span className="reader-chapter-crumb-sep">/</span>
+                      <span className="reader-chapter-crumb-label">
+                        {crumb}
+                      </span>
+                    </span>
+                  ))}
+              </div>
+              <div className="reader-chapter-actions">
+                <button
+                  type="button"
+                  className={`reader-chapter-btn ${galaxyViewActive ? 'is-active' : ''}`}
+                  onClick={() => setGalaxyViewActive((v) => !v)}
+                  title="切换拓扑星系图与章节笔记"
+                >
+                  {galaxyViewActive ? '返回笔记' : '拓扑星系图'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {galaxyViewActive && epubReader && librarySnapshot ? (
+            <BookGalaxyGraphView
+              graph={buildBookGalaxyGraph(
+                epubReader.title,
+                epubReader.progressKey,
+                currentEpubChapter?.toc ?? [],
+                librarySnapshot,
+                currentEpubChapter?.chapterHref,
+              )}
+              currentChapterHref={currentEpubChapter?.chapterHref}
+              theme={theme}
+              onSelectNode={(node) => {
+                void handleGalaxySelectNode(node);
+              }}
+              onSwitchToEditor={() => setGalaxyViewActive(false)}
+            />
+          ) : activeDocument ? (
             <DocumentWorkbench
               document={activeDocument}
               dirty={workbench.dirty}

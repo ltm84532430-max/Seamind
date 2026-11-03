@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  bookChapterKnowledgeCategory,
+  bookChapterKnowledgeNotePath,
+  bookChapterKnowledgeNoteTitle,
   bookKnowledgeCategory,
   bookKnowledgeNotePath,
   bookKnowledgeNoteTitle,
   createBookKnowledgeStarter,
+  createChapterKnowledgeStarter,
+  parseMarkdownFrontmatter,
+  resolveBookChapterKnowledgeTarget,
   resolveBookKnowledgeTarget,
 } from '../src/book-knowledge-target';
 import { executeAgentTool } from '../src/agent/capabilities';
@@ -143,5 +149,153 @@ describe('Book Knowledge Target & Tools', () => {
       commentary: '此段展示使用 scanf 的返回值控制输入循环终止。',
       chapterLabel: '第6章 C控制语句：循环',
     });
+  });
+
+  it('executes chapter-aware agent tools: query_galaxy and sync_reader_chapter', async () => {
+    const queryBookGalaxy = vi.fn(async () => ({
+      bookTitle: 'C Primer Plus',
+      totalChapters: 12,
+      notesCount: 3,
+      completionPercentage: 25,
+      currentChapter: '8.1 单字符I/O',
+      nodes: [
+        { id: 'sun-root', label: 'C Primer Plus', kind: 'sun', hasNote: true },
+        {
+          id: 'planet-8-1',
+          label: '8.1 单字符I/O',
+          kind: 'planet',
+          chapterIndex: '8.1',
+          hasNote: true,
+          isCurrent: true,
+        },
+      ],
+    }));
+
+    const syncReaderChapter = vi.fn(
+      async ({ chapterTarget }: { chapterTarget: string }) => ({
+        synced: true,
+        targetChapter: chapterTarget,
+        notePath: '读书笔记/C Primer Plus/第8章/8.1 单字符IO.md',
+      }),
+    );
+
+    const api = capabilities({
+      queryBookGalaxy,
+      syncReaderChapter,
+    });
+
+    const galaxyRes = await executeAgentTool(
+      'knowledge_query_book_galaxy',
+      JSON.stringify({}),
+      api,
+    );
+    expect(galaxyRes.name).toBe('knowledge_query_book_galaxy');
+    expect(galaxyRes.result.totalChapters).toBe(12);
+    expect(galaxyRes.result.nodes.length).toBe(2);
+    expect(queryBookGalaxy).toHaveBeenCalledTimes(1);
+
+    const syncRes = await executeAgentTool(
+      'knowledge_sync_reader_chapter',
+      JSON.stringify({
+        chapterTarget: '8.1',
+        reason: '跳转到单字符IO小节并打开对应的研读笔记',
+      }),
+      api,
+    );
+    expect(syncRes.name).toBe('knowledge_sync_reader_chapter');
+    expect(syncRes.result.synced).toBe(true);
+    expect(syncRes.result.targetChapter).toBe('8.1');
+    expect(syncReaderChapter).toHaveBeenCalledWith({
+      chapterTarget: '8.1',
+      reason: '跳转到单字符IO小节并打开对应的研读笔记',
+    });
+  });
+
+  it('formats chapter level category, title and partitioned file path', () => {
+    const bookTitle = 'C Primer Plus';
+    const hierarchy = [
+      '第8章 字符输入/输出和输入验证',
+      '8.1 单字符I/O: getchar()和putchar()',
+    ];
+    const chapterLabel = '8.1 单字符I/O: getchar()和putchar()';
+
+    const category = bookChapterKnowledgeCategory(bookTitle, hierarchy);
+    expect(category).toBe(
+      '读书笔记/C Primer Plus/第8章 字符输入 输出和输入验证',
+    );
+
+    const title = bookChapterKnowledgeNoteTitle(chapterLabel);
+    expect(title).toBe('8.1 单字符I O getchar()和putchar()');
+
+    const path = bookChapterKnowledgeNotePath(
+      bookTitle,
+      chapterLabel,
+      hierarchy,
+    );
+    expect(path).toBe(
+      '读书笔记/C Primer Plus/第8章 字符输入 输出和输入验证/8.1 单字符I O getchar()和putchar().md',
+    );
+  });
+
+  it('resolves chapter knowledge note from snapshot and generates structured frontmatter starter', () => {
+    const book = {
+      relativePath: 'books/C Primer Plus.epub',
+      title: 'C Primer Plus',
+    };
+    const chapterQuery = {
+      label: '8.1 单字符I/O: getchar()和putchar()',
+      hierarchy: [
+        '第8章 字符输入/输出和输入验证',
+        '8.1 单字符I/O: getchar()和putchar()',
+      ],
+      href: 'text/ch08.xhtml#sec8_1',
+      index: '8.1',
+    };
+
+    const emptySnapshot: LibrarySnapshot = {
+      rootPath: 'C:/books',
+      documents: [],
+      books: [],
+      plantumlFiles: [],
+      textDocuments: [],
+      categories: [],
+    };
+
+    const target = resolveBookChapterKnowledgeTarget(
+      emptySnapshot,
+      book,
+      chapterQuery,
+    );
+    expect(target.document).toBeNull();
+    expect(target.isChapterLevel).toBe(true);
+    expect(target.relativePath).toContain('第8章 字符输入 输出和输入验证');
+    expect(target.relativePath).toContain(
+      '8.1 单字符I O getchar()和putchar().md',
+    );
+
+    // Test starter creation and frontmatter parsing
+    const starter = createChapterKnowledgeStarter({
+      bookTitle: book.title,
+      creator: 'Stephen Prata',
+      chapterTitle: chapterQuery.label,
+      parentChapter: '第8章 字符输入/输出和输入验证',
+      chapterHref: chapterQuery.href,
+      chapterIndex: chapterQuery.index,
+    });
+
+    expect(starter).toContain('book_title: "C Primer Plus"');
+    expect(starter).toContain(
+      'chapter_title: "8.1 单字符I/O: getchar()和putchar()"',
+    );
+    expect(starter).toContain('chapter_href: "text/ch08.xhtml#sec8_1"');
+    expect(starter).toContain('# 8.1 单字符I/O: getchar()和putchar()');
+
+    const parsed = parseMarkdownFrontmatter(starter);
+    expect(parsed.frontmatter.book_title).toBe('C Primer Plus');
+    expect(parsed.frontmatter.chapter_title).toBe(
+      '8.1 单字符I/O: getchar()和putchar()',
+    );
+    expect(parsed.frontmatter.chapter_href).toBe('text/ch08.xhtml#sec8_1');
+    expect(parsed.body).toContain('## 核心概念与关键要点');
   });
 });

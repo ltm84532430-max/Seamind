@@ -11202,6 +11202,97 @@ button {
   font-size: 13px;
 }
 
+.reader-chapter-dock-bar {
+  height: 38px;
+  flex: 0 0 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  z-index: 5;
+  user-select: none;
+}
+
+.reader-chapter-breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.reader-chapter-crumb-book {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.reader-chapter-crumb-book:hover {
+  text-decoration: underline;
+}
+
+.reader-chapter-crumb-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.reader-chapter-crumb-sep {
+  opacity: 0.5;
+  font-size: 11px;
+}
+
+.reader-chapter-crumb-label {
+  color: var(--ink);
+  font-weight: 500;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.reader-chapter-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.reader-chapter-btn {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+}
+
+.reader-chapter-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.reader-chapter-btn.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
 .app-shell.is-reader-knowledge {
   grid-template-columns:
     minmax(0, calc((100% - 3px) * 0.52))

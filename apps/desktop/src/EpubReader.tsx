@@ -72,6 +72,16 @@ export interface EpubChapterNavigationRequest {
   label: string;
 }
 
+export interface EpubChapterChangeInfo {
+  chapterIndex: number;
+  chapterHref: string;
+  chapterLabel: string;
+  chapterHierarchy: string[];
+  cfi: string;
+  fraction: number;
+  toc: FoliateTocItem[];
+}
+
 export interface EpubReaderAgentBridge {
   readCurrentChapter(): Promise<{
     bookKey: string;
@@ -476,6 +486,32 @@ function normalizeTocHref(href: string) {
   }
 }
 
+function resolveTocHierarchy(
+  items: FoliateTocItem[],
+  targetId?: number | null,
+  targetHref?: string,
+): string[] {
+  const normTargetHref = targetHref ? normalizeTocHref(targetHref) : '';
+  function search(list: FoliateTocItem[], trail: string[]): string[] | null {
+    for (const item of list) {
+      const currentTrail = [...trail, displayLabel(item.label)];
+      const matchId = typeof targetId === 'number' && item.id === targetId;
+      const matchHref =
+        Boolean(normTargetHref) &&
+        normalizeTocHref(item.href) === normTargetHref;
+      if (matchId || matchHref) {
+        return currentTrail;
+      }
+      if (item.subitems && item.subitems.length > 0) {
+        const found = search(item.subitems, currentTrail);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+  return search(items, []) ?? [];
+}
+
 function normalizeTocLabel(value: string): string {
   return value
     .normalize('NFKC')
@@ -608,6 +644,7 @@ export default function EpubReader({
   onToggleMindmap,
   onWakeAi,
   onAgentBridgeChange,
+  onChapterChange,
   onClose,
 }: {
   selection: EpubReaderSelection;
@@ -627,6 +664,7 @@ export default function EpubReader({
   onToggleMindmap: () => void;
   onWakeAi: () => void;
   onAgentBridgeChange: (bridge: EpubReaderAgentBridge | null) => void;
+  onChapterChange?: (info: EpubChapterChangeInfo) => void;
   onClose: () => void;
 }) {
   const stageRef = useRef<HTMLDivElement>(null);
@@ -2232,6 +2270,21 @@ export default function EpubReader({
       metadataUpdate.currentChapterHref = chapterHref;
       metadataUpdate.currentChapterLabel = label;
       saveEpubBookMetadata(selection.progressKey, metadataUpdate);
+      const hierarchy = resolveTocHierarchy(
+        currentToc,
+        currentTocId,
+        chapterHref,
+      );
+      onChapterChange?.({
+        chapterIndex,
+        chapterHref,
+        chapterLabel: label,
+        chapterHierarchy:
+          hierarchy.length > 0 ? hierarchy : label ? [label] : [],
+        cfi: detail.cfi || '',
+        fraction: typeof detail.fraction === 'number' ? detail.fraction : 0,
+        toc: currentToc,
+      });
     };
     const blockExternalLink = (event: Event) => event.preventDefault();
 

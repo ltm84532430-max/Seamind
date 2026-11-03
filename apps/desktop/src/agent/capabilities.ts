@@ -96,7 +96,7 @@ export interface AgentCapabilities {
     selectionCfi: string;
     text: string;
   }): Promise<{ annotationId: string }>;
-  readCurrentBookKnowledgeNote?(): Promise<{
+  readCurrentBookKnowledgeNote?(input?: { chapterTarget?: string }): Promise<{
     bookKey: string;
     bookTitle: string;
     relativePath: string;
@@ -104,16 +104,20 @@ export interface AgentCapabilities {
     title: string;
     exists: boolean;
     markdown: string;
+    isChapterLevel?: boolean;
+    chapterLabel?: string;
   }>;
   updateBookKnowledgeNote?(input: {
     content: string;
     mode: 'append' | 'overwrite';
     rationale?: string;
+    chapterTarget?: string;
   }): Promise<{
     relativePath: string;
     title: string;
     category: string;
     updated: boolean;
+    isChapterLevel?: boolean;
   }>;
   appendBookKnowledgeExcerpt?(input: {
     excerpt: string;
@@ -123,6 +127,30 @@ export interface AgentCapabilities {
     relativePath: string;
     title: string;
     appended: boolean;
+  }>;
+  queryBookGalaxy?(): Promise<{
+    bookTitle: string;
+    totalChapters: number;
+    notesCount: number;
+    completionPercentage: number;
+    currentChapter?: string;
+    nodes: Array<{
+      id: string;
+      label: string;
+      kind: string;
+      chapterIndex?: string;
+      hasNote: boolean;
+      notePath?: string;
+      isCurrent?: boolean;
+    }>;
+  }>;
+  syncReaderChapter?(input: {
+    chapterTarget: string;
+    reason?: string;
+  }): Promise<{
+    synced: boolean;
+    targetChapter: string;
+    notePath?: string;
   }>;
   getCurrentMindmap(): ActiveMindmapSnapshot;
   searchLibrary(query: string, category?: string): Promise<MapDocument[]>;
@@ -190,15 +218,21 @@ export const agentToolCatalog: AgentToolDescriptor[] = [
     version: 1,
     name: 'knowledge_get_book_note',
     description:
-      '读取当前打开电子书对应的知识库 Markdown 读书笔记全文、标题、分类与相对路径。修改或扩充笔记前建议先调用此工具获取最新笔记原文。',
+      '读取当前电子书或指定章节对应的知识库 Markdown 读书笔记全文、标题、分类与相对路径。可指定 chapterTarget（如 "8.1" 或 "第8章"），留空则默认读取当前正在阅读的章节。',
     permission: 'read',
-    inputSchema: schema({}),
+    inputSchema: schema({
+      chapterTarget: {
+        type: 'string',
+        description:
+          '可选：指定章节序号或标题（如 "8.1" 或 "第8章 字符输入"）。若省略则取当前正文章节。',
+      },
+    }),
   },
   {
     version: 1,
     name: 'knowledge_update_book_note',
     description:
-      '更新当前电子书的知识库 Markdown 笔记。mode 为 "append" 时在文末或章节后追加内容，mode 为 "overwrite" 时全量重写。修改会实时同步到知识库工作区与并排笔记编辑器中。',
+      '更新当前电子书或指定章节的知识库 Markdown 笔记。mode 为 "append" 时在文末或章节后追加内容，mode 为 "overwrite" 时全量重写。修改会实时同步到知识库工作区与并排笔记编辑器中。',
     permission: 'read',
     inputSchema: schema(
       {
@@ -212,6 +246,11 @@ export const agentToolCatalog: AgentToolDescriptor[] = [
           enum: ['append', 'overwrite'],
           description: '写入模式：append 追加或 overwrite 覆盖。',
         },
+        chapterTarget: {
+          type: 'string',
+          description:
+            '可选：指定章节序号或标题（如 "8.1" 或 "第8章"）。若省略则归属于当前正文章节。',
+        },
         rationale: {
           type: 'string',
           maxLength: 300,
@@ -219,6 +258,34 @@ export const agentToolCatalog: AgentToolDescriptor[] = [
         },
       },
       ['content', 'mode'],
+    ),
+  },
+  {
+    version: 1,
+    name: 'knowledge_query_book_galaxy',
+    description:
+      '查询当前电子书的完整章节目录树拓扑、星系图节点以及各章节关联知识库笔记的覆盖度与状态，用于全书知识鸟瞰与章节定位。',
+    permission: 'read',
+    inputSchema: schema({}),
+  },
+  {
+    version: 1,
+    name: 'knowledge_sync_reader_chapter',
+    description:
+      '将电子书阅读器同步翻页/跳转到指定章节（如 "8.1" 或 "第8章"），同时联动切换右侧知识库笔记。',
+    permission: 'read',
+    inputSchema: schema(
+      {
+        chapterTarget: {
+          type: 'string',
+          description: '目标章节的编号、标题或名称（如 "8.1" 或 "第8章"）。',
+        },
+        reason: {
+          type: 'string',
+          description: '跳转该章节的教学、伴读或复习意图。',
+        },
+      },
+      ['chapterTarget'],
     ),
   },
   {
@@ -747,10 +814,13 @@ export async function executeAgentTool(
   }
 
   if (name === 'knowledge_get_book_note') {
-    assertOnlyKeys(input, []);
+    assertOnlyKeys(input, ['chapterTarget']);
     if (!capabilities.readCurrentBookKnowledgeNote)
       throw new Error('当前环境未处于电子书阅读状态，无法获取书籍知识库笔记。');
-    const note = await capabilities.readCurrentBookKnowledgeNote();
+    const chapterTarget = optionalString(input, 'chapterTarget', 200);
+    const note = await capabilities.readCurrentBookKnowledgeNote({
+      chapterTarget,
+    });
     return {
       version: 1,
       permission: 'read',
@@ -765,12 +835,14 @@ export async function executeAgentTool(
         title: note.title,
         exists: note.exists,
         markdown: note.markdown,
+        isChapterLevel: note.isChapterLevel,
+        chapterLabel: note.chapterLabel,
       },
     };
   }
 
   if (name === 'knowledge_update_book_note') {
-    assertOnlyKeys(input, ['content', 'mode', 'rationale']);
+    assertOnlyKeys(input, ['content', 'mode', 'rationale', 'chapterTarget']);
     if (!capabilities.updateBookKnowledgeNote)
       throw new Error('当前环境未处于电子书阅读状态，无法更新知识库笔记。');
     const content = requireText(input, 'content', 150_000, 1);
@@ -779,10 +851,12 @@ export async function executeAgentTool(
       throw new Error('mode 仅支持 "append" 或 "overwrite"。');
     }
     const rationale = optionalString(input, 'rationale', 300) ?? '';
+    const chapterTarget = optionalString(input, 'chapterTarget', 200);
     const res = await capabilities.updateBookKnowledgeNote({
       content,
       mode,
       rationale,
+      chapterTarget,
     });
     return {
       version: 1,
@@ -795,7 +869,43 @@ export async function executeAgentTool(
         title: res.title,
         category: res.category,
         updated: res.updated,
+        isChapterLevel: res.isChapterLevel,
       },
+    };
+  }
+
+  if (name === 'knowledge_query_book_galaxy') {
+    assertOnlyKeys(input, []);
+    if (!capabilities.queryBookGalaxy)
+      throw new Error('当前环境未处于电子书阅读状态，无法查询星系图数据。');
+    const galaxy = await capabilities.queryBookGalaxy();
+    return {
+      version: 1,
+      permission: 'read',
+      name,
+      label: '全书知识星系',
+      summary: `${galaxy.bookTitle} · 共 ${galaxy.totalChapters} 章节 (笔记覆盖 ${galaxy.notesCount})`,
+      result: galaxy,
+    };
+  }
+
+  if (name === 'knowledge_sync_reader_chapter') {
+    assertOnlyKeys(input, ['chapterTarget', 'reason']);
+    if (!capabilities.syncReaderChapter)
+      throw new Error('当前环境无法跳转电子书章节。');
+    const chapterTarget = requireString(input, 'chapterTarget', 200);
+    const reason = optionalString(input, 'reason', 300) ?? '';
+    const res = await capabilities.syncReaderChapter({
+      chapterTarget,
+      reason,
+    });
+    return {
+      version: 1,
+      permission: 'read',
+      name,
+      label: '同步阅读章节',
+      summary: `已将电子书同步跳转至「${res.targetChapter}」${reason ? `：${reason}` : ''}。`,
+      result: res,
     };
   }
 
