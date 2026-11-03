@@ -12,7 +12,7 @@ export interface FeedWorkspaceProps {
   onOpenMindmap?: (markdown: string, title: string) => void;
 }
 
-export const FeedWorkspace: React.FC<FeedWorkspaceProps> = ({
+const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
   onOpenMindmap,
 }) => {
   const [overview, setOverview] = useState<FeedOverview | null>(null);
@@ -353,7 +353,13 @@ export const FeedWorkspace: React.FC<FeedWorkspaceProps> = ({
         isOpen={isOpmlOpen}
         mode={opmlMode}
         exportData={exportData}
-        existingUrls={(overview?.channels || []).map((c) => c.url)}
+        existingUrls={
+          overview?.channels && Array.isArray(overview.channels)
+            ? overview.channels
+                .map((c) => (c && typeof c.url === 'string' ? c.url : ''))
+                .filter(Boolean)
+            : []
+        }
         onClose={() => setIsOpmlOpen(false)}
         onFeedAdded={async () => {
           await Promise.all([reloadOverview(), reloadArticles()]);
@@ -363,4 +369,87 @@ export const FeedWorkspace: React.FC<FeedWorkspaceProps> = ({
   );
 };
 
-export default FeedWorkspace;
+interface FeedErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+export class FeedErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  FeedErrorBoundaryState
+> {
+  override state: FeedErrorBoundaryState = {
+    hasError: false,
+    error: null,
+  };
+
+  static getDerivedStateFromError(error: Error): FeedErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  override componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error(
+      '[FeedErrorBoundary] Uncaught render error in feed workspace:',
+      error,
+      errorInfo,
+    );
+  }
+
+  handleReset = () => {
+    this.setState({ hasError: false, error: null });
+  };
+
+  override render() {
+    if (this.state.hasError) {
+      return (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            height: '100%',
+            padding: '36px',
+            textAlign: 'center',
+            color: 'var(--ink)',
+          }}
+        >
+          <h3 style={{ margin: '0 0 8px 0', fontSize: '18px' }}>
+            订阅工作区加载异常
+          </h3>
+          <p
+            style={{
+              color: 'var(--muted)',
+              fontSize: '13px',
+              maxWidth: '460px',
+              margin: '0 0 16px 0',
+            }}
+          >
+            {this.state.error?.message || '未知错误'}
+          </p>
+          <button
+            type="button"
+            className="feed-text-btn is-primary"
+            onClick={this.handleReset}
+          >
+            重新载入
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export const FeedWorkspaceWithBoundary: React.FC<FeedWorkspaceProps> = (
+  props,
+) => {
+  return (
+    <FeedErrorBoundary>
+      <FeedWorkspaceInner {...props} />
+    </FeedErrorBoundary>
+  );
+};
+
+export const FeedWorkspace = FeedWorkspaceWithBoundary;
+export default FeedWorkspaceWithBoundary;

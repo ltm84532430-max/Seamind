@@ -15,7 +15,7 @@ export const FeedOpmlDialog: React.FC<FeedOpmlDialogProps> = ({
   isOpen,
   mode,
   exportData = '',
-  existingUrls,
+  existingUrls = [],
   onClose,
   onFeedAdded,
 }) => {
@@ -34,9 +34,20 @@ export const FeedOpmlDialog: React.FC<FeedOpmlDialogProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const subscribedSet = useMemo(() => {
-    const set = new Set(existingUrls.map((u) => u.toLowerCase().trim()));
-    for (const url of Object.keys(addedUrls)) {
-      set.add(url.toLowerCase().trim());
+    const set = new Set<string>();
+    if (Array.isArray(existingUrls)) {
+      for (const u of existingUrls) {
+        if (typeof u === 'string' && u.trim()) {
+          set.add(u.toLowerCase().trim());
+        }
+      }
+    }
+    if (addedUrls) {
+      for (const url of Object.keys(addedUrls)) {
+        if (typeof url === 'string' && url.trim()) {
+          set.add(url.toLowerCase().trim());
+        }
+      }
     }
     return set;
   }, [existingUrls, addedUrls]);
@@ -130,22 +141,25 @@ export const FeedOpmlDialog: React.FC<FeedOpmlDialogProps> = ({
   };
 
   const filteredItems = useMemo(() => {
-    if (!parsedItems) return [];
+    if (!parsedItems || !Array.isArray(parsedItems)) return [];
     if (!filterQuery.trim()) return parsedItems;
     const q = filterQuery.toLowerCase().trim();
     return parsedItems.filter(
       (item) =>
-        item.title.toLowerCase().includes(q) ||
-        item.xmlUrl.toLowerCase().includes(q) ||
-        item.category.toLowerCase().includes(q),
+        (item?.title && String(item.title).toLowerCase().includes(q)) ||
+        (item?.xmlUrl && String(item.xmlUrl).toLowerCase().includes(q)) ||
+        (item?.category && String(item.category).toLowerCase().includes(q)),
     );
   }, [parsedItems, filterQuery]);
 
   const remainingCount = useMemo(() => {
-    if (!parsedItems) return 0;
-    return parsedItems.filter(
-      (item) => !subscribedSet.has(item.xmlUrl.toLowerCase().trim()),
-    ).length;
+    if (!parsedItems || !Array.isArray(parsedItems)) return 0;
+    return parsedItems.filter((item) => {
+      const urlKey = item?.xmlUrl
+        ? String(item.xmlUrl).toLowerCase().trim()
+        : '';
+      return urlKey && !subscribedSet.has(urlKey);
+    }).length;
   }, [parsedItems, subscribedSet]);
 
   const handleCopyExport = async () => {
