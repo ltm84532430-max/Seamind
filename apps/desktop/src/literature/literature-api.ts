@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { readProviderSettings } from '../app-storage';
 import type {
   CollectionInput,
   LiteratureOverview,
@@ -95,6 +96,15 @@ export const literatureApi = {
 
   searchOnline: (query: string, source: 'crossref' | 'arxiv') =>
     invoke<LiteratureSearchResult[]>('literature_search', { query, source }),
+
+  aiDiscover: (prompt: string, baseUrl?: string, model?: string) => {
+    const settings = readProviderSettings();
+    return invoke<LiteratureSearchResult[]>('literature_ai_discover', {
+      prompt,
+      baseUrl: baseUrl || settings.baseUrl,
+      model: model || settings.model,
+    });
+  },
 
   downloadArxivPdf: (id: string) =>
     invoke<PaperItem>('literature_download_arxiv_pdf', { id }),

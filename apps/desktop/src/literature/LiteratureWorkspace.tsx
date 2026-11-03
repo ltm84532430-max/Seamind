@@ -151,6 +151,19 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
   // Copy notice toast
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
 
+  // AI Paper Discovery State
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiSearching, setAiSearching] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiResults, setAiResults] = useState<LiteratureSearchResult[]>([]);
+  const [selectedAiIndices, setSelectedAiIndices] = useState<Set<number>>(
+    new Set(),
+  );
+  const [aiBatchImporting, setAiBatchImporting] = useState(false);
+  const [expandedAiAbstractIndex, setExpandedAiAbstractIndex] = useState<
+    number | null
+  >(null);
+
   const showToast = (text: string) => {
     setCopyNotice(text);
     setTimeout(() => setCopyNotice(null), 2000);
@@ -552,6 +565,157 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
     }
   };
 
+  const handleAiDiscover = async () => {
+    const prompt = aiPrompt.trim();
+    if (!prompt) return;
+    setAiSearching(true);
+    setAiError(null);
+    setAiResults([]);
+    setSelectedAiIndices(new Set());
+    setExpandedAiAbstractIndex(null);
+    try {
+      const results = await literatureApi.aiDiscover(prompt);
+      setAiResults(results);
+      if (results.length === 0) {
+        setAiError('未检索到匹配的学术论文，请尝试调整研究主题或关键词。');
+      } else {
+        const unaddedIndices = new Set<number>();
+        results.forEach((r, idx) => {
+          if (!r.existingPaperId) unaddedIndices.add(idx);
+        });
+        setSelectedAiIndices(unaddedIndices);
+      }
+    } catch (err: unknown) {
+      setAiError(
+        err instanceof Error
+          ? err.message
+          : String(err) || 'AI 检索失败，请检查网络或模型设置。',
+      );
+    } finally {
+      setAiSearching(false);
+    }
+  };
+
+  const handleToggleSelectAiResult = (index: number) => {
+    setSelectedAiIndices((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
+  };
+
+  const handleToggleSelectAllAiResults = () => {
+    const unaddedIndices = aiResults
+      .map((r, i) => (!r.existingPaperId ? i : -1))
+      .filter((i) => i >= 0);
+    if (selectedAiIndices.size === unaddedIndices.length) {
+      setSelectedAiIndices(new Set());
+    } else {
+      setSelectedAiIndices(new Set(unaddedIndices));
+    }
+  };
+
+  const handleImportSingleAiResult = async (
+    result: LiteratureSearchResult,
+    index: number,
+  ) => {
+    if (result.existingPaperId) {
+      await handleOpenDiscoveredPaper(result);
+      return;
+    }
+    try {
+      const saved = await literatureApi.save({
+        ...result.paper,
+        collectionIds: activeCollectionId ? [activeCollectionId] : undefined,
+      });
+      setPapers((current) => [
+        saved,
+        ...current.filter((p) => p.id !== saved.id),
+      ]);
+      setSelectedPaperId(saved.id);
+      selectedRef.current = saved.id;
+      setCompactPane('detail');
+      setAiResults((prev) =>
+        prev.map((item, i) =>
+          i === index ? { ...item, existingPaperId: saved.id } : item,
+        ),
+      );
+      setSelectedAiIndices((prev) => {
+        const next = new Set(prev);
+        next.delete(index);
+        return next;
+      });
+      if (result.source.toLowerCase() === 'arxiv' || result.pdfUrl) {
+        void acquireAndRead(saved);
+      }
+      showToast(`已添加《${saved.title}》到文献库。`);
+      void loadOverview();
+    } catch (err: unknown) {
+      setAiError(
+        err instanceof Error ? err.message : String(err) || '添加文献失败。',
+      );
+    }
+  };
+
+  const handleBatchImportAiResults = async () => {
+    const indices = Array.from(selectedAiIndices);
+    if (indices.length === 0) return;
+    setAiBatchImporting(true);
+    let successCount = 0;
+    try {
+      for (const idx of indices) {
+        const result = aiResults[idx];
+        if (!result || result.existingPaperId) continue;
+        try {
+          const saved = await literatureApi.save({
+            ...result.paper,
+            collectionIds: activeCollectionId
+              ? [activeCollectionId]
+              : undefined,
+          });
+          setPapers((current) => [
+            saved,
+            ...current.filter((p) => p.id !== saved.id),
+          ]);
+          setAiResults((prev) =>
+            prev.map((item, i) =>
+              i === idx ? { ...item, existingPaperId: saved.id } : item,
+            ),
+          );
+          if (result.source.toLowerCase() === 'arxiv' || result.pdfUrl) {
+            void literatureApi.acquirePdf(saved.id).catch(() => undefined);
+          }
+          successCount++;
+        } catch {
+          // continue
+        }
+      }
+      setSelectedAiIndices(new Set());
+      showToast(`成功导入 ${successCount} 篇文献！`);
+      void loadOverview();
+    } finally {
+      setAiBatchImporting(false);
+    }
+  };
+
+  const handleJumpToExistingPaper = async (paperId: string) => {
+    const existing =
+      papers.find((p) => p.id === paperId) ||
+      (await literatureApi.get(paperId));
+    if (existing) {
+      if (!papers.some((p) => p.id === existing.id)) {
+        setPapers((current) => [existing, ...current]);
+      }
+      setSelectedPaperId(existing.id);
+      selectedRef.current = existing.id;
+      setCompactPane('detail');
+    }
+  };
+
   const handleExecuteBibtexImport = async () => {
     if (!bibtexDraft.trim()) return;
     setBibtexLoading(true);
@@ -738,6 +902,226 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
               </div>
             </div>
           )}
+
+          {/* AI Literature Discovery Section */}
+          <div className="lit-nav-section lit-ai-section">
+            <div className="lit-section-label lit-ai-section-label">
+              <span className="lit-ai-badge">✨ AI 论文探索</span>
+              {aiResults.length > 0 && (
+                <button
+                  type="button"
+                  className="lit-section-btn"
+                  title="清空搜索结果"
+                  onClick={() => {
+                    setAiResults([]);
+                    setSelectedAiIndices(new Set());
+                    setAiError(null);
+                  }}
+                >
+                  ×
+                </button>
+              )}
+            </div>
+
+            <div className="lit-ai-input-wrap">
+              <textarea
+                className="lit-ai-prompt-input"
+                placeholder="描述研究课题或需求，如：大模型长文本外推代表作..."
+                value={aiPrompt}
+                onChange={(e) => setAiPrompt(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    void handleAiDiscover();
+                  }
+                }}
+                rows={2}
+              />
+              <button
+                type="button"
+                className="lit-ai-submit-btn"
+                onClick={() => void handleAiDiscover()}
+                disabled={aiSearching || !aiPrompt.trim()}
+              >
+                {aiSearching ? '检索中…' : '🔍 检索'}
+              </button>
+            </div>
+
+            {/* Topic inspiration pills */}
+            {!aiResults.length && !aiSearching && (
+              <div className="lit-ai-pills">
+                {[
+                  '长文本LLM',
+                  '多模态扩散',
+                  '代码Agent',
+                  '时序Transformer',
+                ].map((topic) => (
+                  <button
+                    key={topic}
+                    type="button"
+                    className="lit-ai-pill"
+                    onClick={() => {
+                      setAiPrompt(topic);
+                    }}
+                  >
+                    {topic}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Status / Loading */}
+            {aiSearching && (
+              <div className="lit-ai-loading">
+                <span className="lit-ai-spinner" aria-hidden="true" />
+                <span>AI 正在分析主题并检索学术库…</span>
+              </div>
+            )}
+
+            {/* Error notice */}
+            {aiError && (
+              <div className="lit-ai-error" role="alert">
+                {aiError}
+              </div>
+            )}
+
+            {/* Results count & batch toolbar */}
+            {aiResults.length > 0 && (
+              <div className="lit-ai-results-header">
+                <span className="lit-ai-count">
+                  找到 {aiResults.length} 篇相关论文
+                </span>
+                <div className="lit-ai-batch-actions">
+                  <button
+                    type="button"
+                    className="lit-ai-link-btn"
+                    onClick={handleToggleSelectAllAiResults}
+                  >
+                    {selectedAiIndices.size ===
+                    aiResults.filter((r) => !r.existingPaperId).length
+                      ? '取消'
+                      : '全选'}
+                  </button>
+                  <button
+                    type="button"
+                    className="lit-ai-import-btn"
+                    disabled={selectedAiIndices.size === 0 || aiBatchImporting}
+                    onClick={() => void handleBatchImportAiResults()}
+                  >
+                    {aiBatchImporting
+                      ? '导入中…'
+                      : `导入 (${selectedAiIndices.size})`}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Results list */}
+            {aiResults.length > 0 && (
+              <div className="lit-ai-cards-list">
+                {aiResults.map((result, idx) => (
+                  <div
+                    key={`${result.paper.arxivId || result.paper.doi || result.paper.title}-${idx}`}
+                    className={`lit-ai-card ${
+                      selectedAiIndices.has(idx) ? 'is-selected' : ''
+                    } ${result.existingPaperId ? 'is-existing-card' : ''}`}
+                  >
+                    <div className="lit-ai-card-top">
+                      <input
+                        type="checkbox"
+                        checked={selectedAiIndices.has(idx)}
+                        onChange={() => handleToggleSelectAiResult(idx)}
+                        disabled={!!result.existingPaperId}
+                        aria-label={`选择论文 ${result.paper.title}`}
+                      />
+                      <div
+                        className="lit-ai-card-title"
+                        title={result.paper.title}
+                        onClick={() =>
+                          setExpandedAiAbstractIndex((prev) =>
+                            prev === idx ? null : idx,
+                          )
+                        }
+                      >
+                        {result.paper.title}
+                      </div>
+                    </div>
+
+                    <div className="lit-ai-card-meta">
+                      <span className="lit-ai-card-authors">
+                        {result.paper.authors.slice(0, 2).join(', ')}
+                        {result.paper.authors.length > 2 ? ' 等' : ''}
+                      </span>
+                      {result.paper.year && <span> · {result.paper.year}</span>}
+                      <span className="lit-ai-card-source">
+                        {result.source}
+                      </span>
+                      {result.pdfUrl && (
+                        <span
+                          className="lit-ai-pdf-tag"
+                          title="官方 PDF 可下载"
+                        >
+                          PDF
+                        </span>
+                      )}
+                    </div>
+
+                    {result.aiRecommendation && (
+                      <div className="lit-ai-card-reason">
+                        💡 {result.aiRecommendation}
+                      </div>
+                    )}
+
+                    {expandedAiAbstractIndex === idx &&
+                      result.paper.abstractText && (
+                        <div className="lit-ai-card-abstract">
+                          {result.paper.abstractText}
+                        </div>
+                      )}
+
+                    <div className="lit-ai-card-actions">
+                      {result.existingPaperId ? (
+                        <button
+                          type="button"
+                          className="lit-ai-card-btn is-existing"
+                          onClick={() =>
+                            void handleJumpToExistingPaper(
+                              result.existingPaperId!,
+                            )
+                          }
+                        >
+                          已在库中（定位）
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="lit-ai-card-btn is-add"
+                          onClick={() =>
+                            void handleImportSingleAiResult(result, idx)
+                          }
+                        >
+                          + 添加至文献库
+                        </button>
+                      )}
+                      {result.paper.abstractText && (
+                        <button
+                          type="button"
+                          className="lit-ai-card-toggle-abs"
+                          onClick={() =>
+                            setExpandedAiAbstractIndex((prev) =>
+                              prev === idx ? null : idx,
+                            )
+                          }
+                        >
+                          {expandedAiAbstractIndex === idx ? '收起' : '摘要'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </aside>
 

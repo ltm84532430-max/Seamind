@@ -208,6 +208,7 @@ pub fn run() {
             literature::literature_fetch_doi,
             literature::literature_fetch_arxiv,
             literature::literature_search,
+            literature::literature_ai_discover,
             literature::literature_parse_bibtex_text,
             literature::literature_import_bibtex_text,
             literature::literature_export_bibtex_text,
@@ -762,7 +763,7 @@ pub(crate) async fn request_chat_completion(
         .ok_or_else(|| "AI 服务没有返回内容。".to_string())
 }
 
-fn strip_json_code_fence(content: &str) -> &str {
+pub(crate) fn strip_json_code_fence(content: &str) -> &str {
     let trimmed = content.trim();
     if !trimmed.starts_with("```") || !trimmed.ends_with("```") {
         return trimmed;

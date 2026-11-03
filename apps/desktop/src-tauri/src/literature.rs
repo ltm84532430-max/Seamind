@@ -37,6 +37,8 @@ pub struct LiteratureSearchResult {
     pub source: String,
     pub pdf_url: Option<String>,
     pub existing_paper_id: Option<String>,
+    #[serde(default)]
+    pub ai_recommendation: Option<String>,
 }
 
 fn literature_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -1067,6 +1069,7 @@ fn crossref_search_result(item: &serde_json::Value) -> Option<LiteratureSearchRe
         source: "Crossref".to_string(),
         pdf_url,
         existing_paper_id: None,
+        ai_recommendation: None,
     })
 }
 
@@ -1210,6 +1213,7 @@ async fn search_arxiv(query: &str) -> Result<Vec<LiteratureSearchResult>, String
             source: "arXiv".to_string(),
             pdf_url,
             existing_paper_id: None,
+            ai_recommendation: None,
         });
     }
     Ok(results)
@@ -1269,6 +1273,184 @@ pub async fn literature_search(
         seen.insert(key)
     });
     Ok(results)
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct AiLiteratureDiscoveryPlan {
+    #[serde(default)]
+    queries: Vec<String>,
+    #[serde(default)]
+    landmarks: Vec<AiLandmarkRecommendation>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct AiLandmarkRecommendation {
+    #[serde(default)]
+    arxiv_id: Option<String>,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    reason: String,
+}
+
+const AI_DISCOVERY_SYSTEM_PROMPT: &str = r#"You are an expert academic research assistant specializing in scholarly literature discovery.
+Analyze the user's research topic or request.
+You must:
+1. Formulate 2 to 3 precise English academic search queries (optimized for arXiv and Crossref API keyword searches).
+2. If you know 1 to 3 specific seminal, landmark, or highly-cited papers that directly address this topic, list them with their valid arXiv ID (e.g. "2309.00071") if known, the exact English paper title, and a 1-sentence Chinese reason explaining its core contribution.
+
+Respond ONLY with a valid JSON object matching this schema without any markdown formatting or commentary:
+{
+  "queries": ["query 1", "query 2"],
+  "landmarks": [
+    {
+      "arxiv_id": "2309.00071",
+      "title": "YaRN: Efficient Context Window Extension for Large Language Models",
+      "reason": "提出 YaRN 方法，通过旋转位置编码（RoPE）内插与外推实现长上下文窗口的高效扩展。"
+    }
+  ]
+}"#;
+
+#[tauri::command(async)]
+pub async fn literature_ai_discover(
+    app: AppHandle,
+    base_url: String,
+    model: String,
+    prompt: String,
+) -> Result<Vec<LiteratureSearchResult>, String> {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return Err("请输入研究主题或论文检索需求。".to_string());
+    }
+    if prompt.len() > 1000 {
+        return Err("输入内容过长，请控制在 1000 字符以内。".to_string());
+    }
+
+    let completion = crate::request_chat_completion(
+        &base_url,
+        &model,
+        AI_DISCOVERY_SYSTEM_PROMPT,
+        prompt,
+        6000,
+    )
+    .await?;
+
+    let cleaned_json = crate::strip_json_code_fence(&completion);
+    let plan: AiLiteratureDiscoveryPlan = serde_json::from_str(cleaned_json).unwrap_or_else(|_| {
+        AiLiteratureDiscoveryPlan {
+            queries: vec![prompt.to_string()],
+            landmarks: Vec::new(),
+        }
+    });
+
+    let mut combined: Vec<LiteratureSearchResult> = Vec::new();
+    let mut landmark_reasons: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+
+    // 1. Process known landmark papers
+    for landmark in plan.landmarks {
+        if let Some(ref aid) = landmark.arxiv_id {
+            if let Ok(paper_input) = literature_fetch_arxiv(aid.clone()).await {
+                let pdf_url = paper_input
+                    .arxiv_id
+                    .as_ref()
+                    .map(|id| format!("https://arxiv.org/pdf/{id}.pdf"));
+                landmark_reasons.insert(aid.to_lowercase(), landmark.reason.clone());
+                landmark_reasons.insert(landmark.title.to_lowercase(), landmark.reason.clone());
+                combined.push(LiteratureSearchResult {
+                    paper: paper_input,
+                    source: "arXiv".to_string(),
+                    pdf_url,
+                    existing_paper_id: None,
+                    ai_recommendation: Some(landmark.reason),
+                });
+            }
+        } else {
+            landmark_reasons.insert(landmark.title.to_lowercase(), landmark.reason);
+        }
+    }
+
+    // 2. Query arXiv and Crossref with the generated queries
+    for query in plan.queries.iter().take(3) {
+        let q = query.trim();
+        if q.is_empty() {
+            continue;
+        }
+        if let Ok(mut arxiv_items) = search_arxiv(q).await {
+            combined.append(&mut arxiv_items);
+        }
+        if let Ok(mut crossref_items) = search_crossref(q).await {
+            combined.append(&mut crossref_items);
+        }
+    }
+
+    // Fallback search with original prompt if combined is still empty
+    if combined.is_empty() {
+        if let Ok(mut arxiv_items) = search_arxiv(prompt).await {
+            combined.append(&mut arxiv_items);
+        }
+        if let Ok(mut crossref_items) = search_crossref(prompt).await {
+            combined.append(&mut crossref_items);
+        }
+    }
+
+    // 3. Deduplicate
+    let mut seen = HashSet::new();
+    combined.retain(|result| {
+        let key = result
+            .paper
+            .arxiv_id
+            .as_ref()
+            .map(|val| format!("arxiv:{}", val.to_ascii_lowercase()))
+            .or_else(|| {
+                result
+                    .paper
+                    .doi
+                    .as_ref()
+                    .map(|val| format!("doi:{}", val.to_ascii_lowercase()))
+            })
+            .unwrap_or_else(|| {
+                format!(
+                    "title:{}",
+                    result
+                        .paper
+                        .title
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .to_lowercase()
+                )
+            });
+        seen.insert(key)
+    });
+
+    // 4. Attach reasons and check local existing status
+    let conn = open_db(&app)?;
+    for result in &mut combined {
+        result.existing_paper_id = store::find_existing_paper_id(
+            &conn,
+            result.paper.doi.as_deref(),
+            result.paper.arxiv_id.as_deref(),
+        )?;
+
+        if result.ai_recommendation.is_none() {
+            if let Some(ref aid) = result.paper.arxiv_id {
+                if let Some(reason) = landmark_reasons.get(&aid.to_lowercase()) {
+                    result.ai_recommendation = Some(reason.clone());
+                }
+            }
+            if result.ai_recommendation.is_none() {
+                let title_lower = result.paper.title.to_lowercase();
+                if let Some(reason) = landmark_reasons.get(&title_lower) {
+                    result.ai_recommendation = Some(reason.clone());
+                }
+            }
+        }
+    }
+
+    // Limit to top 15 results
+    combined.truncate(15);
+    Ok(combined)
 }
 
 // -------------------------------------------------------------------------------------------------

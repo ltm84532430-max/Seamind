@@ -56,6 +56,7 @@ export interface LiteratureSearchResult {
   source: 'Crossref' | 'arXiv';
   pdfUrl: string | null;
   existingPaperId: string | null;
+  aiRecommendation?: string | null;
 }
 
 export interface PaperAnnotationRect {
