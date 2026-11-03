@@ -967,6 +967,10 @@
   height: 100%;
   min-height: 0;
   grid-template-columns: minmax(0, 1fr) 360px;
+  transition: grid-template-columns 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+.player-watch.is-queue-collapsed {
+  grid-template-columns: minmax(0, 1fr) 42px;
 }
 /* A video that came from a pasted link has no list beside it, so it gets the whole width. */
 .player-watch.is-single {
@@ -976,22 +980,21 @@
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  padding: 12px 20px 28px;
+  padding: 16px 20px 32px;
 }
-/* The picture is as wide as the window leaves room for at 16:9, so there are no black bars at
-   the sides when the window is wide and not very tall; its heading and buttons line up with it. */
 .player-watch-main > .player-watch-bar,
 .player-watch-main > .youtube-player-dialog,
 .player-watch-main > .player-watch-info {
-  max-width: max(480px, calc((100vh - 360px) * 16 / 9));
-  margin-right: auto;
-  margin-left: auto;
+  width: 100%;
+  max-width: 100%;
+  margin-right: 0;
+  margin-left: 0;
 }
 .player-watch-bar {
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
 .player-watch-info h2 {
-  margin: 14px 0 6px;
+  margin: 16px 0 6px;
   font-size: 18px;
   line-height: 1.4;
 }
@@ -1033,13 +1036,17 @@
   flex-direction: column;
   border-left: 1px solid var(--player-line);
   background: var(--player-panel);
+  transition: width 0.18s ease;
+  overflow: hidden;
 }
 .player-watch-queue > header {
   display: flex;
+  height: 52px;
+  min-height: 52px;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 12px 14px;
+  padding: 0 12px;
   border-bottom: 1px solid var(--player-line);
   font-size: 12.5px;
 }
@@ -1048,10 +1055,44 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.player-watch-queue-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
 .player-watch-queue > header span {
   flex: none;
   color: var(--player-muted);
   font-variant-numeric: tabular-nums;
+}
+.player-watch-queue.is-collapsed > header {
+  padding: 0;
+  justify-content: center;
+  border-bottom: 0;
+}
+.player-queue-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  flex: none;
+  border: 1px solid var(--player-line-strong);
+  border-radius: 4px;
+  background: var(--player-panel-alt);
+  color: var(--player-muted);
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+.player-queue-toggle-btn:hover {
+  border-color: var(--player-accent);
+  color: var(--player-accent);
+  background: rgba(223, 115, 91, 0.08);
+}
+.player-queue-toggle-btn.is-collapsed {
+  margin: 0 auto;
 }
 .player-watch-queue-list {
   position: relative;
@@ -1064,12 +1105,16 @@
 /* The shared player, when it sits in the page instead of a dialog. */
 .player-workspace-stage .youtube-player-dialog.is-page {
   width: 100%;
+  max-width: 100%;
   max-height: none;
   overflow: visible;
   border-color: var(--player-line);
+  border-radius: 4px;
 }
 .player-workspace-stage .youtube-player-dialog.is-page .youtube-player-stage {
-  max-height: calc(100vh - 250px);
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  max-height: none;
   min-height: 240px;
 }
 

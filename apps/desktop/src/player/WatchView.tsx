@@ -28,6 +28,7 @@ export interface Watching {
 const SAVE_EVERY_MS = 10_000;
 const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];
 const RATE_KEY = 'seamind:player-rate:v1';
+const QUEUE_COLLAPSED_KEY = 'seamind:player-queue-collapsed:v1';
 
 function readRate(): number {
   try {
@@ -71,6 +72,25 @@ export default function WatchView({
   const [assignedCategoryId, setAssignedCategoryId] = useState<string | null>(
     null,
   );
+  const [queueCollapsed, setQueueCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(QUEUE_COLLAPSED_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleQueue = useCallback(() => {
+    setQueueCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(QUEUE_COLLAPSED_KEY, String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  }, []);
   const progressRef = useRef<PlayerProgress | null>(null);
   const savedAtRef = useRef(0);
   const onSavedRef = useRef(onSaved);
@@ -172,7 +192,9 @@ export default function WatchView({
 
   return (
     <section
-      className={`player-watch${queue.items.length > 1 ? '' : ' is-single'}`}
+      className={`player-watch${queue.items.length > 1 ? '' : ' is-single'}${
+        queueCollapsed && queue.items.length > 1 ? ' is-queue-collapsed' : ''
+      }`}
       aria-label="正在播放"
     >
       <div className="player-watch-main">
@@ -286,22 +308,80 @@ export default function WatchView({
         </div>
       </div>
       {queue.items.length > 1 && (
-        <aside className="player-watch-queue" aria-label="播放队列">
+        <aside
+          className={`player-watch-queue${queueCollapsed ? ' is-collapsed' : ''}`}
+          aria-label="播放队列"
+        >
           <header>
-            <strong title={queue.title}>{queue.title}</strong>
-            <span>
-              {position >= 0 ? `${position + 1}/` : ''}
-              {queue.items.length}
-            </span>
+            {!queueCollapsed ? (
+              <>
+                <strong title={queue.title}>{queue.title}</strong>
+                <div className="player-watch-queue-controls">
+                  <span>
+                    {position >= 0 ? `${position + 1}/` : ''}
+                    {queue.items.length}
+                  </span>
+                  <button
+                    type="button"
+                    className="player-queue-toggle-btn"
+                    onClick={toggleQueue}
+                    title="收起播放列表 (扩大播放窗口)"
+                    aria-label="收起播放列表"
+                  >
+                    <svg
+                      viewBox="0 0 16 16"
+                      width="13"
+                      height="13"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M6 3l5 5-5 5"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.8"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </button>
+                </div>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="player-queue-toggle-btn is-collapsed"
+                onClick={toggleQueue}
+                title="展开播放列表"
+                aria-label="展开播放列表"
+              >
+                <svg
+                  viewBox="0 0 16 16"
+                  width="13"
+                  height="13"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M10 3L5 8l5 5"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            )}
           </header>
-          <div ref={queueListRef} className="player-watch-queue-list">
-            <VideoList
-              items={queue.items}
-              queueTitle={queue.title}
-              activeId={videoId}
-              compact
-            />
-          </div>
+          {!queueCollapsed && (
+            <div ref={queueListRef} className="player-watch-queue-list">
+              <VideoList
+                items={queue.items}
+                queueTitle={queue.title}
+                activeId={videoId}
+                compact
+              />
+            </div>
+          )}
         </aside>
       )}
     </section>
