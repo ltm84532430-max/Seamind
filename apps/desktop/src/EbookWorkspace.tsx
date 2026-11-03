@@ -424,89 +424,6 @@ export default function EbookWorkspace({
         onOpenBook={onOpenBook}
       />
       <div className="ebook-shelf-content">
-        <header className="ebook-shelf-header">
-          <div>
-            <span className="ebook-shelf-kicker">
-              LOCAL LIBRARY · BOOKSHELF
-            </span>
-            <h1>电子书</h1>
-            <p>
-              {books.length
-                ? `书架中有 ${books.length} 本 EPUB，阅读位置和书签会自动保存。`
-                : '导入 EPUB 后会保存在当前文件库，下次打开仍可继续阅读。'}
-            </p>
-          </div>
-          <div className="ebook-shelf-actions">
-            <button
-              type="button"
-              className="ebook-exam-library-toggle"
-              aria-expanded={!examLibraryCollapsed || examLibraryOpen}
-              onClick={() => {
-                if (
-                  typeof window !== 'undefined' &&
-                  window.innerWidth <= 1480
-                ) {
-                  setExamLibraryOpen((open) => !open);
-                } else {
-                  setExamLibraryCollapsed((collapsed) => {
-                    const next = !collapsed;
-                    try {
-                      localStorage.setItem(
-                        'seamind_ebook_exam_collapsed',
-                        String(next),
-                      );
-                    } catch {
-                      // ignore
-                    }
-                    return next;
-                  });
-                }
-              }}
-            >
-              {examLibraryCollapsed
-                ? `试卷库${exams.length ? ` · ${exams.length}` : ''}`
-                : '收起试卷库'}
-            </button>
-            <button
-              type="button"
-              className="ebook-dashboard-toggle"
-              aria-expanded={dashboardOpen}
-              onClick={() => setDashboardOpen((open) => !open)}
-            >
-              {dashboardOpen ? '收起看板' : '阅读看板'}
-            </button>
-            <button type="button" onClick={onRefresh} disabled={busy}>
-              刷新书架
-            </button>
-            <button
-              type="button"
-              className="ebook-shelf-zlib"
-              onClick={() => setZlibDialogOpen(true)}
-              disabled={!snapshot?.rootPath}
-              title={
-                snapshot?.rootPath
-                  ? '在线搜索 Z-Library 海量书籍并下载'
-                  : '请先选择文件库位置'
-              }
-            >
-              在线找书
-            </button>
-            <button
-              type="button"
-              className="ebook-shelf-import"
-              onClick={onImport}
-              disabled={busy || !snapshot?.rootPath}
-              title={
-                snapshot?.rootPath
-                  ? '导入 EPUB 并保存到文件库'
-                  : '请先选择文件库位置'
-              }
-            >
-              {busy ? '正在导入…' : '导入 EPUB'}
-            </button>
-          </div>
-        </header>
-
         {!snapshot?.rootPath ? (
           <section className="ebook-shelf-empty">
             <div className="ebook-shelf-empty-icon" aria-hidden="true">
@@ -539,35 +456,46 @@ export default function EbookWorkspace({
                   </button>
                 )}
               </label>
-              <label className="ebook-shelf-sort">
-                <span>排序</span>
-                <select
-                  value={sortBy}
-                  onChange={(event) =>
-                    setSortBy(event.target.value as ShelfSort)
-                  }
+              <div className="ebook-shelf-toolbar-controls">
+                <label className="ebook-shelf-sort">
+                  <span>排序</span>
+                  <select
+                    value={sortBy}
+                    onChange={(event) =>
+                      setSortBy(event.target.value as ShelfSort)
+                    }
+                  >
+                    <option value="recent">最近阅读</option>
+                    <option value="added">最近加入</option>
+                    <option value="title">书名</option>
+                  </select>
+                </label>
+                <label className="ebook-shelf-category-filter">
+                  <span>分类</span>
+                  <select
+                    value={categoryFilter}
+                    onChange={(event) => setCategoryFilter(event.target.value)}
+                    aria-label="按书籍分类筛选"
+                  >
+                    <option value="all">全部分类</option>
+                    <option value="__uncategorized__">未分类</option>
+                    {bookCategories.map((category) => (
+                      <option key={category} value={`category:${category}`}>
+                        {category}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="ebook-shelf-refresh-button"
+                  onClick={onRefresh}
+                  disabled={busy}
+                  title="刷新书架"
                 >
-                  <option value="recent">最近阅读</option>
-                  <option value="added">最近加入</option>
-                  <option value="title">书名</option>
-                </select>
-              </label>
-              <label className="ebook-shelf-category-filter">
-                <span>分类</span>
-                <select
-                  value={categoryFilter}
-                  onChange={(event) => setCategoryFilter(event.target.value)}
-                  aria-label="按书籍分类筛选"
-                >
-                  <option value="all">全部分类</option>
-                  <option value="__uncategorized__">未分类</option>
-                  {bookCategories.map((category) => (
-                    <option key={category} value={`category:${category}`}>
-                      {category}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  刷新书架
+                </button>
+              </div>
             </div>
 
             {categoryError && !categoryTarget && (
@@ -789,6 +717,25 @@ export default function EbookWorkspace({
                     </article>
                   );
                 })}
+                <button
+                  type="button"
+                  className="ebook-book-card ebook-book-add-card"
+                  onClick={onImport}
+                  disabled={busy || !snapshot?.rootPath}
+                  title={
+                    snapshot?.rootPath
+                      ? '导入 EPUB 文件到书架'
+                      : '请先选择文件库位置'
+                  }
+                  aria-label="导入 EPUB 文件到书架"
+                >
+                  <div className="ebook-book-add-cover" aria-hidden="true">
+                    <span className="ebook-book-add-plus">＋</span>
+                    {busy && (
+                      <span className="ebook-book-add-busy-text">导入中…</span>
+                    )}
+                  </div>
+                </button>
               </section>
             ) : (
               <section className="ebook-shelf-empty ebook-shelf-no-results">
@@ -956,6 +903,14 @@ export default function EbookWorkspace({
         onClose={() => setExamLibraryOpen(false)}
         onFilterBook={setFilteredExamBookKey}
         onOpenExam={(exam) => setSelectedExam(exam)}
+        hasRoot={Boolean(snapshot?.rootPath)}
+        onBookDownloaded={(doc, openImmediately) => {
+          onRefresh();
+          if (openImmediately) {
+            onOpenBook(doc);
+          }
+        }}
+        onOpenZlibDialog={() => setZlibDialogOpen(true)}
       />
 
       {planTarget && (

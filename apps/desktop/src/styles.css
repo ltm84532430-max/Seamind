@@ -11150,10 +11150,100 @@ button {
   border-radius: 50% !important;
 }
 
+.reader-knowledge-dock {
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--canvas-bg);
+  display: flex;
+  flex-direction: column;
+}
+.reader-knowledge-dock > .document-workbench {
+  height: 100%;
+  width: 100%;
+}
+.reader-knowledge-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.app-shell.is-reader-knowledge {
+  grid-template-columns:
+    minmax(0, calc((100% - 3px) * 0.52))
+    3px
+    minmax(0, 1fr);
+  grid-template-rows: 52px minmax(0, 1fr) 29px;
+}
+.app-shell.is-reader-knowledge > .topbar {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+.app-shell.is-reader-knowledge > .ebook-workspace-stage {
+  grid-column: 1;
+  grid-row: 2;
+  min-width: 0;
+  border-right: 0;
+}
+.app-shell.is-reader-knowledge > .reader-knowledge-divider {
+  grid-column: 2;
+  grid-row: 2;
+}
+.app-shell.is-reader-knowledge > .reader-knowledge-dock {
+  grid-column: 3;
+  grid-row: 2;
+}
+.app-shell.is-reader-knowledge > .statusbar {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+
+.app-shell.is-reader-knowledge.is-reader-split {
+  grid-template-columns:
+    minmax(0, 0.4fr)
+    3px
+    minmax(0, 0.3fr)
+    3px
+    minmax(0, 0.3fr);
+  grid-template-rows: 52px minmax(0, 1fr) 29px;
+}
+.app-shell.is-reader-knowledge.is-reader-split > .topbar {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+.app-shell.is-reader-knowledge.is-reader-split > .ebook-workspace-stage {
+  grid-column: 1;
+  grid-row: 2;
+  min-width: 0;
+}
+.app-shell.is-reader-knowledge.is-reader-split > .reader-knowledge-divider {
+  grid-column: 2;
+  grid-row: 2;
+}
+.app-shell.is-reader-knowledge.is-reader-split > .reader-knowledge-dock {
+  grid-column: 3;
+  grid-row: 2;
+}
+.app-shell.is-reader-knowledge.is-reader-split > .reader-mindmap-divider {
+  grid-column: 4;
+  grid-row: 2;
+}
+.app-shell.is-reader-knowledge.is-reader-split > .workspace {
+  grid-column: 5;
+  grid-row: 2;
+}
+.app-shell.is-reader-knowledge.is-reader-split > .statusbar {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+
 .app-shell.is-reader-split {
   grid-template-columns:
-    minmax(0, calc((100% - 8px) * var(--reader-split-wide-ratio, 0.45)))
-    8px
+    minmax(0, calc((100% - 3px) * var(--reader-split-wide-ratio, 0.45)))
+    3px
     minmax(0, 1fr);
   grid-template-rows: 52px minmax(0, 1fr) 29px;
 }
@@ -11203,24 +11293,25 @@ button {
 .reader-split-divider {
   position: relative;
   z-index: 8;
-  min-width: 8px;
-  min-height: 8px;
+  min-width: 3px;
+  width: 3px;
+  min-height: 3px;
   background: var(--line);
   cursor: col-resize;
   touch-action: none;
   user-select: none;
+  transition: background-color 0.15s ease;
 }
 .reader-split-divider::after {
   position: absolute;
   top: 50%;
-  left: 2px;
-  width: 4px;
-  height: 44px;
-  border-left: 1px solid var(--muted);
-  border-right: 1px solid var(--muted);
+  left: 1px;
+  width: 1px;
+  height: 36px;
+  background: var(--muted);
   content: '';
   transform: translateY(-50%);
-  opacity: 0.55;
+  opacity: 0.6;
 }
 .reader-split-divider:hover,
 .reader-split-divider:focus-visible {
@@ -13186,7 +13277,7 @@ button {
 
 /* Reader-side CLI keeps the same PTY mounted while the dock moves. */
 .app-shell.is-terminal-right {
-  grid-template-columns: minmax(0, 1fr) 8px minmax(
+  grid-template-columns: minmax(0, 1fr) 3px minmax(
       320px,
       var(--terminal-width, 440px)
     );
@@ -13200,20 +13291,21 @@ button {
 .app-shell.is-terminal-right > .seamind-terminal-drawer {
   grid-column: 2 / 4;
   grid-row: 2;
-  grid-template-columns: 8px minmax(0, 1fr);
+  grid-template-columns: 3px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   border-top: 0;
   border-left: 1px solid var(--line);
 }
 .app-shell.is-terminal-right .terminal-drawer-resize-handle {
-  min-width: 8px;
+  min-width: 3px;
+  width: 3px;
   height: 100%;
   cursor: col-resize;
 }
 .app-shell.is-terminal-right .terminal-drawer-resize-handle::after {
   top: 50%;
-  left: 3px;
-  width: 2px;
+  left: 1px;
+  width: 1px;
   height: 34px;
   transform: translateY(-50%);
 }
@@ -13251,13 +13343,13 @@ button {
     minmax(
       0,
       calc(
-        (100% - var(--terminal-side-width, 440px) - 16px) *
+        (100% - var(--terminal-side-width, 440px) - 6px) *
           var(--reader-split-wide-ratio, 0.45)
       )
     )
-    8px
+    3px
     minmax(0, 1fr)
-    8px
+    3px
     minmax(320px, var(--terminal-side-width, 440px));
   grid-template-rows: 52px minmax(0, 1fr) 29px;
 }
@@ -13269,6 +13361,7 @@ button {
   grid-column: 1;
   grid-row: 2;
 }
+.app-shell.is-reader-split.is-terminal-right > .reader-mindmap-divider,
 .app-shell.is-reader-split.is-terminal-right > .reader-split-divider {
   grid-column: 2;
   grid-row: 2;
@@ -13280,10 +13373,95 @@ button {
 .app-shell.is-reader-split.is-terminal-right > .seamind-terminal-drawer {
   grid-column: 4 / 6;
   grid-row: 2;
-  grid-template-columns: 8px minmax(0, 1fr);
+  grid-template-columns: 3px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
 }
 .app-shell.is-reader-split.is-terminal-right > .statusbar {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+.app-shell.is-reader-knowledge.is-terminal-right {
+  grid-template-columns:
+    minmax(0, calc((100% - var(--terminal-side-width, 440px) - 6px) * 0.52))
+    3px
+    minmax(0, 1fr)
+    3px
+    minmax(320px, var(--terminal-side-width, 440px));
+  grid-template-rows: 52px minmax(0, 1fr) 29px;
+}
+.app-shell.is-reader-knowledge.is-terminal-right > .topbar {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+.app-shell.is-reader-knowledge.is-terminal-right > .ebook-workspace-stage {
+  grid-column: 1;
+  grid-row: 2;
+}
+.app-shell.is-reader-knowledge.is-terminal-right > .reader-knowledge-divider {
+  grid-column: 2;
+  grid-row: 2;
+}
+.app-shell.is-reader-knowledge.is-terminal-right > .reader-knowledge-dock {
+  grid-column: 3;
+  grid-row: 2;
+}
+.app-shell.is-reader-knowledge.is-terminal-right > .seamind-terminal-drawer {
+  grid-column: 4 / 6;
+  grid-row: 2;
+  grid-template-columns: 3px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.app-shell.is-reader-knowledge.is-terminal-right > .statusbar {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+.app-shell.is-reader-knowledge.is-reader-split.is-terminal-right {
+  grid-template-columns:
+    minmax(0, 0.36fr)
+    3px
+    minmax(0, 0.24fr)
+    3px
+    minmax(0, 0.2fr)
+    3px
+    minmax(300px, var(--terminal-side-width, 400px));
+  grid-template-rows: 52px minmax(0, 1fr) 29px;
+}
+.app-shell.is-reader-knowledge.is-reader-split.is-terminal-right > .topbar {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+.app-shell.is-reader-knowledge.is-reader-split.is-terminal-right
+  > .ebook-workspace-stage {
+  grid-column: 1;
+  grid-row: 2;
+}
+.app-shell.is-reader-knowledge.is-reader-split.is-terminal-right
+  > .reader-knowledge-divider {
+  grid-column: 2;
+  grid-row: 2;
+}
+.app-shell.is-reader-knowledge.is-reader-split.is-terminal-right
+  > .reader-knowledge-dock {
+  grid-column: 3;
+  grid-row: 2;
+}
+.app-shell.is-reader-knowledge.is-reader-split.is-terminal-right
+  > .reader-mindmap-divider {
+  grid-column: 4;
+  grid-row: 2;
+}
+.app-shell.is-reader-knowledge.is-reader-split.is-terminal-right > .workspace {
+  grid-column: 5;
+  grid-row: 2;
+}
+.app-shell.is-reader-knowledge.is-reader-split.is-terminal-right
+  > .seamind-terminal-drawer {
+  grid-column: 6 / 8;
+  grid-row: 2;
+  grid-template-columns: 3px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.app-shell.is-reader-knowledge.is-reader-split.is-terminal-right > .statusbar {
   grid-column: 1 / -1;
   grid-row: 3;
 }

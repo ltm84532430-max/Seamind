@@ -1,5 +1,6 @@
 import type { EpubBookDocument, LibrarySnapshot } from './library';
 import { resolveBookMindmapTarget as resolveBookMindmapTargetFromLibrary } from './book-mindmap-target';
+import { resolveBookKnowledgeTarget as resolveBookKnowledgeTargetFromLibrary } from './book-knowledge-target';
 
 export type ProviderSettings = { baseUrl: string; model: string };
 export type Theme = 'light' | 'dark';
@@ -254,6 +255,55 @@ export function resolveBookMindmapTarget(
     (epubRelativePath) =>
       snapshot.rootPath
         ? loadEpubMindmapPath(snapshot.rootPath, epubRelativePath)
+        : null,
+  );
+}
+
+export function epubKnowledgeStorageKey(
+  rootPath: string,
+  epubRelativePath: string,
+): string {
+  return `seamind:epub-knowledge:v1:${encodeURIComponent(normalizeLibraryPath(rootPath))}:${encodeURIComponent(normalizeLibraryPath(epubRelativePath))}`;
+}
+
+export function loadEpubKnowledgePath(
+  rootPath: string,
+  epubRelativePath: string,
+): string | null {
+  try {
+    return localStorage.getItem(
+      epubKnowledgeStorageKey(rootPath, epubRelativePath),
+    );
+  } catch {
+    return null;
+  }
+}
+
+export function saveEpubKnowledgePath(
+  rootPath: string,
+  epubRelativePath: string,
+  knowledgeRelativePath: string,
+): void {
+  try {
+    localStorage.setItem(
+      epubKnowledgeStorageKey(rootPath, epubRelativePath),
+      knowledgeRelativePath,
+    );
+  } catch {
+    // The note stays available in the current library when browser storage is full.
+  }
+}
+
+export function resolveBookKnowledgeTarget(
+  snapshot: LibrarySnapshot,
+  book: Pick<EpubBookDocument, 'relativePath' | 'title'>,
+) {
+  return resolveBookKnowledgeTargetFromLibrary(
+    snapshot,
+    book,
+    (epubRelativePath) =>
+      snapshot.rootPath
+        ? loadEpubKnowledgePath(snapshot.rootPath, epubRelativePath)
         : null,
   );
 }

@@ -96,6 +96,34 @@ export interface AgentCapabilities {
     selectionCfi: string;
     text: string;
   }): Promise<{ annotationId: string }>;
+  readCurrentBookKnowledgeNote?(): Promise<{
+    bookKey: string;
+    bookTitle: string;
+    relativePath: string;
+    category: string;
+    title: string;
+    exists: boolean;
+    markdown: string;
+  }>;
+  updateBookKnowledgeNote?(input: {
+    content: string;
+    mode: 'append' | 'overwrite';
+    rationale?: string;
+  }): Promise<{
+    relativePath: string;
+    title: string;
+    category: string;
+    updated: boolean;
+  }>;
+  appendBookKnowledgeExcerpt?(input: {
+    excerpt: string;
+    commentary?: string;
+    chapterLabel?: string;
+  }): Promise<{
+    relativePath: string;
+    title: string;
+    appended: boolean;
+  }>;
   getCurrentMindmap(): ActiveMindmapSnapshot;
   searchLibrary(query: string, category?: string): Promise<MapDocument[]>;
   readDocument(relativePath: string): Promise<OpenedDocument>;
@@ -156,6 +184,66 @@ export const agentToolCatalog: AgentToolDescriptor[] = [
         text: { type: 'string', minLength: 1, maxLength: 800 },
       },
       ['selectionCfi', 'text'],
+    ),
+  },
+  {
+    version: 1,
+    name: 'knowledge_get_book_note',
+    description:
+      '读取当前打开电子书对应的知识库 Markdown 读书笔记全文、标题、分类与相对路径。修改或扩充笔记前建议先调用此工具获取最新笔记原文。',
+    permission: 'read',
+    inputSchema: schema({}),
+  },
+  {
+    version: 1,
+    name: 'knowledge_update_book_note',
+    description:
+      '更新当前电子书的知识库 Markdown 笔记。mode 为 "append" 时在文末或章节后追加内容，mode 为 "overwrite" 时全量重写。修改会实时同步到知识库工作区与并排笔记编辑器中。',
+    permission: 'read',
+    inputSchema: schema(
+      {
+        content: {
+          type: 'string',
+          minLength: 1,
+          description: '待写入或追加的 Markdown 笔记正文。',
+        },
+        mode: {
+          type: 'string',
+          enum: ['append', 'overwrite'],
+          description: '写入模式：append 追加或 overwrite 覆盖。',
+        },
+        rationale: {
+          type: 'string',
+          maxLength: 300,
+          description: '本次知识沉淀或修改的意图说明。',
+        },
+      },
+      ['content', 'mode'],
+    ),
+  },
+  {
+    version: 1,
+    name: 'knowledge_append_excerpt',
+    description:
+      '快速将电子书的重点摘录、概念代码或思考洞察沉淀为知识库笔记中的标准引用块与深度要点。',
+    permission: 'read',
+    inputSchema: schema(
+      {
+        excerpt: {
+          type: 'string',
+          minLength: 1,
+          description: '从书中选取的关键段落或代码。',
+        },
+        commentary: {
+          type: 'string',
+          description: 'AI 或用户的思考、解析或扩展洞见。',
+        },
+        chapterLabel: {
+          type: 'string',
+          description: '当前章节名称（用于结构化归类）。',
+        },
+      },
+      ['excerpt'],
     ),
   },
   {
@@ -543,6 +631,21 @@ function requireString(
   return normalized;
 }
 
+function optionalString(
+  input: Record<string, unknown>,
+  key: string,
+  maxLength: number,
+): string | undefined {
+  const value = input[key];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') throw new Error(`参数 ${key} 必须是文本。`);
+  const normalized = value.trim();
+  if (normalized.length > maxLength) {
+    throw new Error(`参数 ${key} 长度不得超过 ${maxLength} 个字符。`);
+  }
+  return normalized;
+}
+
 function requireText(
   input: Record<string, unknown>,
   key: string,
@@ -640,6 +743,85 @@ export async function executeAgentTool(
       label: '电子书脚注',
       summary: '用户已确认并保存脚注。',
       result: { annotationId: saved.annotationId, saved: true },
+    };
+  }
+
+  if (name === 'knowledge_get_book_note') {
+    assertOnlyKeys(input, []);
+    if (!capabilities.readCurrentBookKnowledgeNote)
+      throw new Error('当前环境未处于电子书阅读状态，无法获取书籍知识库笔记。');
+    const note = await capabilities.readCurrentBookKnowledgeNote();
+    return {
+      version: 1,
+      permission: 'read',
+      name,
+      label: '电子书读书笔记',
+      summary: `${note.bookTitle} · ${note.title} (${note.exists ? '已存在' : '新文件'})`,
+      result: {
+        bookKey: note.bookKey,
+        bookTitle: note.bookTitle,
+        relativePath: note.relativePath,
+        category: note.category,
+        title: note.title,
+        exists: note.exists,
+        markdown: note.markdown,
+      },
+    };
+  }
+
+  if (name === 'knowledge_update_book_note') {
+    assertOnlyKeys(input, ['content', 'mode', 'rationale']);
+    if (!capabilities.updateBookKnowledgeNote)
+      throw new Error('当前环境未处于电子书阅读状态，无法更新知识库笔记。');
+    const content = requireText(input, 'content', 150_000, 1);
+    const mode = requireString(input, 'mode', 20) as 'append' | 'overwrite';
+    if (mode !== 'append' && mode !== 'overwrite') {
+      throw new Error('mode 仅支持 "append" 或 "overwrite"。');
+    }
+    const rationale = optionalString(input, 'rationale', 300) ?? '';
+    const res = await capabilities.updateBookKnowledgeNote({
+      content,
+      mode,
+      rationale,
+    });
+    return {
+      version: 1,
+      permission: 'read',
+      name,
+      label: '更新读书笔记',
+      summary: `已成功${mode === 'append' ? '追加内容至' : '更新'}「${res.title}」。`,
+      result: {
+        relativePath: res.relativePath,
+        title: res.title,
+        category: res.category,
+        updated: res.updated,
+      },
+    };
+  }
+
+  if (name === 'knowledge_append_excerpt') {
+    assertOnlyKeys(input, ['excerpt', 'commentary', 'chapterLabel']);
+    if (!capabilities.appendBookKnowledgeExcerpt)
+      throw new Error('当前环境未处于电子书阅读状态，无法沉淀摘录至知识库。');
+    const excerpt = requireText(input, 'excerpt', 10_000, 1);
+    const commentary = optionalString(input, 'commentary', 5_000) ?? '';
+    const chapterLabel = optionalString(input, 'chapterLabel', 200) ?? '';
+    const res = await capabilities.appendBookKnowledgeExcerpt({
+      excerpt,
+      commentary,
+      chapterLabel,
+    });
+    return {
+      version: 1,
+      permission: 'read',
+      name,
+      label: '知识库摘录沉淀',
+      summary: `已将摘录沉淀至「${res.title}」。`,
+      result: {
+        relativePath: res.relativePath,
+        title: res.title,
+        appended: res.appended,
+      },
     };
   }
 

@@ -150,6 +150,8 @@ import {
   normalizeLibraryPath,
   saveEpubMindmapPath,
   resolveBookMindmapTarget,
+  saveEpubKnowledgePath,
+  resolveBookKnowledgeTarget,
   createDraft,
   type ActiveWorkspace,
   type EditorDraft,
@@ -166,6 +168,7 @@ import {
   findPureNodeBySourcePath,
   prepareMindmapTree,
 } from './app-tree-utils';
+import { createBookKnowledgeStarter } from './book-knowledge-target';
 import {
   addMarkdownNodeNoteCards,
   escapeHtmlText,
@@ -384,6 +387,7 @@ export default function App() {
   );
   const readerAgentBridgeRef = useRef<EpubReaderAgentBridge | null>(null);
   const [readerSplitOpen, setReaderSplitOpen] = useState(false);
+  const [readerKnowledgeOpen, setReaderKnowledgeOpen] = useState(false);
   const [readerSplitLayout, setReaderSplitLayout] = useState<ReaderSplitLayout>(
     DEFAULT_READER_SPLIT_LAYOUT,
   );
@@ -400,15 +404,19 @@ export default function App() {
   const [mindmapNavigationTree, setMindmapNavigationTree] =
     useState<MindmapMiniTreeNode | null>(null);
   const [bookMindmapBusy, setBookMindmapBusy] = useState(false);
+  const [bookKnowledgeBusy, setBookKnowledgeBusy] = useState(false);
   const readerSplitActive =
     activeWorkspace === 'reader' && readerSplitOpen && Boolean(epubReader);
+  const readerKnowledgeActive =
+    activeWorkspace === 'reader' && readerKnowledgeOpen && Boolean(epubReader);
   const canDockTerminalRight =
     activeWorkspace === 'reader' && viewportWidth >= 1250;
   const terminalRightActive =
     terminalOpen && terminalDock === 'right' && canDockTerminalRight;
-  const terminalSideWidth = readerSplitActive
-    ? Math.min(terminalWidth, Math.max(320, viewportWidth - 900))
-    : terminalWidth;
+  const terminalSideWidth =
+    readerSplitActive || readerKnowledgeActive
+      ? Math.min(terminalWidth, Math.max(300, viewportWidth - 880))
+      : terminalWidth;
   const readerSplitActiveRef = useRef(readerSplitActive);
   readerSplitActiveRef.current = readerSplitActive;
   const epubReaderRef = useRef(epubReader);
@@ -1364,6 +1372,173 @@ export default function App() {
         throw new Error('请先在电子书阅读器中打开一本书。');
       }
       return readerAgentBridgeRef.current.proposeFootnote(input);
+    },
+    readCurrentBookKnowledgeNote: async () => {
+      if (activeWorkspace !== 'reader' || !epubReader) {
+        throw new Error('请先在电子书阅读器中打开一本书。');
+      }
+      const snapshot = librarySnapshotRef.current;
+      if (!snapshot?.rootPath) {
+        throw new Error('文件库尚未就绪。');
+      }
+      const target = resolveBookKnowledgeTarget(snapshot, {
+        relativePath: epubReader.relativePath,
+        title: epubReader.title,
+      });
+      const currentDoc = workbench.controller.getState();
+      if (
+        currentDoc &&
+        currentDoc.kind === 'doc' &&
+        normalizeLibraryPath(currentDoc.relativePath) ===
+          normalizeLibraryPath(target.relativePath)
+      ) {
+        return {
+          bookKey: epubReader.progressKey,
+          bookTitle: epubReader.title,
+          relativePath: currentDoc.relativePath,
+          category: currentDoc.category || target.category,
+          title: currentDoc.title,
+          exists: true,
+          markdown: currentDoc.source,
+        };
+      }
+      if (target.document) {
+        const opened = await invoke<OpenedDocument>('open_document', {
+          relativePath: target.document.relativePath,
+        });
+        return {
+          bookKey: epubReader.progressKey,
+          bookTitle: epubReader.title,
+          relativePath: target.document.relativePath,
+          category: target.document.category || target.category,
+          title: target.document.title,
+          exists: true,
+          markdown: opened.markdown,
+        };
+      }
+      return {
+        bookKey: epubReader.progressKey,
+        bookTitle: epubReader.title,
+        relativePath: target.relativePath,
+        category: target.category,
+        title: target.title,
+        exists: false,
+        markdown: createBookKnowledgeStarter({
+          title: epubReader.title,
+        }),
+      };
+    },
+    updateBookKnowledgeNote: async ({ content, mode, rationale }) => {
+      if (activeWorkspace !== 'reader' || !epubReader) {
+        throw new Error('请先在电子书阅读器中打开一本书。');
+      }
+      const snapshot = librarySnapshotRef.current;
+      if (!snapshot?.rootPath) {
+        throw new Error('文件库尚未就绪。');
+      }
+      const target = resolveBookKnowledgeTarget(snapshot, {
+        relativePath: epubReader.relativePath,
+        title: epubReader.title,
+      });
+
+      let baseMarkdown = '';
+      const currentDoc = workbench.controller.getState();
+      const isCurrentlyOpen =
+        currentDoc &&
+        currentDoc.kind === 'doc' &&
+        normalizeLibraryPath(currentDoc.relativePath) ===
+          normalizeLibraryPath(target.relativePath);
+
+      if (isCurrentlyOpen) {
+        baseMarkdown = currentDoc.source;
+      } else if (target.document) {
+        const opened = await invoke<OpenedDocument>('open_document', {
+          relativePath: target.document.relativePath,
+        });
+        baseMarkdown = opened.markdown;
+      } else {
+        baseMarkdown = createBookKnowledgeStarter({
+          title: epubReader.title,
+        });
+      }
+
+      const nextMarkdown =
+        mode === 'append'
+          ? `${baseMarkdown.trimEnd()}\n\n${content.trim()}\n`
+          : content.trim();
+
+      if (isCurrentlyOpen) {
+        workbench.controller.edit(nextMarkdown);
+        await workbench.controller.save({ manual: true });
+      } else if (target.document) {
+        await invoke<MapDocument>('save_document', {
+          input: {
+            id: target.document.id,
+            relativePath: target.document.relativePath,
+            title: target.document.title,
+            category: target.document.category || target.category,
+            mapType: '文档',
+            tags: target.document.tags,
+            markdown: nextMarkdown,
+            historySource: 'ai',
+            kind: 'doc',
+          },
+        });
+        await loadLibrary(false);
+      } else {
+        await workbench.controller.createCustomDocument({
+          kind: 'doc',
+          category: target.category,
+          title: target.title,
+          source: nextMarkdown,
+          tags: ['读书笔记', '电子书'],
+        });
+        saveEpubKnowledgePath(
+          snapshot.rootPath,
+          epubReader.relativePath,
+          target.relativePath,
+        );
+      }
+
+      setSaveMessage(
+        rationale ? `AI 更新读书笔记：${rationale}` : 'AI 已更新读书笔记',
+      );
+      return {
+        relativePath: target.relativePath,
+        title: target.title,
+        category: target.category,
+        updated: true,
+      };
+    },
+    appendBookKnowledgeExcerpt: async ({
+      excerpt,
+      commentary,
+      chapterLabel,
+    }) => {
+      const heading = chapterLabel ? `### ${chapterLabel}\n` : '';
+      const noteBlock = [
+        heading,
+        `> [!QUOTE] 章节摘录`,
+        `> ${excerpt.trim().replace(/\n/g, '\n> ')}`,
+        commentary?.trim()
+          ? `\n**深度思考 / 见解**：\n${commentary.trim()}`
+          : '',
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+      const result = await agentCapabilities.updateBookKnowledgeNote!({
+        content: noteBlock,
+        mode: 'append',
+        rationale: chapterLabel
+          ? `摘录沉淀至「${chapterLabel}」`
+          : '摘录沉淀至读书笔记',
+      });
+      return {
+        relativePath: result.relativePath,
+        title: result.title,
+        appended: result.updated,
+      };
     },
     getCurrentMindmap: getAgentMindmap,
     searchLibrary: (query, category) =>
@@ -2777,6 +2952,65 @@ export default function App() {
       return;
     const converted = await workbench.controller.convertToMindmap();
     if (converted) await openMap(converted);
+  };
+
+  const toggleBookKnowledge = async () => {
+    if (readerKnowledgeOpen) {
+      setReaderKnowledgeOpen(false);
+      return;
+    }
+
+    const selection = epubReader;
+    const snapshot = librarySnapshotRef.current;
+    if (!selection || !snapshot?.rootPath) {
+      setLibraryError('请先打开文件库中的电子书，再关联知识库笔记。');
+      return;
+    }
+    const book = snapshot.books.find(
+      (candidate) =>
+        normalizeLibraryPath(candidate.relativePath) ===
+        normalizeLibraryPath(selection.relativePath),
+    );
+    if (!book) {
+      setLibraryError('当前 EPUB 已不在文件库中，请从书架重新打开。');
+      return;
+    }
+
+    setBookKnowledgeBusy(true);
+    setLibraryError('');
+    try {
+      const target = resolveBookKnowledgeTarget(snapshot, book);
+      if (target.document) {
+        await openKnowledgeNote(target.document);
+        saveEpubKnowledgePath(
+          snapshot.rootPath,
+          book.relativePath,
+          target.document.relativePath,
+        );
+      } else {
+        const starter = createBookKnowledgeStarter({
+          title: book.title,
+        });
+        await workbench.controller.createCustomDocument({
+          kind: 'doc',
+          category: target.category,
+          title: target.title,
+          source: starter,
+          tags: ['读书笔记', '电子书'],
+        });
+        saveEpubKnowledgePath(
+          snapshot.rootPath,
+          book.relativePath,
+          target.relativePath,
+        );
+      }
+      setReaderKnowledgeOpen(true);
+      setActiveWorkspace('reader');
+    } catch (error) {
+      setLibraryError(errorMessage(error, '打开知识库笔记失败。'));
+    } finally {
+      setBookKnowledgeBusy(false);
+    }
   };
 
   const toggleBookMindmap = async () => {
@@ -4288,6 +4522,13 @@ export default function App() {
           title: epubReader.title,
         })
       : null;
+  const activeBookKnowledgeTarget =
+    epubReader && librarySnapshot?.rootPath
+      ? resolveBookKnowledgeTarget(librarySnapshot, {
+          relativePath: epubReader.relativePath,
+          title: epubReader.title,
+        })
+      : null;
   const clampTerminalHeight = (height: number) =>
     Math.round(Math.max(160, Math.min(window.innerHeight * 0.72, height)));
   const onTerminalResizePointerDown = (
@@ -4419,7 +4660,7 @@ export default function App() {
   return (
     <main
       ref={appShellRef}
-      className={`app-shell${readerSplitActive ? ' is-reader-split' : ''}${terminalOpen ? ' is-terminal-open' : ''}${terminalRightActive ? ' is-terminal-right' : ''}`}
+      className={`app-shell${readerSplitActive ? ' is-reader-split' : ''}${readerKnowledgeActive ? ' is-reader-knowledge' : ''}${terminalOpen ? ' is-terminal-open' : ''}${terminalRightActive ? ' is-terminal-right' : ''}`}
       data-theme={theme}
       data-map-style={mindmapStyle}
       style={
@@ -4738,27 +4979,29 @@ export default function App() {
           }}
         />
 
-        {activeDocument && activeWorkspace !== 'knowledge' && (
-          <DocumentWorkbench
-            document={activeDocument}
-            dirty={workbench.dirty}
-            statusText={saveMessage}
-            theme={theme}
-            documents={libraryDocuments}
-            categories={librarySnapshot?.categories ?? []}
-            renderMarkdownPreview={renderDocumentPreview}
-            onSourceChange={(source) => workbench.controller.edit(source)}
-            onSave={() => void workbench.controller.save({ manual: true })}
-            onRename={(title) => workbench.controller.rename(title)}
-            onChangeCategory={(category) =>
-              workbench.controller.setCategory(category)
-            }
-            onChangeTags={(tags) => workbench.controller.setTags(tags)}
-            onOpenWikilink={(target) => void openWikilinkTarget(target)}
-            onOpenAsMindmap={() => void openActiveDocumentAsMindmap()}
-            onConvertToMindmap={() => void convertActiveDocumentToMindmap()}
-          />
-        )}
+        {activeDocument &&
+          activeWorkspace !== 'knowledge' &&
+          activeWorkspace !== 'reader' && (
+            <DocumentWorkbench
+              document={activeDocument}
+              dirty={workbench.dirty}
+              statusText={saveMessage}
+              theme={theme}
+              documents={libraryDocuments}
+              categories={librarySnapshot?.categories ?? []}
+              renderMarkdownPreview={renderDocumentPreview}
+              onSourceChange={(source) => workbench.controller.edit(source)}
+              onSave={() => void workbench.controller.save({ manual: true })}
+              onRename={(title) => workbench.controller.rename(title)}
+              onChangeCategory={(category) =>
+                workbench.controller.setCategory(category)
+              }
+              onChangeTags={(tags) => workbench.controller.setTags(tags)}
+              onOpenWikilink={(target) => void openWikilinkTarget(target)}
+              onOpenAsMindmap={() => void openActiveDocumentAsMindmap()}
+              onConvertToMindmap={() => void convertActiveDocumentToMindmap()}
+            />
+          )}
 
         <section
           className={`editor-pane${sourceCollapsed ? ' is-collapsed' : ''}${isStandalonePlantUml ? ' is-plantuml-file' : ''}`}
@@ -5610,6 +5853,9 @@ export default function App() {
             theme={theme}
             provider={providerSettings}
             embedded
+            knowledgeOpen={readerKnowledgeActive}
+            knowledgeExists={Boolean(activeBookKnowledgeTarget?.document)}
+            knowledgeBusy={bookKnowledgeBusy}
             mindmapOpen={readerSplitActive}
             mindmapExists={Boolean(activeBookMindmapTarget?.document)}
             mindmapBusy={bookMindmapBusy}
@@ -5622,9 +5868,9 @@ export default function App() {
               if (book) createBookTask(book, chapter);
               else setLibraryError('找不到当前电子书，请刷新文件库。');
             }}
+            onToggleKnowledge={() => void toggleBookKnowledge()}
             onToggleMindmap={() => void toggleBookMindmap()}
             onWakeAi={() => {
-              setReaderSplitOpen(false);
               setTerminalDockAndStore('right');
               setTerminalOpen(true);
             }}
@@ -5632,6 +5878,7 @@ export default function App() {
               readerAgentBridgeRef.current = bridge;
             }}
             onClose={() => {
+              setReaderKnowledgeOpen(false);
               setReaderSplitOpen(false);
               setEpubChapterNavigation(null);
               setEpubReader(null);
@@ -5958,9 +6205,48 @@ export default function App() {
         </section>
       )}
 
+      {readerKnowledgeActive && (
+        <div
+          className="reader-split-divider reader-knowledge-divider"
+          role="separator"
+          aria-label="电子书与知识库笔记分界"
+        />
+      )}
+
+      {readerKnowledgeActive && (
+        <section
+          className="reader-knowledge-dock"
+          aria-label="电子书知识库笔记"
+        >
+          {activeDocument ? (
+            <DocumentWorkbench
+              document={activeDocument}
+              dirty={workbench.dirty}
+              statusText={saveMessage}
+              theme={theme}
+              documents={libraryDocuments}
+              categories={librarySnapshot?.categories ?? []}
+              renderMarkdownPreview={renderDocumentPreview}
+              onSourceChange={(source) => workbench.controller.edit(source)}
+              onSave={() => void workbench.controller.save({ manual: true })}
+              onRename={(title) => workbench.controller.rename(title)}
+              onChangeCategory={(category) =>
+                workbench.controller.setCategory(category)
+              }
+              onChangeTags={(tags) => workbench.controller.setTags(tags)}
+              onOpenWikilink={(target) => void openWikilinkTarget(target)}
+              onOpenAsMindmap={() => void openActiveDocumentAsMindmap()}
+              onConvertToMindmap={() => void convertActiveDocumentToMindmap()}
+            />
+          ) : (
+            <div className="reader-knowledge-empty">正在打开知识库笔记…</div>
+          )}
+        </section>
+      )}
+
       {readerSplitActive && (
         <div
-          className="reader-split-divider"
+          className="reader-split-divider reader-mindmap-divider"
           role="separator"
           aria-label="调整电子书与思维导图的分栏比例"
           aria-orientation={

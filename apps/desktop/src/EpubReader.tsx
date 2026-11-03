@@ -570,12 +570,16 @@ export default function EpubReader({
   theme,
   provider,
   embedded = false,
+  knowledgeOpen = false,
+  knowledgeExists = false,
+  knowledgeBusy = false,
   mindmapOpen,
   mindmapExists,
   mindmapBusy,
   chapterNavigationRequest,
   onCreateTask,
   onOpenTask,
+  onToggleKnowledge,
   onToggleMindmap,
   onWakeAi,
   onAgentBridgeChange,
@@ -585,12 +589,16 @@ export default function EpubReader({
   theme: 'light' | 'dark';
   provider: EpubReaderProviderSettings;
   embedded?: boolean;
+  knowledgeOpen?: boolean;
+  knowledgeExists?: boolean;
+  knowledgeBusy?: boolean;
   mindmapOpen: boolean;
   mindmapExists: boolean;
   mindmapBusy: boolean;
   chapterNavigationRequest: EpubChapterNavigationRequest | null;
   onCreateTask: (chapter: { href: string; label: string }) => void;
   onOpenTask: (id: string) => void;
+  onToggleKnowledge?: () => void;
   onToggleMindmap: () => void;
   onWakeAi: () => void;
   onAgentBridgeChange: (bridge: EpubReaderAgentBridge | null) => void;
@@ -2903,6 +2911,26 @@ export default function EpubReader({
                 <span aria-hidden="true">›</span>
               </button>
               <span className="epub-reader-footer-divider" aria-hidden="true" />
+              <button
+                type="button"
+                className={`epub-reader-footer-action${knowledgeOpen ? ' is-active' : ''}`}
+                aria-label={knowledgeOpen ? '收起知识库笔记' : '打开知识库笔记'}
+                aria-pressed={knowledgeOpen}
+                disabled={knowledgeBusy}
+                title="打开或创建本书的知识库 Markdown 笔记，并排编辑"
+                onClick={onToggleKnowledge}
+              >
+                <ReaderIcon name="notes" />
+                <span>
+                  {knowledgeBusy
+                    ? '打开中…'
+                    : knowledgeOpen
+                      ? '收起笔记'
+                      : knowledgeExists
+                        ? '知识库'
+                        : '知识库'}
+                </span>
+              </button>
               <button
                 type="button"
                 className={`epub-reader-footer-action${mindmapOpen ? ' is-active' : ''}`}
