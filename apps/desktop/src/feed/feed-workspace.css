@@ -3,6 +3,9 @@
    ============================================================================= */
 
 .feed-workspace-stage {
+  --scrollbar-slider: color-mix(in srgb, var(--muted) 28%, transparent);
+  --scrollbar-slider-hover: color-mix(in srgb, var(--muted) 52%, transparent);
+  --scrollbar-slider-active: color-mix(in srgb, var(--muted) 68%, transparent);
   grid-row: 2;
   min-width: 0;
   min-height: 0;
@@ -14,6 +17,7 @@
 }
 
 .feed-workspace {
+  position: relative;
   display: flex;
   flex: 1 1 0;
   width: 100%;
@@ -112,6 +116,53 @@
   letter-spacing: 0.06em;
 }
 
+.feed-nav-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-height: 34px;
+  margin: 13px 3px 4px;
+  padding: 8px 6px 4px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+}
+
+.feed-nav-section-heading .feed-nav-section-title {
+  flex: 1 1 auto;
+  padding: 0;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.feed-add-category-btn {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 3px 6px;
+  border-color: color-mix(in srgb, var(--line) 86%, transparent);
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.feed-category-bulk-toggle {
+  flex: 0 0 auto;
+  padding: 3px 4px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 9.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.feed-category-bulk-toggle:hover,
+.feed-add-category-btn:hover {
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+  color: var(--ink);
+}
+
 .feed-nav-item {
   display: flex;
   align-items: center;
@@ -152,6 +203,16 @@
   text-overflow: ellipsis;
 }
 
+.feed-category-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  vertical-align: 1px;
+}
+
 .feed-badge {
   font-size: 11px;
   font-family: var(--mono);
@@ -167,12 +228,204 @@
 }
 
 .feed-category-group {
-  margin-top: 8px;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+
+/* 分类标题、折叠控制和源列表使用固定网格，窄侧栏中也保持整齐。 */
+.feed-category-heading-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 1px;
+  min-width: 0;
+  margin: 0 3px;
+}
+
+.feed-category-toggle {
+  display: grid;
+  width: 22px;
+  height: 28px;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.feed-category-toggle:hover {
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  color: var(--ink);
+}
+
+.feed-category-chevron {
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg) translate(-1px, -1px);
+  transition: transform 120ms ease;
+}
+
+.feed-category-group.is-collapsed .feed-category-chevron {
+  transform: rotate(-45deg) translate(-1px, -1px);
+}
+
+.feed-category-filter {
+  display: flex;
+  min-width: 0;
+  min-height: 28px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 7px;
+  border: 1px solid transparent;
+  border-left: 2px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  font-size: 12px;
+  font-weight: 620;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.feed-category-filter:hover {
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+}
+
+.feed-category-filter.is-active {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  color: var(--ink);
+}
+
+.feed-category-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  margin: 0;
+  border-radius: 1px;
+  opacity: 0.86;
+}
+
+.feed-category-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feed-category-count,
+.feed-channel-count {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.feed-category-count.has-unread,
+.feed-channel-count {
+  color: var(--accent);
+}
+
+.feed-category-channels {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 1px 3px 0 25px;
+}
+
+.feed-category-channels[hidden] {
+  display: none;
+}
+
+.feed-channel-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 3px;
+  border-radius: 3px;
+}
+
+.feed-channel-row:hover,
+.feed-channel-row:focus-within {
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
 }
 
 .feed-channel-item {
-  padding-left: 18px;
-  font-size: 12.5px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 27px;
+  padding: 4px 6px;
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.feed-channel-item:hover,
+.feed-channel-item.is-active {
+  background: transparent;
+  color: var(--ink);
+}
+
+.feed-channel-item.is-active {
+  font-weight: 600;
+}
+
+.feed-channel-unsubscribe {
+  flex: 0 0 auto;
+  margin-right: 4px;
+  padding: 2px 5px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 9.5px;
+  opacity: 0;
+  pointer-events: none;
+  cursor: pointer;
+  transition:
+    opacity 100ms ease,
+    color 100ms ease,
+    border-color 100ms ease;
+}
+
+.feed-channel-row:hover .feed-channel-unsubscribe,
+.feed-channel-row:focus-within .feed-channel-unsubscribe {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.feed-channel-unsubscribe:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.feed-category-toggle:focus-visible,
+.feed-category-filter:focus-visible,
+.feed-channel-item:focus-visible,
+.feed-channel-unsubscribe:focus-visible,
+.feed-category-bulk-toggle:focus-visible,
+.feed-add-category-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .feed-category-chevron,
+  .feed-category-filter,
+  .feed-channel-unsubscribe {
+    transition: none;
+  }
 }
 
 /* -----------------------------------------------------------------------------
@@ -204,6 +457,12 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.feed-article-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .feed-filter-tabs {
@@ -649,6 +908,18 @@
   margin: 0;
 }
 
+.feed-dialog-error {
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.feed-category-help {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .feed-dialog-body {
   padding: 18px;
   display: flex;
@@ -724,86 +995,257 @@
   color: var(--accent);
 }
 
+/* -----------------------------------------------------------------------------
+   Subscription source galaxy
+   ----------------------------------------------------------------------------- */
+.feed-galaxy-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel);
+  color: var(--ink);
+}
+
+.feed-galaxy-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.feed-galaxy-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.feed-galaxy-subtitle,
+.feed-galaxy-footer {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.feed-galaxy-subtitle {
+  margin-top: 3px;
+}
+
+.feed-galaxy-map-wrap {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+  place-items: center;
+  padding: 8px 20px;
+}
+
+.feed-galaxy-map {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: 1320px;
+}
+
+.feed-galaxy-orbit {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 1;
+  stroke-dasharray: 2 6;
+}
+
+.feed-galaxy-orbit.is-outer {
+  stroke-dasharray: 1 8;
+  opacity: 0.65;
+}
+
+.feed-galaxy-category-link,
+.feed-galaxy-channel-link {
+  fill: none;
+  stroke-width: 1;
+  opacity: 0.34;
+}
+
+.feed-galaxy-channel-link {
+  stroke-width: 0.8;
+  opacity: 0.24;
+}
+
+.feed-galaxy-center circle {
+  fill: var(--panel);
+  stroke: var(--line);
+  stroke-width: 1.5;
+}
+
+.feed-galaxy-center text {
+  fill: var(--ink);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.feed-galaxy-center .feed-galaxy-center-caption {
+  fill: var(--muted);
+  font-size: 7px;
+  font-weight: 500;
+}
+
+.feed-galaxy-category-node,
+.feed-galaxy-channel-node {
+  cursor: pointer;
+  outline: none;
+}
+
+.feed-galaxy-category-node circle {
+  stroke: var(--panel);
+  stroke-width: 3;
+  transition:
+    r 120ms ease,
+    stroke-width 120ms ease;
+}
+
+.feed-galaxy-category-node:hover circle,
+.feed-galaxy-category-node:focus-visible circle {
+  r: 24px;
+  stroke-width: 2;
+}
+
+.feed-galaxy-category-node > text:not(.feed-galaxy-category-label) {
+  fill: #fff;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.feed-galaxy-category-node .feed-galaxy-category-label {
+  fill: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.feed-galaxy-channel-node {
+  cursor: pointer;
+  outline: none;
+}
+
+.feed-galaxy-channel-hit-target {
+  fill: transparent;
+  stroke: transparent;
+  pointer-events: all;
+}
+
+.feed-galaxy-channel-dot {
+  stroke: var(--panel);
+  stroke-width: 2;
+  pointer-events: none;
+  transition:
+    r 120ms ease,
+    stroke-width 120ms ease;
+}
+
+.feed-galaxy-channel-node:hover .feed-galaxy-channel-dot,
+.feed-galaxy-channel-node:focus-visible .feed-galaxy-channel-dot {
+  r: 9px;
+  stroke-width: 1.5;
+}
+
+.feed-galaxy-footer {
+  flex: 0 0 auto;
+  padding: 8px 18px;
+  border-top: 1px solid var(--line);
+}
+
 /* ==========================================================================
    SeaMind Feed Workspace — Smooth Minimalist Scrollbars (VS Code / eBook Style)
    ========================================================================== */
 
-.feed-nav,
-.feed-article-list,
-.feed-reader-body,
-.feed-opml-items-list,
+.feed-sidebar-scroll,
+.feed-article-scroll,
+.feed-reader-scroll,
+.feed-opml-list,
 .feed-dialog-body {
   --scrollbar-thumb: transparent;
-  transition: --scrollbar-thumb 800ms linear;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
 }
 
-.feed-nav:hover,
-.feed-article-list:hover,
-.feed-reader-body:hover,
-.feed-opml-items-list:hover,
+.feed-sidebar-scroll:hover,
+.feed-article-scroll:hover,
+.feed-reader-scroll:hover,
+.feed-opml-list:hover,
 .feed-dialog-body:hover {
   --scrollbar-thumb: var(--scrollbar-slider);
+  scrollbar-color: var(--scrollbar-slider) transparent;
   transition-duration: 100ms;
 }
 
 .feed-workspace-stage *::-webkit-scrollbar-track,
-.feed-dialog-backdrop *::-webkit-scrollbar-track {
+.feed-dialog-overlay *::-webkit-scrollbar-track {
   background: transparent !important;
 }
 
 .feed-workspace-stage *::-webkit-scrollbar-button,
-.feed-dialog-backdrop *::-webkit-scrollbar-button {
+.feed-dialog-overlay *::-webkit-scrollbar-button {
   display: none !important;
   width: 0 !important;
   height: 0 !important;
 }
 
 .feed-workspace-stage *::-webkit-scrollbar-corner,
-.feed-dialog-backdrop *::-webkit-scrollbar-corner {
+.feed-dialog-overlay *::-webkit-scrollbar-corner {
   background: transparent !important;
 }
 
-.feed-nav::-webkit-scrollbar,
-.feed-article-list::-webkit-scrollbar,
-.feed-reader-body::-webkit-scrollbar,
-.feed-opml-items-list::-webkit-scrollbar,
-.feed-dialog-body::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+.feed-workspace-stage::-webkit-scrollbar,
+.feed-workspace-stage *::-webkit-scrollbar,
+.feed-dialog-overlay::-webkit-scrollbar,
+.feed-dialog-overlay *::-webkit-scrollbar {
+  width: 2px;
+  height: 2px;
 }
 
+.feed-workspace-stage::-webkit-scrollbar-thumb,
 .feed-workspace-stage *::-webkit-scrollbar-thumb,
-.feed-dialog-backdrop *::-webkit-scrollbar-thumb {
-  min-width: 20px;
-  min-height: 20px;
+.feed-dialog-overlay::-webkit-scrollbar-thumb,
+.feed-dialog-overlay *::-webkit-scrollbar-thumb {
+  min-width: 0;
+  min-height: 0;
   background: var(--scrollbar-thumb, transparent);
+  transition: background-color 800ms linear;
+}
+
+.feed-workspace-stage *::-webkit-scrollbar-thumb:vertical,
+.feed-dialog-overlay *::-webkit-scrollbar-thumb:vertical {
+  min-height: 24px;
+}
+
+.feed-workspace-stage *::-webkit-scrollbar-thumb:horizontal,
+.feed-dialog-overlay *::-webkit-scrollbar-thumb:horizontal {
+  min-width: 24px;
+}
+
+.feed-sidebar-scroll:hover::-webkit-scrollbar-thumb,
+.feed-article-scroll:hover::-webkit-scrollbar-thumb,
+.feed-reader-scroll:hover::-webkit-scrollbar-thumb,
+.feed-opml-list:hover::-webkit-scrollbar-thumb,
+.feed-dialog-body:hover::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-slider) !important;
+  transition-duration: 100ms;
 }
 
 .feed-workspace-stage *::-webkit-scrollbar-thumb:hover,
-.feed-dialog-backdrop *::-webkit-scrollbar-thumb:hover {
+.feed-dialog-overlay *::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-slider-hover) !important;
 }
 
 .feed-workspace-stage *::-webkit-scrollbar-thumb:active,
-.feed-dialog-backdrop *::-webkit-scrollbar-thumb:active {
+.feed-dialog-overlay *::-webkit-scrollbar-thumb:active {
   background: var(--scrollbar-slider-active) !important;
-}
-
-@supports not selector(::-webkit-scrollbar) {
-  .feed-nav,
-  .feed-article-list,
-  .feed-reader-body,
-  .feed-opml-items-list,
-  .feed-dialog-body {
-    scrollbar-width: thin;
-    scrollbar-color: transparent transparent;
-  }
-
-  .feed-nav:hover,
-  .feed-article-list:hover,
-  .feed-reader-body:hover,
-  .feed-opml-items-list:hover,
-  .feed-dialog-body:hover {
-    scrollbar-color: var(--scrollbar-slider) transparent;
-  }
 }

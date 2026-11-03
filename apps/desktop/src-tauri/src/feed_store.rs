@@ -1,5 +1,6 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use uuid::Uuid;
 
 pub const SCHEMA: &str = "
@@ -20,6 +21,18 @@ CREATE TABLE IF NOT EXISTS feed_channels (
 
 CREATE INDEX IF NOT EXISTS idx_feed_channels_url ON feed_channels(url);
 CREATE INDEX IF NOT EXISTS idx_feed_channels_category ON feed_channels(category);
+
+CREATE TABLE IF NOT EXISTS feed_categories (
+    name TEXT PRIMARY KEY COLLATE NOCASE NOT NULL,
+    color TEXT NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS feed_seed_state (
+    key TEXT PRIMARY KEY NOT NULL,
+    applied_at INTEGER NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS feed_articles (
     id TEXT PRIMARY KEY NOT NULL,
@@ -130,6 +143,7 @@ pub struct ArticleFilter {
 #[serde(rename_all = "camelCase")]
 pub struct CategoryStats {
     pub name: String,
+    pub color: String,
     pub unread_count: usize,
     pub channel_count: usize,
 }
@@ -150,7 +164,313 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
         .map_err(|e| format!("启用订阅数据库关联约束失败：{e}"))?;
     conn.execute_batch(SCHEMA)
         .map_err(|e| format!("初始化订阅数据库结构失败：{e}"))?;
+    conn.execute(
+        "UPDATE feed_channels SET category = CASE
+            WHEN trim(category) = '' THEN '默认分类'
+            ELSE trim(category)
+         END",
+        [],
+    )
+    .map_err(|e| format!("规范化订阅分类失败：{e}"))?;
+    backfill_categories(&conn)?;
+    repair_category_color_collisions(&conn)?;
+    conn.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_feed_categories_color
+         ON feed_categories(color);",
+    )
+    .map_err(|e| format!("建立订阅分类颜色唯一约束失败：{e}"))?;
     Ok(conn)
+}
+
+const CATEGORY_COLORS: &[&str] = &[
+    "#d6a354", "#6ba8d6", "#70b89a", "#be8ac8", "#d57966", "#8e9fca", "#b4a55f",
+    "#5faeb0", "#d58faa", "#8cae72",
+];
+
+fn category_hash(name: &str) -> u32 {
+    name.as_bytes()
+        .iter()
+        .fold(2_166_136_261_u32, |hash, byte| {
+            (hash ^ u32::from(*byte)).wrapping_mul(16_777_619)
+        })
+}
+
+fn category_color_candidate(name: &str, used_colors: &HashSet<String>) -> String {
+    let hash = category_hash(name);
+    let preferred = match name {
+        "金融与量化" => Some("#d6a354"),
+        "政府与公共机构" => Some("#6ba8d6"),
+        "技术博客" => Some("#70b89a"),
+        "默认分类" => Some("#8993a4"),
+        _ => None,
+    };
+    if let Some(color) = preferred {
+        if !used_colors.contains(color) {
+            return color.to_string();
+        }
+    }
+
+    for offset in 0..CATEGORY_COLORS.len() {
+        let index = (hash as usize + offset) % CATEGORY_COLORS.len();
+        let color = CATEGORY_COLORS[index];
+        if !used_colors.contains(color) {
+            return color.to_string();
+        }
+    }
+
+    // Once the curated palette is exhausted, spread custom categories around
+    // the hue wheel. The unique index below enforces this invariant in SQLite.
+    for attempt in 0..30_000_u64 {
+        let hue_milli = (u64::from(hash) * 1_000 + attempt * 137_508) % 360_000;
+        let color = format!(
+            "hsl({}.{:03} 52% 58%)",
+            hue_milli / 1_000,
+            hue_milli % 1_000
+        );
+        if !used_colors.contains(&color.to_ascii_lowercase()) {
+            return color;
+        }
+    }
+
+    // This path is only reachable after tens of thousands of categories.
+    // It remains deterministic and checks the same persisted color set.
+    for offset in 0..=u32::MAX {
+        let color = format!("#{:06x}", hash.wrapping_add(offset) & 0x00ff_ffff);
+        if !used_colors.contains(&color) {
+            return color;
+        }
+    }
+    unreachable!("no category colors remain")
+}
+
+fn category_colors(conn: &Connection) -> Result<HashSet<String>, String> {
+    let mut stmt = conn
+        .prepare("SELECT color FROM feed_categories")
+        .map_err(|e| format!("读取现有订阅分类颜色失败：{e}"))?;
+    let colors = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("遍历现有订阅分类颜色失败：{e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("解析现有订阅分类颜色失败：{e}"))?;
+    Ok(colors
+        .into_iter()
+        .map(|color| color.trim().to_ascii_lowercase())
+        .collect())
+}
+
+fn repair_category_color_collisions(conn: &Connection) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare("SELECT name, color FROM feed_categories ORDER BY sort_order, created_at, name")
+        .map_err(|e| format!("读取订阅分类颜色失败：{e}"))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| format!("遍历订阅分类颜色失败：{e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("解析订阅分类颜色失败：{e}"))?;
+    drop(stmt);
+
+    let mut used_colors = HashSet::new();
+    for (name, color) in rows {
+        let normalized = color.trim().to_ascii_lowercase();
+        if used_colors.insert(normalized) {
+            continue;
+        }
+
+        let replacement = category_color_candidate(&name, &used_colors);
+        conn.execute(
+            "UPDATE feed_categories SET color = ?1 WHERE name = ?2",
+            params![replacement, name],
+        )
+        .map_err(|e| format!("修复重复的订阅分类颜色失败：{e}"))?;
+        used_colors.insert(replacement.to_ascii_lowercase());
+    }
+    Ok(())
+}
+
+fn ensure_category(conn: &Connection, name: &str, now: i64) -> Result<(), String> {
+    let clean = name.trim();
+    if clean.is_empty() {
+        return Err("分类名称不能为空".to_string());
+    }
+    let already_exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM feed_categories WHERE name = ?1)",
+            params![clean],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("检查订阅分类是否存在失败：{e}"))?;
+    if already_exists {
+        return Ok(());
+    }
+    let used_colors = category_colors(conn)?;
+    let color = category_color_candidate(clean, &used_colors);
+    conn.execute(
+        "INSERT INTO feed_categories (name, color, sort_order, created_at)
+         VALUES (?1, ?2, COALESCE((SELECT MAX(sort_order) + 1 FROM feed_categories), 0), ?3)
+         ON CONFLICT(name) DO NOTHING",
+        params![clean, color, now],
+    )
+    .map_err(|e| format!("保存订阅分类失败：{e}"))?;
+    Ok(())
+}
+
+fn backfill_categories(conn: &Connection) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare("SELECT DISTINCT category FROM feed_channels ORDER BY category ASC")
+        .map_err(|e| format!("读取已有订阅分类失败：{e}"))?;
+    let names = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("遍历已有订阅分类失败：{e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("解析已有订阅分类失败：{e}"))?;
+    drop(stmt);
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+    ensure_category(conn, "默认分类", now)?;
+    for name in names {
+        ensure_category(conn, &name, now)?;
+    }
+    Ok(())
+}
+
+pub fn create_category(conn: &Connection, name: &str, now: i64) -> Result<(), String> {
+    let clean = name.trim();
+    if clean.chars().count() > 40 {
+        return Err("分类名称不能超过 40 个字符".to_string());
+    }
+    if clean.chars().any(char::is_control) {
+        return Err("分类名称不能包含控制字符".to_string());
+    }
+    ensure_category(conn, clean, now)
+}
+
+const STARTER_FEEDS: &[(&str, &str, &str, &str)] = &[
+    // Finance and quantitative research.
+    ("金融与量化", "Federal Reserve · Press Releases", "https://www.federalreserve.gov/feeds/press_all.xml", "https://www.federalreserve.gov/"),
+    ("金融与量化", "Federal Reserve · Speeches & Testimony", "https://www.federalreserve.gov/feeds/speeches_and_testimony.xml", "https://www.federalreserve.gov/"),
+    ("金融与量化", "Federal Reserve · Working Papers", "https://www.federalreserve.gov/feeds/working_papers.xml", "https://www.federalreserve.gov/"),
+    ("金融与量化", "Federal Reserve · Finance & Economics Discussion Series", "https://www.federalreserve.gov/feeds/feds.xml", "https://www.federalreserve.gov/"),
+    ("金融与量化", "Federal Reserve · FEDS Notes", "https://www.federalreserve.gov/feeds/feds_notes.xml", "https://www.federalreserve.gov/"),
+    ("金融与量化", "Federal Reserve · Selected Interest Rates (H.15)", "https://www.federalreserve.gov/feeds/h15.xml", "https://www.federalreserve.gov/"),
+    ("金融与量化", "TreasuryDirect · Offering Announcements", "https://www.treasurydirect.gov/TA_WS/securities/announced/rss", "https://www.treasurydirect.gov/"),
+    ("金融与量化", "TreasuryDirect · Auction Results", "https://www.treasurydirect.gov/TA_WS/securities/auctioned/rss", "https://www.treasurydirect.gov/"),
+    ("金融与量化", "TreasuryDirect · Debt to the Penny", "https://www.treasurydirect.gov/NP_WS/debt/feeds/recent", "https://www.treasurydirect.gov/"),
+    ("金融与量化", "Financial Stability Board · Press Releases", "https://www.fsb.org/wordpress/content_type/press-releases/feed/", "https://www.fsb.org/"),
+    ("金融与量化", "New York Fed · Liberty Street Economics", "https://libertystreeteconomics.newyorkfed.org/feed/", "https://libertystreeteconomics.newyorkfed.org/"),
+    ("金融与量化", "Quantpedia · Quantitative Trading Research", "https://quantpedia.com/feed/", "https://quantpedia.com/"),
+    ("金融与量化", "Alpha Architect · Quantitative Investing Research", "https://alphaarchitect.com/feed/", "https://alphaarchitect.com/"),
+
+    // Public institutions across the United States, China, Japan and the EU.
+    ("政府与公共机构", "U.S. Census Bureau · Economic Indicators", "https://www.census.gov/economic-indicators/indicator.xml", "https://www.census.gov/economic-indicators/"),
+    ("政府与公共机构", "U.S. Census Bureau · Press Releases", "https://www.census.gov/content/census/en/newsroom/press-releases.xml", "https://www.census.gov/newsroom.html"),
+    ("政府与公共机构", "U.S. Bureau of Labor Statistics · Latest Releases", "https://www.bls.gov/feed/bls_latest.rss", "https://www.bls.gov/"),
+    ("政府与公共机构", "U.S. Bureau of Economic Analysis · Current Releases", "https://apps.bea.gov/rss/rss.xml", "https://www.bea.gov/news/current-releases"),
+    ("政府与公共机构", "国家统计局 · 最新发布", "https://www.stats.gov.cn/sj/zxfb/rss.xml", "https://www.stats.gov.cn/"),
+    ("政府与公共机构", "国家统计局 · 数据解读", "https://www.stats.gov.cn/sj/sjjd/rss.xml", "https://www.stats.gov.cn/"),
+    ("政府与公共机构", "Japan Ministry of Finance · What's New", "https://www.mof.go.jp/english/news.rss", "https://www.mof.go.jp/english/"),
+    ("政府与公共机构", "Bank of Japan · What's New", "https://www.boj.or.jp/en/rss/whatsnew.xml", "https://www.boj.or.jp/en/"),
+    ("政府与公共机构", "Bank of Japan · Statistics", "https://www.boj.or.jp/en/rss/statistics.xml", "https://www.boj.or.jp/en/statistics/"),
+    ("政府与公共机构", "European Central Bank · Press Releases", "https://www.ecb.europa.eu/rss/press.html", "https://www.ecb.europa.eu/press/"),
+    ("政府与公共机构", "European Central Bank · Statistical Press Releases", "https://www.ecb.europa.eu/rss/statpress.html", "https://www.ecb.europa.eu/stats/"),
+    ("政府与公共机构", "European Central Bank · Blog", "https://www.ecb.europa.eu/rss/blog.html", "https://www.ecb.europa.eu/press/blog/"),
+    ("政府与公共机构", "European Central Bank · Publications", "https://www.ecb.europa.eu/rss/pub.html", "https://www.ecb.europa.eu/pub/"),
+
+    // Technology publishers and engineering blogs. Rust is included for clean installs;
+    // existing subscriptions are deduplicated by URL.
+    ("技术博客", "Rust 官方博客", "https://blog.rust-lang.org/feed.xml", "https://blog.rust-lang.org/"),
+    ("技术博客", "GitHub Blog", "https://github.blog/feed/", "https://github.blog/"),
+    ("技术博客", "GitHub Changelog", "https://github.blog/changelog/feed/", "https://github.blog/changelog/"),
+    ("技术博客", "Cloudflare Blog", "https://blog.cloudflare.com/rss/", "https://blog.cloudflare.com/"),
+    ("技术博客", "Kubernetes Blog", "https://kubernetes.io/feed.xml", "https://kubernetes.io/blog/"),
+    ("技术博客", "Mozilla Hacks", "https://hacks.mozilla.org/feed/", "https://hacks.mozilla.org/"),
+    ("技术博客", "AWS News Blog", "https://aws.amazon.com/blogs/aws/feed/", "https://aws.amazon.com/blogs/aws/"),
+    ("技术博客", "Go Blog", "https://go.dev/blog/feed.atom", "https://go.dev/blog/"),
+    ("技术博客", "Python Insider", "https://blog.python.org/feeds/posts/default", "https://blog.python.org/"),
+    ("技术博客", "TypeScript Blog", "https://devblogs.microsoft.com/typescript/feed/", "https://devblogs.microsoft.com/typescript/"),
+];
+
+pub fn seed_default_sources(conn: &Connection, now: i64) -> Result<Vec<String>, String> {
+    const SEED_KEY: &str = "starter-feeds-v2";
+    let already_seeded: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM feed_seed_state WHERE key = ?1)",
+            params![SEED_KEY],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("检查默认订阅源状态失败：{e}"))?;
+    if already_seeded {
+        return Ok(Vec::new());
+    }
+
+    let mut added_ids = Vec::new();
+    const LEGACY_CFA_URL: &str = "https://blogs.cfainstitute.org/investor/feed/";
+    conn.execute(
+        "DELETE FROM feed_channels
+         WHERE url = ?1
+           AND title = ?2
+           AND NOT EXISTS (
+               SELECT 1 FROM feed_articles WHERE feed_articles.channel_id = feed_channels.id
+           )",
+        params![LEGACY_CFA_URL, "CFA Institute · Enterprising Investor"],
+    )
+    .map_err(|e| format!("清理无文章的旧 CFA RSS 地址失败：{e}"))?;
+
+    const LEGACY_BEA_URL: &str = "https://www.bea.gov/news/current-releases/rss.xml";
+    const CURRENT_BEA_URL: &str = "https://apps.bea.gov/rss/rss.xml";
+    let legacy_bea_id: Option<String> = conn
+        .query_row(
+            "SELECT id FROM feed_channels
+             WHERE url = ?1
+               AND NOT EXISTS (SELECT 1 FROM feed_channels WHERE url = ?2)",
+            params![LEGACY_BEA_URL, CURRENT_BEA_URL],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("查找旧 BEA 订阅地址失败：{e}"))?;
+    if let Some(id) = legacy_bea_id {
+        conn.execute(
+            "UPDATE feed_channels SET
+                url = ?1,
+                sync_status = 'idle',
+                error_message = NULL,
+                last_sync_at = 0,
+                updated_at = ?2
+             WHERE id = ?3",
+            params![CURRENT_BEA_URL, now, id],
+        )
+        .map_err(|e| format!("迁移 BEA 订阅地址失败：{e}"))?;
+        added_ids.push(id);
+    }
+
+    for (category, title, url, site_url) in STARTER_FEEDS {
+        ensure_category(conn, category, now)?;
+        let id = Uuid::new_v4().to_string();
+        let inserted = conn
+            .execute(
+                "INSERT OR IGNORE INTO feed_channels (
+                    id, url, title, description, site_url, category, icon,
+                    sync_status, error_message, last_sync_at, created_at, updated_at
+                 ) VALUES (?1, ?2, ?3, NULL, ?4, ?5, NULL, 'idle', NULL, 0, ?6, ?6)",
+                params![id, url, title, site_url, category, now],
+            )
+            .map_err(|e| format!("预置订阅源失败（{title}）：{e}"))?;
+        if inserted > 0 {
+            added_ids.push(id);
+        }
+    }
+
+    conn.execute(
+        "INSERT INTO feed_seed_state (key, applied_at) VALUES (?1, ?2)
+         ON CONFLICT(key) DO NOTHING",
+        params![SEED_KEY, now],
+    )
+    .map_err(|e| format!("保存默认订阅源状态失败：{e}"))?;
+    Ok(added_ids)
 }
 
 pub fn upsert_channel(
@@ -164,6 +484,7 @@ pub fn upsert_channel(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("默认分类");
+    ensure_category(conn, category, now)?;
 
     if let Some(existing_id) = &input.id {
         conn.execute(
@@ -574,16 +895,18 @@ pub fn get_feed_overview(conn: &Connection) -> Result<FeedOverview, String> {
         });
     }
 
-    // Categories aggregation
+    // Include empty categories so users can keep and organize them before subscribing.
     let mut cat_stmt = conn
         .prepare(
-            "SELECT c.category,
-                    COUNT(DISTINCT c.id) as channel_cnt,
-                    COUNT(CASE WHEN a.read_status = 'unread' THEN 1 END) as unread_cnt
-             FROM feed_channels c
-             LEFT JOIN feed_articles a ON c.id = a.channel_id
-             GROUP BY c.category
-             ORDER BY c.category ASC",
+            "SELECT categories.name,
+                    categories.color,
+                    COUNT(DISTINCT channels.id) as channel_cnt,
+                    COUNT(CASE WHEN articles.read_status = 'unread' THEN 1 END) as unread_cnt
+             FROM feed_categories categories
+             LEFT JOIN feed_channels channels ON channels.category = categories.name
+             LEFT JOIN feed_articles articles ON channels.id = articles.channel_id
+             GROUP BY categories.name, categories.color, categories.sort_order
+             ORDER BY categories.sort_order ASC, categories.name COLLATE NOCASE ASC",
         )
         .map_err(|e| format!("统计分类数据失败：{e}"))?;
 
@@ -591,8 +914,9 @@ pub fn get_feed_overview(conn: &Connection) -> Result<FeedOverview, String> {
         .query_map([], |r| {
             Ok(CategoryStats {
                 name: r.get(0)?,
-                channel_count: r.get(1)?,
-                unread_count: r.get(2)?,
+                color: r.get(1)?,
+                channel_count: r.get(2)?,
+                unread_count: r.get(3)?,
             })
         })
         .map_err(|e| format!("遍历分类数据失败：{e}"))?;

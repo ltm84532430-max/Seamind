@@ -47,6 +47,7 @@ export interface ArticleFilter {
 
 export interface CategoryStats {
   name: string;
+  color: string;
   unreadCount: number;
   channelCount: number;
 }

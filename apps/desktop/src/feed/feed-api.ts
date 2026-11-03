@@ -15,6 +15,18 @@ export const feedApi = {
     return invoke<FeedChannel[]>('feed_list_channels');
   },
 
+  async createCategory(name: string): Promise<void> {
+    return invoke<void>('feed_create_category', { name });
+  },
+
+  async seedDefaultSources(): Promise<string[]> {
+    return invoke<string[]>('feed_seed_default_sources');
+  },
+
+  async refreshChannels(ids: string[]): Promise<number> {
+    return invoke<number>('feed_refresh_channels', { ids });
+  },
+
   async addChannel(
     url: string,
     category?: string,

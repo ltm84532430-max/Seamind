@@ -11,6 +11,7 @@ interface FeedArticleListProps {
   onChangeFilterMode: (mode: 'all' | 'unread' | 'starred') => void;
   onChangeSearchQuery: (query: string) => void;
   onMarkAllRead: () => void;
+  onOpenGalaxy: () => void;
 }
 
 function formatRelativeTime(timestamp: number): string {
@@ -39,6 +40,7 @@ export const FeedArticleList: React.FC<FeedArticleListProps> = ({
   onChangeFilterMode,
   onChangeSearchQuery,
   onMarkAllRead,
+  onOpenGalaxy,
 }) => {
   return (
     <section className="feed-article-pane">
@@ -72,14 +74,24 @@ export const FeedArticleList: React.FC<FeedArticleListProps> = ({
             </button>
           </div>
 
-          <button
-            type="button"
-            className="feed-text-btn"
-            onClick={onMarkAllRead}
-            title="将当前列表文章标记为已读"
-          >
-            全部已读
-          </button>
+          <div className="feed-article-toolbar-actions">
+            <button
+              type="button"
+              className="feed-text-btn"
+              onClick={onOpenGalaxy}
+              title="按分类查看订阅源星系"
+            >
+              星系
+            </button>
+            <button
+              type="button"
+              className="feed-text-btn"
+              onClick={onMarkAllRead}
+              title="将当前列表文章标记为已读"
+            >
+              全部已读
+            </button>
+          </div>
         </div>
 
         <input

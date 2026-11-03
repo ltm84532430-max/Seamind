@@ -2,11 +2,41 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { feedApi } from './feed-api';
 import { FeedAddDialog } from './FeedAddDialog';
 import { FeedArticleList } from './FeedArticleList';
+import { FeedCategoryDialog } from './FeedCategoryDialog';
+import { FeedGalaxyView } from './FeedGalaxyView';
 import { FeedOpmlDialog } from './FeedOpmlDialog';
 import { FeedReaderView } from './FeedReaderView';
 import { FeedSidebar } from './FeedSidebar';
 import type { FeedArticle, FeedOverview } from './types';
 import './feed-workspace.css';
+
+let defaultFeedSeedPromise: Promise<string[]> | null = null;
+let defaultFeedRefreshPromise: Promise<void> | null = null;
+
+async function seedDefaultSourcesOnce(): Promise<{
+  refreshPromise: Promise<void> | null;
+}> {
+  if (!defaultFeedSeedPromise) {
+    defaultFeedSeedPromise = feedApi.seedDefaultSources().catch((error) => {
+      defaultFeedSeedPromise = null;
+      throw error;
+    });
+  }
+
+  const seededIds = await defaultFeedSeedPromise;
+  if (seededIds.length > 0 && !defaultFeedRefreshPromise) {
+    defaultFeedRefreshPromise = feedApi
+      .refreshChannels(seededIds)
+      .then(() => undefined)
+      .catch((error) => {
+        console.error('后台刷新预置订阅源失败：', error);
+      });
+  }
+  // Return the refresh task as a value inside an object. Returning the promise
+  // directly from an async function would make JavaScript await it before the
+  // caller can render the freshly seeded categories and channels.
+  return { refreshPromise: defaultFeedRefreshPromise };
+}
 
 export interface FeedWorkspaceProps {
   onOpenMindmap?: (markdown: string, title: string) => void;
@@ -35,6 +65,8 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
   // Dialogs
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isOpmlOpen, setIsOpmlOpen] = useState(false);
+  const [isCreateCategoryOpen, setIsCreateCategoryOpen] = useState(false);
+  const [isGalaxyOpen, setIsGalaxyOpen] = useState(false);
   const [opmlMode, setOpmlMode] = useState<'import' | 'export'>('import');
   const [exportData, setExportData] = useState('');
 
@@ -77,12 +109,31 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
   }, [selectedChannelId, selectedCategory, filterMode, searchQuery]);
 
   useEffect(() => {
-    reloadOverview();
-  }, [reloadOverview]);
+    let active = true;
+    const initialize = async () => {
+      let refreshPromise: Promise<void> | null = null;
+      try {
+        const seedResult = await seedDefaultSourcesOnce();
+        refreshPromise = seedResult.refreshPromise;
+      } catch (err) {
+        console.error('初始化预置订阅源失败：', err);
+      }
 
-  useEffect(() => {
-    reloadArticles();
-  }, [reloadArticles]);
+      if (!active) return;
+      await Promise.all([reloadOverview(), reloadArticles()]);
+
+      if (refreshPromise) {
+        void refreshPromise.then(async () => {
+          if (active) await Promise.all([reloadOverview(), reloadArticles()]);
+        });
+      }
+    };
+
+    void initialize();
+    return () => {
+      active = false;
+    };
+  }, [reloadOverview, reloadArticles]);
 
   // ---------------------------------------------------------------------------
   // Article Actions
@@ -191,6 +242,14 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
       await Promise.all([reloadOverview(), reloadArticles()]);
     },
     [reloadOverview, reloadArticles],
+  );
+
+  const handleCreateCategory = useCallback(
+    async (name: string) => {
+      await feedApi.createCategory(name);
+      await reloadOverview();
+    },
+    [reloadOverview],
   );
 
   const handleDeleteChannel = useCallback(
@@ -313,6 +372,7 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
           setSelectedCategory(null);
         }}
         onOpenAddDialog={() => setIsAddOpen(true)}
+        onOpenCreateCategory={() => setIsCreateCategoryOpen(true)}
         onOpenImportOpml={() => {
           setOpmlMode('import');
           setIsOpmlOpen(true);
@@ -332,6 +392,7 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
         onChangeFilterMode={(m) => setFilterMode(m)}
         onChangeSearchQuery={(q) => setSearchQuery(q)}
         onMarkAllRead={handleMarkAllRead}
+        onOpenGalaxy={() => setIsGalaxyOpen(true)}
       />
 
       <FeedReaderView
@@ -365,6 +426,32 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
           await Promise.all([reloadOverview(), reloadArticles()]);
         }}
       />
+
+      <FeedCategoryDialog
+        isOpen={isCreateCategoryOpen}
+        onClose={() => setIsCreateCategoryOpen(false)}
+        onCreate={handleCreateCategory}
+      />
+
+      {isGalaxyOpen && (
+        <FeedGalaxyView
+          categories={overview?.categories ?? []}
+          channels={overview?.channels ?? []}
+          onClose={() => setIsGalaxyOpen(false)}
+          onSelectCategory={(category) => {
+            setSelectedChannelId(null);
+            setSelectedCategory(category);
+            setFilterMode('all');
+            setIsGalaxyOpen(false);
+          }}
+          onSelectChannel={(channelId) => {
+            setSelectedCategory(null);
+            setSelectedChannelId(channelId);
+            setFilterMode('all');
+            setIsGalaxyOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 };

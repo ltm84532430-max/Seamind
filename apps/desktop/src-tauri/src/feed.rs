@@ -688,6 +688,47 @@ pub async fn feed_list_channels(app: AppHandle) -> Result<Vec<store::FeedChannel
 }
 
 #[tauri::command]
+pub async fn feed_create_category(app: AppHandle, name: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let conn = open_db(&app)?;
+        store::create_category(&conn, &name, now_secs())
+    })
+    .await
+    .map_err(|e| format!("创建订阅分类任务失败：{e}"))?
+}
+
+#[tauri::command]
+pub async fn feed_seed_default_sources(app: AppHandle) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let conn = open_db(&app)?;
+        store::seed_default_sources(&conn, now_secs())
+    })
+    .await
+    .map_err(|e| format!("预置订阅源任务失败：{e}"))?
+}
+
+#[tauri::command]
+pub async fn feed_refresh_channels(app: AppHandle, ids: Vec<String>) -> Result<usize, String> {
+    let semaphore = Arc::new(Semaphore::new(5));
+    let tasks = ids.into_iter().map(|id| {
+        let app_handle = app.clone();
+        let sem = semaphore.clone();
+        tokio::spawn(async move {
+            let _permit = sem.acquire().await.ok();
+            feed_refresh_channel(app_handle, id).await
+        })
+    });
+
+    let mut total_new = 0;
+    for task in tasks {
+        if let Ok(Ok(count)) = task.await {
+            total_new += count;
+        }
+    }
+    Ok(total_new)
+}
+
+#[tauri::command]
 pub async fn feed_add_channel(
     app: AppHandle,
     url: String,
