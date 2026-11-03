@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { literatureApi } from './literature-api';
 import type {
   LiteratureOverview,
@@ -6,6 +12,7 @@ import type {
   PaperInput,
   PaperItem,
   LiteratureSearchResult,
+  PaperPdfSource,
 } from './types';
 import './literature-workspace.css';
 
@@ -26,7 +33,22 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
   const [selectedPaperId, setSelectedPaperId] = useState<string | null>(null);
   const [compactPane, setCompactPane] = useState<'list' | 'detail'>('list');
   const [readerPaper, setReaderPaper] = useState<PaperItem | null>(null);
-  const [pdfBusy, setPdfBusy] = useState(false);
+  const [busyPdfIds, setBusyPdfIds] = useState<string[]>([]);
+  const pdfRequests = useRef(new Set<string>());
+  const selectedRef = useRef<string | null>(null);
+  selectedRef.current = selectedPaperId;
+  const [pdfError, setPdfError] = useState<{
+    id: string;
+    message: string;
+  } | null>(null);
+  const [pdfSource, setPdfSource] = useState<PaperPdfSource | null>(null);
+  const [oaEmail, setOaEmail] = useState(() => {
+    try {
+      return localStorage.getItem('seamind:literature:unpaywall-email') || '';
+    } catch {
+      return '';
+    }
+  });
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -138,6 +160,41 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
     () => papers.find((p) => p.id === selectedPaperId) || null,
     [papers, selectedPaperId],
   );
+  const pdfBusy = Boolean(
+    selectedPaper && busyPdfIds.includes(selectedPaper.id),
+  );
+
+  useEffect(() => {
+    let active = true;
+    setPdfSource(null);
+    setPdfError(null);
+    if (selectedPaper?.pdfPath) {
+      void literatureApi
+        .pdfSource(selectedPaper.id)
+        .then((source) => {
+          if (active) setPdfSource(source);
+        })
+        .catch(() => {});
+    } else if (selectedPaper) {
+      const id = selectedPaper.id;
+      void literatureApi
+        .pdfAttempt(id)
+        .then((attempt) => {
+          if (!active || pdfRequests.current.has(id)) return;
+          if (attempt?.status === 'failed')
+            setPdfError({
+              id,
+              message: attempt.message || '上次未找到原文，可重试或手动添加。',
+            });
+          else if (attempt?.status === 'searching')
+            setPdfError({ id, message: '上次查找未完成，可以重新尝试。' });
+        })
+        .catch(() => {});
+    }
+    return () => {
+      active = false;
+    };
+  }, [selectedPaper?.id, selectedPaper?.pdfSha256]);
 
   useEffect(() => {
     if (selectedPaper) {
@@ -145,7 +202,7 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
     } else {
       setNotesDraft('');
     }
-  }, [selectedPaper]);
+  }, [selectedPaper?.id]);
 
   // ---------------------------------------------------------------------------
   // Handlers
@@ -245,31 +302,59 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
 
   const handleAttachPdf = async (replaceExisting = false) => {
     if (!selectedPaper || pdfBusy) return;
-    setPdfBusy(true);
+    if (
+      replaceExisting &&
+      !window.confirm(
+        '更换后，旧 PDF 的批注仍会保留，但不会显示在新文件上。继续更换吗？',
+      )
+    )
+      return;
+    const paperId = selectedPaper.id;
+    setBusyPdfIds((ids) => [...ids, paperId]);
     try {
-      const updatedPaper = await literatureApi.attachPdf(selectedPaper.id);
+      const updatedPaper = await literatureApi.attachPdf(paperId);
       if (!updatedPaper) return;
       setPapers((current) =>
         current.map((paper) =>
           paper.id === updatedPaper.id ? updatedPaper : paper,
         ),
       );
-      setReaderPaper(updatedPaper);
+      setPdfError(null);
+      if (selectedRef.current === paperId) setReaderPaper(updatedPaper);
       showToast(replaceExisting ? 'PDF 原文已更换' : 'PDF 已加入文献库');
     } catch (attachError) {
       alert(`添加 PDF 失败：${attachError}`);
     } finally {
-      setPdfBusy(false);
+      setBusyPdfIds((ids) => ids.filter((id) => id !== paperId));
+    }
+  };
+
+  const acquireAndRead = async (paper: PaperItem) => {
+    if (pdfRequests.current.has(paper.id)) return;
+    pdfRequests.current.add(paper.id);
+    setBusyPdfIds((ids) => [...ids, paper.id]);
+    setPdfError(null);
+    try {
+      const updated = await literatureApi.acquirePdf(
+        paper.id,
+        oaEmail.trim() || undefined,
+      );
+      setPapers((current) =>
+        current.map((item) => (item.id === updated.id ? updated : item)),
+      );
+      if (selectedRef.current === paper.id) setReaderPaper(updated);
+      else showToast('原文已保存到文献库');
+    } catch (error) {
+      if (String(error).includes('已取消')) showToast('已取消获取原文');
+      else setPdfError({ id: paper.id, message: String(error) });
+    } finally {
+      pdfRequests.current.delete(paper.id);
+      setBusyPdfIds((ids) => ids.filter((id) => id !== paper.id));
     }
   };
 
   const handleOpenPdfReader = () => {
-    if (!selectedPaper) return;
-    if (!selectedPaper.pdfPath) {
-      void handleAttachPdf();
-      return;
-    }
-    setReaderPaper(selectedPaper);
+    if (selectedPaper) void acquireAndRead(selectedPaper);
   };
 
   const handleReaderStarted = useCallback(
@@ -344,28 +429,27 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
   ) => {
     if (result.existingPaperId) {
       await handleOpenDiscoveredPaper(result);
+      if (downloadPdf) {
+        const existing = await literatureApi.get(result.existingPaperId);
+        if (existing) {
+          selectedRef.current = existing.id;
+          void acquireAndRead(existing);
+        }
+      }
       return;
     }
 
     try {
-      let paper = await literatureApi.save({
+      const paper = await literatureApi.save({
         ...result.paper,
         collectionIds: activeCollectionId ? [activeCollectionId] : undefined,
       });
-      let pdfError: string | null = null;
-      if (downloadPdf && paper.arxivId) {
-        try {
-          paper = await literatureApi.downloadArxivPdf(paper.id);
-        } catch (e: any) {
-          pdfError = e?.toString() || 'PDF 下载失败';
-        }
-      }
-
       setPapers((current) => [
         paper,
         ...current.filter((p) => p.id !== paper.id),
       ]);
       setSelectedPaperId(paper.id);
+      selectedRef.current = paper.id;
       setCompactPane('detail');
       setDiscoveryResults((current) =>
         current.map((item) =>
@@ -378,28 +462,34 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
       setSearchQuery('');
       void loadOverview();
 
-      if (downloadPdf && paper.pdfPath) {
-        setReaderPaper(paper);
-        showToast('论文已添加，开放 PDF 已下载。');
-      } else if (pdfError) {
-        showToast(`论文已添加，但 PDF 下载失败：${pdfError}`);
-      } else {
-        showToast('论文已添加到文献库。');
-      }
+      if (downloadPdf) void acquireAndRead(paper);
+      else showToast('论文已添加到文献库。');
     } catch (e: any) {
       setDiscoveryError(e?.toString() || '添加论文失败。');
     }
   };
 
-  const handleSaveFetchedPaper = async () => {
+  const handleSaveFetchedPaper = async (read = false) => {
     if (!fetchedPreview) return;
     try {
-      await literatureApi.save(fetchedPreview);
+      const paper = await literatureApi.save(fetchedPreview);
       setShowFetchModal(false);
       setFetchedPreview(null);
       setFetchInput('');
-      loadOverview();
-      loadPapers();
+      setStatusFilter('all');
+      setActiveCollectionId(null);
+      setActiveTag(null);
+      setSearchQuery('');
+      setPapers((current) => [
+        paper,
+        ...current.filter((item) => item.id !== paper.id),
+      ]);
+      setSelectedPaperId(paper.id);
+      selectedRef.current = paper.id;
+      setCompactPane('detail');
+      void loadOverview();
+      if (read) void acquireAndRead(paper);
+      else showToast('论文已保存');
     } catch (e: any) {
       alert(`保存文献失败: ${e}`);
     }
@@ -781,7 +871,6 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
             >
               ‹ 文献列表
             </button>
-            <span className="lit-inspector-head-title">条目检视</span>
             <div
               className="lit-inspector-actions"
               style={{ display: 'flex', gap: '6px', alignItems: 'center' }}
@@ -790,10 +879,10 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
                 <button
                   type="button"
                   className="lit-btn lit-btn-primary"
-                  title="自动解构文献并转为思维导图"
+                  title="根据题录和摘要生成阅读模板；不分析 PDF 正文"
                   onClick={handleGenerateMindmap}
                 >
-                  生成思维导图
+                  生成阅读模板
                 </button>
               )}
 
@@ -861,36 +950,91 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
             <div className="lit-doc-title">{selectedPaper.title}</div>
 
             <div className="lit-pdf-source-actions">
-              {selectedPaper.pdfPath ? (
-                <>
-                  <button
-                    type="button"
-                    className="lit-btn lit-btn-primary"
-                    onClick={handleOpenPdfReader}
-                  >
-                    阅读 PDF 原文
-                  </button>
-                  <button
-                    type="button"
-                    className="lit-btn"
-                    disabled={pdfBusy}
-                    onClick={() => void handleAttachPdf(true)}
-                  >
-                    {pdfBusy ? '正在导入…' : '更换 PDF'}
-                  </button>
-                  <span>PDF 已保存在本机文献库</span>
-                </>
+              <button
+                type="button"
+                className="lit-btn lit-btn-primary"
+                disabled={pdfBusy}
+                onClick={handleOpenPdfReader}
+              >
+                {pdfBusy ? '正在查找原文…' : '阅读原文'}
+              </button>
+              {pdfBusy ? (
+                <button
+                  type="button"
+                  className="lit-btn"
+                  onClick={() => void literatureApi.cancelPdf(selectedPaper.id)}
+                >
+                  取消
+                </button>
               ) : (
                 <button
                   type="button"
-                  className="lit-btn lit-btn-primary"
-                  disabled={pdfBusy}
-                  onClick={handleOpenPdfReader}
+                  className="lit-btn"
+                  onClick={() =>
+                    void handleAttachPdf(Boolean(selectedPaper.pdfPath))
+                  }
                 >
-                  {pdfBusy ? '正在导入…' : '添加 PDF 原文'}
+                  {selectedPaper.pdfPath ? '更换 PDF' : '手动添加'}
+                </button>
+              )}
+              {selectedPaper.pdfPath && (
+                <span>
+                  已保存在本机
+                  {pdfSource
+                    ? ` · ${pdfSource.sourceType}${pdfSource.version ? ` · ${pdfSource.version}` : ''}${pdfSource.license ? ` · ${pdfSource.license}` : ''}`
+                    : ''}
+                </span>
+              )}
+              {selectedPaper.pdfPath && pdfSource?.sourceUrl && (
+                <button
+                  type="button"
+                  className="lit-btn"
+                  onClick={() => handleOpenLink(pdfSource.sourceUrl)}
+                >
+                  查看来源
                 </button>
               )}
             </div>
+            {pdfError?.id === selectedPaper.id && !pdfBusy && (
+              <div className="lit-pdf-feedback" role="status">
+                <span>{pdfError.message}</span>
+                <details>
+                  <summary>尝试更多开放来源</summary>
+                  <label>
+                    Unpaywall 联系邮箱（仅用于查询该来源）
+                    <input
+                      className="lit-text-input"
+                      type="email"
+                      value={oaEmail}
+                      onChange={(event) => setOaEmail(event.target.value)}
+                      placeholder="name@example.com"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="lit-btn"
+                    onClick={() => {
+                      try {
+                        if (oaEmail.trim())
+                          localStorage.setItem(
+                            'seamind:literature:unpaywall-email',
+                            oaEmail.trim(),
+                          );
+                        else
+                          localStorage.removeItem(
+                            'seamind:literature:unpaywall-email',
+                          );
+                      } catch {
+                        /* optional */
+                      }
+                      void acquireAndRead(selectedPaper);
+                    }}
+                  >
+                    保存并重试
+                  </button>
+                </details>
+              </div>
+            )}
 
             {/* Metadata Grid */}
             <div className="lit-kv-grid">
@@ -1292,40 +1436,52 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
                           )}
                           <div className="lit-search-result-actions">
                             {result.existingPaperId ? (
-                              <button
-                                type="button"
-                                className="lit-btn"
-                                onClick={() =>
-                                  void handleOpenDiscoveredPaper(result)
-                                }
-                              >
-                                已在文献库 · 打开
-                              </button>
-                            ) : (
                               <>
                                 <button
                                   type="button"
                                   className="lit-btn lit-btn-primary"
+                                  onClick={() =>
+                                    void handleImportDiscoveredPaper(
+                                      result,
+                                      true,
+                                    )
+                                  }
+                                >
+                                  阅读原文
+                                </button>
+                                <button
+                                  type="button"
+                                  className="lit-btn"
+                                  onClick={() =>
+                                    void handleOpenDiscoveredPaper(result)
+                                  }
+                                >
+                                  查看条目
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  className="lit-btn"
                                   onClick={() =>
                                     void handleImportDiscoveredPaper(result)
                                   }
                                 >
                                   加入文献库
                                 </button>
-                                {result.pdfUrl && result.paper.arxivId && (
-                                  <button
-                                    type="button"
-                                    className="lit-btn"
-                                    onClick={() =>
-                                      void handleImportDiscoveredPaper(
-                                        result,
-                                        true,
-                                      )
-                                    }
-                                  >
-                                    加入并阅读开放 PDF
-                                  </button>
-                                )}
+                                <button
+                                  type="button"
+                                  className="lit-btn lit-btn-primary"
+                                  onClick={() =>
+                                    void handleImportDiscoveredPaper(
+                                      result,
+                                      true,
+                                    )
+                                  }
+                                >
+                                  加入并阅读
+                                </button>
                               </>
                             )}
                           </div>
@@ -1346,14 +1502,24 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
                 取消
               </button>
               {fetchMode === 'identifier' && (
-                <button
-                  type="button"
-                  className="lit-btn lit-btn-primary"
-                  disabled={!fetchedPreview}
-                  onClick={handleSaveFetchedPaper}
-                >
-                  保存到文献库
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="lit-btn"
+                    disabled={!fetchedPreview}
+                    onClick={() => void handleSaveFetchedPaper(false)}
+                  >
+                    仅保存
+                  </button>
+                  <button
+                    type="button"
+                    className="lit-btn lit-btn-primary"
+                    disabled={!fetchedPreview}
+                    onClick={() => void handleSaveFetchedPaper(true)}
+                  >
+                    保存并阅读
+                  </button>
+                </>
               )}
             </div>
           </div>

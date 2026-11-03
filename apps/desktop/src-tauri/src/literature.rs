@@ -4,15 +4,19 @@ use std::collections::HashSet;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{
     fs,
-    io::Read,
+    io::{Read, Write},
     path::{Component, Path, PathBuf},
 };
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
+use tokio::sync::{watch, Mutex as AsyncMutex};
 
 use crate::bibtex::{clean_doi, generate_cite_key, parse_bibtex, serialize_bibtex, ParsedBibEntry};
 use crate::literature_store as store;
+use crate::literature_resolver as resolver;
 
 const DATABASE_FILE: &str = "literature.sqlite3";
 const PDF_DIRECTORY: &str = "paper-pdfs";
@@ -35,11 +39,16 @@ pub struct LiteratureSearchResult {
     pub existing_paper_id: Option<String>,
 }
 
+fn literature_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    #[cfg(debug_assertions)]
+    if let Some(path) = std::env::var_os("SEAMIND_TEST_LITERATURE_DIR") {
+        return Ok(PathBuf::from(path));
+    }
+    app.path().app_local_data_dir().map_err(|e| format!("无法定位文献数据目录：{e}"))
+}
+
 fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let directory = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|e| format!("无法定位文献数据目录：{e}"))?;
+    let directory = literature_data_dir(app)?;
     std::fs::create_dir_all(&directory).map_err(|e| format!("无法创建文献数据目录：{e}"))?;
     Ok(directory.join(DATABASE_FILE))
 }
@@ -59,7 +68,7 @@ fn http_client() -> Result<reqwest::Client, String> {
     let mut headers = HeaderMap::new();
     headers.insert(
         USER_AGENT,
-        HeaderValue::from_static("Seamind-Desktop/0.1.0 (mailto:seamind@markmap.org)"),
+        HeaderValue::from_static("Seamind-Desktop/0.1.0"),
     );
     headers.insert(
         ACCEPT,
@@ -100,7 +109,26 @@ pub fn literature_save(
     app: AppHandle,
     paper: store::PaperInput,
 ) -> Result<store::PaperItem, String> {
-    store::upsert_paper(&open_db(&app)?, &paper, now())
+    let conn = open_db(&app)?;
+    conn.execute_batch("BEGIN IMMEDIATE").map_err(|e| format!("保存文献失败：{e}"))?;
+    let saved = (|| {
+        if paper.id.is_none() {
+            if let Some(existing) = store::find_existing_paper_id(&conn, paper.doi.as_deref(), paper.arxiv_id.as_deref())? {
+                if let Some(collections) = &paper.collection_ids {
+                    for collection in collections {
+                        conn.execute("INSERT OR IGNORE INTO paper_collection_items (paper_id,collection_id,added_at) VALUES (?1,?2,?3)", rusqlite::params![existing, collection, now()])
+                            .map_err(|e| format!("添加文献集失败：{e}"))?;
+                    }
+                }
+                return store::get_paper(&conn, &existing)?.ok_or_else(|| "找不到已保存的文献".to_string());
+            }
+        }
+        store::upsert_paper(&conn, &paper, now())
+    })();
+    match saved {
+        Ok(item) => { conn.execute_batch("COMMIT").map_err(|e| format!("保存文献失败：{e}"))?; Ok(item) }
+        Err(error) => { let _ = conn.execute_batch("ROLLBACK"); Err(error) }
+    }
 }
 
 #[tauri::command(async)]
@@ -192,10 +220,7 @@ pub fn literature_attach_pdf(
         return Err("所选文件没有有效的 PDF 文件头。".to_string());
     }
 
-    let app_data = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|e| format!("无法定位文献附件目录：{e}"))?;
+    let app_data = literature_data_dir(&app)?;
     let directory = app_data.join(PDF_DIRECTORY);
     fs::create_dir_all(&directory).map_err(|e| format!("无法创建 PDF 附件目录：{e}"))?;
     let filename = format!("{}.pdf", Uuid::new_v4());
@@ -215,7 +240,10 @@ pub fn literature_attach_pdf(
         .join(&filename)
         .to_string_lossy()
         .replace('\\', "/");
-    if let Err(error) = store::update_paper_pdf(&conn, &id, &relative_path, &sha256, now()) {
+    conn.execute_batch("BEGIN IMMEDIATE").map_err(|e| format!("无法保存附件：{e}"))?;
+    let source = store::PaperPdfSource { source_type: "本地文件".into(), source_url: None, version: None, license: None, acquired_at: now() };
+    if let Err(error) = store::update_paper_pdf(&conn, &id, &relative_path, &sha256, now()).and_then(|_| store::set_pdf_source(&conn, &id, &source)).and_then(|_| store::set_pdf_attempt(&conn, &id, "available", None, now())).and_then(|_| conn.execute_batch("COMMIT").map_err(|e| e.to_string())) {
+        let _ = conn.execute_batch("ROLLBACK");
         let _ = fs::remove_file(&destination);
         return Err(error);
     }
@@ -230,88 +258,142 @@ pub fn literature_attach_pdf(
         .ok_or_else(|| "关联 PDF 后无法读取文献记录。".to_string())
 }
 
+static PDF_LOCKS: OnceLock<Mutex<HashMap<String, Weak<AsyncMutex<()>>>>> = OnceLock::new();
+static PDF_CANCEL: OnceLock<Mutex<HashMap<String, watch::Sender<bool>>>> = OnceLock::new();
+static ARXIV_API_SLOT: OnceLock<AsyncMutex<Option<tokio::time::Instant>>> = OnceLock::new();
+
+async fn arxiv_api_slot() -> tokio::sync::MutexGuard<'static, Option<tokio::time::Instant>> {
+    let mut slot = ARXIV_API_SLOT.get_or_init(|| AsyncMutex::new(None)).lock().await;
+    if let Some(previous) = *slot {
+        tokio::time::sleep_until(previous + Duration::from_secs(3)).await;
+    }
+    *slot = Some(tokio::time::Instant::now());
+    slot
+}
+
+struct TemporaryPdf(PathBuf);
+impl Drop for TemporaryPdf { fn drop(&mut self) { let _ = fs::remove_file(&self.0); } }
+
 #[tauri::command(async)]
-pub async fn literature_download_arxiv_pdf(
-    app: AppHandle,
-    id: String,
-) -> Result<store::PaperItem, String> {
-    let conn = open_db(&app)?;
-    let existing =
-        store::get_paper(&conn, &id)?.ok_or_else(|| "找不到要下载 PDF 的文献记录。".to_string())?;
-    let arxiv_id = existing
-        .arxiv_id
-        .as_deref()
-        .ok_or_else(|| "这篇文献没有 arXiv ID，无法自动下载开放 PDF。".to_string())?;
-    let arxiv_id = validate_arxiv_id(arxiv_id)?;
-    let pdf_url = format!("https://arxiv.org/pdf/{arxiv_id}.pdf");
-    let client = http_client()?;
-    let mut response = client
-        .get(&pdf_url)
-        .send()
-        .await
-        .map_err(|e| format!("请求 arXiv PDF 失败：{e}"))?;
-    if !response.status().is_success() {
-        return Err(format!("arXiv PDF 返回错误状态码：{}", response.status()));
+pub fn literature_cancel_pdf(id: String) {
+    if let Some(sender) = PDF_CANCEL.get_or_init(Default::default).lock().unwrap().get(&id) {
+        let _ = sender.send(true);
     }
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_DOWNLOADED_PDF_BYTES)
-    {
-        return Err("PDF 文件超过 100 MB，已取消下载。".to_string());
-    }
+}
 
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|e| format!("读取 arXiv PDF 失败：{e}"))?
-    {
-        if bytes.len() as u64 + chunk.len() as u64 > MAX_DOWNLOADED_PDF_BYTES {
-            return Err("PDF 文件超过 100 MB，已取消下载。".to_string());
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    if !bytes
-        .get(..bytes.len().min(1024))
-        .is_some_and(|header| header.windows(5).any(|window| window == b"%PDF-"))
-    {
-        return Err("arXiv 返回内容不是有效的 PDF 文件。".to_string());
-    }
+#[tauri::command(async)]
+pub fn literature_pdf_source(app: AppHandle, id: String) -> Result<Option<store::PaperPdfSource>, String> {
+    store::pdf_source(&open_db(&app)?, &id)
+}
 
-    let app_data = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|e| format!("无法定位文献附件目录：{e}"))?;
-    let directory = app_data.join(PDF_DIRECTORY);
-    fs::create_dir_all(&directory).map_err(|e| format!("无法创建 PDF 附件目录：{e}"))?;
-    let filename = format!("{}.pdf", Uuid::new_v4());
-    let destination = directory.join(&filename);
-    if let Err(error) = fs::write(&destination, &bytes) {
-        let _ = fs::remove_file(&destination);
-        return Err(format!("保存下载的 PDF 失败：{error}"));
-    }
-    let sha256 = match hash_file(&destination) {
-        Ok(hash) => hash,
-        Err(error) => {
-            let _ = fs::remove_file(&destination);
-            return Err(error);
+#[tauri::command(async)]
+pub fn literature_pdf_attempt(app: AppHandle, id: String) -> Result<Option<store::PaperPdfAttempt>, String> {
+    store::pdf_attempt(&open_db(&app)?, &id)
+}
+
+#[tauri::command(async)]
+pub async fn literature_acquire_pdf(app: AppHandle, id: String, email: Option<String>) -> Result<store::PaperItem, String> {
+    let lock = {
+        let mut locks = PDF_LOCKS.get_or_init(Default::default).lock().unwrap();
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        match locks.get(&id).and_then(Weak::upgrade) {
+            Some(lock) => lock,
+            None => { let lock = Arc::new(AsyncMutex::new(())); locks.insert(id.clone(), Arc::downgrade(&lock)); lock }
         }
     };
-    let relative_path = Path::new(PDF_DIRECTORY)
-        .join(&filename)
-        .to_string_lossy()
-        .replace('\\', "/");
-    if let Err(error) = store::update_paper_pdf(&conn, &id, &relative_path, &sha256, now()) {
-        let _ = fs::remove_file(&destination);
-        return Err(error);
+    let _guard = lock.lock().await;
+    let paper = store::get_paper(&open_db(&app)?, &id)?.ok_or("找不到这篇文献")?;
+    if paper.pdf_path.as_deref().is_some_and(|path| resolve_managed_pdf(&app, path).is_ok()) { return Ok(paper); }
+    store::set_pdf_attempt(&open_db(&app)?, &id, "searching", None, now())?;
+    let (sender, mut receiver) = watch::channel(false);
+    PDF_CANCEL.get_or_init(Default::default).lock().unwrap().insert(id.clone(), sender);
+    let result = tokio::select! {
+        value = acquire_pdf_inner(&app, &paper, email.as_deref()) => value,
+        _ = receiver.changed() => Err("已取消获取原文".to_string()),
+    };
+    PDF_CANCEL.get_or_init(Default::default).lock().unwrap().remove(&id);
+    if let Err(error) = &result {
+        let state = if error.contains("已取消") { "cancelled" } else { "failed" };
+        if let Ok(conn) = open_db(&app) { let _ = store::set_pdf_attempt(&conn, &id, state, Some(error), now()); }
     }
-    if let Some(old_path) = existing.pdf_path.as_deref() {
-        if old_path != relative_path {
-            remove_managed_pdf(&app, old_path);
+    result
+}
+
+async fn acquire_pdf_inner(app: &AppHandle, paper: &store::PaperItem, email: Option<&str>) -> Result<store::PaperItem, String> {
+    let mut candidates = Vec::new();
+    let arxiv = paper.arxiv_id.as_deref().and_then(resolver::arxiv_id)
+        .or_else(|| paper.doi.as_deref().and_then(resolver::arxiv_id))
+        .or_else(|| paper.url.as_deref().and_then(resolver::arxiv_id));
+    if let Some(id) = arxiv {
+        if let Ok(url) = resolver::safe_url(&format!("https://arxiv.org/pdf/{id}")) {
+            candidates.push(resolver::Candidate { url, source: "arXiv", version: Some(id), license: None });
         }
     }
+    // Try arXiv immediately so a slow DOI resolver does not delay reading.
+    let mut last_error = None;
+    for candidate in candidates {
+        match download_candidate(app, paper, &candidate).await { Ok(item) => return Ok(item), Err(error) => last_error = Some(error) }
+    }
+    for candidate in resolver::candidates(paper.doi.as_deref(), None, None, email).await {
+        if candidate.source == "arXiv" { continue; }
+        match download_candidate(app, paper, &candidate).await { Ok(item) => return Ok(item), Err(error) => last_error = Some(error) }
+    }
+    Err(last_error.unwrap_or_else(|| "没有找到可直接阅读的开放 PDF，请手动添加文件或打开出版社页面".into()))
+}
 
-    store::get_paper(&conn, &id)?.ok_or_else(|| "保存 PDF 后无法读取文献记录。".to_string())
+async fn download_candidate(app: &AppHandle, paper: &store::PaperItem, candidate: &resolver::Candidate) -> Result<store::PaperItem, String> {
+    let (mut response, final_url) = resolver::request(candidate.url.as_str()).await?;
+    if !response.status().is_success() { return Err(format!("{} 返回 HTTP {}", candidate.source, response.status().as_u16())); }
+    if response.content_length().is_some_and(|n| n > MAX_DOWNLOADED_PDF_BYTES) { return Err("PDF 超过 100 MB".into()); }
+    let directory = literature_data_dir(app)?.join(PDF_DIRECTORY);
+    fs::create_dir_all(&directory).map_err(|e| format!("无法创建附件目录：{e}"))?;
+    let filename = format!("{}.pdf", Uuid::new_v4());
+    let target = directory.join(&filename);
+    let temp = TemporaryPdf(directory.join(format!("{filename}.part")));
+    let mut file = fs::File::create(&temp.0).map_err(|e| format!("无法创建临时文件：{e}"))?;
+    let mut size = 0u64;
+    let mut head = Vec::new();
+    let mut tail = Vec::new();
+    let mut hash = Sha256::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| format!("下载中断：{}", e.without_url()))? {
+        size += chunk.len() as u64;
+        if size > MAX_DOWNLOADED_PDF_BYTES { return Err("PDF 超过 100 MB".into()); }
+        if head.len() < 1024 { head.extend_from_slice(&chunk[..chunk.len().min(1024 - head.len())]); }
+        tail.extend_from_slice(&chunk);
+        if tail.len() > 2048 { tail.drain(..tail.len()-2048); }
+        hash.update(&chunk);
+        file.write_all(&chunk).map_err(|e| format!("保存 PDF 失败：{e}"))?;
+    }
+    if size < 100 || !head.windows(5).any(|s| s == b"%PDF-") || !tail.windows(5).any(|s| s == b"%%EOF") {
+        return Err("来源返回的内容不是完整 PDF，请尝试其他来源".into());
+    }
+    file.sync_all().map_err(|e| format!("保存 PDF 失败：{e}"))?;
+    drop(file);
+    let conn = open_db(app)?;
+    conn.execute_batch("BEGIN IMMEDIATE").map_err(|e| format!("无法保存附件：{e}"))?;
+    let current = store::get_paper(&conn, &paper.id)?.ok_or("文献已被删除")?;
+    if current.pdf_path != paper.pdf_path {
+        let _ = conn.execute_batch("ROLLBACK");
+        let _ = store::set_pdf_attempt(&conn, &paper.id, "available", None, now());
+        return Ok(current);
+    }
+    fs::rename(&temp.0, &target).map_err(|e| format!("无法完成 PDF 保存：{e}"))?;
+    let path = format!("{PDF_DIRECTORY}/{filename}");
+    let mut public_url = final_url;
+    // Query parameters may contain expiring access tokens; keep provenance without credentials.
+    public_url.set_query(None);
+    let source = store::PaperPdfSource { source_type: candidate.source.into(), source_url: Some(public_url.to_string()), version: candidate.version.clone(), license: candidate.license.clone(), acquired_at: now() };
+    let save = store::update_paper_pdf(&conn, &paper.id, &path, &format!("{:x}", hash.finalize()), now())
+        .and_then(|_| store::set_pdf_source(&conn, &paper.id, &source))
+        .and_then(|_| store::set_pdf_attempt(&conn, &paper.id, "available", None, now()))
+        .and_then(|_| conn.execute_batch("COMMIT").map_err(|e| e.to_string()));
+    if let Err(error) = save { let _ = conn.execute_batch("ROLLBACK"); let _ = fs::remove_file(&target); return Err(error); }
+    store::get_paper(&conn, &paper.id)?.ok_or_else(|| "保存后找不到文献".into())
+}
+
+#[tauri::command(async)]
+pub async fn literature_download_arxiv_pdf(app: AppHandle, id: String) -> Result<store::PaperItem, String> {
+    literature_acquire_pdf(app, id, None).await
 }
 
 #[tauri::command(async)]
@@ -398,10 +480,7 @@ fn resolve_managed_pdf(app: &AppHandle, relative_path: &str) -> Result<PathBuf, 
     {
         return Err("文献 PDF 路径无效，请重新关联原文。".to_string());
     }
-    let app_data = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|e| format!("无法定位文献附件目录：{e}"))?;
+    let app_data = literature_data_dir(app)?;
     let root = fs::canonicalize(&app_data).map_err(|e| format!("文献附件目录不可用：{e}"))?;
     let resolved = fs::canonicalize(root.join(relative))
         .map_err(|e| format!("找不到文献 PDF，请重新关联原文：{e}"))?;
@@ -460,6 +539,9 @@ pub async fn literature_fetch_doi(doi: String) -> Result<store::PaperInput, Stri
     let cleaned = clean_doi(&doi);
     if cleaned.is_empty() {
         return Err("请输入有效的 DOI".to_string());
+    }
+    if let Some(id) = resolver::arxiv_id(&cleaned) {
+        return literature_fetch_arxiv(id).await;
     }
 
     let encoded = url::form_urlencoded::byte_serialize(cleaned.as_bytes()).collect::<String>();
@@ -584,17 +666,11 @@ pub async fn literature_fetch_doi(doi: String) -> Result<store::PaperInput, Stri
 
 #[tauri::command(async)]
 pub async fn literature_fetch_arxiv(arxiv_id: String) -> Result<store::PaperInput, String> {
-    let cleaned = arxiv_id
-        .trim()
-        .trim_start_matches("arxiv:")
-        .trim_start_matches("arXiv:")
-        .trim();
-    if cleaned.is_empty() {
-        return Err("请输入有效的 arXiv ID".to_string());
-    }
+    let _permit = arxiv_api_slot().await;
+    let cleaned = resolver::arxiv_id(&arxiv_id).ok_or("请输入有效的 arXiv ID")?;
 
     let encoded = url::form_urlencoded::byte_serialize(cleaned.as_bytes()).collect::<String>();
-    let url = format!("http://export.arxiv.org/api/query?id_list={encoded}&max_results=1");
+    let url = format!("https://export.arxiv.org/api/query?id_list={encoded}&max_results=1");
     let client = http_client()?;
     let resp = client
         .get(&url)
@@ -876,6 +952,7 @@ async fn search_crossref(query: &str) -> Result<Vec<LiteratureSearchResult>, Str
 }
 
 async fn search_arxiv(query: &str) -> Result<Vec<LiteratureSearchResult>, String> {
+    let _permit = arxiv_api_slot().await;
     let client = http_client()?;
     let search_query = format!("all:{query}");
     let response = client
@@ -1073,11 +1150,18 @@ pub fn literature_import_bibtex_text(
     }
 
     let conn = open_db(&app)?;
-    let col_ids = collection_id.map(|cid| vec![cid]);
+    let col_ids = collection_id.as_ref().map(|cid| vec![cid.clone()]);
     let current_time = now();
     let mut count = 0;
 
     for entry in entries {
+        if let Some(existing) = store::find_existing_paper_id(&conn, entry.doi.as_deref(), entry.eprint.as_deref())? {
+            if let Some(collection) = &collection_id {
+                conn.execute("INSERT OR IGNORE INTO paper_collection_items (paper_id,collection_id,added_at) VALUES (?1,?2,?3)", rusqlite::params![existing, collection, current_time])
+                    .map_err(|e| format!("添加文献集失败：{e}"))?;
+            }
+            continue;
+        }
         let input = store::PaperInput {
             id: None,
             cite_key: Some(entry.cite_key.clone()),
@@ -1178,6 +1262,7 @@ pub fn literature_generate_mindmap(app: AppHandle, id: String) -> Result<String,
 
     let mut md = String::new();
     md.push_str(&format!("# {} {}\n\n", paper.title, year_str));
+    md.push_str("> 阅读模板：以下仅包含文献题录、摘要和待填写问题，未分析 PDF 正文。\n\n");
 
     // Basic metadata branch
     md.push_str("## 📌 基本信息\n");
@@ -1220,9 +1305,7 @@ pub fn literature_generate_mindmap(app: AppHandle, id: String) -> Result<String,
     md.push_str("- 本文解决的核心问题假设\n\n");
 
     md.push_str("## 💡 核心贡献与创新点\n");
-    md.push_str("- **理论/算法创新**: 提出了新的模型架构或算法机制\n");
-    md.push_str("- **工程与效率优化**: 降低了复杂度或加速了训练/推理\n");
-    md.push_str("- **实验突破**: 在核心评测集上取得的新 SOTA\n\n");
+    md.push_str("- 待读正文后填写论文报告的贡献与证据\n\n");
 
     md.push_str("## ⚙️ 核心架构与方法论\n");
     md.push_str("- 整体架构流程图\n");

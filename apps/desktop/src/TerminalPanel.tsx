@@ -463,13 +463,13 @@ export default function TerminalPanel({
             disabled={dock === 'bottom' && !canDockRight}
             title={
               dock === 'right'
-                ? '将终端移到底部'
+                ? '将终端移回底部'
                 : canDockRight
-                  ? '将终端移到阅读器右侧'
-                  : '在宽窗口中打开电子书后可移到右侧'
+                  ? '将终端收至阅读区右侧，与导图并排显示'
+                  : '请在宽屏电子书阅读区使用侧边停靠'
             }
           >
-            {dock === 'right' ? '移到底部' : '移到右侧'}
+            {dock === 'right' ? '移到底部' : '收至侧边'}
           </button>
           <button
             type="button"

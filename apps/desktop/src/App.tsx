@@ -403,9 +403,12 @@ export default function App() {
   const readerSplitActive =
     activeWorkspace === 'reader' && readerSplitOpen && Boolean(epubReader);
   const canDockTerminalRight =
-    activeWorkspace === 'reader' && !readerSplitActive && viewportWidth >= 1250;
+    activeWorkspace === 'reader' && viewportWidth >= 1250;
   const terminalRightActive =
     terminalOpen && terminalDock === 'right' && canDockTerminalRight;
+  const terminalSideWidth = readerSplitActive
+    ? Math.min(terminalWidth, Math.max(320, viewportWidth - 900))
+    : terminalWidth;
   const readerSplitActiveRef = useRef(readerSplitActive);
   readerSplitActiveRef.current = readerSplitActive;
   const epubReaderRef = useRef(epubReader);
@@ -4182,9 +4185,13 @@ export default function App() {
     const bounds = appShellRef.current?.getBoundingClientRect();
     if (!mode || !bounds) return;
     if (mode === 'wide') {
+      const availableWidth = Math.max(
+        1,
+        bounds.width - (terminalRightActive ? terminalSideWidth + 16 : 8),
+      );
       const ratio = Math.min(
         0.65,
-        Math.max(0.32, (event.clientX - bounds.left) / bounds.width),
+        Math.max(0.32, (event.clientX - bounds.left) / availableWidth),
       );
       setReaderSplitLayout((current) => ({ ...current, wideRatio: ratio }));
       return;
@@ -4350,8 +4357,13 @@ export default function App() {
       /* Keep the preference in memory. */
     }
   };
-  const clampTerminalWidth = (width: number) =>
-    Math.round(Math.max(320, Math.min(window.innerWidth * 0.62, width)));
+  const clampTerminalWidth = (width: number) => {
+    const viewportMax = window.innerWidth * 0.62;
+    const splitMax = readerSplitActive
+      ? Math.min(viewportMax, window.innerWidth - 900)
+      : viewportMax;
+    return Math.round(Math.max(320, Math.min(splitMax, width)));
+  };
   const onTerminalWidthPointerDown = (
     event: ReactPointerEvent<HTMLDivElement>,
   ) => {
@@ -4360,7 +4372,7 @@ export default function App() {
     terminalWidthDragRef.current = {
       pointerId: event.pointerId,
       x: event.clientX,
-      width: terminalWidth,
+      width: terminalSideWidth,
     };
   };
   const onTerminalWidthPointerMove = (
@@ -4415,6 +4427,7 @@ export default function App() {
           ...readerSplitStyle,
           '--terminal-height': `${terminalHeight}px`,
           '--terminal-width': `${terminalWidth}px`,
+          '--terminal-side-width': `${terminalSideWidth}px`,
         } as CSSProperties
       }
     >

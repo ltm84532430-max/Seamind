@@ -11,6 +11,8 @@ import type {
   PaperInput,
   PaperItem,
   PaperReadingProgress,
+  PaperPdfSource,
+  PaperPdfAttempt,
   ParsedBibEntry,
 } from './types';
 
@@ -43,6 +45,17 @@ export const literatureApi = {
 
   openPdf: (id: string) =>
     invoke<OpenedPaperPdf>('literature_open_pdf', { id }),
+
+  acquirePdf: (id: string, email?: string) =>
+    invoke<PaperItem>('literature_acquire_pdf', { id, email: email || null }),
+
+  cancelPdf: (id: string) => invoke<void>('literature_cancel_pdf', { id }),
+
+  pdfSource: (id: string) =>
+    invoke<PaperPdfSource | null>('literature_pdf_source', { id }),
+
+  pdfAttempt: (id: string) =>
+    invoke<PaperPdfAttempt | null>('literature_pdf_attempt', { id }),
 
   listAnnotations: (paperId: string) =>
     invoke<PaperAnnotation[]>('literature_list_annotations', { paperId }),

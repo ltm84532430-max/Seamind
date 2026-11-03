@@ -78,6 +78,24 @@ CREATE TABLE IF NOT EXISTS paper_reading_progress (
     updated_at INTEGER NOT NULL,
     FOREIGN KEY(paper_id) REFERENCES papers(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS paper_pdf_sources (
+    paper_id TEXT PRIMARY KEY NOT NULL,
+    source_type TEXT NOT NULL,
+    source_url TEXT,
+    version TEXT,
+    license TEXT,
+    acquired_at INTEGER NOT NULL,
+    FOREIGN KEY(paper_id) REFERENCES papers(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS paper_pdf_attempts (
+    paper_id TEXT PRIMARY KEY NOT NULL,
+    status TEXT NOT NULL,
+    message TEXT,
+    attempted_at INTEGER NOT NULL,
+    FOREIGN KEY(paper_id) REFERENCES papers(id) ON DELETE CASCADE
+);
 ";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -509,16 +527,25 @@ pub fn find_existing_paper_id(
     doi: Option<&str>,
     arxiv_id: Option<&str>,
 ) -> Result<Option<String>, String> {
-    conn.query_row(
-        "SELECT id FROM papers
-         WHERE (?1 IS NOT NULL AND lower(doi) = lower(?1))
-            OR (?2 IS NOT NULL AND lower(arxiv_id) = lower(?2))
-         LIMIT 1",
-        params![doi, arxiv_id],
-        |row| row.get(0),
-    )
-    .optional()
-    .map_err(|e| format!("鏌ヨ鏂囩尞鏍囪瘑绗﹀け璐ワ細{e}"))
+    let normalize_doi = |value: &str| crate::bibtex::clean_doi(value).trim().to_ascii_lowercase();
+    let version_re = regex::Regex::new(r"(?i)v\d+$").unwrap();
+    let normalize_arxiv = |value: &str| crate::literature_resolver::arxiv_id(value).map(|id| {
+        version_re.replace(&id, "").to_ascii_lowercase()
+    });
+    let wanted_doi = doi.map(normalize_doi).filter(|v| !v.is_empty());
+    let wanted_arxiv = arxiv_id.and_then(normalize_arxiv).or_else(|| doi.and_then(normalize_arxiv));
+    if wanted_doi.is_none() && wanted_arxiv.is_none() { return Ok(None); }
+    let mut statement = conn.prepare("SELECT id,doi,arxiv_id FROM papers WHERE doi IS NOT NULL OR arxiv_id IS NOT NULL")
+        .map_err(|e| format!("Query paper identifiers failed: {e}"))?;
+    let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, Option<String>>(2)?)))
+        .map_err(|e| format!("Query paper identifiers failed: {e}"))?;
+    for row in rows {
+        let (id, old_doi, old_arxiv) = row.map_err(|e| format!("Read paper identifiers failed: {e}"))?;
+        let doi_match = wanted_doi.as_ref().is_some_and(|d| old_doi.as_deref().is_some_and(|v| normalize_doi(v) == *d));
+        let old_arxiv = old_arxiv.as_deref().and_then(normalize_arxiv).or_else(|| old_doi.as_deref().and_then(normalize_arxiv));
+        if doi_match || (wanted_arxiv.is_some() && wanted_arxiv == old_arxiv) { return Ok(Some(id)); }
+    }
+    Ok(None)
 }
 
 pub fn list_papers(conn: &Connection, filter: &PaperFilter) -> Result<Vec<PaperItem>, String> {
@@ -713,6 +740,84 @@ pub fn update_paper_pdf(
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaperPdfSource {
+    pub source_type: String,
+    pub source_url: Option<String>,
+    pub version: Option<String>,
+    pub license: Option<String>,
+    pub acquired_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaperPdfAttempt {
+    pub status: String,
+    pub message: Option<String>,
+    pub attempted_at: i64,
+}
+
+pub fn pdf_attempt(conn: &Connection, id: &str) -> Result<Option<PaperPdfAttempt>, String> {
+    conn.query_row("SELECT status,message,attempted_at FROM paper_pdf_attempts WHERE paper_id=?1", params![id],
+        |row| Ok(PaperPdfAttempt { status: row.get(0)?, message: row.get(1)?, attempted_at: row.get(2)? }))
+        .optional().map_err(|e| format!("读取原文状态失败：{e}"))
+}
+
+pub fn set_pdf_attempt(conn: &Connection, id: &str, status: &str, message: Option<&str>, now: i64) -> Result<(), String> {
+    conn.execute("INSERT INTO paper_pdf_attempts(paper_id,status,message,attempted_at) VALUES (?1,?2,?3,?4) ON CONFLICT(paper_id) DO UPDATE SET status=excluded.status,message=excluded.message,attempted_at=excluded.attempted_at", params![id,status,message,now])
+        .map_err(|e| format!("记录原文状态失败：{e}"))?;
+    Ok(())
+}
+
+pub fn pdf_source(conn: &Connection, id: &str) -> Result<Option<PaperPdfSource>, String> {
+    conn.query_row("SELECT source_type,source_url,version,license,acquired_at FROM paper_pdf_sources WHERE paper_id=?1",
+        params![id], |row| Ok(PaperPdfSource { source_type: row.get(0)?, source_url: row.get(1)?, version: row.get(2)?, license: row.get(3)?, acquired_at: row.get(4)? }))
+        .optional().map_err(|e| format!("读取 PDF 来源失败：{e}"))
+}
+
+pub fn set_pdf_source(conn: &Connection, id: &str, source: &PaperPdfSource) -> Result<(), String> {
+    conn.execute("INSERT INTO paper_pdf_sources(paper_id,source_type,source_url,version,license,acquired_at) VALUES (?1,?2,?3,?4,?5,?6)
+        ON CONFLICT(paper_id) DO UPDATE SET source_type=excluded.source_type,source_url=excluded.source_url,version=excluded.version,license=excluded.license,acquired_at=excluded.acquired_at",
+        params![id, source.source_type, source.source_url, source.version, source.license, source.acquired_at])
+        .map_err(|e| format!("记录 PDF 来源失败：{e}"))?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod pdf_source_tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_identifiers_find_existing_paper_without_rewriting_it() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        conn.execute("INSERT INTO papers(id,cite_key,title,doi,arxiv_id,notes,read_status,created_at,updated_at) VALUES ('p1','one','Paper','10.48550/arXiv.1706.03762','1706.03762v7','keep notes','reading',1,1)", []).unwrap();
+        assert_eq!(find_existing_paper_id(&conn, Some("https://doi.org/10.48550/arxiv.1706.03762"), None).unwrap().as_deref(), Some("p1"));
+        assert_eq!(find_existing_paper_id(&conn, None, Some("arXiv:1706.03762v2")).unwrap().as_deref(), Some("p1"));
+        assert!(find_existing_paper_id(&conn, Some("10.1234/unrelated"), None).unwrap().is_none());
+        assert_eq!(conn.query_row("SELECT notes FROM papers WHERE id='p1'", [], |row| row.get::<_, String>(0)).unwrap(), "keep notes");
+    }
+
+    #[test]
+    fn provenance_is_updated_and_removed_with_the_paper() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        conn.execute_batch(SCHEMA).unwrap();
+        conn.execute("INSERT INTO papers(id,cite_key,title,created_at,updated_at) VALUES ('p1','one','Paper',1,1)", []).unwrap();
+        let source = PaperPdfSource { source_type: "arXiv".into(), source_url: Some("https://arxiv.org/pdf/1706.03762".into()), version: None, license: None, acquired_at: 2 };
+        set_pdf_source(&conn,"p1",&source).unwrap();
+        assert_eq!(pdf_source(&conn,"p1").unwrap().unwrap().source_type,"arXiv");
+        set_pdf_attempt(&conn,"p1","failed",Some("network unavailable"),3).unwrap();
+        assert_eq!(pdf_attempt(&conn,"p1").unwrap().unwrap().status,"failed");
+        set_pdf_attempt(&conn,"p1","available",None,4).unwrap();
+        assert_eq!(pdf_attempt(&conn,"p1").unwrap().unwrap().status,"available");
+        conn.execute("DELETE FROM papers WHERE id='p1'", []).unwrap();
+        assert!(pdf_source(&conn,"p1").unwrap().is_none());
+        assert!(pdf_attempt(&conn,"p1").unwrap().is_none());
+    }
+}
+
 pub fn list_paper_annotations(
     conn: &Connection,
     paper_id: &str,
@@ -866,7 +971,7 @@ pub fn save_paper_reading_progress(
     scale: f64,
     now: i64,
 ) -> Result<PaperReadingProgress, String> {
-    if page_number < 1 || !scale.is_finite() || !(0.5..=3.0).contains(&scale) {
+    if page_number < 1 || !scale.is_finite() || !(0.35..=3.0).contains(&scale) {
         return Err("论文阅读进度参数无效。".to_string());
     }
     let changed = conn

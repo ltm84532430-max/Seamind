@@ -104,6 +104,20 @@ export interface OpenedPaperPdf {
   sha256: string;
 }
 
+export interface PaperPdfSource {
+  sourceType: string;
+  sourceUrl: string | null;
+  version: string | null;
+  license: string | null;
+  acquiredAt: number;
+}
+
+export interface PaperPdfAttempt {
+  status: 'searching' | 'failed' | 'cancelled' | 'available';
+  message: string | null;
+  attemptedAt: number;
+}
+
 export interface PaperCollection {
   id: string;
   name: string;

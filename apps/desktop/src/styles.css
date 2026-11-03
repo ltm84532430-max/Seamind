@@ -13151,6 +13151,47 @@ button {
 .app-shell.is-terminal-right .seamind-terminal-actions button {
   padding: 3px 6px;
 }
+.app-shell.is-reader-split.is-terminal-right {
+  grid-template-columns:
+    minmax(
+      0,
+      calc(
+        (100% - var(--terminal-side-width, 440px) - 16px) *
+          var(--reader-split-wide-ratio, 0.45)
+      )
+    )
+    8px
+    minmax(0, 1fr)
+    8px
+    minmax(320px, var(--terminal-side-width, 440px));
+  grid-template-rows: 52px minmax(0, 1fr) 29px;
+}
+.app-shell.is-reader-split.is-terminal-right > .topbar {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+.app-shell.is-reader-split.is-terminal-right > .ebook-workspace-stage {
+  grid-column: 1;
+  grid-row: 2;
+}
+.app-shell.is-reader-split.is-terminal-right > .reader-split-divider {
+  grid-column: 2;
+  grid-row: 2;
+}
+.app-shell.is-reader-split.is-terminal-right > .workspace {
+  grid-column: 3;
+  grid-row: 2;
+}
+.app-shell.is-reader-split.is-terminal-right > .seamind-terminal-drawer {
+  grid-column: 4 / 6;
+  grid-row: 2;
+  grid-template-columns: 8px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.app-shell.is-reader-split.is-terminal-right > .statusbar {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
 .epub-reader-selection-actions {
   flex-wrap: wrap;
 }

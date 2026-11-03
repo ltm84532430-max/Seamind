@@ -4,6 +4,7 @@ mod bibtex;
 mod library;
 mod learning_tasks;
 mod literature;
+mod literature_resolver;
 mod literature_store;
 mod media_resolver;
 mod plantuml;
@@ -169,6 +170,10 @@ pub fn run() {
             literature::literature_update_notes,
             literature::literature_attach_pdf,
             literature::literature_download_arxiv_pdf,
+            literature::literature_acquire_pdf,
+            literature::literature_cancel_pdf,
+            literature::literature_pdf_source,
+            literature::literature_pdf_attempt,
             literature::literature_open_pdf,
             literature::literature_list_annotations,
             literature::literature_save_annotation,
