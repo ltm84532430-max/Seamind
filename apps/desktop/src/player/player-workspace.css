@@ -1,5 +1,13 @@
 /* The player workspace: the third page of the app, next to the mind maps and the e-books. */
 
+/* VS Code style implicit scrollbars: flat slider without arrow buttons or background
+   track that only shows while the pointer hovers over the area and smoothly fades out on leave. */
+@property --player-scrollbar-thumb {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: transparent;
+}
+
 .player-workspace-stage {
   --player-bg: #f4f6f7;
   --player-panel: #fff;
@@ -12,6 +20,9 @@
   --player-accent-soft: #fbece8;
   --player-hover: #eef2f4;
   --player-danger: #b3362b;
+  --player-scrollbar-slider: rgba(0, 0, 0, 0.2);
+  --player-scrollbar-slider-hover: rgba(0, 0, 0, 0.42);
+  --player-scrollbar-slider-active: rgba(0, 0, 0, 0.65);
   grid-row: 2;
   min-width: 0;
   min-height: 0;
@@ -32,6 +43,125 @@
   --player-accent-soft: #3a2a27;
   --player-hover: #273036;
   --player-danger: #f07a6c;
+  --player-scrollbar-slider: rgba(255, 255, 255, 0.22);
+  --player-scrollbar-slider-hover: rgba(255, 255, 255, 0.45);
+  --player-scrollbar-slider-active: rgba(255, 255, 255, 0.72);
+}
+
+/* VS Code style implicit scrollbars across the player workspace */
+.player-workspace-stage * {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.player-workspace-stage *:hover {
+  scrollbar-color: var(--player-scrollbar-slider) transparent;
+}
+
+.player-workspace-stage *::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+  background: transparent;
+}
+
+.player-workspace-stage *::-webkit-scrollbar-track,
+.player-workspace-stage *::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.player-workspace-stage *::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.player-workspace-stage *::-webkit-scrollbar-thumb {
+  min-width: 20px;
+  min-height: 20px;
+  border-radius: 4px;
+  background: transparent;
+}
+
+.player-workspace-stage *:hover::-webkit-scrollbar-thumb {
+  background: var(--player-scrollbar-slider);
+}
+
+.player-workspace-stage *::-webkit-scrollbar-thumb:hover {
+  background: var(--player-scrollbar-slider-hover) !important;
+}
+
+.player-workspace-stage *::-webkit-scrollbar-thumb:active {
+  background: var(--player-scrollbar-slider-active) !important;
+}
+
+/* Smooth fade-in and fade-out transitions for player views */
+.player-workspace-stage .player-nav,
+.player-workspace-stage .player-main,
+.player-workspace-stage .player-watch-main,
+.player-workspace-stage .player-watch-queue-list,
+.player-workspace-stage .player-channel-videos,
+.player-workspace-stage .player-video-list,
+.player-workspace-stage .player-dialog,
+.player-workspace-stage .lp-proposal-body,
+.player-workspace-stage .lp-copilot-body,
+.player-workspace-stage .vpick-body,
+.player-workspace-stage .vpick-panel,
+.player-workspace-stage .vpick-grid,
+.player-workspace-stage .fav-scroll-stage,
+.player-workspace-stage .fav-column-body,
+.player-workspace-stage .fav-categories-grid,
+.player-workspace-stage .fav-capsule-bar,
+.player-workspace-stage .fav-flow-board,
+.player-workspace-stage .fav-board-column,
+.player-workspace-stage .lp-flow-content {
+  --player-scrollbar-thumb: transparent;
+  transition: --player-scrollbar-thumb 600ms ease;
+}
+
+.player-workspace-stage .player-sidebar:hover .player-nav,
+.player-workspace-stage .player-watch-queue:hover .player-watch-queue-list,
+.player-workspace-stage .player-nav:hover,
+.player-workspace-stage .player-main:hover,
+.player-workspace-stage .player-watch-main:hover,
+.player-workspace-stage .player-watch-queue-list:hover,
+.player-workspace-stage .player-channel-videos:hover,
+.player-workspace-stage .player-video-list:hover,
+.player-workspace-stage .player-dialog:hover,
+.player-workspace-stage .lp-proposal-body:hover,
+.player-workspace-stage .lp-copilot-body:hover,
+.player-workspace-stage .vpick-body:hover,
+.player-workspace-stage .vpick-panel:hover,
+.player-workspace-stage .vpick-grid:hover,
+.player-workspace-stage .fav-scroll-stage:hover,
+.player-workspace-stage .fav-column-body:hover,
+.player-workspace-stage .fav-categories-grid:hover,
+.player-workspace-stage .fav-capsule-bar:hover,
+.player-workspace-stage .fav-flow-board:hover,
+.player-workspace-stage .fav-board-column:hover,
+.player-workspace-stage .lp-flow-content:hover {
+  --player-scrollbar-thumb: var(--player-scrollbar-slider);
+  transition-duration: 100ms;
+}
+
+.player-workspace-stage .player-nav::-webkit-scrollbar-thumb,
+.player-workspace-stage .player-main::-webkit-scrollbar-thumb,
+.player-workspace-stage .player-watch-main::-webkit-scrollbar-thumb,
+.player-workspace-stage .player-watch-queue-list::-webkit-scrollbar-thumb,
+.player-workspace-stage .player-channel-videos::-webkit-scrollbar-thumb,
+.player-workspace-stage .player-video-list::-webkit-scrollbar-thumb,
+.player-workspace-stage .player-dialog::-webkit-scrollbar-thumb,
+.player-workspace-stage .lp-proposal-body::-webkit-scrollbar-thumb,
+.player-workspace-stage .lp-copilot-body::-webkit-scrollbar-thumb,
+.player-workspace-stage .vpick-body::-webkit-scrollbar-thumb,
+.player-workspace-stage .vpick-panel::-webkit-scrollbar-thumb,
+.player-workspace-stage .vpick-grid::-webkit-scrollbar-thumb,
+.player-workspace-stage .fav-scroll-stage::-webkit-scrollbar-thumb,
+.player-workspace-stage .fav-column-body::-webkit-scrollbar-thumb,
+.player-workspace-stage .fav-categories-grid::-webkit-scrollbar-thumb,
+.player-workspace-stage .fav-capsule-bar::-webkit-scrollbar-thumb,
+.player-workspace-stage .fav-flow-board::-webkit-scrollbar-thumb,
+.player-workspace-stage .fav-board-column::-webkit-scrollbar-thumb,
+.player-workspace-stage .lp-flow-content::-webkit-scrollbar-thumb {
+  background: var(--player-scrollbar-thumb);
 }
 .player-loading {
   display: grid;
