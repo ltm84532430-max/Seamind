@@ -68,6 +68,9 @@ export default function WatchView({
   const [handle, setHandle] = useState<YouTubePlayerHandle | null>(null);
   const [status, setStatus] = useState<YouTubePlaybackState>('loading');
   const [rate, setRate] = useState(readRate);
+  const [assignedCategoryId, setAssignedCategoryId] = useState<string | null>(
+    null,
+  );
   const progressRef = useRef<PlayerProgress | null>(null);
   const savedAtRef = useRef(0);
   const onSavedRef = useRef(onSaved);
@@ -98,6 +101,23 @@ export default function WatchView({
       })
       .catch(() => undefined);
   }, [videoId]);
+
+  useEffect(() => {
+    let alive = true;
+    void playerApi
+      .favoritesSnapshot()
+      .then((snapshot) => {
+        if (!alive) return;
+        const found = snapshot.items.find(
+          (entry) => entry.video.videoId === videoId,
+        );
+        setAssignedCategoryId(found?.categoryId ?? null);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [videoId, item.favorite]);
 
   useEffect(() => () => save(), [save]);
   useEffect(() => {
@@ -207,6 +227,26 @@ export default function WatchView({
               <StarIcon filled={item.favorite} />
               {item.favorite ? '已收藏' : '收藏'}
             </button>
+            {item.favorite && host.favoriteCategories.length > 0 && (
+              <label className="player-watch-category-select">
+                <span>分类</span>
+                <select
+                  value={assignedCategoryId ?? ''}
+                  onChange={(e) => {
+                    const nextId = e.target.value || null;
+                    setAssignedCategoryId(nextId);
+                    void host.assignFavoriteCategory(item, nextId);
+                  }}
+                >
+                  <option value="">未分类</option>
+                  {host.favoriteCategories.map((c) => (
+                    <option key={c.categoryId} value={c.categoryId}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <button
               type="button"
               className={`player-button${item.watchLater ? ' is-on' : ''}`}

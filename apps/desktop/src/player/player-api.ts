@@ -2,6 +2,9 @@ import { invoke } from '@tauri-apps/api/core';
 import type {
   BackupSummary,
   ChannelInput,
+  FavoriteCategory,
+  FavoriteCategoryInput,
+  FavoritesSnapshot,
   FeedFetchResult,
   FeedQuery,
   ImportSummary,
@@ -86,6 +89,29 @@ export const playerApi = {
       channelName,
       videos,
     }),
+
+  favoritesSnapshot: () =>
+    invoke<FavoritesSnapshot>('player_favorites_snapshot'),
+  favoriteCategorySave: (input: FavoriteCategoryInput) =>
+    invoke<FavoriteCategory>('player_favorite_category_save', { input }),
+  favoriteCategoryDelete: (categoryId: string) =>
+    invoke<void>('player_favorite_category_delete', { categoryId }),
+  favoriteCategoriesReorder: (categoryIds: string[]) =>
+    invoke<FavoriteCategory[]>('player_favorite_categories_reorder', {
+      categoryIds,
+    }),
+  favoriteAssign: (
+    videoIds: string[],
+    categoryId: string | null,
+    targetIndex?: number | null,
+  ) =>
+    invoke<void>('player_favorite_assign', {
+      videoIds,
+      categoryId,
+      targetIndex: targetIndex ?? null,
+    }),
+  favoriteSetNote: (videoId: string, note: string | null) =>
+    invoke<void>('player_favorite_set_note', { videoId, note }),
 
   learningPathGet: (pathId: string) =>
     invoke<LearningPathDetail | null>('player_learning_path_get', { pathId }),

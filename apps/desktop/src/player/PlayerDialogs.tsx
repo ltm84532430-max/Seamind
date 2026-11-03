@@ -235,8 +235,16 @@ export function SettingsDialog({
     if (!file) return;
     try {
       const summary = await playerApi.importBackup(await file.text());
+      const favCatNotice =
+        summary.favoriteCategoriesAdded && summary.favoriteCategoriesAdded > 0
+          ? `、${summary.favoriteCategoriesAdded} 个收藏分类`
+          : '';
+      const lpNotice =
+        summary.learningPathsAdded && summary.learningPathsAdded > 0
+          ? `、${summary.learningPathsAdded} 条学习路径`
+          : '';
       report(
-        `已恢复：新增 ${summary.channelsAdded} 个订阅、${summary.playlistsAdded} 个列表，涉及 ${summary.videos} 个视频。`,
+        `已恢复：新增 ${summary.channelsAdded} 个订阅、${summary.playlistsAdded} 个列表${favCatNotice}${lpNotice}，涉及 ${summary.videos} 个视频。`,
       );
       onRestored();
     } catch (reason) {

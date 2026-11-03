@@ -1,6 +1,7 @@
 import { createContext, useContext } from 'react';
 import type { Overlay, QueueSource } from './queue';
 import type {
+  FavoriteCategory,
   LearningPathSummary,
   PlayerChannel,
   PlayerPlaylist,
@@ -28,11 +29,16 @@ export interface PlayerHost {
   settings: PlayerSettings;
   channels: PlayerChannel[];
   playlists: PlayerPlaylist[];
+  favoriteCategories: FavoriteCategory[];
   learningPaths: LearningPathSummary[];
   openVideo(item: VideoItem, queue: QueueSource, startOverride?: number): void;
   openChannel(channelId: string): void;
   go(view: PlayerView): void;
   toggleFavorite(item: VideoItem): void;
+  assignFavoriteCategory(
+    item: VideoItem,
+    categoryId: string | null,
+  ): Promise<void>;
   toggleWatchLater(item: VideoItem): void;
   toggleWatched(item: VideoItem): Promise<void>;
   notify(text: string, kind?: 'info' | 'error'): void;

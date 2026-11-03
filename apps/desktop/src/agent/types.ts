@@ -1,4 +1,4 @@
-import type { LearningPathInput } from '../player/types';
+import type { FavoriteCategoryColor, LearningPathInput } from '../player/types';
 
 export interface MindmapNodeSnapshot {
   path: string;
@@ -68,6 +68,23 @@ export interface LearningPathProposal {
   addedNodeCount: number;
   videoCount: number;
   stageCount: number;
+  rationale: string;
+}
+
+export interface FavoritesCategorizationProposal {
+  newCategories: Array<{
+    name: string;
+    color: FavoriteCategoryColor;
+  }>;
+  assignments: Array<{
+    videoId: string;
+    videoTitle: string;
+    channelName: string | null;
+    currentCategoryName: string | null;
+    targetCategoryName: string;
+    isNewCategory: boolean;
+    note: string | null;
+  }>;
   rationale: string;
 }
 

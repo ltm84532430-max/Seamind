@@ -1,6 +1,6 @@
 import type { LearningPathProposal } from '../agent/types';
 import { formatDuration } from './format';
-import { CloseIcon } from './icons';
+import { CheckIcon, CloseIcon, SparkleIcon } from './icons';
 import { thumbnailUrl } from './video-links';
 
 export default function LearningPathProposalDialog({
@@ -40,7 +40,8 @@ export default function LearningPathProposalDialog({
         <header className="lp-proposal-head">
           <div>
             <span className="lp-proposal-badge">
-              {sourceLabel === 'cli' ? 'CLI 终端提案' : 'AI 路径提案'} ·{' '}
+              <SparkleIcon />
+              {sourceLabel === 'cli' ? 'CLI 终端提案' : 'AI 知识树提案'} ·{' '}
               {modeBadge}
             </span>
             <h3>{proposal.input.title}</h3>
@@ -74,8 +75,9 @@ export default function LearningPathProposalDialog({
               style={{
                 padding: '8px 12px',
                 borderRadius: 6,
-                background: 'rgba(179, 54, 43, 0.12)',
-                color: '#b3362b',
+                background: 'rgba(179, 54, 43, 0.16)',
+                border: '1px solid #b3362b',
+                color: '#ff7b72',
                 fontSize: 12,
               }}
             >
@@ -94,7 +96,8 @@ export default function LearningPathProposalDialog({
               display: 'flex',
               gap: 14,
               fontSize: 12,
-              opacity: 0.82,
+              opacity: 0.85,
+              fontWeight: 500,
             }}
           >
             <span>总节点：{proposal.input.nodes.length}</span>
@@ -122,7 +125,9 @@ export default function LearningPathProposalDialog({
                       loading="lazy"
                     />
                   ) : (
-                    <span className="lp-step-num">阶段</span>
+                    <span className="lp-step-num">
+                      {node.kind === 'checkpoint' ? '里程碑' : '阶段'}
+                    </span>
                   )}
                   <div className="lp-proposal-item-info">
                     <strong>
@@ -154,7 +159,7 @@ export default function LearningPathProposalDialog({
 
         <footer className="lp-proposal-foot">
           <span style={{ fontSize: 12, opacity: 0.72 }}>
-            确认后将写入本地播放器数据库并自动打开该学习路径视图。
+            确认后将保存并自动打开该知识树视图。
           </span>
           <div className="lp-proposal-foot-actions">
             <button
@@ -163,15 +168,23 @@ export default function LearningPathProposalDialog({
               disabled={busy}
               onClick={onCancel}
             >
-              拒绝提案
+              取消 / 放弃
             </button>
             <button
               type="button"
-              className="lp-btn is-primary"
+              className="lp-btn is-primary lp-confirm-btn"
               disabled={busy}
               onClick={onConfirm}
+              style={{
+                minWidth: 140,
+                fontWeight: 600,
+                background: 'var(--player-accent, #df735b)',
+                borderColor: 'var(--player-accent, #df735b)',
+                color: '#ffffff',
+              }}
             >
-              {busy ? '正在保存…' : '确认保存并打开路径'}
+              <CheckIcon />
+              {busy ? '正在保存知识树…' : '采纳此方案并生成知识树'}
             </button>
           </div>
         </footer>

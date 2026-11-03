@@ -126,6 +126,12 @@ pub fn run() {
             player::player_playlist_toggle,
             player::player_playlist_items,
             player::player_course_save,
+            player::player_favorites_snapshot,
+            player::player_favorite_category_save,
+            player::player_favorite_category_delete,
+            player::player_favorite_categories_reorder,
+            player::player_favorite_assign,
+            player::player_favorite_set_note,
             player::player_learning_path_get,
             player::player_learning_path_save,
             player::player_learning_path_delete,
@@ -146,8 +152,8 @@ const MAX_RESPONSE_BYTES: usize = 1_048_576;
 const MAX_PROVIDER_MODELS: usize = 500;
 const MAX_AGENT_MESSAGES: usize = 32;
 const MAX_AGENT_CONTEXT_BYTES: usize = 250_000;
-const MAX_AGENT_TOOLS: usize = 12;
-const MAX_AGENT_TOOLS_BYTES: usize = 32_000;
+const MAX_AGENT_TOOLS: usize = 16;
+const MAX_AGENT_TOOLS_BYTES: usize = 48_000;
 const MAX_EPUB_SUMMARY_PROMPT_CHARS: usize = 60_000;
 const MAX_EPUB_HIGHLIGHT_PROMPT_CHARS: usize = 10_000;
 const MAX_EPUB_HIGHLIGHT_INPUT_CHARS: usize = 6_000;
@@ -753,6 +759,8 @@ async fn agent_completion(
         "learning_path_list",
         "learning_path_get",
         "learning_path_propose",
+        "favorites_get_board",
+        "favorites_propose_categorization",
     ];
     let mut tool_names = Vec::with_capacity(tools.len());
     for tool in &tools {

@@ -105,6 +105,24 @@ CREATE TABLE IF NOT EXISTS learning_path_nodes (
     PRIMARY KEY (path_id, node_id)
 );
 CREATE INDEX IF NOT EXISTS idx_learning_path_nodes_video ON learning_path_nodes(video_id);
+CREATE TABLE IF NOT EXISTS favorite_categories (
+    category_id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    color TEXT NOT NULL DEFAULT 'terracotta',
+    channel_ids_json TEXT NOT NULL DEFAULT '[]',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS favorite_item_meta (
+    video_id TEXT PRIMARY KEY NOT NULL,
+    category_id TEXT REFERENCES favorite_categories(category_id) ON DELETE SET NULL,
+    column_position INTEGER NOT NULL DEFAULT 0,
+    note TEXT,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_favorite_item_meta_category
+    ON favorite_item_meta(category_id, column_position ASC);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY NOT NULL,
     value TEXT NOT NULL
@@ -220,8 +238,49 @@ impl Default for PlayerSettings {
 pub struct Overview {
     pub channels: Vec<Channel>,
     pub playlists: Vec<Playlist>,
+    pub favorite_categories: Vec<FavoriteCategory>,
     pub learning_paths: Vec<LearningPathSummary>,
     pub settings: PlayerSettings,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FavoriteCategory {
+    pub category_id: String,
+    pub name: String,
+    pub color: String,
+    pub channel_ids: Vec<String>,
+    pub sort_order: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub item_count: i64,
+    pub finished_count: i64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FavoriteCategoryInput {
+    pub category_id: Option<String>,
+    pub name: String,
+    pub color: Option<String>,
+    pub channel_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FavoriteItemEntry {
+    pub video: VideoItem,
+    pub category_id: Option<String>,
+    pub column_position: i64,
+    pub added_at: i64,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FavoritesSnapshot {
+    pub categories: Vec<FavoriteCategory>,
+    pub items: Vec<FavoriteItemEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -993,6 +1052,9 @@ pub fn playlist_add(connection: &Connection, playlist_id: &str, video_id: &str, 
             params![playlist_id, now],
         )
         .map_err(db_error)?;
+    if playlist_id == FAVORITES_ID {
+        auto_assign_favorite_channel_rule(connection, video_id, now)?;
+    }
     Ok(())
 }
 
@@ -1003,6 +1065,14 @@ pub fn playlist_remove(connection: &Connection, playlist_id: &str, video_id: &st
             params![playlist_id, video_id],
         )
         .map_err(db_error)?;
+    if playlist_id == FAVORITES_ID {
+        connection
+            .execute(
+                "DELETE FROM favorite_item_meta WHERE video_id = ?1",
+                params![video_id],
+            )
+            .map_err(db_error)?;
+    }
     prune(connection, now)
 }
 
@@ -1111,6 +1181,565 @@ pub fn course_save(
     }
     transaction.commit().map_err(db_error)?;
     playlist(connection, &playlist_id)?.ok_or_else(|| "保存课程失败。".to_string())
+}
+
+// ---- favorite categories ------------------------------------------------------------------------
+
+pub const ALLOWED_CATEGORY_COLORS: &[&str] = &[
+    "terracotta",
+    "ocean",
+    "sage",
+    "amber",
+    "plum",
+    "slate",
+    "rose",
+    "teal",
+];
+
+const MAX_FAVORITE_CATEGORIES: usize = 64;
+
+fn normalize_category_color(color: Option<&str>) -> &'static str {
+    let candidate = color.unwrap_or("").trim();
+    for &allowed in ALLOWED_CATEGORY_COLORS {
+        if allowed.eq_ignore_ascii_case(candidate) {
+            return allowed;
+        }
+    }
+    "terracotta"
+}
+
+fn normalize_channel_ids(ids: Option<&[String]>) -> Vec<String> {
+    let Some(ids) = ids else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for raw in ids {
+        let trimmed = raw.trim();
+        if is_channel_id(trimmed) && !out.iter().any(|existing| existing == trimmed) {
+            out.push(trimmed.to_string());
+        }
+    }
+    out
+}
+
+fn parse_channel_ids_json(raw: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(raw)
+        .ok()
+        .map(|list| normalize_channel_ids(Some(&list)))
+        .unwrap_or_default()
+}
+
+fn favorite_category_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<FavoriteCategory> {
+    let raw_channels: String = row.get(3)?;
+    Ok(FavoriteCategory {
+        category_id: row.get(0)?,
+        name: row.get(1)?,
+        color: normalize_category_color(row.get::<_, Option<String>>(2)?.as_deref()).to_string(),
+        channel_ids: parse_channel_ids_json(&raw_channels),
+        sort_order: row.get(4)?,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
+        item_count: row.get(7)?,
+        finished_count: row.get(8)?,
+    })
+}
+
+fn favorite_category_select() -> String {
+    format!(
+        "SELECT c.category_id, c.name, c.color, c.channel_ids_json, c.sort_order, c.created_at, c.updated_at,
+                (SELECT COUNT(*)
+                 FROM playlist_items i
+                 JOIN favorite_item_meta fm ON fm.video_id = i.video_id
+                 WHERE i.playlist_id = '{FAVORITES_ID}' AND fm.category_id = c.category_id),
+                (SELECT COUNT(*)
+                 FROM playlist_items i
+                 JOIN favorite_item_meta fm ON fm.video_id = i.video_id
+                 JOIN videos v ON v.video_id = i.video_id
+                 LEFT JOIN watch_state ws ON ws.video_id = i.video_id
+                 WHERE i.playlist_id = '{FAVORITES_ID}'
+                   AND fm.category_id = c.category_id
+                   AND {FINISHED_SQL} = 1)
+         FROM favorite_categories c"
+    )
+}
+
+pub fn favorite_categories(connection: &Connection) -> Result<Vec<FavoriteCategory>, String> {
+    let mut statement = connection
+        .prepare(&format!(
+            "{} ORDER BY c.sort_order ASC, c.created_at ASC, c.name COLLATE NOCASE ASC",
+            favorite_category_select()
+        ))
+        .map_err(db_error)?;
+    let rows = statement
+        .query_map([], favorite_category_from_row)
+        .map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
+pub fn favorite_category(
+    connection: &Connection,
+    category_id: &str,
+) -> Result<Option<FavoriteCategory>, String> {
+    connection
+        .query_row(
+            &format!("{} WHERE c.category_id = ?1", favorite_category_select()),
+            params![category_id],
+            favorite_category_from_row,
+        )
+        .optional()
+        .map_err(db_error)
+}
+
+fn auto_assign_favorite_channel_rule(
+    connection: &Connection,
+    video_id: &str,
+    now: i64,
+) -> Result<(), String> {
+    let has_category: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM favorite_item_meta WHERE video_id = ?1 AND category_id IS NOT NULL)",
+            params![video_id],
+            |row| row.get(0),
+        )
+        .map_err(db_error)?;
+    if has_category {
+        return Ok(());
+    }
+    let channel_id: Option<String> = connection
+        .query_row(
+            "SELECT channel_id FROM videos WHERE video_id = ?1",
+            params![video_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_error)?
+        .flatten();
+    let Some(channel_id) = channel_id.filter(|id| !id.trim().is_empty()) else {
+        return Ok(());
+    };
+    let categories = favorite_categories(connection)?;
+    let Some(matched) = categories
+        .iter()
+        .find(|cat| cat.channel_ids.iter().any(|bound| bound == &channel_id))
+    else {
+        return Ok(());
+    };
+    let next_pos: i64 = connection
+        .query_row(
+            "SELECT COALESCE(MIN(column_position) - 1, 0) FROM favorite_item_meta WHERE category_id = ?1",
+            params![matched.category_id],
+            |row| row.get(0),
+        )
+        .map_err(db_error)?;
+    connection
+        .execute(
+            "INSERT INTO favorite_item_meta(video_id, category_id, column_position, note, updated_at)
+             VALUES (?1, ?2, ?3, NULL, ?4)
+             ON CONFLICT(video_id) DO UPDATE SET
+                 category_id = excluded.category_id,
+                 column_position = excluded.column_position,
+                 updated_at = excluded.updated_at",
+            params![video_id, matched.category_id, next_pos, now],
+        )
+        .map_err(db_error)?;
+    Ok(())
+}
+
+pub fn favorites_snapshot(connection: &Connection) -> Result<FavoritesSnapshot, String> {
+    let categories = favorite_categories(connection)?;
+    let mut statement = connection
+        .prepare(&format!(
+            "SELECT {},
+                    fm.category_id,
+                    (CASE WHEN fm.video_id IS NOT NULL THEN fm.column_position ELSE -i.added_at END) AS col_pos,
+                    i.added_at,
+                    fm.note
+             FROM playlist_items i
+             JOIN videos v ON v.video_id = i.video_id
+             {ITEM_JOINS}
+             LEFT JOIN favorite_item_meta fm ON fm.video_id = i.video_id
+             WHERE i.playlist_id = ?1
+             ORDER BY col_pos ASC, i.added_at DESC, i.position DESC",
+            item_columns()
+        ))
+        .map_err(db_error)?;
+    let rows = statement
+        .query_map(params![FAVORITES_ID], |row| {
+            let video = item_from_row(row)?;
+            Ok(FavoriteItemEntry {
+                video,
+                category_id: row.get(15)?,
+                column_position: row.get(16)?,
+                added_at: row.get(17)?,
+                note: row.get(18)?,
+            })
+        })
+        .map_err(db_error)?;
+    let items = rows.collect::<Result<Vec<_>, _>>().map_err(db_error)?;
+    Ok(FavoritesSnapshot { categories, items })
+}
+
+pub fn favorite_category_save(
+    connection: &Connection,
+    input: &FavoriteCategoryInput,
+    now: i64,
+) -> Result<FavoriteCategory, String> {
+    let name = clean(&input.name, 60);
+    if name.is_empty() {
+        return Err("请填写分类名称。".to_string());
+    }
+    if name == "未分类" || name.eq_ignore_ascii_case("uncategorized") {
+        return Err("「未分类」是系统保留栏，请换一个名称。".to_string());
+    }
+
+    let requested_id = input
+        .category_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    if let Some(id) = requested_id {
+        if !is_path_or_node_id(id) {
+            return Err("分类编号格式无效。".to_string());
+        }
+    }
+
+    let existing_list = favorite_categories(connection)?;
+    let existing_target = requested_id
+        .and_then(|id| existing_list.iter().find(|cat| cat.category_id == id))
+        .cloned();
+
+    let name_lower = name.to_lowercase();
+    if existing_list.iter().any(|cat| {
+        cat.name.trim().to_lowercase() == name_lower
+            && existing_target
+                .as_ref()
+                .map_or(true, |target| target.category_id != cat.category_id)
+    }) {
+        return Err("已存在同名的收藏分类。".to_string());
+    }
+
+    if existing_target.is_none() && existing_list.len() >= MAX_FAVORITE_CATEGORIES {
+        return Err(format!("收藏分类最多创建 {MAX_FAVORITE_CATEGORIES} 个。"));
+    }
+
+    let color = match (&input.color, &existing_target) {
+        (Some(raw), _) => normalize_category_color(Some(raw)),
+        (None, Some(target)) => normalize_category_color(Some(&target.color)),
+        (None, None) => normalize_category_color(None),
+    };
+    let channel_ids = match (&input.channel_ids, &existing_target) {
+        (Some(ids), _) => normalize_channel_ids(Some(ids)),
+        (None, Some(target)) => target.channel_ids.clone(),
+        (None, None) => Vec::new(),
+    };
+    let channel_ids_json =
+        serde_json::to_string(&channel_ids).map_err(|error| error.to_string())?;
+
+    let transaction = connection.unchecked_transaction().map_err(db_error)?;
+    let category_id = match existing_target {
+        Some(target) => {
+            transaction
+                .execute(
+                    "UPDATE favorite_categories
+                     SET name = ?2, color = ?3, channel_ids_json = ?4, updated_at = ?5
+                     WHERE category_id = ?1",
+                    params![target.category_id, name, color, channel_ids_json, now],
+                )
+                .map_err(db_error)?;
+            target.category_id
+        }
+        None => {
+            let id = requested_id
+                .map(str::to_string)
+                .unwrap_or_else(|| Uuid::new_v4().to_string());
+            let next_order: i64 = transaction
+                .query_row(
+                    "SELECT COALESCE(MAX(sort_order) + 1, 0) FROM favorite_categories",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(db_error)?;
+            transaction
+                .execute(
+                    "INSERT INTO favorite_categories(
+                         category_id, name, color, channel_ids_json, sort_order, created_at, updated_at
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+                    params![id, name, color, channel_ids_json, next_order, now],
+                )
+                .map_err(db_error)?;
+            id
+        }
+    };
+
+    // Retroactively assign currently uncategorized favorite videos from newly bound channels.
+    if !channel_ids.is_empty() {
+        let mut uncategorized_stmt = transaction
+            .prepare(
+                "SELECT i.video_id, v.channel_id
+                 FROM playlist_items i
+                 JOIN videos v ON v.video_id = i.video_id
+                 LEFT JOIN favorite_item_meta fm ON fm.video_id = i.video_id
+                 WHERE i.playlist_id = ?1 AND fm.category_id IS NULL
+                 ORDER BY i.added_at ASC, i.position ASC",
+            )
+            .map_err(db_error)?;
+        let candidates: Vec<String> = uncategorized_stmt
+            .query_map(params![FAVORITES_ID], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            })
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?
+            .into_iter()
+            .filter_map(|(vid, ch_id)| {
+                let ch = ch_id?;
+                if channel_ids.iter().any(|bound| bound == &ch) {
+                    Some(vid)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        drop(uncategorized_stmt);
+
+        for vid in candidates {
+            let next_pos: i64 = transaction
+                .query_row(
+                    "SELECT COALESCE(MIN(column_position) - 1, 0) FROM favorite_item_meta WHERE category_id = ?1",
+                    params![category_id],
+                    |row| row.get(0),
+                )
+                .map_err(db_error)?;
+            transaction
+                .execute(
+                    "INSERT INTO favorite_item_meta(video_id, category_id, column_position, note, updated_at)
+                     VALUES (?1, ?2, ?3, NULL, ?4)
+                     ON CONFLICT(video_id) DO UPDATE SET
+                         category_id = excluded.category_id,
+                         column_position = excluded.column_position,
+                         updated_at = excluded.updated_at",
+                    params![vid, category_id, next_pos, now],
+                )
+                .map_err(db_error)?;
+        }
+    }
+
+    transaction.commit().map_err(db_error)?;
+    favorite_category(connection, &category_id)?.ok_or_else(|| "保存收藏分类失败。".to_string())
+}
+
+pub fn favorite_category_delete(
+    connection: &Connection,
+    category_id: &str,
+    now: i64,
+) -> Result<(), String> {
+    let transaction = connection.unchecked_transaction().map_err(db_error)?;
+    // Preserve notes while restoring natural chronological position inside `未分类`.
+    transaction
+        .execute(
+            "UPDATE favorite_item_meta
+             SET category_id = NULL,
+                 column_position = COALESCE(
+                     (SELECT -pi.added_at FROM playlist_items pi
+                      WHERE pi.playlist_id = ?2 AND pi.video_id = favorite_item_meta.video_id),
+                     0
+                 ),
+                 updated_at = ?3
+             WHERE category_id = ?1",
+            params![category_id, FAVORITES_ID, now],
+        )
+        .map_err(db_error)?;
+    transaction
+        .execute(
+            "DELETE FROM favorite_categories WHERE category_id = ?1",
+            params![category_id],
+        )
+        .map_err(db_error)?;
+    transaction.commit().map_err(db_error)?;
+    Ok(())
+}
+
+pub fn favorite_categories_reorder(
+    connection: &Connection,
+    category_ids: &[String],
+    now: i64,
+) -> Result<Vec<FavoriteCategory>, String> {
+    let current = favorite_categories(connection)?;
+    let mut final_order: Vec<String> = Vec::with_capacity(current.len());
+    for raw in category_ids {
+        let trimmed = raw.trim();
+        if current.iter().any(|cat| cat.category_id == trimmed)
+            && !final_order.iter().any(|id| id == trimmed)
+        {
+            final_order.push(trimmed.to_string());
+        }
+    }
+    for cat in &current {
+        if !final_order.iter().any(|id| id == &cat.category_id) {
+            final_order.push(cat.category_id.clone());
+        }
+    }
+
+    let transaction = connection.unchecked_transaction().map_err(db_error)?;
+    for (idx, id) in final_order.iter().enumerate() {
+        transaction
+            .execute(
+                "UPDATE favorite_categories SET sort_order = ?2, updated_at = ?3 WHERE category_id = ?1",
+                params![id, idx as i64, now],
+            )
+            .map_err(db_error)?;
+    }
+    transaction.commit().map_err(db_error)?;
+    favorite_categories(connection)
+}
+
+pub fn favorite_assign_category(
+    connection: &Connection,
+    video_ids: &[String],
+    category_id: Option<&str>,
+    target_index: Option<usize>,
+    now: i64,
+) -> Result<(), String> {
+    let target_cat = category_id.map(str::trim).filter(|id| !id.is_empty());
+    if let Some(cat_id) = target_cat {
+        let exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM favorite_categories WHERE category_id = ?1)",
+                params![cat_id],
+                |row| row.get(0),
+            )
+            .map_err(db_error)?;
+        if !exists {
+            return Err("找不到目标收藏分类。".to_string());
+        }
+    }
+
+    let transaction = connection.unchecked_transaction().map_err(db_error)?;
+    let mut moved_ids: Vec<String> = Vec::new();
+    for raw in video_ids {
+        let vid = raw.trim();
+        if vid.is_empty() || moved_ids.iter().any(|existing| existing == vid) {
+            continue;
+        }
+        if !video_is_known(&transaction, vid)? {
+            continue;
+        }
+        transaction
+            .execute(
+                "INSERT OR IGNORE INTO playlist_items(playlist_id, position, video_id, added_at)
+                 VALUES (?1, COALESCE((SELECT MAX(position) + 1 FROM playlist_items WHERE playlist_id = ?1), 0), ?2, ?3)",
+                params![FAVORITES_ID, vid, now],
+            )
+            .map_err(db_error)?;
+        moved_ids.push(vid.to_string());
+    }
+    if moved_ids.is_empty() {
+        transaction.commit().map_err(db_error)?;
+        return Ok(());
+    }
+
+    transaction
+        .execute(
+            "UPDATE playlists SET updated_at = ?2 WHERE playlist_id = ?1",
+            params![FAVORITES_ID, now],
+        )
+        .map_err(db_error)?;
+
+    let existing_in_target: Vec<String> = match target_cat {
+        Some(cat_id) => {
+            let mut stmt = transaction
+                .prepare(
+                    "SELECT i.video_id
+                     FROM playlist_items i
+                     JOIN favorite_item_meta fm ON fm.video_id = i.video_id
+                     WHERE i.playlist_id = ?1 AND fm.category_id = ?2
+                     ORDER BY fm.column_position ASC, i.added_at DESC, i.position DESC",
+                )
+                .map_err(db_error)?;
+            let rows = stmt
+                .query_map(params![FAVORITES_ID, cat_id], |row| row.get::<_, String>(0))
+                .map_err(db_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db_error)?;
+            rows
+        }
+        None => {
+            let mut stmt = transaction
+                .prepare(
+                    "SELECT i.video_id
+                     FROM playlist_items i
+                     LEFT JOIN favorite_item_meta fm ON fm.video_id = i.video_id
+                     WHERE i.playlist_id = ?1 AND fm.category_id IS NULL
+                     ORDER BY (CASE WHEN fm.video_id IS NOT NULL THEN fm.column_position ELSE -i.added_at END) ASC,
+                              i.added_at DESC, i.position DESC",
+                )
+                .map_err(db_error)?;
+            let rows = stmt
+                .query_map(params![FAVORITES_ID], |row| row.get::<_, String>(0))
+                .map_err(db_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db_error)?;
+            rows
+        }
+    };
+
+    let mut remaining: Vec<String> = existing_in_target
+        .into_iter()
+        .filter(|vid| !moved_ids.iter().any(|moved| moved == vid))
+        .collect();
+    let insert_at = target_index.unwrap_or(0).min(remaining.len());
+    remaining.splice(insert_at..insert_at, moved_ids);
+
+    for (idx, vid) in remaining.iter().enumerate() {
+        transaction
+            .execute(
+                "INSERT INTO favorite_item_meta(video_id, category_id, column_position, note, updated_at)
+                 VALUES (?1, ?2, ?3, NULL, ?4)
+                 ON CONFLICT(video_id) DO UPDATE SET
+                     category_id = excluded.category_id,
+                     column_position = excluded.column_position,
+                     updated_at = excluded.updated_at",
+                params![vid, target_cat, idx as i64, now],
+            )
+            .map_err(db_error)?;
+    }
+
+    transaction.commit().map_err(db_error)?;
+    Ok(())
+}
+
+pub fn favorite_set_note(
+    connection: &Connection,
+    video_id: &str,
+    note: Option<&str>,
+    now: i64,
+) -> Result<(), String> {
+    let added_at: Option<i64> = connection
+        .query_row(
+            "SELECT added_at FROM playlist_items WHERE playlist_id = ?1 AND video_id = ?2",
+            params![FAVORITES_ID, video_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_error)?;
+    let Some(added_at) = added_at else {
+        return Err("请先收藏该视频再添加收藏备注。".to_string());
+    };
+    let cleaned = note.map(|raw| clean(raw, 500)).filter(|text| !text.is_empty());
+    connection
+        .execute(
+            "INSERT INTO favorite_item_meta(video_id, category_id, column_position, note, updated_at)
+             VALUES (?1, NULL, ?2, ?3, ?4)
+             ON CONFLICT(video_id) DO UPDATE SET
+                 note = excluded.note,
+                 updated_at = excluded.updated_at",
+            params![video_id, -added_at, cleaned, now],
+        )
+        .map_err(db_error)?;
+    Ok(())
 }
 
 // ---- learning paths -----------------------------------------------------------------------------
@@ -1597,6 +2226,7 @@ pub fn overview(connection: &Connection) -> Result<Overview, String> {
     Ok(Overview {
         channels: channels(connection)?,
         playlists: playlists(connection)?,
+        favorite_categories: favorite_categories(connection)?,
         learning_paths: learning_paths(connection)?,
         settings: settings(connection)?,
     })
@@ -1656,6 +2286,28 @@ pub struct BackupLearningPath {
     pub nodes: Vec<LearningPathNodeInput>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BackupFavoriteCategory {
+    pub category_id: String,
+    pub name: String,
+    pub color: String,
+    pub channel_ids: Vec<String>,
+    pub sort_order: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BackupFavoriteItemMeta {
+    pub video_id: String,
+    pub category_id: Option<String>,
+    pub column_position: i64,
+    pub note: Option<String>,
+    pub updated_at: i64,
+}
+
 /// Everything the user made, as one document that can be kept or moved to another machine. The
 /// cached feed is not part of it: the next refresh brings it back.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1666,6 +2318,8 @@ pub struct Backup {
     pub exported_at: i64,
     pub channels: Vec<BackupChannel>,
     pub playlists: Vec<BackupPlaylist>,
+    pub favorite_categories: Vec<BackupFavoriteCategory>,
+    pub favorite_items: Vec<BackupFavoriteItemMeta>,
     pub learning_paths: Vec<BackupLearningPath>,
     pub videos: Vec<VideoInput>,
     pub states: Vec<BackupState>,
@@ -1707,6 +2361,41 @@ pub fn export_backup(connection: &Connection, now: i64) -> Result<Backup, String
             video_ids,
         });
     }
+
+    let favorite_categories_out = favorite_categories(connection)?
+        .into_iter()
+        .map(|cat| BackupFavoriteCategory {
+            category_id: cat.category_id,
+            name: cat.name,
+            color: cat.color,
+            channel_ids: cat.channel_ids,
+            sort_order: cat.sort_order,
+            created_at: cat.created_at,
+            updated_at: cat.updated_at,
+        })
+        .collect();
+
+    let mut fav_meta_stmt = connection
+        .prepare(
+            "SELECT fm.video_id, fm.category_id, fm.column_position, fm.note, fm.updated_at
+             FROM favorite_item_meta fm
+             JOIN playlist_items pi ON pi.playlist_id = ?1 AND pi.video_id = fm.video_id
+             ORDER BY fm.column_position ASC, fm.video_id ASC",
+        )
+        .map_err(db_error)?;
+    let favorite_items_out = fav_meta_stmt
+        .query_map(params![FAVORITES_ID], |row| {
+            Ok(BackupFavoriteItemMeta {
+                video_id: row.get(0)?,
+                category_id: row.get(1)?,
+                column_position: row.get(2)?,
+                note: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
+        })
+        .map_err(db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)?;
 
     let mut learning_paths_out = Vec::new();
     for path in learning_paths(connection)? {
@@ -1809,6 +2498,8 @@ pub fn export_backup(connection: &Connection, now: i64) -> Result<Backup, String
         exported_at: now,
         channels,
         playlists: playlists_out,
+        favorite_categories: favorite_categories_out,
+        favorite_items: favorite_items_out,
         learning_paths: learning_paths_out,
         videos,
         states,
@@ -1822,6 +2513,7 @@ pub fn export_backup(connection: &Connection, now: i64) -> Result<Backup, String
 pub struct BackupSummary {
     pub channels_added: usize,
     pub playlists_added: usize,
+    pub favorite_categories_added: usize,
     pub learning_paths_added: usize,
     pub videos: usize,
 }
@@ -1933,6 +2625,123 @@ pub fn import_backup(connection: &Connection, backup: &Backup, now: i64) -> Resu
                 playlist_add(&transaction, &target, video_id, now)?;
             }
         }
+    }
+
+    let mut category_id_map: HashMap<String, String> = HashMap::new();
+    let mut existing_categories = favorite_categories(&transaction)?;
+    let mut next_cat_order: i64 = existing_categories
+        .iter()
+        .map(|cat| cat.sort_order + 1)
+        .max()
+        .unwrap_or(0);
+    for cat in &backup.favorite_categories {
+        let name = clean(&cat.name, 60);
+        if name.is_empty() || name == "未分类" || name.eq_ignore_ascii_case("uncategorized") {
+            continue;
+        }
+        let name_lower = name.to_lowercase();
+        if let Some(found) = existing_categories.iter().find(|existing| {
+            existing.category_id == cat.category_id
+                || existing.name.trim().to_lowercase() == name_lower
+        }) {
+            category_id_map.insert(cat.category_id.clone(), found.category_id.clone());
+            continue;
+        }
+        let target_id = if is_path_or_node_id(cat.category_id.trim()) {
+            cat.category_id.trim().to_string()
+        } else {
+            Uuid::new_v4().to_string()
+        };
+        let color = normalize_category_color(Some(&cat.color));
+        let channel_ids = normalize_channel_ids(Some(&cat.channel_ids));
+        let channel_ids_json =
+            serde_json::to_string(&channel_ids).map_err(|error| error.to_string())?;
+        let created_at = if cat.created_at > 0 { cat.created_at } else { now };
+        let updated_at = if cat.updated_at > 0 { cat.updated_at } else { created_at };
+        let sort_order = if existing_categories.is_empty() {
+            cat.sort_order
+        } else {
+            let assigned = next_cat_order;
+            next_cat_order += 1;
+            assigned
+        };
+        transaction
+            .execute(
+                "INSERT INTO favorite_categories(
+                     category_id, name, color, channel_ids_json, sort_order, created_at, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    target_id,
+                    name,
+                    color,
+                    channel_ids_json,
+                    sort_order,
+                    created_at,
+                    updated_at,
+                ],
+            )
+            .map_err(db_error)?;
+        category_id_map.insert(cat.category_id.clone(), target_id.clone());
+        existing_categories.push(FavoriteCategory {
+            category_id: target_id,
+            name,
+            color: color.to_string(),
+            channel_ids,
+            sort_order,
+            created_at,
+            updated_at,
+            item_count: 0,
+            finished_count: 0,
+        });
+        summary.favorite_categories_added += 1;
+    }
+
+    for meta in &backup.favorite_items {
+        if !is_video_id(&meta.video_id) {
+            continue;
+        }
+        let is_fav: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM playlist_items WHERE playlist_id = ?1 AND video_id = ?2)",
+                params![FAVORITES_ID, meta.video_id],
+                |row| row.get(0),
+            )
+            .map_err(db_error)?;
+        if !is_fav {
+            continue;
+        }
+        let mapped_cat = meta
+            .category_id
+            .as_ref()
+            .and_then(|raw_id| category_id_map.get(raw_id))
+            .cloned();
+        let cleaned_note = meta
+            .note
+            .as_deref()
+            .map(|raw| clean(raw, 500))
+            .filter(|text| !text.is_empty());
+        let meta_updated_at = if meta.updated_at > 0 { meta.updated_at } else { now };
+        transaction
+            .execute(
+                "INSERT INTO favorite_item_meta(video_id, category_id, column_position, note, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(video_id) DO UPDATE SET
+                     category_id = excluded.category_id,
+                     column_position = excluded.column_position,
+                     note = COALESCE(excluded.note, favorite_item_meta.note),
+                     updated_at = excluded.updated_at
+                 WHERE excluded.updated_at >= favorite_item_meta.updated_at
+                    OR favorite_item_meta.updated_at = ?6",
+                params![
+                    meta.video_id,
+                    mapped_cat,
+                    meta.column_position,
+                    cleaned_note,
+                    meta_updated_at,
+                    now,
+                ],
+            )
+            .map_err(db_error)?;
     }
 
     for path in &backup.learning_paths {
@@ -3112,5 +3921,261 @@ mod tests {
             videos: vec![],
         };
         assert!(learning_path_save(&connection, &missing_parent, NOW).is_err());
+    }
+
+    #[test]
+    fn favorite_categories_start_empty_and_support_single_category_moves_and_notes() {
+        let connection = database();
+        // Zero preset categories on initialization.
+        assert!(favorite_categories(&connection).unwrap().is_empty());
+        assert!(overview(&connection).unwrap().favorite_categories.is_empty());
+
+        // Reserved and blank names are rejected.
+        assert!(favorite_category_save(
+            &connection,
+            &FavoriteCategoryInput {
+                name: "   ".to_string(),
+                ..FavoriteCategoryInput::default()
+            },
+            NOW
+        )
+        .is_err());
+        assert!(favorite_category_save(
+            &connection,
+            &FavoriteCategoryInput {
+                name: "未分类".to_string(),
+                ..FavoriteCategoryInput::default()
+            },
+            NOW
+        )
+        .is_err());
+
+        let cat_dev = favorite_category_save(
+            &connection,
+            &FavoriteCategoryInput {
+                category_id: Some("cat-dev".to_string()),
+                name: "编程架构".to_string(),
+                color: Some("ocean".to_string()),
+                channel_ids: None,
+            },
+            NOW,
+        )
+        .unwrap();
+        let cat_math = favorite_category_save(
+            &connection,
+            &FavoriteCategoryInput {
+                category_id: Some("cat-math".to_string()),
+                name: "数学可视化".to_string(),
+                color: Some("amber".to_string()),
+                channel_ids: None,
+            },
+            NOW + 1,
+        )
+        .unwrap();
+
+        // Duplicate name check (case-insensitive).
+        assert!(favorite_category_save(
+            &connection,
+            &FavoriteCategoryInput {
+                name: "编程架构".to_string(),
+                ..FavoriteCategoryInput::default()
+            },
+            NOW + 2
+        )
+        .is_err());
+
+        // Reorder columns: math first, dev second.
+        let reordered = favorite_categories_reorder(
+            &connection,
+            &[cat_math.category_id.clone(), cat_dev.category_id.clone()],
+            NOW + 3,
+        )
+        .unwrap();
+        assert_eq!(reordered[0].category_id, "cat-math");
+        assert_eq!(reordered[1].category_id, "cat-dev");
+
+        // Upsert and favorite 3 videos.
+        store_videos(
+            &connection,
+            &[
+                video(V1, CHANNEL_A, "系统设计 01", NOW),
+                video(V2, CHANNEL_A, "系统设计 02", NOW),
+                video(V3, CHANNEL_B, "线性代数本质", NOW),
+            ],
+            NOW,
+        )
+        .unwrap();
+        playlist_add(&connection, FAVORITES_ID, V1, NOW + 10).unwrap();
+        playlist_add(&connection, FAVORITES_ID, V2, NOW + 20).unwrap();
+        playlist_add(&connection, FAVORITES_ID, V3, NOW + 30).unwrap();
+
+        // Assign V1 then V2 into `cat-dev` at specific target indices, and add a note on V2.
+        favorite_assign_category(
+            &connection,
+            &[V1.to_string(), V2.to_string()],
+            Some("cat-dev"),
+            Some(0),
+            NOW + 40,
+        )
+        .unwrap();
+        favorite_set_note(&connection, V2, Some("重点看第 12 分钟缓存一致性"), NOW + 41).unwrap();
+        // Move V2 above V1 inside `cat-dev` (target_index = 0).
+        favorite_assign_category(
+            &connection,
+            &[V2.to_string()],
+            Some("cat-dev"),
+            Some(0),
+            NOW + 42,
+        )
+        .unwrap();
+
+        let snap = favorites_snapshot(&connection).unwrap();
+        assert_eq!(snap.items.len(), 3);
+        let dev_items: Vec<&FavoriteItemEntry> = snap
+            .items
+            .iter()
+            .filter(|entry| entry.category_id.as_deref() == Some("cat-dev"))
+            .collect();
+        assert_eq!(dev_items.len(), 2);
+        assert_eq!(dev_items[0].video.video.video_id, V2);
+        assert_eq!(
+            dev_items[0].note.as_deref(),
+            Some("重点看第 12 分钟缓存一致性")
+        );
+        assert_eq!(dev_items[1].video.video.video_id, V1);
+
+        // Move V1 across to `cat-math` -> single primary category invariant holds (no duplication).
+        favorite_assign_category(
+            &connection,
+            &[V1.to_string()],
+            Some("cat-math"),
+            None,
+            NOW + 50,
+        )
+        .unwrap();
+        set_watched(&connection, V1, true, NOW + 55).unwrap();
+
+        let snap = favorites_snapshot(&connection).unwrap();
+        assert_eq!(snap.items.len(), 3);
+        let math_cat = snap
+            .categories
+            .iter()
+            .find(|c| c.category_id == "cat-math")
+            .unwrap();
+        let dev_cat = snap
+            .categories
+            .iter()
+            .find(|c| c.category_id == "cat-dev")
+            .unwrap();
+        assert_eq!(math_cat.item_count, 1);
+        assert_eq!(math_cat.finished_count, 1);
+        assert_eq!(dev_cat.item_count, 1);
+
+        // Deleting `cat-dev` keeps V2 favorited and returns it to `未分类` with its note intact!
+        favorite_category_delete(&connection, "cat-dev", NOW + 60).unwrap();
+        let snap_after_del = favorites_snapshot(&connection).unwrap();
+        assert_eq!(snap_after_del.categories.len(), 1);
+        assert_eq!(snap_after_del.items.len(), 3);
+        let v2_entry = snap_after_del
+            .items
+            .iter()
+            .find(|entry| entry.video.video.video_id == V2)
+            .unwrap();
+        assert!(v2_entry.video.favorite);
+        assert_eq!(v2_entry.category_id, None);
+        assert_eq!(
+            v2_entry.note.as_deref(),
+            Some("重点看第 12 分钟缓存一致性")
+        );
+
+        // Unfavoriting V2 cleans up `favorite_item_meta`.
+        playlist_remove(&connection, FAVORITES_ID, V2, NOW + 70).unwrap();
+        let meta_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM favorite_item_meta WHERE video_id = ?1)",
+                params![V2],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!meta_exists);
+    }
+
+    #[test]
+    fn favorite_category_channel_rules_and_backup_round_trip() {
+        let connection = database();
+        store_videos(
+            &connection,
+            &[
+                video(V1, CHANNEL_A, "微积分 01", NOW),
+                video(V2, CHANNEL_B, "Rust 异步", NOW),
+                video(V3, CHANNEL_A, "微积分 02", NOW),
+                video(V4, CHANNEL_B, "杂谈播客", NOW),
+            ],
+            NOW,
+        )
+        .unwrap();
+
+        // V1 and V2 are favorited before any category exists.
+        playlist_add(&connection, FAVORITES_ID, V1, NOW + 10).unwrap();
+        playlist_add(&connection, FAVORITES_ID, V2, NOW + 20).unwrap();
+
+        // Creating a category bound to CHANNEL_A retroactively categorizes V1, leaving V2 uncategorized.
+        let math_cat = favorite_category_save(
+            &connection,
+            &FavoriteCategoryInput {
+                category_id: Some("cat-3b1b".to_string()),
+                name: "数学动画".to_string(),
+                color: Some("sage".to_string()),
+                channel_ids: Some(vec![CHANNEL_A.to_string()]),
+            },
+            NOW + 30,
+        )
+        .unwrap();
+        assert_eq!(math_cat.item_count, 1);
+
+        // Newly favorited V3 from CHANNEL_A auto-assigns to `cat-3b1b`!
+        playlist_add(&connection, FAVORITES_ID, V3, NOW + 40).unwrap();
+        // V4 is favorited and stays uncategorized, with a note.
+        playlist_add(&connection, FAVORITES_ID, V4, NOW + 50).unwrap();
+        favorite_set_note(&connection, V4, Some("通勤听"), NOW + 55).unwrap();
+
+        let snap = favorites_snapshot(&connection).unwrap();
+        let assigned_to_math: Vec<&str> = snap
+            .items
+            .iter()
+            .filter(|e| e.category_id.as_deref() == Some("cat-3b1b"))
+            .map(|e| e.video.video.video_id.as_str())
+            .collect();
+        // V3 added later gets smaller column_position, so it appears above V1.
+        assert_eq!(assigned_to_math, vec![V3, V1]);
+
+        // Export & restore into an empty DB.
+        let backup = export_backup(&connection, NOW + 60).unwrap();
+        assert_eq!(backup.favorite_categories.len(), 1);
+        let restored = database();
+        let summary = import_backup(&restored, &backup, NOW + 70).unwrap();
+        assert_eq!(summary.favorite_categories_added, 1);
+
+        let restored_snap = favorites_snapshot(&restored).unwrap();
+        assert_eq!(restored_snap.categories.len(), 1);
+        assert_eq!(restored_snap.categories[0].name, "数学动画");
+        assert_eq!(
+            restored_snap.categories[0].channel_ids,
+            vec![CHANNEL_A.to_string()]
+        );
+        let restored_math: Vec<&str> = restored_snap
+            .items
+            .iter()
+            .filter(|e| e.category_id.as_deref() == Some("cat-3b1b"))
+            .map(|e| e.video.video.video_id.as_str())
+            .collect();
+        assert_eq!(restored_math, vec![V3, V1]);
+        let restored_v4 = restored_snap
+            .items
+            .iter()
+            .find(|e| e.video.video.video_id == V4)
+            .unwrap();
+        assert_eq!(restored_v4.category_id, None);
+        assert_eq!(restored_v4.note.as_deref(), Some("通勤听"));
     }
 }

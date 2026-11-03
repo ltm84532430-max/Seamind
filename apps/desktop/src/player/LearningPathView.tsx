@@ -28,12 +28,16 @@ import type {
   PositionedPathNode,
 } from './learning-path-layout';
 import { errorText, playerApi } from './player-api';
-import type {
-  LearningPathDetail,
-  LearningPathNodeInput,
-  LearningPathNodeKind,
-  VideoInput,
+import {
+  FAVORITE_CATEGORY_COLORS,
+  type FavoritesSnapshot,
+  type LearningPathDetail,
+  type LearningPathNodeInput,
+  type LearningPathNodeKind,
+  type VideoInput,
 } from './types';
+import { extractProposalFromText } from './learning-path-parser';
+import { VideoPickerModal, type VideoPickerItem } from './VideoPickerModal';
 import { parseYouTubeTarget, thumbnailUrl } from './video-links';
 import { StateMessage } from './VideoList';
 
@@ -107,6 +111,131 @@ export interface LearningPathExternalBridges {
   onExportMarkdownToMindmap?: (title: string, markdown: string) => void;
 }
 
+export function CategoryImportDialog({
+  isOpen,
+  onClose,
+  onSelectCategory,
+  title = '从收藏分类导入视频',
+  subtitle = '选取一个收藏分类，将其包含的视频组织为知识树阶段与课程',
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  onSelectCategory: (category: { id: string | null; name: string }) => void;
+  title?: string;
+  subtitle?: string;
+}) {
+  const [snapshot, setSnapshot] = useState<FavoritesSnapshot | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setLoading(true);
+    playerApi
+      .favoritesSnapshot()
+      .then((snap) => setSnapshot(snap))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  const uncategorizedCount =
+    snapshot?.items.filter((i) => i.categoryId === null).length ?? 0;
+
+  return (
+    <div className="lp-proposal-backdrop" role="dialog" aria-modal="true">
+      <div className="lp-proposal-modal" style={{ width: 'min(580px, 92vw)' }}>
+        <header className="lp-proposal-head">
+          <div>
+            <span className="lp-proposal-badge">一键生成知识树</span>
+            <h3>{title}</h3>
+            {subtitle && (
+              <p style={{ margin: '4px 0 0', fontSize: 12, opacity: 0.78 }}>
+                {subtitle}
+              </p>
+            )}
+          </div>
+          <button type="button" className="lp-icon-btn" onClick={onClose}>
+            <CloseIcon />
+          </button>
+        </header>
+
+        <div className="lp-proposal-body">
+          {loading ? (
+            <div
+              style={{ textAlign: 'center', padding: '30px 0', opacity: 0.7 }}
+            >
+              正在读取收藏分类…
+            </div>
+          ) : (
+            <div className="lp-cat-import-list">
+              <div
+                className="lp-cat-import-card"
+                onClick={() =>
+                  onSelectCategory({ id: null, name: '未分类收藏' })
+                }
+              >
+                <div className="lp-cat-import-card-title">
+                  <span
+                    className="vpick-cat-dot"
+                    style={{ background: 'var(--player-muted)' }}
+                  />
+                  <span>未分类收藏</span>
+                </div>
+                <span className="lp-cat-import-card-count">
+                  {uncategorizedCount} 个视频 →
+                </span>
+              </div>
+
+              {(snapshot?.categories ?? []).map((cat) => {
+                const count = (snapshot?.items ?? []).filter(
+                  (i) => i.categoryId === cat.categoryId,
+                ).length;
+                const colorMeta = FAVORITE_CATEGORY_COLORS.find(
+                  (c) => c.id === cat.color,
+                );
+                return (
+                  <div
+                    key={cat.categoryId}
+                    className="lp-cat-import-card"
+                    onClick={() =>
+                      onSelectCategory({ id: cat.categoryId, name: cat.name })
+                    }
+                  >
+                    <div className="lp-cat-import-card-title">
+                      <span
+                        className="vpick-cat-dot"
+                        style={{
+                          background: colorMeta?.accent ?? '#df735b',
+                        }}
+                      />
+                      <span>{cat.name}</span>
+                    </div>
+                    <span className="lp-cat-import-card-count">
+                      {count} 个视频 →
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <footer className="lp-proposal-foot">
+          <span style={{ fontSize: 12, opacity: 0.72 }}>
+            点击任意分类即可自动读取全部视频并建立连贯的学习知识树。
+          </span>
+          <div className="lp-proposal-foot-actions">
+            <button type="button" className="lp-btn" onClick={onClose}>
+              取消
+            </button>
+          </div>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
 export function LearningPathsHomeView({
   bridges,
 }: {
@@ -114,12 +243,15 @@ export function LearningPathsHomeView({
 }) {
   const host = usePlayerHost();
   const [creating, setCreating] = useState(false);
+  const [categoryImportOpen, setCategoryImportOpen] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newDesc, setNewDesc] = useState('');
   const [saving, setSaving] = useState(false);
   const [aiTopic, setAiTopic] = useState('');
   const [aiRunning, setAiRunning] = useState(false);
   const [aiStatus, setAiStatus] = useState('');
+  const [aiCandidateProposal, setAiCandidateProposal] =
+    useState<LearningPathProposal | null>(null);
 
   const createBlankPath = async (event: FormEvent) => {
     event.preventDefault();
@@ -152,6 +284,78 @@ export function LearningPathsHomeView({
     }
   };
 
+  const importCategoryAsPath = async (cat: {
+    id: string | null;
+    name: string;
+  }) => {
+    try {
+      setSaving(true);
+      const snap = await playerApi.favoritesSnapshot();
+      const items = snap.items.filter((i) =>
+        cat.id === null ? i.categoryId === null : i.categoryId === cat.id,
+      );
+      if (items.length === 0) {
+        host.notify(
+          `分类「${cat.name}」中暂无视频，请先在「我的收藏」中添加视频。`,
+          'error',
+        );
+        return;
+      }
+      const stageTitle = `${cat.name} 核心课程`;
+      const nodes: LearningPathNodeInput[] = [
+        {
+          nodeId: 'stage-1',
+          parentId: null,
+          position: 0,
+          kind: 'stage',
+          title: stageTitle,
+          note: `从收藏分类「${cat.name}」一键生成`,
+        },
+        ...items.map((item, idx) => ({
+          nodeId: `vid-${idx + 1}`,
+          parentId: 'stage-1',
+          position: idx + 1,
+          kind: 'video' as const,
+          title: item.video.title,
+          videoId: item.video.videoId,
+          startSeconds: 0,
+          optional: false,
+          note:
+            item.note ||
+            (item.video.channelName ? `频道：${item.video.channelName}` : null),
+        })),
+        {
+          nodeId: 'checkpoint-finish',
+          parentId: null,
+          position: items.length + 1,
+          kind: 'checkpoint' as const,
+          title: `${cat.name} · 知识通关`,
+          note: '恭喜学完本分类下的全部视频课程',
+        },
+      ];
+      const saved = await playerApi.learningPathSave({
+        title: `${cat.name} · 视频知识树`,
+        description: `由收藏分类「${cat.name}」生成，包含 ${items.length} 节视频课程`,
+        nodes,
+        videos: items.map((i) => ({
+          videoId: i.video.videoId,
+          title: i.video.title,
+          channelName: i.video.channelName,
+          channelId: i.video.channelId,
+          durationSeconds: i.video.durationSeconds,
+        })),
+      });
+      await host.reloadOverview();
+      setCategoryImportOpen(false);
+      host.go({ kind: 'learning-path', pathId: saved.summary.pathId });
+      host.notify(`已从「${cat.name}」成功创建视频知识树！`);
+    } catch (err) {
+      host.notify(errorText(err, '创建知识树失败'), 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const launchCliPrompt = (cli: 'agy' | 'claude' | 'codex') => {
     const topic = aiTopic.trim() || 'Rust 异步与并发系统编程';
     const prompt = `请使用 Seamind MCP 工具先调用 player_search_youtube 搜索真实的 YouTube 教学视频，围绕「${topic}」规划一条分阶段从左向右延伸的视频学习路径，并调用 learning_path_propose 提交预览。`;
@@ -177,6 +381,7 @@ export function LearningPathsHomeView({
     if (!topic || aiRunning) return;
     setAiRunning(true);
     setAiStatus('正在检索 YouTube 视频并规划阶段…');
+    setAiCandidateProposal(null);
     try {
       const result = await runLearningPathAgentTurn({
         history: [],
@@ -196,8 +401,18 @@ export function LearningPathsHomeView({
           'ai',
         );
         setAiStatus('已生成路径预览，请在弹窗中确认保存。');
+        setAiCandidateProposal(null);
       } else {
-        setAiStatus(result.reply);
+        const parsed = extractProposalFromText(topic, result.reply);
+        if (parsed) {
+          setAiCandidateProposal(parsed);
+          setAiStatus(
+            'AI 已规划完成！请点击下方「应用此方案并生成知识树」确认写入。',
+          );
+        } else {
+          setAiCandidateProposal(null);
+          setAiStatus(result.reply);
+        }
       }
     } catch (error) {
       host.notify(errorText(error, 'AI 生成学习路径失败'), 'error');
@@ -227,6 +442,14 @@ export function LearningPathsHomeView({
           >
             <TerminalBoxIcon />
             打开底部 CLI 终端
+          </button>
+          <button
+            type="button"
+            className="lp-btn"
+            onClick={() => setCategoryImportOpen(true)}
+            title="从现有收藏夹分类一键生成结构化视频知识树"
+          >
+            ★ 从收藏分类创建知识树
           </button>
           <button
             type="button"
@@ -298,6 +521,32 @@ export function LearningPathsHomeView({
             {aiStatus}
           </p>
         )}
+        {aiCandidateProposal && (
+          <div className="lp-proposal-quick-card">
+            <div>
+              <span className="lp-proposal-badge">
+                <SparkleIcon /> 检测到 AI 知识规划方案
+              </span>
+              <h4>{aiCandidateProposal.input.title}</h4>
+              <p>
+                包含 {aiCandidateProposal.stageCount} 个阶段，
+                {aiCandidateProposal.videoCount} 节视频课程
+              </p>
+            </div>
+            <button
+              type="button"
+              className="lp-btn is-primary"
+              onClick={() => {
+                bridges?.onPreviewLearningPathProposal?.(
+                  aiCandidateProposal,
+                  'ai',
+                );
+              }}
+            >
+              <CheckIcon /> 应用此方案并生成知识树
+            </button>
+          </div>
+        )}
       </div>
 
       {creating && (
@@ -347,6 +596,14 @@ export function LearningPathsHomeView({
           </button>
         </form>
       )}
+
+      <CategoryImportDialog
+        isOpen={categoryImportOpen}
+        onClose={() => setCategoryImportOpen(false)}
+        onSelectCategory={(cat) => void importCategoryAsPath(cat)}
+        title="从收藏分类创建知识树"
+        subtitle="选取一个分类，将其包含的视频组织为一门结构化的完整知识树"
+      />
 
       {host.learningPaths.length === 0 ? (
         <div style={{ marginTop: 32 }}>
@@ -446,6 +703,21 @@ export default function LearningPathView({
 
   const [editor, setEditor] = useState<NodeEditorDraft | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [videoPickerState, setVideoPickerState] = useState<{
+    isOpen: boolean;
+    title?: string;
+    subtitle?: string;
+    multiple: boolean;
+    parentId: string | null;
+  }>({
+    isOpen: false,
+    multiple: true,
+    parentId: null,
+  });
+  const [categoryImportActiveOpen, setCategoryImportActiveOpen] =
+    useState(false);
+  const [activeAiCandidate, setActiveAiCandidate] =
+    useState<LearningPathProposal | null>(null);
 
   const updateStyle = (patch: Partial<StoredPathStyle>) => {
     setStyle((prev) => {
@@ -613,13 +885,16 @@ export default function LearningPathView({
     }));
   };
 
-  const openAddNodeModal = (parentId: string | null) => {
+  const openAddNodeModal = (
+    parentId: string | null,
+    defaultKind?: LearningPathNodeKind,
+  ) => {
     const suffix = Math.random().toString(36).slice(2, 7);
     setEditor({
       mode: 'add',
       nodeId: `node-${suffix}`,
       parentId: parentId ?? '',
-      kind: parentId ? 'video' : 'stage',
+      kind: defaultKind ?? (parentId ? 'video' : 'stage'),
       title: '',
       note: '',
       videoLink: '',
@@ -627,6 +902,174 @@ export default function LearningPathView({
       optional: false,
       prerequisiteIdsText: '',
     });
+  };
+
+  const handleVideoPickerConfirm = (selectedVideos: VideoPickerItem[]) => {
+    if (editor) {
+      const first = selectedVideos[0];
+      if (first) {
+        setEditor({
+          ...editor,
+          videoLink: first.videoId,
+          title: editor.title.trim() ? editor.title : first.title,
+        });
+      }
+      return;
+    }
+    void batchAddVideosToStage(videoPickerState.parentId, selectedVideos);
+  };
+
+  const batchAddVideosToStage = async (
+    targetParentId: string | null,
+    videos: VideoPickerItem[],
+  ) => {
+    if (!detail || videos.length === 0) return;
+    setSavingEdit(true);
+    try {
+      let maxPos = detail.nodes.reduce(
+        (acc, n) => Math.max(acc, n.position),
+        0,
+      );
+      const newNodes: LearningPathNodeInput[] = videos.map((v, i) => {
+        maxPos += 1;
+        const suffix = Math.random().toString(36).slice(2, 6);
+        return {
+          nodeId: `node-${Date.now().toString(36)}-${suffix}-${i + 1}`,
+          parentId: targetParentId,
+          position: maxPos,
+          kind: 'video',
+          title: v.title,
+          videoId: v.videoId,
+          startSeconds: 0,
+          optional: false,
+          note: v.channelName ? `频道：${v.channelName}` : null,
+        };
+      });
+
+      const nextNodes: LearningPathNodeInput[] = [
+        ...detail.nodes.map((n) => ({
+          nodeId: n.nodeId,
+          parentId: n.parentId,
+          position: n.position,
+          kind: n.kind,
+          title: n.title,
+          note: n.note,
+          videoId: n.videoId,
+          startSeconds: n.startSeconds,
+          optional: n.optional,
+          prerequisiteIds: n.prerequisiteIds,
+        })),
+        ...newNodes,
+      ];
+
+      const newVideoInputs: VideoInput[] = videos.map((v) => ({
+        videoId: v.videoId,
+        title: v.title,
+        channelName: v.channelName,
+        channelId: v.channelId,
+        durationSeconds: v.durationSeconds,
+      }));
+
+      const updated = await playerApi.learningPathSave({
+        pathId: detail.summary.pathId,
+        title: detail.summary.title,
+        description: detail.summary.description,
+        nodes: nextNodes,
+        videos: newVideoInputs,
+      });
+
+      setDetail(updated);
+      host.notify(`已成功添加 ${videos.length} 节课时视频`);
+    } catch (err) {
+      host.notify(errorText(err, '批量添加视频失败'), 'error');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const importCategoryIntoActivePath = async (cat: {
+    id: string | null;
+    name: string;
+  }) => {
+    if (!detail) return;
+    try {
+      setSavingEdit(true);
+      const snap = await playerApi.favoritesSnapshot();
+      const items = snap.items.filter((i) =>
+        cat.id === null ? i.categoryId === null : i.categoryId === cat.id,
+      );
+      if (items.length === 0) {
+        host.notify(`分类「${cat.name}」中暂无视频`, 'error');
+        return;
+      }
+      let maxPos = detail.nodes.reduce(
+        (acc, n) => Math.max(acc, n.position),
+        0,
+      );
+      const stageNodeId = `stage-${Date.now().toString(36)}`;
+      maxPos += 1;
+      const stageNode: LearningPathNodeInput = {
+        nodeId: stageNodeId,
+        parentId: null,
+        position: maxPos,
+        kind: 'stage',
+        title: `${cat.name} 模块`,
+        note: `从收藏分类「${cat.name}」导入`,
+      };
+      const videoNodes: LearningPathNodeInput[] = items.map((item, idx) => {
+        maxPos += 1;
+        return {
+          nodeId: `node-${Date.now().toString(36)}-${idx + 1}`,
+          parentId: stageNodeId,
+          position: maxPos,
+          kind: 'video',
+          title: item.video.title,
+          videoId: item.video.videoId,
+          startSeconds: 0,
+          optional: false,
+          note:
+            item.note ||
+            (item.video.channelName ? `频道：${item.video.channelName}` : null),
+        };
+      });
+
+      const updated = await playerApi.learningPathSave({
+        pathId: detail.summary.pathId,
+        title: detail.summary.title,
+        description: detail.summary.description,
+        nodes: [
+          ...detail.nodes.map((n) => ({
+            nodeId: n.nodeId,
+            parentId: n.parentId,
+            position: n.position,
+            kind: n.kind,
+            title: n.title,
+            note: n.note,
+            videoId: n.videoId,
+            startSeconds: n.startSeconds,
+            optional: n.optional,
+            prerequisiteIds: n.prerequisiteIds,
+          })),
+          stageNode,
+          ...videoNodes,
+        ],
+        videos: items.map((i) => ({
+          videoId: i.video.videoId,
+          title: i.video.title,
+          channelName: i.video.channelName,
+          channelId: i.video.channelId,
+          durationSeconds: i.video.durationSeconds,
+        })),
+      });
+
+      setDetail(updated);
+      setCategoryImportActiveOpen(false);
+      host.notify(`已将「${cat.name}」的 ${items.length} 个视频作为新阶段导入`);
+    } catch (err) {
+      host.notify(errorText(err, '导入分类失败'), 'error');
+    } finally {
+      setSavingEdit(false);
+    }
   };
 
   const openEditNodeModal = (positioned: PositionedPathNode) => {
@@ -847,6 +1290,17 @@ export default function LearningPathView({
           turn.learningPathProposal,
           'ai',
         );
+        setActiveAiCandidate(null);
+      } else {
+        const parsed = extractProposalFromText(
+          detail.summary.title,
+          turn.reply,
+        );
+        if (parsed) {
+          setActiveAiCandidate(parsed);
+        } else {
+          setActiveAiCandidate(null);
+        }
       }
     } catch (err) {
       setAiReply(`出错：${errorText(err, '请求失败')}`);
@@ -927,10 +1381,33 @@ export default function LearningPathView({
           )}
           <button
             type="button"
-            className="lp-btn"
-            onClick={() => openAddNodeModal(null)}
+            className="lp-btn is-primary"
+            onClick={() => {
+              setVideoPickerState({
+                isOpen: true,
+                title: '选取课程视频加入知识树',
+                subtitle: '从我的收藏、播放历史、关注频道或 YouTube 搜索中选取',
+                multiple: true,
+                parentId: null,
+              });
+            }}
           >
-            <PlusIcon /> 添加节点
+            <PlusIcon /> 选取视频添加
+          </button>
+          <button
+            type="button"
+            className="lp-btn"
+            onClick={() => openAddNodeModal(null, 'stage')}
+          >
+            + 新增阶段
+          </button>
+          <button
+            type="button"
+            className="lp-btn"
+            onClick={() => setCategoryImportActiveOpen(true)}
+            title="从收藏分类中导入全部视频作为新模块"
+          >
+            ★ 从收藏导入
           </button>
           <button
             type="button"
@@ -1196,14 +1673,54 @@ export default function LearningPathView({
                           <CheckIcon filled={video.finished} />
                         </button>
                       )}
-                      <button
-                        type="button"
-                        className="lp-icon-btn"
-                        title="在此节点右侧添加子阶段或视频"
-                        onClick={() => openAddNodeModal(node.nodeId)}
-                      >
-                        +
-                      </button>
+                      {isStageCard ? (
+                        <>
+                          <button
+                            type="button"
+                            className="lp-node-action-btn"
+                            title="在此阶段下批量选取添加课时视频"
+                            onClick={() => {
+                              setVideoPickerState({
+                                isOpen: true,
+                                title: `为「${node.title}」选取课程视频`,
+                                subtitle:
+                                  '可从收藏、历史、订阅动态或搜索中批量勾选',
+                                multiple: true,
+                                parentId: node.nodeId,
+                              });
+                            }}
+                          >
+                            + 课时
+                          </button>
+                          <button
+                            type="button"
+                            className="lp-node-action-btn"
+                            title="添加子阶段"
+                            onClick={() =>
+                              openAddNodeModal(node.nodeId, 'stage')
+                            }
+                          >
+                            + 阶段
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          className="lp-node-action-btn"
+                          title="在此视频后添加下一课"
+                          onClick={() => {
+                            setVideoPickerState({
+                              isOpen: true,
+                              title: '添加下一课视频',
+                              subtitle: '可从收藏、历史或搜索中选取后续视频',
+                              multiple: true,
+                              parentId: node.parentId ?? null,
+                            });
+                          }}
+                        >
+                          + 下一课
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="lp-icon-btn"
@@ -1415,6 +1932,23 @@ export default function LearningPathView({
               )}
 
               {aiReply && <div className="lp-copilot-reply">{aiReply}</div>}
+              {activeAiCandidate && (
+                <div style={{ marginTop: 8 }}>
+                  <button
+                    type="button"
+                    className="lp-btn is-primary"
+                    style={{ width: '100%', justifyContent: 'center' }}
+                    onClick={() => {
+                      bridges?.onPreviewLearningPathProposal?.(
+                        activeAiCandidate,
+                        'ai',
+                      );
+                    }}
+                  >
+                    <CheckIcon /> 应用此方案并生成知识树
+                  </button>
+                </div>
+              )}
             </div>
           </aside>
         )}
@@ -1424,7 +1958,7 @@ export default function LearningPathView({
         <div className="lp-proposal-backdrop" role="dialog" aria-modal="true">
           <form
             className="lp-proposal-modal"
-            style={{ width: 'min(520px, 92vw)' }}
+            style={{ width: 'min(540px, 92vw)' }}
             onSubmit={(e) => void saveNodeDraft(e)}
           >
             <header className="lp-proposal-head">
@@ -1482,20 +2016,38 @@ export default function LearningPathView({
 
               <label style={{ fontSize: 12 }}>
                 YouTube 视频链接或 11 位 ID（纯阶段分组可留空）
-                <input
-                  type="text"
-                  value={editor.videoLink}
-                  onChange={(e) =>
-                    setEditor({ ...editor, videoLink: e.target.value })
-                  }
-                  placeholder="https://www.youtube.com/watch?v=... 或 11 位 videoId"
-                  style={{
-                    width: '100%',
-                    height: 32,
-                    marginTop: 4,
-                    padding: '0 8px',
-                  }}
-                />
+                <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                  <input
+                    type="text"
+                    value={editor.videoLink}
+                    onChange={(e) =>
+                      setEditor({ ...editor, videoLink: e.target.value })
+                    }
+                    placeholder="https://www.youtube.com/watch?v=... 或 11 位 videoId"
+                    style={{
+                      flex: 1,
+                      height: 32,
+                      padding: '0 8px',
+                      background: 'var(--player-panel)',
+                      color: 'var(--player-ink)',
+                      border: '1px solid var(--player-line-strong)',
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="lp-btn"
+                    onClick={() => {
+                      setVideoPickerState({
+                        isOpen: true,
+                        title: '从视频库选取视频填入',
+                        multiple: false,
+                        parentId: null,
+                      });
+                    }}
+                  >
+                    从视频库选取…
+                  </button>
+                </div>
               </label>
 
               <div style={{ display: 'flex', gap: 10 }}>
@@ -1538,7 +2090,42 @@ export default function LearningPathView({
               </div>
 
               <label style={{ fontSize: 12 }}>
-                前置依赖节点 ID（逗号分隔，用于技能拓扑汇合）
+                前置依赖节点（点击快速连接/解除前置关系，在技能拓扑中自动绘线）
+                <div className="lp-prereq-selector" style={{ marginTop: 4 }}>
+                  {detail.nodes
+                    .filter((n) => n.nodeId !== editor.nodeId)
+                    .map((n) => {
+                      const curSet = new Set(
+                        editor.prerequisiteIdsText
+                          .split(',')
+                          .map((s) => s.trim())
+                          .filter(Boolean),
+                      );
+                      const isChecked = curSet.has(n.nodeId);
+                      return (
+                        <button
+                          key={n.nodeId}
+                          type="button"
+                          className={`lp-prereq-pill${isChecked ? ' is-selected' : ''}`}
+                          onClick={() => {
+                            if (isChecked) {
+                              curSet.delete(n.nodeId);
+                            } else {
+                              curSet.add(n.nodeId);
+                            }
+                            setEditor({
+                              ...editor,
+                              prerequisiteIdsText:
+                                Array.from(curSet).join(', '),
+                            });
+                          }}
+                        >
+                          {isChecked ? '✓ ' : '+ '}
+                          {n.title || n.nodeId}
+                        </button>
+                      );
+                    })}
+                </div>
                 <input
                   type="text"
                   value={editor.prerequisiteIdsText}
@@ -1548,12 +2135,14 @@ export default function LearningPathView({
                       prerequisiteIdsText: e.target.value,
                     })
                   }
-                  placeholder="例如：vid-1, vid-2"
+                  placeholder="手动输入节点 ID（逗号分隔）：vid-1, vid-2"
                   style={{
                     width: '100%',
-                    height: 32,
-                    marginTop: 4,
+                    height: 28,
+                    marginTop: 6,
                     padding: '0 8px',
+                    fontSize: 11,
+                    opacity: 0.8,
                   }}
                 />
               </label>
@@ -1617,6 +2206,25 @@ export default function LearningPathView({
           </form>
         </div>
       )}
+
+      <VideoPickerModal
+        isOpen={videoPickerState.isOpen}
+        title={videoPickerState.title}
+        subtitle={videoPickerState.subtitle}
+        multiple={videoPickerState.multiple}
+        onClose={() =>
+          setVideoPickerState((prev) => ({ ...prev, isOpen: false }))
+        }
+        onConfirm={handleVideoPickerConfirm}
+      />
+
+      <CategoryImportDialog
+        isOpen={categoryImportActiveOpen}
+        onClose={() => setCategoryImportActiveOpen(false)}
+        onSelectCategory={(cat) => void importCategoryIntoActivePath(cat)}
+        title="导入收藏分类作为新学习阶段"
+        subtitle="选取一个分类，将其包含的视频作为一个新阶段追加到当前知识树中"
+      />
     </section>
   );
 }

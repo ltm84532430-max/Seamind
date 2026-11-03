@@ -79,12 +79,17 @@ import type {
 import type {
   ActiveMindmapSnapshot,
   AgentAnalysisMode,
+  FavoritesCategorizationProposal,
   GeneratedHtmlAsset,
   MindmapNodeSnapshot,
   NodeEditOperation,
   NodeEditProposal,
   LearningPathProposal,
 } from './agent/types';
+import FavoritesProposalDialog, {
+  applyFavoritesCategorizationProposal,
+  buildFavoritesCategorizationProposal,
+} from './player/FavoritesProposalDialog';
 import LearningPathProposalDialog from './player/LearningPathProposalDialog';
 import { playerApi } from './player/player-api';
 import type { VideoInput } from './player/types';
@@ -337,6 +342,11 @@ interface CliAgentProposal {
 interface CliLearningPathProposal {
   requestId: string;
   proposal: LearningPathProposal;
+}
+
+interface CliFavoritesProposal {
+  requestId: string;
+  proposal: FavoritesCategorizationProposal;
 }
 
 interface EpubOutline {
@@ -1733,8 +1743,16 @@ export default function App() {
     useState(false);
   const [cliLearningPathProposalError, setCliLearningPathProposalError] =
     useState('');
+  const [cliFavoritesProposal, setCliFavoritesProposal] =
+    useState<CliFavoritesProposal | null>(null);
+  const [cliFavoritesProposalBusy, setCliFavoritesProposalBusy] =
+    useState(false);
+  const [cliFavoritesProposalError, setCliFavoritesProposalError] =
+    useState('');
   const [playerOpenLearningPathRequest, setPlayerOpenLearningPathRequest] =
     useState<{ id: number; pathId: string } | null>(null);
+  const [playerOpenFavoritesRequestId, setPlayerOpenFavoritesRequestId] =
+    useState<number | null>(null);
   const [activeMapPath, setActiveMapPath] = useState<string | null>(null);
   const [nodeNoteDialog, setNodeNoteDialog] = useState<{
     nodeId: string | null;
@@ -1756,7 +1774,9 @@ export default function App() {
   const cliLearningPathProposalRef = useRef<CliLearningPathProposal | null>(
     null,
   );
+  const cliFavoritesProposalRef = useRef<CliFavoritesProposal | null>(null);
   const playerOpenLearningPathRequestIdRef = useRef(0);
+  const playerOpenFavoritesRequestIdRef = useRef(0);
   const youtubeSearchResultsRef = useRef(new Map<string, VideoInput>());
   const svgRef = useRef<SVGSVGElement>(null);
   const markdownEditorRef = useRef<MarkdownEditorHandle | null>(null);
@@ -2605,6 +2625,11 @@ export default function App() {
     listLearningPaths: async () => (await playerApi.overview()).learningPaths,
     getLearningPath: (pathId) => playerApi.learningPathGet(pathId),
     proposeLearningPath,
+    getFavoritesBoard: () => playerApi.favoritesSnapshot(),
+    proposeFavoritesCategorization: async (input) => {
+      const snapshot = await playerApi.favoritesSnapshot();
+      return buildFavoritesCategorizationProposal(snapshot, input);
+    },
   };
   agentCapabilitiesRef.current = agentCapabilities;
 
@@ -2653,10 +2678,35 @@ export default function App() {
             JSON.stringify(input ?? {}),
             capabilities,
           );
+          if (execution.favoritesCategorizationProposal) {
+            if (
+              cliAgentProposalRef.current ||
+              cliLearningPathProposalRef.current ||
+              cliFavoritesProposalRef.current
+            ) {
+              await invoke('agent_bridge_resolve', {
+                requestId,
+                result: {},
+                error: 'Seamind 正在等待你确认另一条提案。',
+              }).catch(() => undefined);
+              return;
+            }
+            const pending = {
+              requestId,
+              proposal: execution.favoritesCategorizationProposal,
+            };
+            cliFavoritesProposalRef.current = pending;
+            setCliFavoritesProposal(pending);
+            setCliFavoritesProposalError('');
+            setActiveWorkspace('player');
+            setPlayerOpened(true);
+            return;
+          }
           if (execution.learningPathProposal) {
             if (
               cliAgentProposalRef.current ||
-              cliLearningPathProposalRef.current
+              cliLearningPathProposalRef.current ||
+              cliFavoritesProposalRef.current
             ) {
               await invoke('agent_bridge_resolve', {
                 requestId,
@@ -2679,7 +2729,8 @@ export default function App() {
           if (execution.proposal) {
             if (
               cliAgentProposalRef.current ||
-              cliLearningPathProposalRef.current
+              cliLearningPathProposalRef.current ||
+              cliFavoritesProposalRef.current
             ) {
               await invoke('agent_bridge_resolve', {
                 requestId,
@@ -2873,6 +2924,62 @@ export default function App() {
       );
     } finally {
       setCliLearningPathProposalBusy(false);
+    }
+  };
+
+  const resolveCliFavoritesProposal = async (apply: boolean) => {
+    const pending = cliFavoritesProposalRef.current;
+    if (!pending || cliFavoritesProposalBusy) return;
+    if (!apply) {
+      cliFavoritesProposalRef.current = null;
+      setCliFavoritesProposal(null);
+      setCliFavoritesProposalError('');
+      await invoke('agent_bridge_resolve', {
+        requestId: pending.requestId,
+        result: {},
+        error: '用户取消了收藏视频智能归类提案；未做任何改动。',
+      }).catch(() => undefined);
+      return;
+    }
+
+    setCliFavoritesProposalBusy(true);
+    setCliFavoritesProposalError('');
+    try {
+      const result = await applyFavoritesCategorizationProposal(
+        pending.proposal,
+      );
+      cliFavoritesProposalRef.current = null;
+      setCliFavoritesProposal(null);
+      setPlayerOpened(true);
+      setActiveWorkspace('player');
+      playerOpenFavoritesRequestIdRef.current += 1;
+      setPlayerOpenFavoritesRequestId(playerOpenFavoritesRequestIdRef.current);
+      const structuredContent = {
+        status: 'applied',
+        permission: 'user_approval',
+        name: 'favorites_propose_categorization',
+        createdCategories: result.createdCategories,
+        assignedVideos: result.assignedVideos,
+      };
+      await invoke('agent_bridge_resolve', {
+        requestId: pending.requestId,
+        result: {
+          content: [
+            {
+              type: 'text',
+              text: `用户已确认并应用收藏视频智能归类：新建 ${result.createdCategories} 个分类、归类 ${result.assignedVideos} 个视频。`,
+            },
+          ],
+          structuredContent,
+        },
+        error: null,
+      }).catch(() => undefined);
+    } catch (error) {
+      setCliFavoritesProposalError(
+        errorMessage(error, '应用收藏视频分类提案失败。'),
+      );
+    } finally {
+      setCliFavoritesProposalBusy(false);
     }
   };
 
@@ -6611,6 +6718,12 @@ export default function App() {
                   request?.id === id ? null : request,
                 )
               }
+              openFavoritesRequestId={playerOpenFavoritesRequestId}
+              onOpenFavoritesRequestHandled={(id) =>
+                setPlayerOpenFavoritesRequestId((current) =>
+                  current === id ? null : current,
+                )
+              }
               onSendTerminalCommand={(text, execute = false) => {
                 setTerminalOpen(true);
                 if (text) {
@@ -7543,6 +7656,16 @@ export default function App() {
           error={cliLearningPathProposalError}
           onCancel={() => void resolveCliLearningPathProposal(false)}
           onConfirm={() => void resolveCliLearningPathProposal(true)}
+        />
+      )}
+      {cliFavoritesProposal && (
+        <FavoritesProposalDialog
+          proposal={cliFavoritesProposal.proposal}
+          sourceLabel="cli"
+          busy={cliFavoritesProposalBusy}
+          error={cliFavoritesProposalError}
+          onCancel={() => void resolveCliFavoritesProposal(false)}
+          onConfirm={() => void resolveCliFavoritesProposal(true)}
         />
       )}
       {terminalCommandConfirmation && (

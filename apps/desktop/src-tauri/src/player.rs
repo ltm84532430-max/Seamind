@@ -185,6 +185,57 @@ pub fn player_course_save(
 }
 
 #[tauri::command(async)]
+pub fn player_favorites_snapshot(app: AppHandle) -> Result<store::FavoritesSnapshot, String> {
+    store::favorites_snapshot(&open(&app)?)
+}
+
+#[tauri::command(async)]
+pub fn player_favorite_category_save(
+    app: AppHandle,
+    input: store::FavoriteCategoryInput,
+) -> Result<store::FavoriteCategory, String> {
+    store::favorite_category_save(&open(&app)?, &input, now())
+}
+
+#[tauri::command(async)]
+pub fn player_favorite_category_delete(app: AppHandle, category_id: String) -> Result<(), String> {
+    store::favorite_category_delete(&open(&app)?, &category_id, now())
+}
+
+#[tauri::command(async)]
+pub fn player_favorite_categories_reorder(
+    app: AppHandle,
+    category_ids: Vec<String>,
+) -> Result<Vec<store::FavoriteCategory>, String> {
+    store::favorite_categories_reorder(&open(&app)?, &category_ids, now())
+}
+
+#[tauri::command(async)]
+pub fn player_favorite_assign(
+    app: AppHandle,
+    video_ids: Vec<String>,
+    category_id: Option<String>,
+    target_index: Option<usize>,
+) -> Result<(), String> {
+    store::favorite_assign_category(
+        &open(&app)?,
+        &video_ids,
+        category_id.as_deref(),
+        target_index,
+        now(),
+    )
+}
+
+#[tauri::command(async)]
+pub fn player_favorite_set_note(
+    app: AppHandle,
+    video_id: String,
+    note: Option<String>,
+) -> Result<(), String> {
+    store::favorite_set_note(&open(&app)?, &video_id, note.as_deref(), now())
+}
+
+#[tauri::command(async)]
 pub fn player_learning_path_get(
     app: AppHandle,
     path_id: String,

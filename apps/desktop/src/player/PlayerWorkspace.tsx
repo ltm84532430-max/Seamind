@@ -13,6 +13,7 @@ import type { LearningPathProposal } from '../agent/types';
 import ChannelView from './ChannelView';
 import CollectionView from './CollectionView';
 import FeedView from './FeedView';
+import FavoritesView from './FavoritesView';
 import { PlayerHostContext, viewKey } from './host';
 import type { PlayerHost, PlayerView } from './host';
 import LearningPathProposalDialog from './LearningPathProposalDialog';
@@ -89,6 +90,8 @@ export default function PlayerWorkspace({
   capabilities,
   openLearningPathRequest = null,
   onOpenLearningPathRequestHandled,
+  openFavoritesRequestId = null,
+  onOpenFavoritesRequestHandled,
   onSendTerminalCommand,
   onExportMarkdownToMindmap,
 }: {
@@ -97,6 +100,8 @@ export default function PlayerWorkspace({
   capabilities: AgentCapabilities;
   openLearningPathRequest?: { id: number; pathId: string } | null;
   onOpenLearningPathRequestHandled?(id: number): void;
+  openFavoritesRequestId?: number | null;
+  onOpenFavoritesRequestHandled?(id: number): void;
   onSendTerminalCommand?: (text: string, execute?: boolean) => void;
   onExportMarkdownToMindmap?: (title: string, markdown: string) => void;
 }) {
@@ -232,6 +237,23 @@ export default function PlayerWorkspace({
     reloadOverview,
     go,
     onOpenLearningPathRequestHandled,
+  ]);
+
+  const handledFavoritesRequestRef = useRef<number | null>(null);
+  useEffect(() => {
+    const requestId = openFavoritesRequestId;
+    if (!requestId || handledFavoritesRequestRef.current === requestId) return;
+    handledFavoritesRequestRef.current = requestId;
+    void (async () => {
+      await reloadOverview();
+      go({ kind: 'favorites' });
+      onOpenFavoritesRequestHandled?.(requestId);
+    })();
+  }, [
+    openFavoritesRequestId,
+    reloadOverview,
+    go,
+    onOpenFavoritesRequestHandled,
   ]);
 
   const openVideo = useCallback(
@@ -431,6 +453,7 @@ export default function PlayerWorkspace({
       settings: overview?.settings ?? defaultPlayerSettings,
       channels: overview?.channels ?? [],
       playlists: overview?.playlists ?? [],
+      favoriteCategories: overview?.favoriteCategories ?? [],
       learningPaths: overview?.learningPaths ?? [],
       openVideo: (item, queue, startOverride) =>
         void openVideo(item, queue, startOverride),
@@ -438,6 +461,16 @@ export default function PlayerWorkspace({
       go,
       toggleFavorite: (item) =>
         void toggleInList(item, FAVORITES_ID, 'favorite'),
+      assignFavoriteCategory: async (item, categoryId) => {
+        try {
+          await playerApi.storeVideos([inputFromItem(item)]);
+          await playerApi.favoriteAssign([item.videoId], categoryId, null);
+          patch(item.videoId, { favorite: true });
+          void reloadOverview();
+        } catch (error) {
+          notify(errorText(error, '分配分类失败'), 'error');
+        }
+      },
       toggleWatchLater: (item) =>
         void toggleInList(item, WATCH_LATER_ID, 'watchLater'),
       toggleWatched,
@@ -452,6 +485,7 @@ export default function PlayerWorkspace({
       openChannel,
       go,
       toggleInList,
+      patch,
       toggleWatched,
       notify,
       reloadOverview,
@@ -477,6 +511,18 @@ export default function PlayerWorkspace({
       case 'channel':
         listView = (
           <ChannelView key={viewKey(view)} channelId={view.channelId} />
+        );
+        break;
+      case 'favorites':
+        listView = (
+          <FavoritesView
+            key="favorites-board"
+            bridges={{
+              aiProvider: provider,
+              agentCapabilities: capabilities,
+              onSendTerminalCommand,
+            }}
+          />
         );
         break;
       case 'remote-playlist':
@@ -565,7 +611,7 @@ export default function PlayerWorkspace({
           ref={mainRef}
           className={`player-main${watching ? ' is-watching' : ''}${
             !watching && view.kind === 'learning-path' ? ' is-canvas' : ''
-          }`}
+          }${!watching && view.kind === 'favorites' ? ' is-favorites-board' : ''}`}
         >
           {loadError && !overview && (
             <StateMessage
