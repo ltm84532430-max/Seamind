@@ -194,20 +194,50 @@
   border-right: 1px solid var(--player-line);
   background: var(--player-panel);
   transition:
-    margin-left 0.22s cubic-bezier(0.2, 0, 0, 1),
-    opacity 0.18s ease;
+    width 0.18s cubic-bezier(0.2, 0, 0, 1),
+    min-width 0.18s cubic-bezier(0.2, 0, 0, 1),
+    max-width 0.18s cubic-bezier(0.2, 0, 0, 1);
   z-index: 5;
+  user-select: none;
 }
 
-.player-page.is-sidebar-collapsed .player-sidebar {
-  margin-left: -252px;
-  opacity: 0;
-  pointer-events: none;
+.player-sidebar.is-collapsed {
+  width: 42px;
+  min-width: 42px;
+  max-width: 42px;
 }
+
+.player-sidebar-header {
+  height: 52px;
+  display: flex;
+  align-items: center;
+  flex: 0 0 52px;
+  border-bottom: 1px solid var(--player-line);
+}
+
+.player-sidebar.is-collapsed .player-sidebar-header {
+  padding: 0;
+  justify-content: center;
+  border-bottom: 0;
+}
+
+.player-sidebar-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.player-sidebar.is-collapsed .player-sidebar-body {
+  display: none !important;
+}
+
 .player-open {
   display: flex;
   gap: 6px;
-  padding: 12px 12px 8px;
+  padding: 0 10px;
+  width: 100%;
+  align-items: center;
 }
 .player-open input {
   flex: 1;
@@ -1195,8 +1225,10 @@
     min-width: 210px;
     max-width: 210px;
   }
-  .player-page.is-sidebar-collapsed .player-sidebar {
-    margin-left: -210px;
+  .player-sidebar.is-collapsed {
+    width: 42px;
+    min-width: 42px;
+    max-width: 42px;
   }
   .player-view-header {
     padding: 10px 16px;
@@ -1209,22 +1241,22 @@
   }
 }
 
-/* ---- Sidebar Collapse & Expand Controls ---- */
+/* ---- Sidebar Collapse & Expand Controls (Unified with Library Rail) ---- */
 
 .player-sidebar-collapse-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   flex: none;
   border: 1px solid var(--player-line-strong);
-  border-radius: 2px;
+  border-radius: 4px;
   background: var(--player-panel-alt);
   color: var(--player-muted);
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: all 0.14s ease;
 }
 
 .player-sidebar-collapse-btn:hover {
@@ -1233,81 +1265,8 @@
   background: rgba(223, 115, 91, 0.08);
 }
 
-.player-sidebar-edge-notch {
-  position: absolute;
-  top: 76px;
-  right: -12px;
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 12px;
-  height: 36px;
-  padding: 0;
-  border: 1px solid var(--player-line-strong);
-  border-left: none;
-  border-radius: 0 4px 4px 0;
-  background: var(--player-panel);
-  color: var(--player-muted);
-  cursor: pointer;
-  transition: all 0.15s ease;
-  box-shadow: 2px 2px 8px rgba(0, 0, 0, 0.22);
-}
-
-.player-sidebar-edge-notch:hover {
-  width: 15px;
-  right: -15px;
-  border-color: var(--player-accent);
-  color: var(--player-accent);
-  background: var(--player-panel-alt);
-}
-
-.player-sidebar-expand-tab {
-  position: absolute;
-  top: 76px;
-  left: 0;
-  z-index: 20;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 36px;
-  padding: 0 8px 0 4px;
-  border: 1px solid var(--player-line-strong);
-  border-left: none;
-  border-radius: 0 4px 4px 0;
-  background: var(--player-panel);
-  color: var(--player-muted);
-  font-family: inherit;
-  font-size: 11px;
-  cursor: pointer;
-  user-select: none;
-  box-shadow: 2px 2px 10px rgba(0, 0, 0, 0.32);
-  transition: all 0.16s ease;
-  animation: playerTabSlideIn 0.18s ease-out;
-}
-
-@keyframes playerTabSlideIn {
-  from {
-    transform: translateX(-100%);
-  }
-  to {
-    transform: translateX(0);
-  }
-}
-
-.player-sidebar-expand-tab:hover {
-  padding-right: 11px;
-  border-color: var(--player-accent);
-  color: var(--player-ink);
-  background: var(--player-panel-alt);
-}
-
-.player-sidebar-expand-tab:hover svg {
-  color: var(--player-accent);
-}
-
-.player-sidebar-expand-text {
-  font-size: 11px;
-  letter-spacing: 0.2px;
-  white-space: nowrap;
+.player-sidebar-collapse-btn.is-collapsed {
+  width: 28px;
+  height: 28px;
+  margin: 0 auto;
 }

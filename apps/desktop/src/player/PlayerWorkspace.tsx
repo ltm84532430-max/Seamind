@@ -653,27 +653,6 @@ export default function PlayerWorkspace({
           collapsed={sidebarCollapsed}
           onToggleCollapse={toggleSidebar}
         />
-        {sidebarCollapsed && (
-          <button
-            type="button"
-            className="player-sidebar-expand-tab"
-            onClick={toggleSidebar}
-            title="展开侧边栏 (快捷键 Ctrl+B)"
-            aria-label="展开侧边栏"
-          >
-            <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-              <path
-                d="M6 3l5 5-5 5"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-            <span className="player-sidebar-expand-text">展开导航</span>
-          </button>
-        )}
         <main
           ref={mainRef}
           className={`player-main${watching ? ' is-watching' : ''}${

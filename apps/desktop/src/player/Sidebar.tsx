@@ -126,228 +126,250 @@ export default function Sidebar({
       aria-label="播放器导航"
       aria-expanded={!collapsed}
     >
-      <form className="player-open" onSubmit={(event) => void submit(event)}>
-        <input
-          type="text"
-          value={link}
-          placeholder="粘贴 YouTube 链接或 @名称"
-          title="可以粘贴视频、播放列表或频道的链接，也可以输入 @名称 或频道 ID，按回车打开"
-          aria-label="粘贴 YouTube 链接"
-          spellCheck={false}
-          onChange={(event) => setLink(event.target.value)}
-        />
-        <button
-          type="submit"
-          className="player-open-button"
-          disabled={!link.trim() || opening}
-          title="打开"
-          aria-label="打开"
-        >
-          {opening ? '…' : '打开'}
-        </button>
-        {onToggleCollapse && (
-          <button
-            type="button"
-            className="player-sidebar-collapse-btn"
-            onClick={onToggleCollapse}
-            title="收起侧边栏 (快捷键 Ctrl+B)"
-            aria-label="收起侧边栏"
+      <div className="player-sidebar-header">
+        {!collapsed ? (
+          <form
+            className="player-open"
+            onSubmit={(event) => void submit(event)}
           >
-            <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-              <path
-                d="M10 3L5 8l5 5"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </button>
-        )}
-      </form>
-      {opening && slowOpen && (
-        <p className="player-open-hint" role="status">
-          {SLOW_LOOKUP_TEXT}
-        </p>
-      )}
-      {openError && (
-        <p className="player-open-error" role="alert">
-          <WarningIcon />
-          {openError}
-        </p>
-      )}
-
-      <nav className="player-nav" aria-label="播放器">
-        <NavItem
-          view={view}
-          target={{ kind: 'feed' }}
-          icon={<FeedIcon />}
-          label="动态"
-          onGo={onGo}
-        />
-        <NavItem
-          view={view}
-          target={{ kind: 'favorites' }}
-          icon={<StarIcon />}
-          label="收藏"
-          badge={count(FAVORITES_ID) ? String(count(FAVORITES_ID)) : undefined}
-          onGo={onGo}
-        />
-        <NavItem
-          view={view}
-          target={{ kind: 'watch-later' }}
-          icon={<ClockIcon />}
-          label="稍后看"
-          badge={
-            count(WATCH_LATER_ID) ? String(count(WATCH_LATER_ID)) : undefined
-          }
-          onGo={onGo}
-        />
-        <NavItem
-          view={view}
-          target={{ kind: 'history' }}
-          icon={<HistoryIcon />}
-          label="历史"
-          onGo={onGo}
-        />
-
-        <h3 className="player-nav-heading">学习路径</h3>
-        <NavItem
-          view={view}
-          target={{ kind: 'learning-paths-home' }}
-          icon={<PathTreeIcon />}
-          label="全部路径"
-          badge={
-            learningPaths.length ? String(learningPaths.length) : undefined
-          }
-          onGo={onGo}
-        />
-        {learningPaths.map((path) => (
-          <NavItem
-            key={path.pathId}
-            view={view}
-            target={{ kind: 'learning-path', pathId: path.pathId }}
-            icon={<PathTreeIcon />}
-            label={path.title}
-            badge={`${path.finishedCount}/${path.videoCount}`}
-            onGo={onGo}
-          />
-        ))}
-
-        {courses.length > 0 && (
-          <>
-            <h3 className="player-nav-heading">课程</h3>
-            {courses.map((course) => (
-              <NavItem
-                key={course.playlistId}
-                view={view}
-                target={{ kind: 'course', playlistId: course.playlistId }}
-                icon={<CourseIcon />}
-                label={course.name}
-                badge={`${course.finishedCount}/${course.itemCount}`}
-                onGo={onGo}
-              />
-            ))}
-          </>
-        )}
-
-        <h3 className="player-nav-heading">
-          订阅
-          {channels.length > 0 && (
-            <span className="player-nav-count">{channels.length}</span>
-          )}
-        </h3>
-        {channels.length >= FILTER_FROM && (
-          <input
-            type="search"
-            className="player-filter"
-            value={filter}
-            placeholder="筛选订阅"
-            aria-label="筛选订阅"
-            onChange={(event) => setFilter(event.target.value)}
-          />
-        )}
-        {channels.length === 0 && (
-          <p className="player-nav-empty">
-            还没有订阅。粘贴频道链接，或导入订阅文件。
-          </p>
-        )}
-        {shown.map((channel) => {
-          const current = isCurrent(view, {
-            kind: 'channel',
-            channelId: channel.channelId,
-          });
-          return (
+            <input
+              type="text"
+              value={link}
+              placeholder="粘贴 YouTube 链接或 @名称"
+              title="可以粘贴视频、播放列表或频道的链接，也可以输入 @名称 或频道 ID，按回车打开"
+              aria-label="粘贴 YouTube 链接"
+              spellCheck={false}
+              onChange={(event) => setLink(event.target.value)}
+            />
             <button
-              key={channel.channelId}
-              type="button"
-              className={`player-nav-item is-channel${current ? ' is-current' : ''}`}
-              aria-current={current ? 'page' : undefined}
-              title={
-                channel.lastError
-                  ? `${channel.name}\n上次更新失败：${channel.lastError}`
-                  : channel.name
-              }
-              onClick={() =>
-                onGo({ kind: 'channel', channelId: channel.channelId })
-              }
+              type="submit"
+              className="player-open-button"
+              disabled={!link.trim() || opening}
+              title="打开"
+              aria-label="打开"
             >
-              <Avatar name={channel.name} url={channel.avatarUrl} size={22} />
-              <span className="player-nav-label">{channel.name}</span>
-              {channel.lastError && (
-                <span className="player-nav-warning" aria-label="更新失败">
-                  <WarningIcon />
-                </span>
-              )}
+              {opening ? '…' : '打开'}
             </button>
-          );
-        })}
-        {channels.length > 0 && shown.length === 0 && (
-          <p className="player-nav-empty">没有匹配的订阅。</p>
+            {onToggleCollapse && (
+              <button
+                type="button"
+                className="player-sidebar-collapse-btn"
+                onClick={onToggleCollapse}
+                title="收起侧边栏 (快捷键 Ctrl+B)"
+                aria-label="收起侧边栏"
+              >
+                <svg
+                  viewBox="0 0 16 16"
+                  width="13"
+                  height="13"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M10 3L5 8l5 5"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            )}
+          </form>
+        ) : (
+          onToggleCollapse && (
+            <button
+              type="button"
+              className="player-sidebar-collapse-btn is-collapsed"
+              onClick={onToggleCollapse}
+              title="展开侧边栏 (快捷键 Ctrl+B)"
+              aria-label="展开侧边栏"
+            >
+              <svg
+                viewBox="0 0 16 16"
+                width="14"
+                height="14"
+                aria-hidden="true"
+              >
+                <path
+                  d="M6 3l5 5-5 5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          )
         )}
-      </nav>
-
-      <div className="player-sidebar-footer">
-        <button
-          type="button"
-          className="player-footer-button"
-          onClick={onImport}
-          title="从 NewPipe、Google Takeout 或 OPML 文件导入订阅"
-        >
-          <PlusIcon />
-          导入订阅
-        </button>
-        <button
-          type="button"
-          className="player-footer-button"
-          onClick={onSettings}
-        >
-          <SettingsIcon />
-          设置
-        </button>
       </div>
 
-      {onToggleCollapse && (
-        <button
-          type="button"
-          className="player-sidebar-edge-notch"
-          onClick={onToggleCollapse}
-          title="收起侧边栏 (快捷键 Ctrl+B)"
-          aria-label="收起侧边栏"
-        >
-          <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">
-            <path
-              d="M10 3L5 8l5 5"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+      <div className="player-sidebar-body">
+        {opening && slowOpen && (
+          <p className="player-open-hint" role="status">
+            {SLOW_LOOKUP_TEXT}
+          </p>
+        )}
+        {openError && (
+          <p className="player-open-error" role="alert">
+            <WarningIcon />
+            {openError}
+          </p>
+        )}
+
+        <nav className="player-nav" aria-label="播放器">
+          <NavItem
+            view={view}
+            target={{ kind: 'feed' }}
+            icon={<FeedIcon />}
+            label="动态"
+            onGo={onGo}
+          />
+          <NavItem
+            view={view}
+            target={{ kind: 'favorites' }}
+            icon={<StarIcon />}
+            label="收藏"
+            badge={
+              count(FAVORITES_ID) ? String(count(FAVORITES_ID)) : undefined
+            }
+            onGo={onGo}
+          />
+          <NavItem
+            view={view}
+            target={{ kind: 'watch-later' }}
+            icon={<ClockIcon />}
+            label="稍后看"
+            badge={
+              count(WATCH_LATER_ID) ? String(count(WATCH_LATER_ID)) : undefined
+            }
+            onGo={onGo}
+          />
+          <NavItem
+            view={view}
+            target={{ kind: 'history' }}
+            icon={<HistoryIcon />}
+            label="历史"
+            onGo={onGo}
+          />
+
+          <h3 className="player-nav-heading">学习路径</h3>
+          <NavItem
+            view={view}
+            target={{ kind: 'learning-paths-home' }}
+            icon={<PathTreeIcon />}
+            label="全部路径"
+            badge={
+              learningPaths.length ? String(learningPaths.length) : undefined
+            }
+            onGo={onGo}
+          />
+          {learningPaths.map((path) => (
+            <NavItem
+              key={path.pathId}
+              view={view}
+              target={{ kind: 'learning-path', pathId: path.pathId }}
+              icon={<PathTreeIcon />}
+              label={path.title}
+              badge={`${path.finishedCount}/${path.videoCount}`}
+              onGo={onGo}
             />
-          </svg>
-        </button>
-      )}
+          ))}
+
+          {courses.length > 0 && (
+            <>
+              <h3 className="player-nav-heading">课程</h3>
+              {courses.map((course) => (
+                <NavItem
+                  key={course.playlistId}
+                  view={view}
+                  target={{ kind: 'course', playlistId: course.playlistId }}
+                  icon={<CourseIcon />}
+                  label={course.name}
+                  badge={`${course.finishedCount}/${course.itemCount}`}
+                  onGo={onGo}
+                />
+              ))}
+            </>
+          )}
+
+          <h3 className="player-nav-heading">
+            订阅
+            {channels.length > 0 && (
+              <span className="player-nav-count">{channels.length}</span>
+            )}
+          </h3>
+          {channels.length >= FILTER_FROM && (
+            <input
+              type="search"
+              className="player-filter"
+              value={filter}
+              placeholder="筛选订阅"
+              aria-label="筛选订阅"
+              onChange={(event) => setFilter(event.target.value)}
+            />
+          )}
+          {channels.length === 0 && (
+            <p className="player-nav-empty">
+              还没有订阅。粘贴频道链接，或导入订阅文件。
+            </p>
+          )}
+          {shown.map((channel) => {
+            const current = isCurrent(view, {
+              kind: 'channel',
+              channelId: channel.channelId,
+            });
+            return (
+              <button
+                key={channel.channelId}
+                type="button"
+                className={`player-nav-item is-channel${current ? ' is-current' : ''}`}
+                aria-current={current ? 'page' : undefined}
+                title={
+                  channel.lastError
+                    ? `${channel.name}\n上次更新失败：${channel.lastError}`
+                    : channel.name
+                }
+                onClick={() =>
+                  onGo({ kind: 'channel', channelId: channel.channelId })
+                }
+              >
+                <Avatar name={channel.name} url={channel.avatarUrl} size={22} />
+                <span className="player-nav-label">{channel.name}</span>
+                {channel.lastError && (
+                  <span className="player-nav-warning" aria-label="更新失败">
+                    <WarningIcon />
+                  </span>
+                )}
+              </button>
+            );
+          })}
+          {channels.length > 0 && shown.length === 0 && (
+            <p className="player-nav-empty">没有匹配的订阅。</p>
+          )}
+        </nav>
+
+        <div className="player-sidebar-footer">
+          <button
+            type="button"
+            className="player-footer-button"
+            onClick={onImport}
+            title="从 NewPipe、Google Takeout 或 OPML 文件导入订阅"
+          >
+            <PlusIcon />
+            导入订阅
+          </button>
+          <button
+            type="button"
+            className="player-footer-button"
+            onClick={onSettings}
+          >
+            <SettingsIcon />
+            设置
+          </button>
+        </div>
+      </div>
     </aside>
   );
 }
