@@ -75,6 +75,15 @@ export function epubProgressKey(book: EpubBookDocument) {
   return `library:${book.relativePath}:${book.fileSize}:${book.updatedAt}`;
 }
 
+/** Stable within a library when the library root moves; file changes are tracked by epubProgressKey. */
+export function epubBookIdentity(relativePath: string) {
+  return relativePath
+    .normalize('NFC')
+    .replace(/\\/g, '/')
+    .replace(/^\.\//, '')
+    .toLocaleLowerCase('en-US');
+}
+
 export function loadEpubBookMetadata(
   progressKey: string,
 ): EpubBookMetadata | null {

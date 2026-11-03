@@ -1,5 +1,9 @@
 import type { EpubBookDocument } from '../library';
-import { epubProgressKey, loadEpubReadingPlan } from '../ebook-storage';
+import {
+  epubBookIdentity,
+  epubProgressKey,
+  loadEpubReadingPlan,
+} from '../ebook-storage';
 import { loadLearningPaths } from '../ebook-learning-path';
 import type { LearningPathDetail } from '../player/types';
 import type { ImportPlan, TaskInput, TaskResource } from './types';
@@ -47,11 +51,12 @@ function bookResource(
   return {
     resource: {
       kind: 'ebook',
-      resourceId: freshId(),
+      resourceId: `ebook:${epubBookIdentity(relativePath)}`,
       title,
       rootPath,
       relativePath,
       progressKey,
+      bookId: epubBookIdentity(relativePath),
     },
     missing: !book,
   };
@@ -137,11 +142,12 @@ export function ebookImportCandidates(
     entry.resources = [
       {
         kind: 'ebook',
-        resourceId: freshId(),
+        resourceId: `ebook:${epubBookIdentity(book.relativePath)}`,
         title: book.title,
         rootPath,
         relativePath: book.relativePath,
         progressKey,
+        bookId: epubBookIdentity(book.relativePath),
         href: plan.startChapterHref || null,
         targetUnit: 'chapters',
         targetValue: plan.targetChapters,

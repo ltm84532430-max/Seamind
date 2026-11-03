@@ -46,6 +46,18 @@ export const taskApi = {
     tasksChanged();
     return result;
   },
+  syncPlan: async (
+    source: ImportPlan,
+    targetPlanId: string | null,
+    newPlanTitle: string | null,
+    createNew: boolean,
+  ) => {
+    const result = await invoke<ImportResult>('learning_tasks_sync_plan', {
+      request: { source, targetPlanId, newPlanTitle, createNew },
+    });
+    tasksChanged();
+    return result;
+  },
   archiveDone: async (planId?: string | null) => {
     const count = await invoke<number>('learning_tasks_archive_done', {
       planId: planId ?? null,

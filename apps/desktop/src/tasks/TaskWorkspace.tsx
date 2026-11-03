@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { LibrarySnapshot } from '../library';
 import {
+  epubBookIdentity,
   epubProgressKey,
   getEpubReadingPlanCompleted,
   loadEpubBookMetadata,
@@ -36,6 +37,40 @@ export interface TaskCreateRequest {
   title?: string;
 }
 
+type ResourceTargetUnit = '' | 'chapters' | 'words' | 'seconds';
+type TaskResourceDraft = {
+  key: string;
+  kind: TaskResource['kind'];
+  original: TaskResource | null;
+  bookPath: string;
+  chapterHref: string;
+  videoInput: string;
+  startSeconds: string;
+  targetUnit: ResourceTargetUnit;
+  targetValue: string;
+  manualValue: string;
+};
+
+function resourceDraft(
+  resource?: TaskResource,
+  kind: TaskResource['kind'] = 'ebook',
+): TaskResourceDraft {
+  return {
+    key: crypto.randomUUID(),
+    kind: resource?.kind ?? kind,
+    original: resource ?? null,
+    bookPath: resource?.kind === 'ebook' ? (resource.relativePath ?? '') : '',
+    chapterHref: resource?.kind === 'ebook' ? (resource.href ?? '') : '',
+    videoInput: resource?.kind === 'youtube' ? resource.resourceId : '',
+    startSeconds: String(resource?.startSeconds ?? 0),
+    targetUnit: resource?.targetUnit ?? '',
+    targetValue:
+      resource?.targetValue == null ? '' : String(resource.targetValue),
+    manualValue:
+      resource?.manualValue == null ? '' : String(resource.manualValue),
+  };
+}
+
 interface Props {
   library: LibrarySnapshot | null;
   createRequest: TaskCreateRequest | null;
@@ -56,7 +91,7 @@ const statusName: Record<TaskStatus, string> = {
   done: '已完成',
   cancelled: '已取消',
 };
-const emptySnapshot: TaskSnapshot = { plans: [], tasks: [] };
+const emptySnapshot: TaskSnapshot = { plans: [], tasks: [], sources: [] };
 const TASK_VIEW_KEY = 'seamind:task-view:v1';
 
 function readTaskView(): 'board' | 'list' | 'calendar' {
@@ -177,34 +212,29 @@ function formatSeconds(value: number) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 }
 
-function resourceProgress(
+function resourceTargetProgress(
   resource: TaskResource,
   library: LibrarySnapshot | null,
   watch: Record<string, WatchState | null | 'error'>,
-): string {
+): number | null {
+  if (!resource.targetUnit || !resource.targetValue) return null;
   if (resource.kind === 'youtube') {
     const state = watch[resource.resourceId];
-    if (state === undefined) return '正在读取观看进度';
-    if (state === 'error') return '观看进度暂时不可用';
-    if (!state) return '暂无观看记录';
-    const duration = state.durationSeconds
-      ? ` / ${formatSeconds(state.durationSeconds)}`
-      : '';
-    return `观看 ${formatSeconds(state.progressSeconds)}${duration}${state.finished ? ' · 视频已看完' : ''}`;
+    if (!state || state === 'error') return null;
+    return Math.max(state.progressSeconds, resource.manualValue ?? 0);
   }
-  if (!library?.rootPath || library.rootPath !== resource.rootPath)
-    return '书库未打开或已切换';
+  if (!library?.rootPath || library.rootPath !== resource.rootPath) return null;
   const book = library.books.find(
-    (item) => item.relativePath === resource.relativePath,
+    (item) =>
+      (resource.bookId &&
+        epubBookIdentity(item.relativePath) === resource.bookId) ||
+      item.relativePath === resource.relativePath,
   );
-  if (!book) return '书籍未找到，可编辑任务重新关联';
-  const currentKey = epubProgressKey(book);
-  if (resource.progressKey && currentKey !== resource.progressKey)
-    return '书籍文件已变化，请确认并重新关联';
-  const key = resource.progressKey || currentKey;
+  if (!book) return null;
+  const key = resource.progressKey || epubProgressKey(book);
   const metadata = loadEpubBookMetadata(key);
   const activity = loadEpubReadingActivity(key);
-  if (resource.targetUnit === 'words' && resource.targetValue) {
+  if (resource.targetUnit === 'words') {
     const furthest = Math.max(
       metadata?.progress ?? 0,
       activity?.furthestProgress ?? 0,
@@ -216,10 +246,76 @@ function resourceProgress(
           (activity?.estimatedTotalWords ?? 0),
       ),
     );
-    const completed = Math.min(
-      resource.targetValue,
-      Math.max(resource.manualValue ?? 0, estimate),
-    );
+    return Math.max(resource.manualValue ?? 0, estimate);
+  }
+  if (resource.targetUnit === 'chapters') {
+    const readingPlan = loadEpubReadingPlan(key);
+    const matchesPlan =
+      readingPlan &&
+      readingPlan.targetChapters === resource.targetValue &&
+      readingPlan.startChapterIndex === resource.baseline;
+    return matchesPlan
+      ? getEpubReadingPlanCompleted(readingPlan)
+      : Math.max(
+          0,
+          (metadata?.currentChapterIndex ?? 0) - (resource.baseline ?? 0),
+        );
+  }
+  return null;
+}
+
+function taskTargetsReached(
+  task: LearningTask,
+  library: LibrarySnapshot | null,
+  watch: Record<string, WatchState | null | 'error'>,
+) {
+  return (
+    task.resources.length > 0 &&
+    task.resources.every((resource) => {
+      if (!resource.targetUnit || !resource.targetValue) return false;
+      const progress = resourceTargetProgress(resource, library, watch);
+      return progress !== null && progress >= resource.targetValue;
+    })
+  );
+}
+
+function resourceProgress(
+  resource: TaskResource,
+  library: LibrarySnapshot | null,
+  watch: Record<string, WatchState | null | 'error'>,
+): string {
+  if (resource.kind === 'youtube') {
+    const state = watch[resource.resourceId];
+    if (state === undefined) return '正在读取观看进度';
+    if (state === 'error') return '观看进度暂时不可用';
+    if (!state) return '暂无观看记录';
+    const targetProgress = resourceTargetProgress(resource, library, watch);
+    if (resource.targetUnit === 'seconds' && resource.targetValue) {
+      const completed = targetProgress ?? 0;
+      return `目标进度 ${formatSeconds(completed)} / ${formatSeconds(resource.targetValue)}${completed >= resource.targetValue ? ' · 已达成' : ''}`;
+    }
+    const duration = state.durationSeconds
+      ? ` / ${formatSeconds(state.durationSeconds)}`
+      : '';
+    return `观看 ${formatSeconds(state.progressSeconds)}${duration}${state.finished ? ' · 视频已看完' : ''}`;
+  }
+  if (!library?.rootPath || library.rootPath !== resource.rootPath)
+    return '书库未打开或已切换';
+  const book = library.books.find(
+    (item) =>
+      (resource.bookId &&
+        epubBookIdentity(item.relativePath) === resource.bookId) ||
+      item.relativePath === resource.relativePath,
+  );
+  if (!book) return '书籍未找到，可编辑任务重新关联';
+  const currentKey = epubProgressKey(book);
+  if (resource.progressKey && currentKey !== resource.progressKey)
+    return '书籍文件已变化，请确认并重新关联';
+  const key = resource.progressKey || currentKey;
+  const metadata = loadEpubBookMetadata(key);
+  if (resource.targetUnit === 'words' && resource.targetValue) {
+    const estimate = resourceTargetProgress(resource, library, watch) ?? 0;
+    const completed = Math.min(resource.targetValue, estimate);
     return `估算 / 手动 ${completed.toLocaleString()} / ${resource.targetValue.toLocaleString()} 字`;
   }
   if (resource.targetUnit === 'chapters' && resource.targetValue) {
@@ -228,12 +324,7 @@ function resourceProgress(
       readingPlan &&
       readingPlan.targetChapters === resource.targetValue &&
       readingPlan.startChapterIndex === resource.baseline;
-    const chapters = matchesPlan
-      ? getEpubReadingPlanCompleted(readingPlan)
-      : Math.max(
-          0,
-          (metadata?.currentChapterIndex ?? 0) - (resource.baseline ?? 0),
-        );
+    const chapters = resourceTargetProgress(resource, library, watch) ?? 0;
     return `${matchesPlan ? '章节进度' : '当前章节估算'} ${Math.min(chapters, resource.targetValue)} / ${resource.targetValue}`;
   }
   return metadata
@@ -251,6 +342,9 @@ export default function TaskWorkspace({
 }: Props) {
   const [snapshot, setSnapshot] = useState<TaskSnapshot>(emptySnapshot);
   const [loading, setLoading] = useState(true);
+  const [databaseConnected, setDatabaseConnected] = useState<boolean | null>(
+    null,
+  );
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [planFilter, setPlanFilter] = useState('all');
@@ -259,22 +353,17 @@ export default function TaskWorkspace({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [newPlan, setNewPlan] = useState('');
   const [draft, setDraft] = useState<TaskInput | null>(null);
-  const [sourceKind, setSourceKind] = useState<'none' | 'ebook' | 'youtube'>(
-    'none',
-  );
-  const [bookPath, setBookPath] = useState('');
-  const [chapterHref, setChapterHref] = useState('');
-  const [videoInput, setVideoInput] = useState('');
-  const [startSeconds, setStartSeconds] = useState('0');
-  const [targetUnit, setTargetUnit] = useState<
-    '' | 'chapters' | 'words' | 'seconds'
-  >('');
-  const [targetValue, setTargetValue] = useState('');
-  const [manualValue, setManualValue] = useState('');
+  const [resourceDrafts, setResourceDrafts] = useState<TaskResourceDraft[]>([]);
   const [draftError, setDraftError] = useState('');
   const [saving, setSaving] = useState(false);
   const [candidates, setCandidates] = useState<ImportCandidate[] | null>(null);
+  const [selectedCandidateKeys, setSelectedCandidateKeys] = useState<string[]>(
+    [],
+  );
+  const [mergeTargetPlanId, setMergeTargetPlanId] = useState('new');
+  const [newPlanTitle, setNewPlanTitle] = useState('');
   const [importBusy, setImportBusy] = useState('');
+  const [playerConnected, setPlayerConnected] = useState<boolean | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [watch, setWatch] = useState<
     Record<string, WatchState | null | 'error'>
@@ -285,16 +374,28 @@ export default function TaskWorkspace({
     try {
       const next = await taskApi.snapshot();
       setSnapshot(next);
+      setDatabaseConnected(true);
       setError('');
     } catch (reason) {
+      setDatabaseConnected(false);
       setError(errorText(reason));
     } finally {
       setLoading(false);
     }
   }, []);
 
+  const refreshConnections = useCallback(async () => {
+    await reload();
+    try {
+      await playerApi.overview();
+      setPlayerConnected(true);
+    } catch {
+      setPlayerConnected(false);
+    }
+  }, [reload]);
+
   useEffect(() => {
-    void reload();
+    void refreshConnections();
     const refresh = () => void reload();
     const refreshProgress = () => setProgressRevision((value) => value + 1);
     window.addEventListener(TASKS_CHANGED_EVENT, refresh);
@@ -305,7 +406,7 @@ export default function TaskWorkspace({
       window.removeEventListener(RESOURCE_PROGRESS_EVENT, refreshProgress);
       window.removeEventListener('focus', refreshProgress);
     };
-  }, [reload]);
+  }, [reload, refreshConnections]);
 
   useEffect(() => {
     let current = true;
@@ -339,24 +440,40 @@ export default function TaskWorkspace({
   }, [snapshot.tasks, progressRevision]);
 
   const openDraft = useCallback((input: TaskInput) => {
-    const resource = input.resources[0];
     setDraft(input);
-    setSourceKind(resource?.kind ?? 'none');
-    setBookPath(
-      resource?.kind === 'ebook' ? (resource.relativePath ?? '') : '',
-    );
-    setChapterHref(resource?.kind === 'ebook' ? (resource.href ?? '') : '');
-    setVideoInput(resource?.kind === 'youtube' ? resource.resourceId : '');
-    setStartSeconds(String(resource?.startSeconds ?? 0));
-    setTargetUnit(resource?.targetUnit ?? '');
-    setTargetValue(
-      resource?.targetValue == null ? '' : String(resource.targetValue),
-    );
-    setManualValue(
-      resource?.manualValue == null ? '' : String(resource.manualValue),
+    setResourceDrafts(
+      input.resources.map((resource) => resourceDraft(resource)),
     );
     setDraftError('');
   }, []);
+
+  const updateResourceDraft = (
+    key: string,
+    update: Partial<TaskResourceDraft>,
+  ) => {
+    setResourceDrafts((current) =>
+      current.map((resource) =>
+        resource.key === key ? { ...resource, ...update } : resource,
+      ),
+    );
+  };
+
+  const addResourceDraft = (kind: TaskResource['kind']) => {
+    if (resourceDrafts.length >= 20) {
+      setDraftError('一个任务最多关联 20 个资源。');
+      return;
+    }
+    setResourceDrafts((current) => [
+      ...current,
+      resourceDraft(undefined, kind),
+    ]);
+  };
+
+  const removeResourceDraft = (key: string) => {
+    setResourceDrafts((current) =>
+      current.filter((resource) => resource.key !== key),
+    );
+  };
 
   useEffect(() => {
     if (!createRequest) return;
@@ -417,6 +534,76 @@ export default function TaskWorkspace({
   );
   const isBlocked = (entry: LearningTask) =>
     entry.prerequisiteIds.some((id) => byId.get(id)?.status !== 'done');
+  const allResources = snapshot.tasks.flatMap((entry) => entry.resources);
+  const ebookResources = allResources.filter(
+    (resource) => resource.kind === 'ebook',
+  );
+  const unlinkedEbookCount = ebookResources.filter(
+    (resource) =>
+      !library?.books.some(
+        (book) =>
+          (resource.bookId &&
+            epubBookIdentity(book.relativePath) === resource.bookId) ||
+          book.relativePath === resource.relativePath,
+      ),
+  ).length;
+  const ebookRebindCount = ebookResources.filter((resource) => {
+    const book = library?.books.find(
+      (item) =>
+        (resource.bookId &&
+          epubBookIdentity(item.relativePath) === resource.bookId) ||
+        item.relativePath === resource.relativePath,
+    );
+    return Boolean(
+      book &&
+        (resource.rootPath !== library?.rootPath ||
+          (resource.progressKey &&
+            epubProgressKey(book) !== resource.progressKey)),
+    );
+  }).length;
+  const videoResources = allResources.filter(
+    (resource) => resource.kind === 'youtube',
+  );
+  const videoErrorCount = videoResources.filter(
+    (resource) => watch[resource.resourceId] === 'error',
+  ).length;
+  const videoPendingCount = videoResources.filter(
+    (resource) => watch[resource.resourceId] === undefined,
+  ).length;
+  const removedSourceTaskCount = snapshot.sources.reduce(
+    (count, source) => count + source.removedCount,
+    0,
+  );
+  const ebookLinkNeedsRepair = (resource: TaskResource) => {
+    if (resource.kind !== 'ebook') return false;
+    const book = library?.books.find(
+      (item) =>
+        (resource.bookId &&
+          epubBookIdentity(item.relativePath) === resource.bookId) ||
+        item.relativePath === resource.relativePath,
+    );
+    return Boolean(
+      !book ||
+        resource.rootPath !== library?.rootPath ||
+        (resource.progressKey &&
+          epubProgressKey(book) !== resource.progressKey),
+    );
+  };
+  const retryVideoProgress = async (resourceId: string) => {
+    setWatch((current) => {
+      const next = { ...current };
+      delete next[resourceId];
+      return next;
+    });
+    try {
+      const state = await playerApi.watchState(resourceId);
+      setWatch((current) => ({ ...current, [resourceId]: state }));
+      setPlayerConnected(true);
+    } catch {
+      setWatch((current) => ({ ...current, [resourceId]: 'error' }));
+      setPlayerConnected(false);
+    }
+  };
 
   const changeView = (next: typeof view) => {
     setView(next);
@@ -454,14 +641,68 @@ export default function TaskWorkspace({
     }
   };
 
-  const openResource = async (resource: TaskResource) => {
+  const openResource = async (entry: LearningTask, resource: TaskResource) => {
     try {
-      await onOpenResource(resource);
+      let linkedResource = resource;
+      if (resource.kind === 'ebook') {
+        if (!library?.rootPath) {
+          throw new Error('先打开电子书库，再重试此关联。');
+        }
+        const identity =
+          resource.bookId ||
+          (resource.relativePath
+            ? epubBookIdentity(resource.relativePath)
+            : '');
+        const book = library.books.find(
+          (candidate) =>
+            (identity &&
+              epubBookIdentity(candidate.relativePath) === identity) ||
+            candidate.relativePath === resource.relativePath,
+        );
+        if (!book) {
+          throw new Error('找不到这本书。请编辑任务并从当前书库重新关联。');
+        }
+        const nextProgressKey = epubProgressKey(book);
+        const rootChanged = resource.rootPath !== library.rootPath;
+        const fileChanged =
+          Boolean(resource.progressKey) &&
+          resource.progressKey !== nextProgressKey;
+        if (rootChanged || fileChanged) {
+          const message = rootChanged
+            ? '这本书已在另一个书库中找到。重新关联后会使用当前书库路径，是否继续？'
+            : '书籍文件已更新。重新关联后会从当前文件版本读取进度，是否继续？';
+          if (!window.confirm(message)) return;
+        }
+        const identityChanged =
+          resource.bookId !== epubBookIdentity(book.relativePath);
+        if (rootChanged || fileChanged || identityChanged) {
+          const metadata = loadEpubBookMetadata(nextProgressKey);
+          const rebound: TaskResource = {
+            ...resource,
+            title: book.title,
+            rootPath: library.rootPath,
+            relativePath: book.relativePath,
+            progressKey: nextProgressKey,
+            bookId: epubBookIdentity(book.relativePath),
+            baseline: fileChanged
+              ? resource.targetUnit === 'chapters'
+                ? (metadata?.currentChapterIndex ?? 0)
+                : (metadata?.progress ?? 0)
+              : resource.baseline,
+          };
+          const resources = entry.resources.map((item) =>
+            item === resource ? rebound : item,
+          );
+          await taskApi.saveTask({ ...editTask(entry), resources });
+          linkedResource = rebound;
+          await reload();
+        }
+      }
+      await onOpenResource(linkedResource);
     } catch (reason) {
       setError(errorText(reason));
     }
   };
-
   const addPlan = async (event: FormEvent) => {
     event.preventDefault();
     if (!newPlan.trim()) return;
@@ -479,98 +720,119 @@ export default function TaskWorkspace({
     event.preventDefault();
     if (!draft || saving) return;
     setDraftError('');
-    let resources: TaskResource[] = [];
-    const old = draft.resources[0];
-    const numericTarget = targetValue.trim() ? Number(targetValue) : null;
-    const numericManual = manualValue.trim() ? Number(manualValue) : null;
-    if (
-      (numericTarget !== null &&
-        (!Number.isFinite(numericTarget) || numericTarget <= 0)) ||
-      (numericManual !== null &&
-        (!Number.isFinite(numericManual) || numericManual < 0))
-    ) {
-      setDraftError('目标和手动进度需要填写有效的非负数字。');
-      return;
-    }
-    if (sourceKind === 'ebook') {
-      const book = library?.books.find(
-        (item) => item.relativePath === bookPath,
-      );
-      if (book && library?.rootPath) {
-        const key = epubProgressKey(book);
-        const same =
-          old?.kind === 'ebook' &&
-          old.rootPath === library.rootPath &&
-          old.relativePath === book.relativePath &&
-          old.progressKey === key;
-        const metadata = loadEpubBookMetadata(key);
-        resources = [
-          {
+    const resources: TaskResource[] = [];
+    const resourceKeys = new Set<string>();
+    for (const item of resourceDrafts) {
+      const old = item.original;
+      const numericTarget = item.targetValue.trim()
+        ? Number(item.targetValue)
+        : null;
+      const numericManual = item.manualValue.trim()
+        ? Number(item.manualValue)
+        : null;
+      if (
+        (numericTarget !== null &&
+          (!Number.isFinite(numericTarget) || numericTarget <= 0)) ||
+        (numericManual !== null &&
+          (!Number.isFinite(numericManual) || numericManual < 0))
+      ) {
+        setDraftError('目标与手动进度必须是有效的非负数字，目标必须大于零。');
+        return;
+      }
+      if (item.kind === 'ebook') {
+        const book = library?.books.find(
+          (candidate) => candidate.relativePath === item.bookPath,
+        );
+        if (book && library?.rootPath) {
+          const bookId = epubBookIdentity(book.relativePath);
+          const progressKey = epubProgressKey(book);
+          const sameBook =
+            old?.kind === 'ebook' &&
+            (old.bookId ||
+              (old.relativePath ? epubBookIdentity(old.relativePath) : '')) ===
+              bookId;
+          const sameRevision = sameBook && old?.progressKey === progressKey;
+          const metadata = loadEpubBookMetadata(progressKey);
+          resources.push({
             kind: 'ebook',
-            resourceId: same ? old.resourceId : crypto.randomUUID(),
+            resourceId: sameBook ? old.resourceId : 'ebook:' + bookId,
             title: book.title,
             rootPath: library.rootPath,
             relativePath: book.relativePath,
-            progressKey: key,
-            href: chapterHref.trim() || null,
+            progressKey,
+            bookId,
+            href: item.chapterHref.trim() || null,
             targetUnit:
-              targetUnit === 'chapters' || targetUnit === 'words'
-                ? targetUnit
+              item.targetUnit === 'chapters' || item.targetUnit === 'words'
+                ? item.targetUnit
                 : null,
             targetValue: numericTarget,
             baseline:
-              same && old.targetUnit === targetUnit
+              sameRevision && old?.targetUnit === item.targetUnit
                 ? old.baseline
-                : targetUnit === 'chapters'
+                : item.targetUnit === 'chapters'
                   ? (metadata?.currentChapterIndex ?? 0)
                   : (metadata?.progress ?? 0),
             manualValue: numericManual,
-          },
-        ];
-      } else if (old?.kind === 'ebook' && old.relativePath === bookPath) {
-        resources = [
-          {
+          });
+        } else if (
+          old?.kind === 'ebook' &&
+          old.relativePath === item.bookPath
+        ) {
+          resources.push({
             ...old,
-            href: chapterHref.trim() || null,
+            href: item.chapterHref.trim() || null,
             targetUnit:
-              targetUnit === 'chapters' || targetUnit === 'words'
-                ? targetUnit
+              item.targetUnit === 'chapters' || item.targetUnit === 'words'
+                ? item.targetUnit
                 : null,
             targetValue: numericTarget,
             manualValue: numericManual,
-          },
-        ];
+          });
+        } else {
+          setDraftError('请选择当前书库中的书籍，或移除这条失效关联。');
+          return;
+        }
       } else {
-        setDraftError('请选择可用电子书。');
-        return;
-      }
-    } else if (sourceKind === 'youtube') {
-      const parsed = parseYouTubeTarget(videoInput);
-      if (!parsed || parsed.kind !== 'video') {
-        setDraftError('请输入有效的 YouTube 视频链接或 ID。');
-        return;
-      }
-      const start = Number(startSeconds);
-      if (!Number.isFinite(start) || start < 0) {
-        setDraftError('视频起始秒数无效。');
-        return;
-      }
-      resources = [
-        {
+        const parsed = parseYouTubeTarget(item.videoInput);
+        if (!parsed || parsed.kind !== 'video') {
+          setDraftError('请输入有效的 YouTube 视频链接或视频 ID。');
+          return;
+        }
+        const start = Number(item.startSeconds);
+        if (!Number.isFinite(start) || start < 0) {
+          setDraftError('视频起始秒数必须是非负数字。');
+          return;
+        }
+        resources.push({
           kind: 'youtube',
           resourceId: parsed.videoId,
           title:
             old?.kind === 'youtube' && old.resourceId === parsed.videoId
               ? old.title
-              : draft.title,
-          startSeconds: Math.floor(start || parsed.startSeconds),
-          targetUnit: targetUnit === 'seconds' ? 'seconds' : null,
+              : draft.title.trim(),
+          startSeconds: Math.floor(start),
+          targetUnit: item.targetUnit === 'seconds' ? 'seconds' : null,
           targetValue: numericTarget,
           manualValue: numericManual,
-        },
-      ];
+        });
+      }
     }
-    if (draft.resources.length > 1) resources.push(...draft.resources.slice(1));
+    if (resources.length > 20) {
+      setDraftError('一个任务最多关联 20 个资源。');
+      return;
+    }
+    for (const resource of resources) {
+      const key =
+        resource.kind === 'ebook'
+          ? 'ebook:' + (resource.bookId || resource.relativePath || '')
+          : 'youtube:' + resource.resourceId;
+      if (resourceKeys.has(key)) {
+        setDraftError('同一任务不能重复关联相同的书籍或视频。');
+        return;
+      }
+      resourceKeys.add(key);
+    }
     setSaving(true);
     try {
       const saved = await taskApi.saveTask({
@@ -580,6 +842,7 @@ export default function TaskWorkspace({
       });
       setSelectedId(saved.id);
       setDraft(null);
+      setResourceDrafts([]);
       setNotice('任务已保存');
     } catch (reason) {
       setDraftError(errorText(reason));
@@ -587,7 +850,6 @@ export default function TaskWorkspace({
       setSaving(false);
     }
   };
-
   const reviewExistingPlans = async () => {
     setImportBusy('loading');
     setError('');
@@ -598,34 +860,87 @@ export default function TaskWorkspace({
     try {
       const overview = await playerApi.overview();
       const details = await Promise.all(
-        overview.learningPaths.map((path) =>
-          playerApi.learningPathGet(path.pathId),
+        overview.learningPaths.map((summary) =>
+          playerApi.learningPathGet(summary.pathId).catch(() => null),
         ),
       );
       details.forEach((detail) => {
         if (detail) items.push(videoImportCandidate(detail));
       });
+      setPlayerConnected(true);
     } catch (reason) {
-      setError(`视频学习路径读取失败：${errorText(reason)}`);
+      setPlayerConnected(false);
+      setError('读取视频学习路径失败：' + errorText(reason));
     }
     setCandidates(items);
+    setSelectedCandidateKeys(items.map((candidate) => candidate.key));
+    const linkedPlanIds = items.map(
+      (candidate) =>
+        snapshot.sources.find((source) => source.sourceKey === candidate.key)
+          ?.planId ??
+        snapshot.plans.find((plan) => plan.originKey === candidate.key)?.id ??
+        null,
+    );
+    const firstLinkedPlan = linkedPlanIds[0];
+    const allAlreadyInOnePlan =
+      typeof firstLinkedPlan === 'string' &&
+      linkedPlanIds.every((planId) => planId === firstLinkedPlan);
+    setMergeTargetPlanId(allAlreadyInOnePlan ? firstLinkedPlan : 'new');
+    setNewPlanTitle(
+      items.length > 1 ? '综合学习计划' : (items[0]?.label ?? '综合学习计划'),
+    );
     setImportBusy('');
   };
 
-  const importCandidate = async (candidate: ImportCandidate) => {
-    setImportBusy(candidate.key);
+  const syncSelectedCandidates = async () => {
+    if (!candidates || importBusy) return;
+    const selectedCandidates = candidates.filter((candidate) =>
+      selectedCandidateKeys.includes(candidate.key),
+    );
+    if (!selectedCandidates.length) return;
+    setImportBusy('sync');
+    setError('');
+    let targetPlanId = mergeTargetPlanId === 'new' ? null : mergeTargetPlanId;
+    const createNew = mergeTargetPlanId === 'new';
+    const totals = { added: 0, updated: 0, conflicts: 0, removed: 0 };
     try {
-      const result = await taskApi.importPlan(candidate.draft);
-      setPlanFilter(result.planId);
+      for (const candidate of selectedCandidates) {
+        const result = await taskApi.syncPlan(
+          candidate.draft,
+          targetPlanId,
+          createNew && !targetPlanId
+            ? newPlanTitle.trim() || candidate.label
+            : null,
+          createNew && !targetPlanId,
+        );
+        targetPlanId = result.planId;
+        totals.added += result.added;
+        totals.updated += result.updated;
+        totals.conflicts += result.conflicts;
+        totals.removed += result.removed;
+      }
+      await reload();
       setCandidates(null);
-      setNotice(`已导入 ${result.added} 项，已有 ${result.alreadyPresent} 项`);
+      setSelectedCandidateKeys([]);
+      setNotice(
+        '已同步 ' +
+          selectedCandidates.length +
+          ' 个来源：新增 ' +
+          totals.added +
+          '，更新 ' +
+          totals.updated +
+          '，保留用户改动 ' +
+          totals.conflicts +
+          ' 处，来源移除节点 ' +
+          totals.removed +
+          ' 项（未删除）。',
+      );
     } catch (reason) {
       setError(errorText(reason));
     } finally {
       setImportBusy('');
     }
   };
-
   const archiveDoneTasks = async () => {
     try {
       const targetPlan =
@@ -695,13 +1010,20 @@ export default function TaskWorkspace({
         ))}
         {entry.dueDate && <span>截止 {entry.dueDate}</span>}
         {entry.optional && <span>可选</span>}
+        {entry.sourceKey && !entry.sourcePresent && (
+          <span className="task-source-removed-badge">来源已移除</span>
+        )}
         {isBlocked(entry) && entry.status !== 'done' && (
           <span className="task-blocked">前置未完成</span>
         )}
       </div>
-      {entry.resources[0] && (
+      {entry.resources.length > 0 && (
         <div className="task-card-progress">
-          {resourceProgress(entry.resources[0], library, watch)}
+          {entry.resources.map((resource) => (
+            <span key={`${resource.kind}:${resource.resourceId}`}>
+              {resource.title} · {resourceProgress(resource, library, watch)}
+            </span>
+          ))}
         </div>
       )}
     </article>
@@ -882,6 +1204,55 @@ export default function TaskWorkspace({
             </button>
           </div>
         </header>
+        <section
+          className="task-connection-panel"
+          aria-label="任务数据连接状态"
+        >
+          <div className="task-connection-item">
+            <span
+              className={`task-connection-dot ${databaseConnected === true ? 'is-connected' : databaseConnected === false ? 'is-error' : 'is-pending'}`}
+            />
+            任务库：
+            {databaseConnected === true
+              ? '已连接'
+              : databaseConnected === false
+                ? '连接失败'
+                : '检测中'}
+          </div>
+          <div className="task-connection-item">
+            <span
+              className={`task-connection-dot ${library?.rootPath ? 'is-connected' : 'is-pending'}`}
+            />
+            书库：{library?.rootPath ? `${library.books.length} 本` : '未连接'}
+            {unlinkedEbookCount > 0 && ` · ${unlinkedEbookCount} 条未关联`}
+            {ebookRebindCount > 0 && ` · ${ebookRebindCount} 条需确认重绑`}
+          </div>
+          <div className="task-connection-item">
+            <span
+              className={`task-connection-dot ${playerConnected === true ? 'is-connected' : playerConnected === false ? 'is-error' : 'is-pending'}`}
+            />
+            播放器：
+            {playerConnected === true
+              ? '已连接'
+              : playerConnected === false
+                ? '不可用'
+                : '检测中'}
+            {videoErrorCount > 0 && ` · ${videoErrorCount} 条进度读取失败`}
+            {videoPendingCount > 0 && ` · ${videoPendingCount} 条检测中`}
+          </div>
+          <div className="task-connection-item">
+            计划来源：{snapshot.sources.length} 个
+            {removedSourceTaskCount > 0 &&
+              ` · ${removedSourceTaskCount} 个已移除节点已保留`}
+          </div>
+          <button
+            type="button"
+            className="task-connection-refresh"
+            onClick={() => void refreshConnections()}
+          >
+            重新检测
+          </button>
+        </section>
         {error && (
           <div className="task-message is-error" role="alert">
             {error}
@@ -1024,7 +1395,9 @@ export default function TaskWorkspace({
                                   <button
                                     type="button"
                                     className="task-archive-resource-btn"
-                                    onClick={() => void openResource(resource)}
+                                    onClick={() =>
+                                      void openResource(entry, resource)
+                                    }
                                   >
                                     打开资源
                                   </button>
@@ -1153,6 +1526,11 @@ export default function TaskWorkspace({
               </div>
             )}
             {selected.note && <p className="task-note">{selected.note}</p>}
+            {selected.sourceKey && !selected.sourcePresent && (
+              <span className="task-source-removed">
+                原计划已移除此节点；任务和进度保留
+              </span>
+            )}
             {selected.prerequisiteIds.length > 0 && (
               <div className="task-detail-section">
                 <strong>前置任务</strong>
@@ -1177,12 +1555,44 @@ export default function TaskWorkspace({
                 <button
                   type="button"
                   className="task-primary"
-                  onClick={() => void openResource(resource)}
+                  onClick={() => void openResource(selected, resource)}
                 >
                   打开资源
                 </button>
+                {ebookLinkNeedsRepair(resource) && (
+                  <button
+                    type="button"
+                    onClick={() => openDraft(editTask(selected))}
+                  >
+                    重新关联书籍
+                  </button>
+                )}
+                {resource.kind === 'youtube' &&
+                  watch[resource.resourceId] === 'error' && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void retryVideoProgress(resource.resourceId)
+                      }
+                    >
+                      重试读取进度
+                    </button>
+                  )}
               </div>
             ))}
+            {taskTargetsReached(selected, library, watch) && (
+              <div className="task-target-ready" role="status">
+                <span>已达到所有关联资源的目标。</span>
+                {selected.status !== 'done' && (
+                  <button
+                    type="button"
+                    onClick={() => void changeStatus(selected, 'done')}
+                  >
+                    确认标记完成
+                  </button>
+                )}
+              </div>
+            )}
             <div className="task-detail-actions">
               <button
                 type="button"
@@ -1302,120 +1712,199 @@ export default function TaskWorkspace({
                   </select>
                 </label>
               </div>
-              <label>
-                关联资源
-                <select
-                  value={sourceKind}
-                  onChange={(event) => {
-                    setSourceKind(event.target.value as typeof sourceKind);
-                    setTargetUnit('');
-                    setTargetValue('');
-                  }}
-                >
-                  <option value="none">普通任务</option>
-                  <option value="ebook">电子书</option>
-                  <option value="youtube">YouTube 视频</option>
-                </select>
-              </label>
-              {sourceKind === 'ebook' && (
-                <>
-                  <label>
-                    书籍
-                    <select
-                      value={bookPath}
-                      onChange={(event) => setBookPath(event.target.value)}
+              <section className="task-resource-editor">
+                <div className="task-resource-editor-heading">
+                  <div>
+                    <strong>关联资源</strong>
+                    <span>
+                      各资源进度分别统计；所有目标达成后由你确认完成。
+                    </span>
+                  </div>
+                  <div className="task-resource-add-actions">
+                    <button
+                      type="button"
+                      onClick={() => addResourceDraft('ebook')}
                     >
-                      <option value="">选择书籍</option>
-                      {bookPath &&
-                        !library?.books.some(
-                          (item) => item.relativePath === bookPath,
-                        ) && (
-                          <option value={bookPath}>未找到：{bookPath}</option>
-                        )}
-                      {library?.books.map((book) => (
-                        <option
-                          key={book.relativePath}
-                          value={book.relativePath}
+                      + 电子书
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => addResourceDraft('youtube')}
+                    >
+                      + YouTube
+                    </button>
+                  </div>
+                </div>
+                {resourceDrafts.map((item) => (
+                  <fieldset className="task-resource-edit-card" key={item.key}>
+                    <div className="task-resource-edit-heading">
+                      <label>
+                        资源类型
+                        <select
+                          value={item.kind}
+                          onChange={(event) => {
+                            const kind = event.target
+                              .value as TaskResource['kind'];
+                            updateResourceDraft(item.key, {
+                              kind,
+                              original: null,
+                              bookPath: '',
+                              chapterHref: '',
+                              videoInput: '',
+                              startSeconds: '0',
+                              targetUnit: '',
+                              targetValue: '',
+                              manualValue: '',
+                            });
+                          }}
                         >
-                          {book.title}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    章节链接（可选）
-                    <input
-                      value={chapterHref}
-                      onChange={(event) => setChapterHref(event.target.value)}
-                      placeholder="从阅读器创建任务时自动带入"
-                    />
-                  </label>
-                </>
-              )}
-              {sourceKind === 'youtube' && (
-                <div className="task-form-row">
-                  <label>
-                    视频链接或 ID
-                    <input
-                      value={videoInput}
-                      onChange={(event) => setVideoInput(event.target.value)}
-                    />
-                  </label>
-                  <label>
-                    起始秒数
-                    <input
-                      type="number"
-                      min="0"
-                      value={startSeconds}
-                      onChange={(event) => setStartSeconds(event.target.value)}
-                    />
-                  </label>
-                </div>
-              )}
-              {sourceKind !== 'none' && (
-                <div className="task-form-row">
-                  <label>
-                    目标单位
-                    <select
-                      value={targetUnit}
-                      onChange={(event) =>
-                        setTargetUnit(event.target.value as typeof targetUnit)
-                      }
-                    >
-                      <option value="">无目标</option>
-                      {sourceKind === 'ebook' ? (
-                        <>
-                          <option value="chapters">章节</option>
-                          <option value="words">字数（估算）</option>
-                        </>
-                      ) : (
-                        <option value="seconds">秒</option>
+                          <option value="ebook">电子书</option>
+                          <option value="youtube">YouTube 视频</option>
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        className="task-resource-remove"
+                        onClick={() => removeResourceDraft(item.key)}
+                      >
+                        移除资源
+                      </button>
+                    </div>
+                    {item.kind === 'ebook' ? (
+                      <>
+                        <label>
+                          书籍
+                          <select
+                            value={item.bookPath}
+                            onChange={(event) =>
+                              updateResourceDraft(item.key, {
+                                bookPath: event.target.value,
+                              })
+                            }
+                          >
+                            <option value="">选择书籍</option>
+                            {item.bookPath &&
+                              !library?.books.some(
+                                (book) => book.relativePath === item.bookPath,
+                              ) && (
+                                <option value={item.bookPath}>
+                                  未找到：{item.bookPath}
+                                </option>
+                              )}
+                            {library?.books.map((book) => (
+                              <option
+                                key={book.relativePath}
+                                value={book.relativePath}
+                              >
+                                {book.title}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          章节链接（可选）
+                          <input
+                            value={item.chapterHref}
+                            onChange={(event) =>
+                              updateResourceDraft(item.key, {
+                                chapterHref: event.target.value,
+                              })
+                            }
+                            placeholder="从阅读器创建任务时自动带入"
+                          />
+                        </label>
+                      </>
+                    ) : (
+                      <div className="task-form-row">
+                        <label>
+                          视频链接或 ID
+                          <input
+                            value={item.videoInput}
+                            onChange={(event) =>
+                              updateResourceDraft(item.key, {
+                                videoInput: event.target.value,
+                              })
+                            }
+                            placeholder="YouTube 视频链接或 11 位 ID"
+                          />
+                        </label>
+                        <label>
+                          起始秒数
+                          <input
+                            type="number"
+                            min="0"
+                            value={item.startSeconds}
+                            onChange={(event) =>
+                              updateResourceDraft(item.key, {
+                                startSeconds: event.target.value,
+                              })
+                            }
+                          />
+                        </label>
+                      </div>
+                    )}
+                    <div className="task-form-row">
+                      <label>
+                        目标单位
+                        <select
+                          value={item.targetUnit}
+                          onChange={(event) =>
+                            updateResourceDraft(item.key, {
+                              targetUnit: event.target
+                                .value as ResourceTargetUnit,
+                            })
+                          }
+                        >
+                          <option value="">无目标</option>
+                          {item.kind === 'ebook' ? (
+                            <>
+                              <option value="chapters">章节</option>
+                              <option value="words">字数（估算）</option>
+                            </>
+                          ) : (
+                            <option value="seconds">秒</option>
+                          )}
+                        </select>
+                      </label>
+                      <label>
+                        目标
+                        <input
+                          type="number"
+                          min="1"
+                          value={item.targetValue}
+                          onChange={(event) =>
+                            updateResourceDraft(item.key, {
+                              targetValue: event.target.value,
+                            })
+                          }
+                          disabled={!item.targetUnit}
+                        />
+                      </label>
+                      {(item.targetUnit === 'words' ||
+                        item.targetUnit === 'seconds') && (
+                        <label>
+                          手动进度
+                          <input
+                            type="number"
+                            min="0"
+                            value={item.manualValue}
+                            onChange={(event) =>
+                              updateResourceDraft(item.key, {
+                                manualValue: event.target.value,
+                              })
+                            }
+                          />
+                        </label>
                       )}
-                    </select>
-                  </label>
-                  <label>
-                    目标
-                    <input
-                      type="number"
-                      min="1"
-                      value={targetValue}
-                      onChange={(event) => setTargetValue(event.target.value)}
-                      disabled={!targetUnit}
-                    />
-                  </label>
-                  {targetUnit === 'words' && (
-                    <label>
-                      手动字数
-                      <input
-                        type="number"
-                        min="0"
-                        value={manualValue}
-                        onChange={(event) => setManualValue(event.target.value)}
-                      />
-                    </label>
-                  )}
-                </div>
-              )}
+                    </div>
+                    {item.original && (
+                      <p className="task-resource-current-progress">
+                        当前：{resourceProgress(item.original, library, watch)}
+                      </p>
+                    )}
+                  </fieldset>
+                ))}
+              </section>{' '}
               <label>
                 备注
                 <textarea
@@ -1513,53 +2002,168 @@ export default function TaskWorkspace({
                 </div>
               )}
               <p className="task-muted">
-                选择要导入的计划。原计划和阅读、观看记录会保留；重复导入不会重复创建任务。导入后原计划的修改不会自动同步，重复导入仅补充新节点。
+                预览来源节点后确认同步。已有任务状态和资源进度会保留；来源更新只覆盖未被本地修改的字段，冲突会保留本地内容并计入结果。来源移除的节点会保留并标记，不会删除。
               </p>
               {candidates.length === 0 && (
                 <p className="task-muted">当前书库和播放器没有可导入的计划。</p>
               )}
-              {candidates.map((candidate) => (
-                <article className="task-import-card" key={candidate.key}>
-                  <div>
-                    <strong>{candidate.label}</strong>
-                    <span>
-                      {candidate.source} · {candidate.draft.tasks.length} 个节点
-                      {candidate.missingBooks
-                        ? ` · ${candidate.missingBooks} 本书需重新关联`
-                        : ''}
-                    </span>
+              {candidates.length > 0 && (
+                <>
+                  <div className="task-import-selection-actions">
+                    <strong>选择来源</strong>
+                    <button
+                      type="button"
+                      disabled={Boolean(importBusy)}
+                      onClick={() =>
+                        setSelectedCandidateKeys(
+                          candidates.map((candidate) => candidate.key),
+                        )
+                      }
+                    >
+                      全选
+                    </button>
+                    <button
+                      type="button"
+                      disabled={Boolean(importBusy)}
+                      onClick={() => setSelectedCandidateKeys([])}
+                    >
+                      清空
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    className="task-primary"
-                    disabled={Boolean(importBusy)}
-                    onClick={() => void importCandidate(candidate)}
-                  >
-                    {importBusy === candidate.key
-                      ? '导入中…'
-                      : snapshot.plans.some(
+                  <div className="task-import-target">
+                    <label>
+                      同步到计划
+                      <select
+                        value={mergeTargetPlanId}
+                        disabled={Boolean(importBusy)}
+                        onChange={(event) =>
+                          setMergeTargetPlanId(event.target.value)
+                        }
+                      >
+                        <option value="new">新建一个计划并合并所选来源</option>
+                        {snapshot.plans.map((plan) => (
+                          <option key={plan.id} value={plan.id}>
+                            {plan.title}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    {mergeTargetPlanId === 'new' && (
+                      <label>
+                        新计划名称
+                        <input
+                          value={newPlanTitle}
+                          maxLength={160}
+                          disabled={Boolean(importBusy)}
+                          onChange={(event) =>
+                            setNewPlanTitle(event.target.value)
+                          }
+                        />
+                      </label>
+                    )}
+                  </div>
+                  {candidates.map((candidate) => {
+                    const sourceLink = snapshot.sources.find(
+                      (source) => source.sourceKey === candidate.key,
+                    );
+                    const linkedPlan = snapshot.plans.find(
+                      (plan) =>
+                        plan.id ===
+                        (sourceLink?.planId ??
+                          snapshot.plans.find(
                             (plan) => plan.originKey === candidate.key,
-                          )
-                        ? '再次核对并导入'
-                        : '确认导入'}
-                  </button>
-                  <details>
-                    <summary>查看节点与依赖</summary>
-                    <ul>
-                      {candidate.draft.tasks.map((item) => (
-                        <li key={item.id}>
-                          {item.title}
-                          {item.prerequisiteIds.length
-                            ? ` · ${item.prerequisiteIds.length} 个前置`
+                          )?.id),
+                    );
+                    const existingNodeCount = candidate.draft.tasks.filter(
+                      (item) =>
+                        snapshot.tasks.some(
+                          (task) => task.originKey === item.originKey,
+                        ),
+                    ).length;
+                    const selectedCandidate = selectedCandidateKeys.includes(
+                      candidate.key,
+                    );
+                    return (
+                      <article
+                        className={`task-import-card${selectedCandidate ? ' is-selected' : ''}`}
+                        key={candidate.key}
+                      >
+                        <label className="task-import-card-select">
+                          <input
+                            type="checkbox"
+                            checked={selectedCandidate}
+                            disabled={Boolean(importBusy)}
+                            onChange={(event) =>
+                              setSelectedCandidateKeys((current) =>
+                                event.target.checked
+                                  ? [...current, candidate.key]
+                                  : current.filter(
+                                      (key) => key !== candidate.key,
+                                    ),
+                              )
+                            }
+                          />
+                          <span>
+                            <strong>{candidate.label}</strong>
+                            <small>
+                              {candidate.source} ·{' '}
+                              {candidate.draft.tasks.length} 个节点
+                              {candidate.missingBooks
+                                ? ` · ${candidate.missingBooks} 本书需重新关联`
+                                : ''}
+                            </small>
+                          </span>
+                        </label>
+                        <div className="task-import-connection">
+                          {linkedPlan
+                            ? `已连接到「${linkedPlan.title}」`
+                            : '尚未连接'}
+                          {` · 已有 ${existingNodeCount} / ${candidate.draft.tasks.length} 项`}
+                          {sourceLink?.removedCount
+                            ? ` · ${sourceLink.removedCount} 个来源移除节点已保留`
                             : ''}
-                          {item.optional ? ' · 可选' : ''}
-                        </li>
-                      ))}
-                    </ul>
-                  </details>
-                </article>
-              ))}
+                        </div>
+                        <details>
+                          <summary>查看节点与依赖</summary>
+                          <ul>
+                            {candidate.draft.tasks.map((item) => (
+                              <li key={item.id}>
+                                {item.title}
+                                {item.prerequisiteIds.length
+                                  ? ` · ${item.prerequisiteIds.length} 个前置`
+                                  : ''}
+                                {item.optional ? ' · 可选' : ''}
+                              </li>
+                            ))}
+                          </ul>
+                        </details>
+                      </article>
+                    );
+                  })}
+                </>
+              )}
             </div>
+            <footer className="task-modal-footer">
+              <button
+                type="button"
+                onClick={() => setCandidates(null)}
+                disabled={Boolean(importBusy)}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="task-primary"
+                onClick={() => void syncSelectedCandidates()}
+                disabled={
+                  Boolean(importBusy) || selectedCandidateKeys.length === 0
+                }
+              >
+                {importBusy === 'sync'
+                  ? '同步中…'
+                  : `确认同步 ${selectedCandidateKeys.length} 个来源`}
+              </button>
+            </footer>
           </div>
         </div>
       )}

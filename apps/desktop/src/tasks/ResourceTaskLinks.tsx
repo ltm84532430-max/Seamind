@@ -13,10 +13,12 @@ const labels: Record<TaskStatus, string> = {
 export default function ResourceTaskLinks({
   kind,
   identity,
+  bookId,
   onOpenTask,
 }: {
   kind: 'ebook' | 'youtube';
   identity: string;
+  bookId?: string;
   onOpenTask(id: string): void;
 }) {
   const [tasks, setTasks] = useState<LearningTask[]>([]);
@@ -33,7 +35,8 @@ export default function ResourceTaskLinks({
                   (resource) =>
                     resource.kind === kind &&
                     (kind === 'ebook'
-                      ? resource.progressKey === identity
+                      ? (bookId && resource.bookId === bookId) ||
+                        resource.progressKey === identity
                       : resource.resourceId === identity),
                 ),
               ),

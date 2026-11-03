@@ -34,15 +34,24 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     completed_at INTEGER,
-    archived_at INTEGER
+    archived_at INTEGER,
+    source_key TEXT,
+    source_present INTEGER NOT NULL DEFAULT 1,
+    source_snapshot_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_plan ON tasks(plan_id, position);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, due_date);
-CREATE INDEX IF NOT EXISTS idx_tasks_archived ON tasks(archived_at);
 CREATE TABLE IF NOT EXISTS task_dependencies (
     task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
     prerequisite_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
     PRIMARY KEY(task_id, prerequisite_id)
+);
+CREATE TABLE IF NOT EXISTS plan_sources (
+    source_key TEXT PRIMARY KEY NOT NULL,
+    plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+    source_kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    last_synced_at INTEGER NOT NULL
 );
 "#;
 
@@ -55,6 +64,8 @@ pub struct TaskResource {
     pub root_path: Option<String>,
     pub relative_path: Option<String>,
     pub progress_key: Option<String>,
+    #[serde(default)]
+    pub book_id: Option<String>,
     pub href: Option<String>,
     pub start_seconds: Option<i64>,
     pub target_unit: Option<String>,
@@ -127,6 +138,20 @@ pub struct Task {
     pub updated_at: i64,
     pub completed_at: Option<i64>,
     pub archived_at: Option<i64>,
+    pub source_key: Option<String>,
+    pub source_present: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanSource {
+    pub source_key: String,
+    pub plan_id: String,
+    pub source_kind: String,
+    pub title: String,
+    pub last_synced_at: i64,
+    pub task_count: usize,
+    pub removed_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,6 +159,8 @@ pub struct Task {
 pub struct TaskSnapshot {
     pub plans: Vec<Plan>,
     pub tasks: Vec<Task>,
+    #[serde(default)]
+    pub sources: Vec<PlanSource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,10 +172,36 @@ pub struct ImportPlan {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SyncImportRequest {
+    pub source: ImportPlan,
+    pub target_plan_id: Option<String>,
+    pub new_plan_title: Option<String>,
+    #[serde(default)]
+    pub create_new: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ImportResult {
     pub plan_id: String,
     pub added: usize,
     pub already_present: usize,
+    pub updated: usize,
+    pub conflicts: usize,
+    pub removed: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct SourceTaskSnapshot {
+    title: String,
+    note: Option<String>,
+    due_date: Option<String>,
+    position: i64,
+    optional: bool,
+    resources: Vec<TaskResource>,
+    parent_id: Option<String>,
+    prerequisite_ids: Vec<String>,
 }
 
 fn db_error(error: impl std::fmt::Display) -> String {
@@ -171,6 +224,22 @@ fn open_path(path: &Path) -> Result<Connection, String> {
     conn.execute_batch(SCHEMA).map_err(db_error)?;
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN completed_at INTEGER", []);
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN archived_at INTEGER", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN source_key TEXT", []);
+    let _ = conn.execute(
+        "ALTER TABLE tasks ADD COLUMN source_present INTEGER NOT NULL DEFAULT 1",
+        [],
+    );
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN source_snapshot_json TEXT", []);
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source_key, source_present)",
+        [],
+    )
+    .map_err(db_error)?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_archived ON tasks(archived_at)",
+        [],
+    )
+    .map_err(db_error)?;
     Ok(conn)
 }
 
@@ -253,6 +322,10 @@ fn validate_resources(resources: &[TaskResource]) -> Result<String, String> {
                 .progress_key
                 .as_ref()
                 .is_some_and(|v| v.len() > 4096)
+            || resource
+                .book_id
+                .as_ref()
+                .is_some_and(|v| v.trim().is_empty() || v.len() > 4096)
             || resource.href.as_ref().is_some_and(|v| v.len() > 4096)
             || resource.start_seconds.is_some_and(|v| v < 0)
             || [
@@ -472,7 +545,7 @@ fn snapshot(conn: &Connection) -> Result<TaskSnapshot, String> {
         .map_err(db_error)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(db_error)?;
-    let mut stmt = conn.prepare("SELECT id,plan_id,parent_id,title,note,status,priority,due_date,position,optional,resources_json,origin_key,revision,created_at,updated_at,completed_at,archived_at FROM tasks ORDER BY position,created_at,id").map_err(db_error)?;
+    let mut stmt = conn.prepare("SELECT id,plan_id,parent_id,title,note,status,priority,due_date,position,optional,resources_json,origin_key,revision,created_at,updated_at,completed_at,archived_at,source_key,source_present FROM tasks ORDER BY position,created_at,id").map_err(db_error)?;
     let mut tasks = stmt
         .query_map([], |row| {
             let resources: String = row.get(10)?;
@@ -501,6 +574,8 @@ fn snapshot(conn: &Connection) -> Result<TaskSnapshot, String> {
                 updated_at: row.get(14)?,
                 completed_at: row.get(15)?,
                 archived_at: row.get(16)?,
+                source_key: row.get(17)?,
+                source_present: row.get::<_, i64>(18)? != 0,
             })
         })
         .map_err(db_error)?
@@ -514,7 +589,36 @@ fn snapshot(conn: &Connection) -> Result<TaskSnapshot, String> {
             .collect::<Result<Vec<_>, _>>()
             .map_err(db_error)?;
     }
-    Ok(TaskSnapshot { plans, tasks })
+    let mut stmt = conn
+        .prepare(
+            "SELECT s.source_key,s.plan_id,s.source_kind,s.title,s.last_synced_at,
+                    SUM(CASE WHEN t.source_present=1 THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN t.source_present=0 THEN 1 ELSE 0 END)
+             FROM plan_sources s LEFT JOIN tasks t ON t.source_key=s.source_key
+             GROUP BY s.source_key,s.plan_id,s.source_kind,s.title,s.last_synced_at
+             ORDER BY s.title,s.source_key",
+        )
+        .map_err(db_error)?;
+    let sources = stmt
+        .query_map([], |row| {
+            Ok(PlanSource {
+                source_key: row.get(0)?,
+                plan_id: row.get(1)?,
+                source_kind: row.get(2)?,
+                title: row.get(3)?,
+                last_synced_at: row.get(4)?,
+                task_count: row.get::<_, Option<i64>>(5)?.unwrap_or(0) as usize,
+                removed_count: row.get::<_, Option<i64>>(6)?.unwrap_or(0) as usize,
+            })
+        })
+        .map_err(db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)?;
+    Ok(TaskSnapshot {
+        plans,
+        tasks,
+        sources,
+    })
 }
 
 fn save_task(conn: &Connection, input: &TaskInput, timestamp: i64) -> Result<Task, String> {
@@ -530,35 +634,98 @@ fn save_task(conn: &Connection, input: &TaskInput, timestamp: i64) -> Result<Tas
     Ok(task)
 }
 
-fn import_plan(
+fn merge_source_field<T: Clone + PartialEq>(
+    current: &T,
+    previous_source: &T,
+    incoming_source: &T,
+) -> (T, bool) {
+    if current == previous_source {
+        (incoming_source.clone(), false)
+    } else if incoming_source == previous_source || current == incoming_source {
+        (current.clone(), false)
+    } else {
+        (current.clone(), true)
+    }
+}
+
+fn import_plan_with_target(
     conn: &Connection,
     draft: &ImportPlan,
+    requested_target_id: Option<&str>,
+    new_plan_title: Option<&str>,
+    create_new: bool,
     timestamp: i64,
 ) -> Result<ImportResult, String> {
     if draft.tasks.len() > 1000 {
         return Err("单次导入最多包含 1000 个任务。".to_string());
     }
-    let origin = draft
+    let source_key = draft
         .plan
         .origin_key
         .as_deref()
-        .filter(|v| !v.trim().is_empty())
+        .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| "导入计划缺少来源标识。".to_string())?;
+    let source_kind = serde_json::from_str::<Vec<String>>(source_key)
+        .ok()
+        .and_then(|parts| parts.first().cloned())
+        .unwrap_or_else(|| "legacy".to_string());
     let tx = conn.unchecked_transaction().map_err(db_error)?;
-    let existing_plan: Option<String> = tx
+
+    let mapped_plan: Option<String> = tx
         .query_row(
-            "SELECT id FROM plans WHERE origin_key=?1",
-            params![origin],
+            "SELECT plan_id FROM plan_sources WHERE source_key=?1",
+            params![source_key],
             |row| row.get(0),
         )
         .optional()
         .map_err(db_error)?;
-    let plan_id = match existing_plan {
-        Some(id) => id,
-        None => write_plan(&tx, &draft.plan, timestamp)?,
+    let legacy_plan: Option<String> = tx
+        .query_row(
+            "SELECT id FROM plans WHERE origin_key=?1",
+            params![source_key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_error)?;
+    let plan_id = if let Some(target_id) = requested_target_id {
+        if !valid_id(target_id) {
+            return Err("目标计划编号无效。".to_string());
+        }
+        let exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM plans WHERE id=?1)",
+                params![target_id],
+                |row| row.get(0),
+            )
+            .map_err(db_error)?;
+        if !exists {
+            return Err("目标计划已不存在，请刷新后重试。".to_string());
+        }
+        target_id.to_string()
+    } else if !create_new && mapped_plan.is_some() {
+        mapped_plan.unwrap()
+    } else if !create_new && legacy_plan.is_some() {
+        legacy_plan.unwrap()
+    } else {
+        let title = new_plan_title
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(draft.plan.title.as_str());
+        let plan = PlanInput {
+            id: None,
+            title: title.to_string(),
+            description: draft.plan.description.clone(),
+            origin_key: if create_new || new_plan_title.is_some() {
+                None
+            } else {
+                draft.plan.origin_key.clone()
+            },
+        };
+        write_plan(&tx, &plan, timestamp)?
     };
+
     let mut mapping = HashMap::new();
-    let mut pending = Vec::new();
+    let mut existing_ids = HashSet::new();
     let mut already_present = 0;
     for input in &draft.tasks {
         let proposed = input
@@ -569,7 +736,7 @@ fn import_plan(
         let task_origin = input
             .origin_key
             .as_deref()
-            .filter(|v| !v.trim().is_empty())
+            .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| "导入任务缺少来源标识。".to_string())?;
         if mapping.contains_key(proposed) {
             return Err("导入任务编号重复。".to_string());
@@ -585,55 +752,293 @@ fn import_plan(
         let actual = existing
             .clone()
             .unwrap_or_else(|| Uuid::new_v4().to_string());
-        mapping.insert(proposed.to_string(), actual);
+        mapping.insert(proposed.to_string(), actual.clone());
         if existing.is_some() {
             already_present += 1;
-        } else {
-            pending.push(input.clone());
+            existing_ids.insert(actual);
         }
     }
-    // Insert nodes first; parent and prerequisite references are applied afterwards.
-    for input in &pending {
-        let mut node = input.clone();
-        node.id = mapping.get(input.id.as_deref().unwrap_or("")).cloned();
-        node.plan_id = Some(plan_id.clone());
-        node.parent_id = None;
-        node.prerequisite_ids.clear();
-        node.expected_revision = None;
-        write_task(&tx, &node, timestamp)?;
+
+    let mut removed = 0usize;
+    {
+        let mut stmt = tx
+            .prepare("SELECT id FROM tasks WHERE source_key=?1 AND source_present=1")
+            .map_err(db_error)?;
+        let old_ids = stmt
+            .query_map(params![source_key], |row| row.get::<_, String>(0))
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        for id in old_ids {
+            if !mapping.values().any(|mapped| mapped == &id) {
+                removed += 1;
+            }
+        }
     }
-    for input in &pending {
+    tx.execute(
+        "UPDATE tasks SET source_present=0 WHERE source_key=?1",
+        params![source_key],
+    )
+    .map_err(db_error)?;
+    tx.execute(
+        "UPDATE tasks SET plan_id=?1 WHERE source_key=?2",
+        params![plan_id, source_key],
+    )
+    .map_err(db_error)?;
+    tx.execute(
+        "INSERT INTO plan_sources(source_key,plan_id,source_kind,title,last_synced_at)
+         VALUES (?1,?2,?3,?4,?5)
+         ON CONFLICT(source_key) DO UPDATE SET plan_id=excluded.plan_id,
+           source_kind=excluded.source_kind,title=excluded.title,last_synced_at=excluded.last_synced_at",
+        params![source_key,plan_id,source_kind,draft.plan.title,timestamp],
+    )
+    .map_err(db_error)?;
+
+    let mut added = 0usize;
+    let mut updated = 0usize;
+    let mut conflicts = 0usize;
+    for input in &draft.tasks {
+        let proposed = input.id.as_deref().unwrap_or("");
         let id = mapping
-            .get(input.id.as_deref().unwrap_or(""))
+            .get(proposed)
             .ok_or_else(|| "导入编号映射失败。".to_string())?;
-        if let Some(parent) = &input.parent_id {
-            let target = mapping
-                .get(parent)
-                .ok_or_else(|| "导入任务的父节点不存在。".to_string())?;
+        let parent_id = input
+            .parent_id
+            .as_ref()
+            .map(|parent| {
+                mapping
+                    .get(parent)
+                    .cloned()
+                    .ok_or_else(|| "导入任务的父节点不存在。".to_string())
+            })
+            .transpose()?;
+        let mut prerequisite_ids = input
+            .prerequisite_ids
+            .iter()
+            .map(|prerequisite| {
+                mapping
+                    .get(prerequisite)
+                    .cloned()
+                    .ok_or_else(|| "导入任务的前置节点不存在。".to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        prerequisite_ids.sort();
+        prerequisite_ids.dedup();
+        let incoming = SourceTaskSnapshot {
+            title: input.title.trim().to_string(),
+            note: clean_optional(&input.note, 4000)?,
+            due_date: validate_due_date(&input.due_date)?,
+            position: input.position,
+            optional: input.optional,
+            resources: input.resources.clone(),
+            parent_id: parent_id.clone(),
+            prerequisite_ids: prerequisite_ids.clone(),
+        };
+        let previous_source: Option<String> = tx
+            .query_row(
+                "SELECT source_snapshot_json FROM tasks WHERE id=?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?
+            .flatten();
+
+        if !existing_ids.contains(id) {
+            let mut node = input.clone();
+            node.id = Some(id.clone());
+            node.plan_id = Some(plan_id.clone());
+            node.parent_id = None;
+            node.prerequisite_ids.clear();
+            node.expected_revision = None;
+            write_task(&tx, &node, timestamp)?;
             tx.execute(
-                "UPDATE tasks SET parent_id=?1 WHERE id=?2",
-                params![target, id],
+                "UPDATE tasks SET parent_id=?1,source_key=?2,source_present=1,source_snapshot_json=?3 WHERE id=?4",
+                params![parent_id,source_key,serde_json::to_string(&incoming).map_err(db_error)?,id],
             )
             .map_err(db_error)?;
+            for prerequisite in &prerequisite_ids {
+                tx.execute(
+                    "INSERT OR IGNORE INTO task_dependencies(task_id,prerequisite_id) VALUES (?1,?2)",
+                    params![id, prerequisite],
+                )
+                .map_err(db_error)?;
+            }
+            added += 1;
+            continue;
         }
-        for prerequisite in &input.prerequisite_ids {
-            let target = mapping
-                .get(prerequisite)
-                .ok_or_else(|| "导入任务的前置节点不存在。".to_string())?;
+
+        let current: Option<(String,Option<String>,Option<String>,i64,bool,String,Option<String>)> = tx
+            .query_row(
+                "SELECT title,note,due_date,position,optional,resources_json,parent_id FROM tasks WHERE id=?1",
+                params![id],
+                |row| {
+                    let optional: i64 = row.get(4)?;
+                    Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,optional != 0,row.get(5)?,row.get(6)?))
+                },
+            )
+            .optional()
+            .map_err(db_error)?;
+        let Some((
+            current_title,
+            current_note,
+            current_due_date,
+            current_position,
+            current_optional,
+            current_resources_json,
+            current_parent_id,
+        )) = current
+        else {
+            return Err("导入映射的任务已不存在，请刷新后重试。".to_string());
+        };
+        let current_resources: Vec<TaskResource> =
+            serde_json::from_str(&current_resources_json).map_err(db_error)?;
+        let mut current_prerequisites = {
+            let mut stmt = tx
+                .prepare("SELECT prerequisite_id FROM task_dependencies WHERE task_id=?1 ORDER BY prerequisite_id")
+                .map_err(db_error)?;
+            let rows = stmt
+                .query_map(params![id], |row| row.get::<_, String>(0))
+                .map_err(db_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db_error)?;
+            rows
+        };
+        current_prerequisites.sort();
+        let current_snapshot = SourceTaskSnapshot {
+            title: current_title,
+            note: current_note,
+            due_date: current_due_date,
+            position: current_position,
+            optional: current_optional,
+            resources: current_resources,
+            parent_id: current_parent_id,
+            prerequisite_ids: current_prerequisites,
+        };
+        let previous: Option<SourceTaskSnapshot> = previous_source
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(db_error)?;
+        let Some(previous) = previous else {
+            conflicts += [
+                current_snapshot.title != incoming.title,
+                current_snapshot.note != incoming.note,
+                current_snapshot.due_date != incoming.due_date,
+                current_snapshot.position != incoming.position,
+                current_snapshot.optional != incoming.optional,
+                current_snapshot.resources != incoming.resources,
+                current_snapshot.parent_id != incoming.parent_id,
+                current_snapshot.prerequisite_ids != incoming.prerequisite_ids,
+            ]
+            .into_iter()
+            .filter(|changed| *changed)
+            .count();
             tx.execute(
-                "INSERT OR IGNORE INTO task_dependencies(task_id,prerequisite_id) VALUES (?1,?2)",
-                params![id, target],
+                "UPDATE tasks SET plan_id=?1,source_key=?2,source_present=1,source_snapshot_json=?3 WHERE id=?4",
+                params![plan_id,source_key,serde_json::to_string(&incoming).map_err(db_error)?,id],
             )
             .map_err(db_error)?;
+            continue;
+        };
+
+        let (title, title_conflict) =
+            merge_source_field(&current_snapshot.title, &previous.title, &incoming.title);
+        let (note, note_conflict) =
+            merge_source_field(&current_snapshot.note, &previous.note, &incoming.note);
+        let (due_date, due_conflict) = merge_source_field(
+            &current_snapshot.due_date,
+            &previous.due_date,
+            &incoming.due_date,
+        );
+        let (position, position_conflict) = merge_source_field(
+            &current_snapshot.position,
+            &previous.position,
+            &incoming.position,
+        );
+        let (optional, optional_conflict) = merge_source_field(
+            &current_snapshot.optional,
+            &previous.optional,
+            &incoming.optional,
+        );
+        let (resources, resources_conflict) = merge_source_field(
+            &current_snapshot.resources,
+            &previous.resources,
+            &incoming.resources,
+        );
+        let (merged_parent, parent_conflict) = merge_source_field(
+            &current_snapshot.parent_id,
+            &previous.parent_id,
+            &incoming.parent_id,
+        );
+        let (merged_prerequisites, prerequisites_conflict) = merge_source_field(
+            &current_snapshot.prerequisite_ids,
+            &previous.prerequisite_ids,
+            &incoming.prerequisite_ids,
+        );
+        conflicts += [
+            title_conflict,
+            note_conflict,
+            due_conflict,
+            position_conflict,
+            optional_conflict,
+            resources_conflict,
+            parent_conflict,
+            prerequisites_conflict,
+        ]
+        .into_iter()
+        .filter(|conflict| *conflict)
+        .count();
+        let changed = title != current_snapshot.title
+            || note != current_snapshot.note
+            || due_date != current_snapshot.due_date
+            || position != current_snapshot.position
+            || optional != current_snapshot.optional
+            || resources != current_snapshot.resources
+            || merged_parent != current_snapshot.parent_id
+            || merged_prerequisites != current_snapshot.prerequisite_ids
+            || current_snapshot.parent_id.is_none() && parent_id.is_some();
+        tx.execute(
+            "UPDATE tasks SET plan_id=?1,parent_id=?2,title=?3,note=?4,due_date=?5,position=?6,optional=?7,resources_json=?8,source_key=?9,source_present=1,source_snapshot_json=?10,revision=revision+?11,updated_at=CASE WHEN ?11=1 THEN ?12 ELSE updated_at END WHERE id=?13",
+            params![plan_id,merged_parent,title,note,due_date,position,i64::from(optional),serde_json::to_string(&resources).map_err(db_error)?,source_key,serde_json::to_string(&incoming).map_err(db_error)?,i64::from(changed),timestamp,id],
+        )
+        .map_err(db_error)?;
+        if merged_prerequisites != current_snapshot.prerequisite_ids {
+            tx.execute(
+                "DELETE FROM task_dependencies WHERE task_id=?1",
+                params![id],
+            )
+            .map_err(db_error)?;
+            for prerequisite in &merged_prerequisites {
+                tx.execute(
+                    "INSERT INTO task_dependencies(task_id,prerequisite_id) VALUES (?1,?2)",
+                    params![id, prerequisite],
+                )
+                .map_err(db_error)?;
+            }
+        }
+        if changed {
+            updated += 1;
         }
     }
     validate_graph(&tx)?;
     tx.commit().map_err(db_error)?;
     Ok(ImportResult {
         plan_id,
-        added: pending.len(),
+        added,
         already_present,
+        updated,
+        conflicts,
+        removed,
     })
+}
+
+fn import_plan(
+    conn: &Connection,
+    draft: &ImportPlan,
+    timestamp: i64,
+) -> Result<ImportResult, String> {
+    import_plan_with_target(conn, draft, None, None, false, timestamp)
 }
 
 #[tauri::command(async)]
@@ -672,8 +1077,26 @@ pub fn learning_tasks_import_plan(
     import_plan(&open(&app)?, &draft, now())
 }
 
+#[tauri::command]
+pub fn learning_tasks_sync_plan(
+    app: AppHandle,
+    request: SyncImportRequest,
+) -> Result<ImportResult, String> {
+    import_plan_with_target(
+        &open(&app)?,
+        &request.source,
+        request.target_plan_id.as_deref(),
+        request.new_plan_title.as_deref(),
+        request.create_new,
+        now(),
+    )
+}
+
 #[tauri::command(async)]
-pub fn learning_tasks_archive_done(app: AppHandle, plan_id: Option<String>) -> Result<usize, String> {
+pub fn learning_tasks_archive_done(
+    app: AppHandle,
+    plan_id: Option<String>,
+) -> Result<usize, String> {
     let conn = open(&app)?;
     let timestamp = now();
     let count = match plan_id.as_deref() {

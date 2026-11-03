@@ -5,6 +5,7 @@ import ResourceTaskLinks from './tasks/ResourceTaskLinks';
 import type { KeyboardEvent } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
+  epubBookIdentity,
   loadEpubBookMetadata,
   loadEpubReadingActivity,
   loadEpubAnnotations,
@@ -36,6 +37,7 @@ import { Overlayer } from '../../../packages/foliate-js/overlayer.js';
 export interface EpubReaderSelection {
   source: File | string;
   progressKey: string;
+  bookId: string;
   relativePath: string;
   title: string;
 }
@@ -1995,6 +1997,9 @@ export default function EpubReader({
           <ResourceTaskLinks
             kind="ebook"
             identity={selection.progressKey}
+            bookId={
+              selection.bookId || epubBookIdentity(selection.relativePath)
+            }
             onOpenTask={onOpenTask}
           />
           <button

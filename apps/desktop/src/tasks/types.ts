@@ -7,6 +7,7 @@ export interface TaskResource {
   rootPath?: string | null;
   relativePath?: string | null;
   progressKey?: string | null;
+  bookId?: string | null;
   href?: string | null;
   startSeconds?: number | null;
   targetUnit?: 'chapters' | 'words' | 'seconds' | null;
@@ -43,6 +44,18 @@ export interface LearningTask {
   updatedAt: number;
   completedAt: number | null;
   archivedAt: number | null;
+  sourceKey: string | null;
+  sourcePresent: boolean;
+}
+
+export interface PlanSource {
+  sourceKey: string;
+  planId: string;
+  sourceKind: string;
+  title: string;
+  lastSyncedAt: number;
+  taskCount: number;
+  removedCount: number;
 }
 
 export interface TaskInput {
@@ -74,6 +87,7 @@ export interface PlanInput {
 export interface TaskSnapshot {
   plans: LearningPlan[];
   tasks: LearningTask[];
+  sources: PlanSource[];
 }
 
 export interface ImportPlan {
@@ -85,6 +99,9 @@ export interface ImportResult {
   planId: string;
   added: number;
   alreadyPresent: number;
+  updated: number;
+  conflicts: number;
+  removed: number;
 }
 
 export function editTask(task: LearningTask): TaskInput {

@@ -63,7 +63,7 @@ import type {
   EpubReaderAgentBridge,
   EpubReaderSelection,
 } from './EpubReader';
-import { epubProgressKey } from './ebook-storage';
+import { epubBookIdentity, epubProgressKey } from './ebook-storage';
 import AgentPanel from './AgentPanel';
 import {
   agentToolCatalog,
@@ -707,6 +707,7 @@ export default function App() {
         setEpubReader({
           source: convertFileSrc(path),
           progressKey: epubProgressKey(book),
+          bookId: epubBookIdentity(book.relativePath),
           relativePath: book.relativePath,
           title: book.title,
         });
@@ -2438,6 +2439,7 @@ export default function App() {
       setEpubReader({
         source: convertFileSrc(path),
         progressKey: epubProgressKey(book),
+        bookId: epubBookIdentity(book.relativePath),
         relativePath: book.relativePath,
         title: book.title,
       });
@@ -2479,6 +2481,7 @@ export default function App() {
         rootPath,
         relativePath: book.relativePath,
         progressKey: epubProgressKey(book),
+        bookId: epubBookIdentity(book.relativePath),
         href: chapter?.href || null,
       },
       chapter?.label ? `阅读 ${book.title} · ${chapter.label}` : undefined,
@@ -2494,7 +2497,10 @@ export default function App() {
         throw new Error('请先切换到这项任务对应的电子书文件库。');
       }
       const book = librarySnapshot.books.find(
-        (item) => item.relativePath === resource.relativePath,
+        (item) =>
+          (resource.bookId &&
+            epubBookIdentity(item.relativePath) === resource.bookId) ||
+          item.relativePath === resource.relativePath,
       );
       if (!book) throw new Error('找不到关联电子书，请编辑任务并重新选择。');
       if (
