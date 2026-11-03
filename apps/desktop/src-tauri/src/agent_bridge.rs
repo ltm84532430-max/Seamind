@@ -1,7 +1,7 @@
 use axum::{
     extract::{DefaultBodyLimit, Json, State as AxumState},
     http::{header, HeaderMap, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::post,
     Router,
 };
@@ -176,12 +176,13 @@ impl AgentBridgeState {
 
     pub fn create_cli_session(&self) -> Result<CliMcpSession, String> {
         let (endpoint, token) = self.credentials()?;
-        let path = std::env::temp_dir().join(format!("seamind-mcp-{}.json", Uuid::new_v4()));
+        let session_uuid = Uuid::new_v4();
+        let path = std::env::temp_dir().join(format!("seamind-mcp-{session_uuid}.json"));
         let config = json!({
             "mcpServers": {
                 "seamind": {
                     "type": "http",
-                    "url": endpoint,
+                    "url": &endpoint,
                     "headers": { "Authorization": format!("Bearer {token}") }
                 }
             }
@@ -197,10 +198,19 @@ impl AgentBridgeState {
             let _ = std::fs::remove_file(&path);
             return Err("无法写入 CLI MCP 临时配置。".to_string());
         }
+
+        let agy_workspace_dir = std::env::temp_dir().join(format!("seamind-agy-{session_uuid}"));
+        if let Err(error) = write_agy_plugin_bundle(&agy_workspace_dir, &endpoint, &token) {
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir_all(&agy_workspace_dir);
+            return Err(error);
+        }
+
         Ok(CliMcpSession {
             endpoint,
             token,
             config_path: path,
+            agy_workspace_dir,
         })
     }
 }
@@ -209,6 +219,46 @@ pub struct CliMcpSession {
     pub endpoint: String,
     pub token: String,
     pub config_path: PathBuf,
+    pub agy_workspace_dir: PathBuf,
+}
+
+fn write_agy_plugin_bundle(root: &PathBuf, endpoint: &str, token: &str) -> Result<(), String> {
+    let plugin_dir = root.join(".agents").join("plugins").join("seamind");
+    let rules_dir = plugin_dir.join("rules");
+    std::fs::create_dir_all(&rules_dir)
+        .map_err(|_| "无法创建 AGY 临时插件目录。".to_string())?;
+
+    let manifest = json!({
+        "name": "seamind-bridge",
+        "displayName": "Seamind Bridge",
+        "description": "Seamind mindmap, knowledge base, YouTube search, and video learning path MCP tools."
+    });
+    let manifest_bytes =
+        serde_json::to_vec_pretty(&manifest).map_err(|_| "无法编码 AGY 插件清单。".to_string())?;
+    std::fs::write(plugin_dir.join("plugin.json"), manifest_bytes)
+        .map_err(|_| "无法写入 AGY 插件清单。".to_string())?;
+
+    let mcp_config = json!({
+        "mcpServers": {
+            "seamind": {
+                "url": endpoint,
+                "serverUrl": endpoint,
+                "headers": {
+                    "Authorization": format!("Bearer {token}")
+                }
+            }
+        }
+    });
+    let mcp_bytes = serde_json::to_vec_pretty(&mcp_config)
+        .map_err(|_| "无法编码 AGY MCP 配置。".to_string())?;
+    std::fs::write(plugin_dir.join("mcp_config.json"), mcp_bytes)
+        .map_err(|_| "无法写入 AGY MCP 配置。".to_string())?;
+
+    let rules_md = "# Seamind 桌面端工具调用规范\n\n当前终端运行在 Seamind 桌面应用内，已挂载 `seamind` MCP 服务：\n\n1. **生成或扩展播放器视频学习路径**：\n   - 必须先调用 `player_search_youtube` 搜索真实可播放的 YouTube 教学视频（获取真实 11 位 `videoId`、时长与标题），严禁编造视频链接或编号。\n   - 查看或续写现有路径时，先调用 `learning_path_list` 与 `learning_path_get`。\n   - 调用 `learning_path_propose`（`create` / `replace` / `append_nodes`）提交分阶段从左向右延伸的视频树或前置依赖拓扑图，等待用户在 Seamind 预览弹窗中确认保存。\n2. **读写思维导图与知识库**：\n   - 使用 `mindmap_get_current`、`library_search`、`library_read_document` 读取上下文，使用 `mindmap_propose_node_edit`、`mindmap_propose_node_branch` 提交导图修改预览。\n";
+    std::fs::write(rules_dir.join("AGENTS.md"), rules_md.as_bytes())
+        .map_err(|_| "无法写入 AGY 规则说明。".to_string())?;
+
+    Ok(())
 }
 
 impl AgentBridgeState {
@@ -294,7 +344,7 @@ async fn handle_mcp(
     AxumState(context): AxumState<HttpContext>,
     headers: HeaderMap,
     Json(body): Json<Value>,
-) -> impl IntoResponse {
+) -> Response {
     if body.to_string().len() > MAX_MCP_BODY_BYTES {
         return mcp_error(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -349,7 +399,7 @@ async fn handle_mcp(
         );
     }
     if method.starts_with("notifications/") && body.get("id").is_none() {
-        return (StatusCode::ACCEPTED, axum::Json(Value::Null));
+        return StatusCode::ACCEPTED.into_response();
     }
 
     let result = match method {
@@ -397,14 +447,10 @@ async fn handle_mcp(
         StatusCode::OK,
         axum::Json(json!({ "jsonrpc": "2.0", "id": id, "result": result })),
     )
+        .into_response()
 }
 
-fn mcp_error(
-    status: StatusCode,
-    id: Value,
-    code: i64,
-    message: &str,
-) -> (StatusCode, axum::Json<Value>) {
+fn mcp_error(status: StatusCode, id: Value, code: i64, message: &str) -> Response {
     (
         status,
         axum::Json(json!({
@@ -413,4 +459,5 @@ fn mcp_error(
             "error": { "code": code, "message": message }
         })),
     )
+        .into_response()
 }

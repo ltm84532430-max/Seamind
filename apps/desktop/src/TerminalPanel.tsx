@@ -453,10 +453,10 @@ export default function TerminalPanel({
         <div className="seamind-terminal-actions">
           <button
             type="button"
-            onClick={() => sendQuickCli('gemini')}
-            title="在当前终端启动已接入 Seamind MCP 的 Gemini CLI"
+            onClick={() => sendQuickCli('agy')}
+            title="在当前终端启动已接入 Seamind MCP 的 Google AGY CLI"
           >
-            gemini
+            agy
           </button>
           <button
             type="button"
@@ -493,7 +493,7 @@ export default function TerminalPanel({
       <div className="seamind-terminal-host" ref={terminalHostRef} />
       <div className="seamind-terminal-note">
         已自动注入 Seamind MCP 工具（导图 · 知识库 ·
-        播放器学习路径）。可直接输入 <code>gemini</code>、<code>claude</code> 或{' '}
+        播放器学习路径）。可直接输入 <code>agy</code>、<code>claude</code> 或{' '}
         <code>codex</code> 调用。
       </div>
     </section>

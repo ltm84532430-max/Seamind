@@ -152,13 +152,13 @@ export function LearningPathsHomeView({
     }
   };
 
-  const launchCliPrompt = (cli: 'gemini' | 'claude' | 'codex') => {
+  const launchCliPrompt = (cli: 'agy' | 'claude' | 'codex') => {
     const topic = aiTopic.trim() || 'Rust 异步与并发系统编程';
     const prompt = `请使用 Seamind MCP 工具先调用 player_search_youtube 搜索真实的 YouTube 教学视频，围绕「${topic}」规划一条分阶段从左向右延伸的视频学习路径，并调用 learning_path_propose 提交预览。`;
     const escaped = prompt.replace(/"/g, '\\"');
     const cmd =
-      cli === 'gemini'
-        ? `gemini -i "${escaped}"`
+      cli === 'agy'
+        ? `agy -i "${escaped}"`
         : cli === 'claude'
           ? `claude "${escaped}"`
           : `codex "${escaped}"`;
@@ -214,7 +214,7 @@ export function LearningPathsHomeView({
           <h2>学习路径 · 视频知识树</h2>
           <p>
             按照从左向右的学习脉络组织 YouTube 视频课程。支持在底部终端直接调用{' '}
-            <code>gemini</code> / <code>claude</code> / <code>codex</code>
+            <code>agy</code> / <code>claude</code> / <code>codex</code>
             ，或使用内置 AI
             自动检索真实视频并生成可交互树状图、地铁轨道图与技能拓扑图。
           </p>
@@ -280,10 +280,10 @@ export function LearningPathsHomeView({
           <button
             type="button"
             className="lp-btn"
-            onClick={() => launchCliPrompt('gemini')}
-            title="唤醒底部终端并用 Google Gemini CLI 搜索生成"
+            onClick={() => launchCliPrompt('agy')}
+            title="唤醒底部终端并用 Google AGY CLI 搜索生成"
           >
-            <TerminalBoxIcon />用 Gemini CLI 生成
+            <TerminalBoxIcon />用 AGY CLI 生成
           </button>
           <button
             type="button"
@@ -351,7 +351,7 @@ export function LearningPathsHomeView({
       {host.learningPaths.length === 0 ? (
         <div style={{ marginTop: 32 }}>
           <StateMessage kind="empty" title="还没有学习路径">
-            可以在上方输入主题，点击「用 Gemini CLI 生成」或「内置 AI
+            可以在上方输入主题，点击「用 AGY CLI 生成」或「内置 AI
             生成预览」，也可以手动新建空白路径。
           </StateMessage>
         </div>
@@ -788,13 +788,13 @@ export default function LearningPathView({
     }
   };
 
-  const sendCliForCurrentPath = (cli: 'gemini' | 'claude' | 'codex') => {
+  const sendCliForCurrentPath = (cli: 'agy' | 'claude' | 'codex') => {
     if (!detail) return;
     const prompt = `请先调用 learning_path_get(pathId="${detail.summary.pathId}") 查看当前学习路径「${detail.summary.title}」，再用 player_search_youtube 搜索真实进阶视频，并通过 learning_path_propose(mode="append_nodes", pathId="${detail.summary.pathId}", ...) 为后续阶段补充视频节点。`;
     const escaped = prompt.replace(/"/g, '\\"');
     const cmd =
-      cli === 'gemini'
-        ? `gemini -i "${escaped}"`
+      cli === 'agy'
+        ? `agy -i "${escaped}"`
         : cli === 'claude'
           ? `claude "${escaped}"`
           : `codex "${escaped}"`;
@@ -1349,16 +1349,16 @@ export default function LearningPathView({
               <div className="lp-copilot-section">
                 <h4>底部 CLI 终端联动（MCP）</h4>
                 <p>
-                  一键在全局底部终端启动 Google Gemini CLI / Claude /
+                  一键在全局底部终端启动 Google AGY / Claude /
                   Codex，自动读取当前路径并搜索新视频扩展：
                 </p>
                 <div className="lp-cli-chips">
                   <button
                     type="button"
                     className="lp-btn"
-                    onClick={() => sendCliForCurrentPath('gemini')}
+                    onClick={() => sendCliForCurrentPath('agy')}
                   >
-                    Gemini 续写路径
+                    AGY 续写路径
                   </button>
                   <button
                     type="button"

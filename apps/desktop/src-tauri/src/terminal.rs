@@ -122,7 +122,8 @@ pub fn terminal_start(
 
     let cli_session = agent_bridge.create_cli_session()?;
     let mcp_config_path = cli_session.config_path.clone();
-    let cleanup_paths = vec![mcp_config_path.clone()];
+    let agy_workspace_dir = cli_session.agy_workspace_dir.clone();
+    let cleanup_paths = vec![mcp_config_path.clone(), agy_workspace_dir.clone()];
 
     #[cfg(windows)]
     let mut command = {
@@ -132,6 +133,7 @@ pub fn terminal_start(
         command.arg("-Command");
         command.arg(create_powershell_bootstrap(
             &mcp_config_path,
+            &agy_workspace_dir,
             &cli_session.endpoint,
         ));
         command
@@ -147,6 +149,8 @@ pub fn terminal_start(
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
     let config_path_text = mcp_config_path.to_string_lossy().to_string();
+    let agy_dir_text = agy_workspace_dir.to_string_lossy().to_string();
+    command.env("SEAMIND_AGY_DIR", &agy_dir_text);
     command.env("SEAMIND_CLAUDE_MCP_CONFIG", &config_path_text);
     command.env("GEMINI_CLI_SYSTEM_DEFAULTS_PATH", &config_path_text);
     command.env("SEAMIND_MCP_URL", &cli_session.endpoint);
@@ -282,16 +286,25 @@ pub fn terminal_close(state: State<'_, TerminalState>, session_id: String) -> Re
 }
 
 #[cfg(windows)]
-fn create_powershell_bootstrap(config_path: &PathBuf, endpoint: &str) -> String {
+fn create_powershell_bootstrap(
+    config_path: &PathBuf,
+    agy_workspace_dir: &PathBuf,
+    endpoint: &str,
+) -> String {
     let config_path = config_path.to_string_lossy().replace('\'', "''");
+    let agy_dir = agy_workspace_dir.to_string_lossy().replace('\'', "''");
     let endpoint = endpoint.replace('\'', "''");
     format!(
-        r#"$env:SEAMIND_CLAUDE_MCP_CONFIG = '{config_path}'; $env:GEMINI_CLI_SYSTEM_DEFAULTS_PATH = '{config_path}'; $env:SEAMIND_MCP_URL = '{endpoint}'; $global:SeamindClaudeExecutable = Get-Command claude -All -ErrorAction SilentlyContinue | Where-Object {{ $_.CommandType -in @('Application', 'ExternalScript') }} | Select-Object -First 1; function global:seamind-claude {{ if (-not $global:SeamindClaudeExecutable) {{ Write-Error 'Claude Code CLI 未安装或不在 PATH 中。'; return }}; & $global:SeamindClaudeExecutable.Source --mcp-config $env:SEAMIND_CLAUDE_MCP_CONFIG @args }}; function global:claude {{ seamind-claude @args }}; $global:SeamindGeminiExecutable = Get-Command gemini -All -ErrorAction SilentlyContinue | Where-Object {{ $_.CommandType -in @('Application', 'ExternalScript') }} | Select-Object -First 1; function global:seamind-gemini {{ if (-not $global:SeamindGeminiExecutable) {{ Write-Error 'Gemini CLI 未安装或不在 PATH 中（可通过 npm i -g @google/gemini-cli 安装）。'; return }}; & $global:SeamindGeminiExecutable.Source @args }}; function global:gemini {{ seamind-gemini @args }}; $global:SeamindCodexExecutable = Get-Command codex -All -ErrorAction SilentlyContinue | Where-Object {{ $_.CommandType -in @('Application', 'ExternalScript') }} | Select-Object -First 1; function global:seamind-codex {{ if (-not $global:SeamindCodexExecutable) {{ Write-Error 'Codex CLI 未安装或不在 PATH 中。'; return }}; & $global:SeamindCodexExecutable.Source -c "mcp_servers.seamind.url=""$env:SEAMIND_MCP_URL""" -c 'mcp_servers.seamind.bearer_token_env_var="SEAMIND_MCP_TOKEN"' @args }}; function global:codex {{ seamind-codex @args }}; Write-Host 'Seamind MCP 已接入当前终端会话。运行 gemini / claude / codex 即可调用导图、知识库与播放器学习路径工具。' -ForegroundColor DarkCyan"#
+        r#"$env:SEAMIND_AGY_DIR = '{agy_dir}'; $env:SEAMIND_CLAUDE_MCP_CONFIG = '{config_path}'; $env:GEMINI_CLI_SYSTEM_DEFAULTS_PATH = '{config_path}'; $env:SEAMIND_MCP_URL = '{endpoint}'; function global:Resolve-SeamindAgyPath {{ $cmd = Get-Command agy -All -ErrorAction SilentlyContinue | Where-Object {{ $_.CommandType -in @('Application', 'ExternalScript') }} | Select-Object -First 1; if ($cmd) {{ return $cmd.Source }}; foreach ($candidate in @("$env:LOCALAPPDATA\agy\bin\agy.exe", "$env:LOCALAPPDATA\agy\bin\agy.cmd", "$env:USERPROFILE\.gemini\antigravity\bin\agy.exe", "$env:USERPROFILE\.gemini\antigravity\bin\agy.cmd", "$env:LOCALAPPDATA\Programs\Antigravity IDE\bin\agy.cmd", "$env:LOCALAPPDATA\Programs\Antigravity IDE\bin\agy.exe")) {{ if ($candidate -and (Test-Path -LiteralPath $candidate)) {{ return $candidate }} }}; return $null }}; function global:seamind-agy {{ $exe = Resolve-SeamindAgyPath; if (-not $exe) {{ Write-Error 'Google Antigravity CLI (agy) 未安装或不在 PATH 中。'; return }}; if ($args.Count -gt 0 -and $args[0] -in @('mcp', 'plugin', 'auth', 'login', 'logout', 'update', 'upgrade', 'help', 'version', '--help', '-h', '--version', '-v')) {{ & $exe @args; return }}; & $exe --add-dir $env:SEAMIND_AGY_DIR @args }}; function global:agy {{ seamind-agy @args }}; $global:SeamindClaudeExecutable = Get-Command claude -All -ErrorAction SilentlyContinue | Where-Object {{ $_.CommandType -in @('Application', 'ExternalScript') }} | Select-Object -First 1; function global:seamind-claude {{ if (-not $global:SeamindClaudeExecutable) {{ Write-Error 'Claude Code CLI 未安装或不在 PATH 中。'; return }}; & $global:SeamindClaudeExecutable.Source --mcp-config $env:SEAMIND_CLAUDE_MCP_CONFIG @args }}; function global:claude {{ seamind-claude @args }}; $global:SeamindCodexExecutable = Get-Command codex -All -ErrorAction SilentlyContinue | Where-Object {{ $_.CommandType -in @('Application', 'ExternalScript') }} | Select-Object -First 1; function global:seamind-codex {{ if (-not $global:SeamindCodexExecutable) {{ Write-Error 'Codex CLI 未安装或不在 PATH 中。'; return }}; & $global:SeamindCodexExecutable.Source -c "mcp_servers.seamind.url=""$env:SEAMIND_MCP_URL""" -c 'mcp_servers.seamind.bearer_token_env_var="SEAMIND_MCP_TOKEN"' @args }}; function global:codex {{ seamind-codex @args }}; Write-Host 'Seamind MCP 已接入当前终端会话。运行 agy / claude / codex 即可调用导图、知识库与播放器学习路径工具。' -ForegroundColor DarkCyan"#
     )
 }
 
 fn remove_temp_files(paths: &[PathBuf]) {
     for path in paths {
-        let _ = std::fs::remove_file(path);
+        if path.is_dir() {
+            let _ = std::fs::remove_dir_all(path);
+        } else {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }
