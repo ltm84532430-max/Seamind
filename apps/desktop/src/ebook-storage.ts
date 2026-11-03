@@ -460,6 +460,92 @@ export function saveEpubReadingWordEstimate(
   return activity;
 }
 
+export function clearReadingActivityForDate(
+  date: string,
+  progressKeys?: string[],
+): number {
+  let clearedCount = 0;
+  try {
+    const keys = new Set<string>();
+    if (progressKeys) {
+      for (const pk of progressKeys) {
+        keys.add(`${READING_ACTIVITY_PREFIX}${suffix(pk)}`);
+      }
+    }
+    for (let i = 0; i < localStorage.length; i++) {
+      const storageKey = localStorage.key(i);
+      if (storageKey?.startsWith(READING_ACTIVITY_PREFIX)) {
+        keys.add(storageKey);
+      }
+    }
+
+    for (const storageKey of keys) {
+      try {
+        const raw = localStorage.getItem(storageKey);
+        if (!raw) continue;
+        const activity = JSON.parse(raw) as Partial<EpubReadingActivity>;
+        if (activity && typeof activity === 'object') {
+          let modified = false;
+          if (activity.dailyWords && date in activity.dailyWords) {
+            delete activity.dailyWords[date];
+            modified = true;
+          }
+          if (activity.pendingProgress && date in activity.pendingProgress) {
+            delete activity.pendingProgress[date];
+            modified = true;
+          }
+          if (modified) {
+            localStorage.setItem(storageKey, JSON.stringify(activity));
+            clearedCount++;
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return clearedCount;
+}
+
+export function clearAllReadingActivity(progressKeys?: string[]): number {
+  let clearedCount = 0;
+  try {
+    const keys = new Set<string>();
+    if (progressKeys) {
+      for (const pk of progressKeys) {
+        keys.add(`${READING_ACTIVITY_PREFIX}${suffix(pk)}`);
+      }
+    }
+    for (let i = 0; i < localStorage.length; i++) {
+      const storageKey = localStorage.key(i);
+      if (storageKey?.startsWith(READING_ACTIVITY_PREFIX)) {
+        keys.add(storageKey);
+      }
+    }
+
+    for (const storageKey of keys) {
+      try {
+        const raw = localStorage.getItem(storageKey);
+        if (!raw) continue;
+        const activity = JSON.parse(raw) as Partial<EpubReadingActivity>;
+        if (activity && typeof activity === 'object') {
+          activity.dailyWords = {};
+          activity.pendingProgress = {};
+          localStorage.setItem(storageKey, JSON.stringify(activity));
+          clearedCount++;
+        }
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return clearedCount;
+}
+
 export function loadEpubReadingPlan(
   progressKey: string,
 ): EpubReadingPlan | null {

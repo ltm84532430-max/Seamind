@@ -1,5 +1,10 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { MouseEvent } from 'react';
 import type { EbookDashboardBook } from './EbookReadingDashboard';
+import {
+  clearReadingActivityForDate,
+  clearAllReadingActivity,
+} from './ebook-storage';
 
 export type HeatmapViewUnit = 'month' | 'year';
 
@@ -60,8 +65,10 @@ function useElementSize(fallback: { width: number; height: number }) {
 
 export default function EbookReadingHeatmap({
   books,
+  onActivityChanged,
 }: {
   books: EbookDashboardBook[];
+  onActivityChanged?: () => void;
 }) {
   const today = new Date();
   const todayKey = localDateKey(today);
@@ -75,6 +82,100 @@ export default function EbookReadingHeatmap({
   const [focusedDate, setFocusedDate] = useState<string>(todayKey);
   const [hoveredDate, setHoveredDate] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<boolean>(true);
+  const [localRevision, setLocalRevision] = useState<number>(0);
+
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    date: string;
+    words: number;
+    books: Array<{ title: string; words: number }>;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const handleDown = (e: MouseEvent | PointerEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('.ebook-heatmap-context-menu')) return;
+      setContextMenu(null);
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setContextMenu(null);
+    };
+    window.addEventListener('pointerdown', handleDown as EventListener);
+    window.addEventListener('keydown', handleKey);
+    return () => {
+      window.removeEventListener('pointerdown', handleDown as EventListener);
+      window.removeEventListener('keydown', handleKey);
+    };
+  }, [contextMenu]);
+
+  const handleCellContextMenu = (
+    e: MouseEvent<HTMLElement | SVGElement>,
+    date: string,
+    words: number,
+    dayBooks: Array<{ title: string; words: number }>,
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setFocusedDate(date);
+    const menuWidth = 200;
+    const menuHeight = 120;
+    const x = Math.min(e.clientX + 2, window.innerWidth - menuWidth - 10);
+    const y = Math.min(e.clientY + 2, window.innerHeight - menuHeight - 10);
+    setContextMenu({
+      x: Math.max(10, x),
+      y: Math.max(10, y),
+      date,
+      words,
+      books: dayBooks,
+    });
+  };
+
+  const handleClearDate = (date: string, words: number) => {
+    const formatted = formatWords(words);
+    const msg =
+      words > 0
+        ? `确认清除 ${date} 的阅读字数记录吗？\n（将清除 ${formatted} 字阅读量）`
+        : `确认清除 ${date} 的阅读记录吗？`;
+    if (!window.confirm(msg)) return;
+
+    for (const b of books) {
+      if (b.activity?.dailyWords && date in b.activity.dailyWords) {
+        delete b.activity.dailyWords[date];
+      }
+      if (b.activity?.pendingProgress && date in b.activity.pendingProgress) {
+        delete b.activity.pendingProgress[date];
+      }
+    }
+    clearReadingActivityForDate(
+      date,
+      books.map((b) => b.progressKey),
+    );
+    setContextMenu(null);
+    setLocalRevision((v) => v + 1);
+    onActivityChanged?.();
+  };
+
+  const handleClearAll = () => {
+    if (
+      !window.confirm(
+        '确认清空全部电子书的阅读热力与字数记录吗？\n此操作通常用于清理测试数据，所有历史打卡与字数将重置为 0。',
+      )
+    ) {
+      return;
+    }
+    for (const b of books) {
+      if (b.activity) {
+        b.activity.dailyWords = {};
+        b.activity.pendingProgress = {};
+      }
+    }
+    clearAllReadingActivity(books.map((b) => b.progressKey));
+    setContextMenu(null);
+    setLocalRevision((v) => v + 1);
+    onActivityChanged?.();
+  };
 
   const monthGridRef = useRef<HTMLDivElement>(null);
   const yearGridRef = useRef<HTMLDivElement>(null);
@@ -95,7 +196,7 @@ export default function EbookReadingHeatmap({
       }
     }
     return result;
-  }, [books]);
+  }, [books, localRevision]);
 
   // Total words tracked across all dates
   const totalTrackedWords = useMemo(() => {
@@ -470,6 +571,16 @@ export default function EbookReadingHeatmap({
             </button>
           </div>
 
+          {/* Clear / Reset Reading Stats */}
+          <button
+            type="button"
+            className="ebook-heatmap-clear-all"
+            onClick={handleClearAll}
+            title="清空热力图中的全部每日阅读字数记录（重置测试数据）"
+          >
+            清除统计记录
+          </button>
+
           {/* Expand / Collapse Toggle */}
           <button
             type="button"
@@ -626,6 +737,14 @@ export default function EbookReadingHeatmap({
                           onMouseLeave={() => setHoveredDate(null)}
                           onClick={() => setFocusedDate(cell.date)}
                           onFocus={() => setFocusedDate(cell.date)}
+                          onContextMenu={(e) =>
+                            handleCellContextMenu(
+                              e,
+                              cell.date,
+                              cell.words,
+                              cell.books,
+                            )
+                          }
                         >
                           <span className="ebook-month-day-num">
                             {cell.dayNumber}
@@ -716,6 +835,14 @@ export default function EbookReadingHeatmap({
                                 onMouseLeave={() => setHoveredDate(null)}
                                 onClick={() => setFocusedDate(day.date)}
                                 onFocus={() => setFocusedDate(day.date)}
+                                onContextMenu={(e) =>
+                                  handleCellContextMenu(
+                                    e,
+                                    day.date,
+                                    day.words,
+                                    day.books,
+                                  )
+                                }
                               />
                             );
                           })}
@@ -786,6 +913,9 @@ export default function EbookReadingHeatmap({
                     activeDate={activeInspectDate}
                     onHoverDate={(d) => setHoveredDate(d)}
                     onSelectDate={(d) => setFocusedDate(d)}
+                    onContextMenuDate={(e, d, words, dayBooks) =>
+                      handleCellContextMenu(e, d, words, dayBooks)
+                    }
                   />
                 ) : (
                   <Year2DChart
@@ -812,11 +942,25 @@ export default function EbookReadingHeatmap({
                       {formatInspectDateTitle(activeInspectDate)}
                     </strong>
                   </div>
-                  <span className="ebook-inspector-level">
-                    {inspectWords > 0
-                      ? `热度 Level ${getHeatLevel(inspectWords)} · 活跃阅读日`
-                      : '暂无阅读记录'}
-                  </span>
+                  <div className="ebook-inspector-tools">
+                    <span className="ebook-inspector-level">
+                      {inspectWords > 0
+                        ? `热度 Level ${getHeatLevel(inspectWords)} · 活跃阅读日`
+                        : '暂无阅读记录'}
+                    </span>
+                    {inspectWords > 0 && (
+                      <button
+                        type="button"
+                        className="ebook-inspector-clear-btn"
+                        onClick={() =>
+                          handleClearDate(activeInspectDate, inspectWords)
+                        }
+                        title={`清除 ${activeInspectDate} 的阅读字数记录`}
+                      >
+                        清除此日字数
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div className="ebook-inspector-body">
@@ -872,8 +1016,50 @@ export default function EbookReadingHeatmap({
             {formatWords(totalTrackedWords)} 字。
             {books.some((book) => book.activity?.wordCountUnavailable) &&
               ' 图片型或无法提取正文的 EPUB 不计入字数。'}{' '}
-            悬停或点击任意日期单元格或图表立柱，可查看当日阅读书目明细。
+            悬停或点击任意日期单元格或图表立柱，可查看当日阅读书目明细。右键单击任意日期可清除该日测试字数。
           </p>
+        </div>
+      )}
+
+      {contextMenu && (
+        <div
+          className="ebook-heatmap-context-menu"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          role="menu"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="ebook-context-menu-head">
+            <span className="ebook-context-menu-date">{contextMenu.date}</span>
+            <span className="ebook-context-menu-words">
+              {contextMenu.words > 0
+                ? `共 ${formatWords(contextMenu.words)} 字`
+                : '无阅读记录'}
+            </span>
+          </div>
+          <div className="ebook-context-menu-items">
+            <button
+              type="button"
+              className="ebook-context-menu-item is-danger"
+              disabled={contextMenu.words <= 0}
+              onClick={() => {
+                handleClearDate(contextMenu.date, contextMenu.words);
+                setContextMenu(null);
+              }}
+            >
+              清除该日阅读字数
+            </button>
+            <div className="ebook-context-menu-divider" />
+            <button
+              type="button"
+              className="ebook-context-menu-item is-muted"
+              onClick={() => {
+                handleClearAll();
+                setContextMenu(null);
+              }}
+            >
+              清空全部阅读记录…
+            </button>
+          </div>
         </div>
       )}
     </section>
@@ -887,6 +1073,7 @@ function Month2DChart({
   activeDate,
   onHoverDate,
   onSelectDate,
+  onContextMenuDate,
   width,
   height,
 }: {
@@ -900,6 +1087,12 @@ function Month2DChart({
   activeDate: string;
   onHoverDate: (date: string | null) => void;
   onSelectDate: (date: string) => void;
+  onContextMenuDate?: (
+    e: MouseEvent<SVGGElement>,
+    date: string,
+    words: number,
+    books: Array<{ title: string; words: number }>,
+  ) => void;
   width: number;
   height: number;
 }) {
@@ -997,6 +1190,9 @@ function Month2DChart({
             onMouseEnter={() => onHoverDate(item.date)}
             onMouseLeave={() => onHoverDate(null)}
             onClick={() => onSelectDate(item.date)}
+            onContextMenu={(e) =>
+              onContextMenuDate?.(e, item.date, item.words, item.books)
+            }
           >
             {/* Hover hit area */}
             <rect

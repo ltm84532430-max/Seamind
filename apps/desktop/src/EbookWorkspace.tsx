@@ -513,7 +513,10 @@ export default function EbookWorkspace({
               </p>
             )}
 
-            <EbookReadingHeatmap books={dashboardBooks} />
+            <EbookReadingHeatmap
+              books={dashboardBooks}
+              onActivityChanged={() => setDashboardRevision((v) => v + 1)}
+            />
 
             {categoryFilter.startsWith('category:') && (
               <header className="ebook-category-content-heading">
