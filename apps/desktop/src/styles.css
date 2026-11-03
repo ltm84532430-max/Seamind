@@ -6285,6 +6285,39 @@ button {
   aspect-ratio: 16 / 9;
   background: #000;
 }
+.youtube-player-volume-control {
+  position: absolute;
+  z-index: 5;
+  top: 8px;
+  right: 128px;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 4px;
+  place-items: center;
+  border: 0;
+  border-radius: 2px;
+  color: #fff;
+  background: transparent;
+  cursor: pointer;
+  filter: drop-shadow(0 1px 2px #000);
+}
+.youtube-player-volume-control:hover {
+  background: #0005;
+}
+.youtube-player-volume-control:focus-visible {
+  outline: 1px solid #fff;
+  outline-offset: -2px;
+}
+.youtube-player-volume-control:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.youtube-player-volume-control svg {
+  display: block;
+  width: 24px;
+  height: 24px;
+}
 .youtube-player-stage iframe {
   display: block;
   width: 100%;

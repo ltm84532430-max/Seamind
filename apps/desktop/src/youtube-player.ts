@@ -59,6 +59,11 @@ export interface YouTubeIframePlayer {
   seekTo(seconds: number, allowSeekAhead: boolean): void;
   setPlaybackRate(rate: number): void;
   getPlaybackRate(): number;
+  setVolume(volume: number): void;
+  getVolume(): number;
+  mute(): void;
+  unMute(): void;
+  isMuted(): boolean;
 }
 
 interface YouTubePlayerEvent {

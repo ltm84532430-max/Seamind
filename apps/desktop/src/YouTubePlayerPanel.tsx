@@ -36,6 +36,10 @@ export interface YouTubePlayerHandle {
   seekTo(seconds: number): void;
   setPlaybackRate(rate: number): void;
   getPlaybackRate(): number;
+  getVolume(): number;
+  setVolume(volume: number): void;
+  isMuted(): boolean;
+  toggleMute(): boolean;
   play(): void;
   pause(): void;
 }
@@ -128,11 +132,15 @@ export default function YouTubePlayerPanel({
   const [localBusy, setLocalBusy] = useState(false);
   const [mpvBusy, setMpvBusy] = useState(false);
   const [mpvLaunched, setMpvLaunched] = useState(false);
+  const [volumePercent, setVolumePercent] = useState(100);
+  const [muted, setMuted] = useState(false);
 
   const embedHostRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const volumeButtonRef = useRef<HTMLButtonElement | null>(null);
   const embedPlayerRef = useRef<YouTubeIframePlayer | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const wheelDeltaRef = useRef(0);
   const nativeAbortRef = useRef<AbortController | null>(null);
   const resumeRef = useRef(selection.startSeconds);
   const requestIdRef = useRef(newRequestId());
@@ -588,6 +596,62 @@ export default function YouTubePlayerPanel({
           return 1;
         }
       },
+      getVolume() {
+        const element = video();
+        if (element) return Math.round(element.volume * 100);
+        try {
+          const volume = finite(embedPlayerRef.current?.getVolume()) ?? 100;
+          return Math.max(0, Math.min(100, Math.round(volume)));
+        } catch {
+          return 100;
+        }
+      },
+      setVolume(volume) {
+        const next = Math.max(0, Math.min(100, Math.round(volume)));
+        const element = video();
+        if (element) {
+          element.volume = next / 100;
+          element.muted = next === 0;
+          return;
+        }
+        try {
+          const player = embedPlayerRef.current;
+          if (!player) return;
+          player.setVolume(next);
+          if (next === 0) player.mute();
+          else player.unMute();
+        } catch {
+          // The player may not be ready yet.
+        }
+      },
+      isMuted() {
+        const element = video();
+        if (element) return element.muted;
+        try {
+          return embedPlayerRef.current?.isMuted() ?? false;
+        } catch {
+          return false;
+        }
+      },
+      toggleMute() {
+        const element = video();
+        if (element) {
+          element.muted = !element.muted;
+          return element.muted;
+        }
+        try {
+          const player = embedPlayerRef.current;
+          if (!player) return false;
+          if (player.isMuted()) {
+            player.unMute();
+            return false;
+          }
+          player.mute();
+          return true;
+        } catch {
+          return false;
+        }
+      },
       play() {
         const element = video();
         if (element) void element.play().catch(() => undefined);
@@ -610,6 +674,46 @@ export default function YouTubePlayerPanel({
       },
     };
   }, []);
+
+  useEffect(() => {
+    setVolumePercent(handle.getVolume());
+    setMuted(handle.isMuted());
+  }, [handle, mode, status]);
+
+  useEffect(() => {
+    if (mode !== 'embed') return undefined;
+    const button = volumeButtonRef.current;
+    if (!button) return undefined;
+    wheelDeltaRef.current = 0;
+
+    const adjustVolume = (event: WheelEvent) => {
+      if (event.deltaY === 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+
+      const pixelsPerUnit =
+        event.deltaMode === 1
+          ? 40
+          : event.deltaMode === 2
+            ? (stageRef.current?.clientHeight ?? 720)
+            : 1;
+      wheelDeltaRef.current += event.deltaY * pixelsPerUnit;
+      const notches = Math.trunc(wheelDeltaRef.current / 100);
+      if (notches === 0) return;
+      wheelDeltaRef.current -= notches * 100;
+
+      const next = Math.max(0, Math.min(100, handle.getVolume() - notches * 5));
+      handle.setVolume(next);
+      setVolumePercent(next);
+      setMuted(next === 0);
+    };
+
+    button.addEventListener('wheel', adjustVolume, { passive: false });
+    return () => {
+      button.removeEventListener('wheel', adjustVolume);
+      wheelDeltaRef.current = 0;
+    };
+  }, [handle, mode]);
 
   useEffect(() => {
     onHandleRef.current?.(handle);
@@ -780,6 +884,42 @@ export default function YouTubePlayerPanel({
           </div>
         )}
         <div ref={stageRef} className="youtube-player-stage">
+          {mode === 'embed' && (
+            <button
+              ref={volumeButtonRef}
+              type="button"
+              className="youtube-player-volume-control"
+              aria-label={`${muted ? '取消静音' : '静音'}；当前音量 ${volumePercent}%，滚轮可调节`}
+              aria-pressed={muted}
+              title={`滚轮调节音量（${volumePercent}%），点击切换静音`}
+              disabled={status === 'loading' || status === 'resolving'}
+              onClick={() => {
+                setMuted(handle.toggleMute());
+                setVolumePercent(handle.getVolume());
+              }}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 9v6h4l5 4V5L7 9H3z" fill="currentColor" />
+                {muted ? (
+                  <path
+                    d="m16 9 5 6m0-6-5 6"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeWidth="2"
+                  />
+                ) : (
+                  <path
+                    d="M15 9a4 4 0 0 1 0 6m2.5-8.5a8 8 0 0 1 0 11"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeWidth="2"
+                  />
+                )}
+              </svg>
+            </button>
+          )}
           {mode === 'embed' && (
             <div
               key={embedSession}
