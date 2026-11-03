@@ -286,7 +286,7 @@ export function VideoPickerModal({
             className={`vpick-tab${tab === 'fav' ? ' is-active' : ''}`}
             onClick={() => setTab('fav')}
           >
-            ★ 我的收藏
+            我的收藏
             {favSnapshot ? ` (${favSnapshot.items.length})` : ''}
           </button>
           <button
@@ -294,28 +294,28 @@ export function VideoPickerModal({
             className={`vpick-tab${tab === 'history' ? ' is-active' : ''}`}
             onClick={() => setTab('history')}
           >
-            ⏱ 播放历史
+            播放历史
           </button>
           <button
             type="button"
             className={`vpick-tab${tab === 'feed' ? ' is-active' : ''}`}
             onClick={() => setTab('feed')}
           >
-            ✦ 关注频道
+            关注频道
           </button>
           <button
             type="button"
             className={`vpick-tab${tab === 'search' ? ' is-active' : ''}`}
             onClick={() => setTab('search')}
           >
-            🔍 YouTube 在线搜索
+            YouTube 搜索
           </button>
           <button
             type="button"
             className={`vpick-tab${tab === 'url' ? ' is-active' : ''}`}
             onClick={() => setTab('url')}
           >
-            🔗 粘贴链接 / ID
+            粘贴链接 / ID
           </button>
         </div>
 

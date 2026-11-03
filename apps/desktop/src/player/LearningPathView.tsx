@@ -9,14 +9,7 @@ import type {
 } from '../agent/types';
 import { formatDuration } from './format';
 import { usePlayerHost } from './host';
-import {
-  CheckIcon,
-  CloseIcon,
-  PathTreeIcon,
-  PlusIcon,
-  SparkleIcon,
-  TerminalBoxIcon,
-} from './icons';
+import { CloseIcon, PathTreeIcon } from './icons';
 import {
   computeLearningPathLayout,
   learningPathToMarkdown,
@@ -440,7 +433,6 @@ export function LearningPathsHomeView({
             className="lp-btn"
             onClick={() => bridges?.onSendTerminalCommand?.('', false)}
           >
-            <TerminalBoxIcon />
             打开底部 CLI 终端
           </button>
           <button
@@ -449,14 +441,13 @@ export function LearningPathsHomeView({
             onClick={() => setCategoryImportOpen(true)}
             title="从现有收藏夹分类一键生成结构化视频知识树"
           >
-            ★ 从收藏分类创建知识树
+            从收藏分类创建知识树
           </button>
           <button
             type="button"
             className="lp-btn is-primary"
             onClick={() => setCreating((v) => !v)}
           >
-            <PlusIcon />
             新建空白路径
           </button>
         </div>
@@ -497,7 +488,6 @@ export function LearningPathsHomeView({
             disabled={!aiTopic.trim() || aiRunning}
             onClick={() => void runQuickAi()}
           >
-            <SparkleIcon />
             {aiRunning ? '规划中…' : '内置 AI 生成预览'}
           </button>
           <button
@@ -506,7 +496,7 @@ export function LearningPathsHomeView({
             onClick={() => launchCliPrompt('agy')}
             title="唤醒底部终端并用 Google AGY CLI 搜索生成"
           >
-            <TerminalBoxIcon />用 AGY CLI 生成
+            用 AGY CLI 生成
           </button>
           <button
             type="button"
@@ -524,9 +514,7 @@ export function LearningPathsHomeView({
         {aiCandidateProposal && (
           <div className="lp-proposal-quick-card">
             <div>
-              <span className="lp-proposal-badge">
-                <SparkleIcon /> 检测到 AI 知识规划方案
-              </span>
+              <span className="lp-proposal-badge">检测到 AI 知识规划方案</span>
               <h4>{aiCandidateProposal.input.title}</h4>
               <p>
                 包含 {aiCandidateProposal.stageCount} 个阶段，
@@ -543,7 +531,7 @@ export function LearningPathsHomeView({
                 );
               }}
             >
-              <CheckIcon /> 应用此方案并生成知识树
+              应用此方案并生成知识树
             </button>
           </div>
         )}
@@ -1376,7 +1364,7 @@ export default function LearningPathView({
               className="lp-btn is-primary"
               onClick={() => playNode(nextUp)}
             >
-              ▶ 继续学习：{nextUp.node.title}
+              继续学习：{nextUp.node.title}
             </button>
           )}
           <button
@@ -1392,14 +1380,14 @@ export default function LearningPathView({
               });
             }}
           >
-            <PlusIcon /> 选取视频添加
+            选取视频添加
           </button>
           <button
             type="button"
             className="lp-btn"
             onClick={() => openAddNodeModal(null, 'stage')}
           >
-            + 新增阶段
+            新增阶段
           </button>
           <button
             type="button"
@@ -1407,7 +1395,7 @@ export default function LearningPathView({
             onClick={() => setCategoryImportActiveOpen(true)}
             title="从收藏分类中导入全部视频作为新模块"
           >
-            ★ 从收藏导入
+            从收藏导入
           </button>
           <button
             type="button"
@@ -1415,14 +1403,14 @@ export default function LearningPathView({
             onClick={() => bridges?.onSendTerminalCommand?.('', false)}
             title="展开/聚焦全局底部 CLI 终端"
           >
-            <TerminalBoxIcon /> 终端 CLI
+            终端 CLI
           </button>
           <button
             type="button"
             className={`lp-btn${copilotOpen ? ' is-primary' : ''}`}
             onClick={() => setCopilotOpen((v) => !v)}
           >
-            <SparkleIcon /> AI / CLI 助手
+            AI 规划助手
           </button>
           {bridges?.onExportMarkdownToMindmap && (
             <button
@@ -1436,7 +1424,7 @@ export default function LearningPathView({
               }
               title="将当前视频学习路径导出为思维导图打开"
             >
-              导出为导图
+              导出导图
             </button>
           )}
           <button
@@ -1444,7 +1432,7 @@ export default function LearningPathView({
             className="lp-btn is-danger"
             onClick={() => void deleteEntirePath()}
           >
-            删除
+            删除路径
           </button>
         </div>
       </header>
@@ -1666,11 +1654,11 @@ export default function LearningPathView({
                       {video && (
                         <button
                           type="button"
-                          className={`lp-icon-btn${video.finished ? ' is-done' : ''}`}
-                          title={video.finished ? '标为未看' : '标为已看完'}
+                          className={`lp-node-action-btn${video.finished ? ' is-done' : ''}`}
+                          title={video.finished ? '标为未看' : '标为已看'}
                           onClick={() => host.toggleWatched(video)}
                         >
-                          <CheckIcon filled={video.finished} />
+                          {video.finished ? '已看' : '标已看'}
                         </button>
                       )}
                       {isStageCard ? (
@@ -1723,19 +1711,19 @@ export default function LearningPathView({
                       )}
                       <button
                         type="button"
-                        className="lp-icon-btn"
+                        className="lp-node-action-btn"
                         title="编辑此节点"
                         onClick={() => openEditNodeModal(item)}
                       >
-                        ✎
+                        编辑
                       </button>
                       <button
                         type="button"
-                        className="lp-icon-btn"
+                        className="lp-node-action-btn is-danger"
                         title="移除此节点"
                         onClick={() => void deleteNode(node.nodeId)}
                       >
-                        ×
+                        删除
                       </button>
                     </div>
                   </div>
@@ -1945,7 +1933,7 @@ export default function LearningPathView({
                       );
                     }}
                   >
-                    <CheckIcon /> 应用此方案并生成知识树
+                    应用此方案并生成知识树
                   </button>
                 </div>
               )}

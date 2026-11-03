@@ -1,6 +1,6 @@
 import type { LearningPathProposal } from '../agent/types';
 import { formatDuration } from './format';
-import { CheckIcon, CloseIcon, SparkleIcon } from './icons';
+import { CloseIcon } from './icons';
 import { thumbnailUrl } from './video-links';
 
 export default function LearningPathProposalDialog({
@@ -40,7 +40,6 @@ export default function LearningPathProposalDialog({
         <header className="lp-proposal-head">
           <div>
             <span className="lp-proposal-badge">
-              <SparkleIcon />
               {sourceLabel === 'cli' ? 'CLI 终端提案' : 'AI 知识树提案'} ·{' '}
               {modeBadge}
             </span>
@@ -183,7 +182,6 @@ export default function LearningPathProposalDialog({
                 color: '#ffffff',
               }}
             >
-              <CheckIcon />
               {busy ? '正在保存知识树…' : '采纳此方案并生成知识树'}
             </button>
           </div>

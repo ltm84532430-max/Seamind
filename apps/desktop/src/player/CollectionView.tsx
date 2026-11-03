@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { usePlayerHost } from './host';
 import { playerApi, errorText } from './player-api';
 import { firstUnfinished, withOverlay } from './queue';
@@ -45,6 +45,172 @@ function loadCollection(collection: Collection): Promise<VideoItem[]> {
     case 'course':
       return playerApi.playlistItems(collection.playlistId);
   }
+}
+
+const COURSE_INTRO_STORAGE_PREFIX = 'seamind:course-intro:v1:';
+
+function CourseIntroBanner({
+  courseKey,
+  courseTitle,
+}: {
+  courseKey: string;
+  courseTitle: string;
+}) {
+  const storageKey = `${COURSE_INTRO_STORAGE_PREFIX}${courseKey}`;
+  const [intro, setIntro] = useState<string>(() => {
+    try {
+      return window.localStorage.getItem(storageKey) || '';
+    } catch {
+      return '';
+    }
+  });
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState(intro);
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(storageKey) || '';
+      setIntro(saved);
+      setDraft(saved);
+      setIsEditing(false);
+    } catch {
+      setIntro('');
+      setDraft('');
+      setIsEditing(false);
+    }
+  }, [storageKey]);
+
+  const handleSave = () => {
+    const trimmed = draft.trim();
+    try {
+      if (trimmed) {
+        window.localStorage.setItem(storageKey, trimmed);
+      } else {
+        window.localStorage.removeItem(storageKey);
+      }
+      setIntro(trimmed);
+      setIsEditing(false);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleCancel = () => {
+    setDraft(intro);
+    setIsEditing(false);
+  };
+
+  const handleClear = () => {
+    if (window.confirm(`清空课程“${courseTitle}”的手动介绍？`)) {
+      try {
+        window.localStorage.removeItem(storageKey);
+        setIntro('');
+        setDraft('');
+        setIsEditing(false);
+      } catch {
+        // ignore
+      }
+    }
+  };
+
+  if (isEditing) {
+    return (
+      <div className="player-course-intro is-editing">
+        <div className="player-course-intro-head">
+          <span className="player-course-intro-tag">编辑课程介绍</span>
+          <span className="player-course-intro-hint">
+            支持换行与重点大纲，Ctrl + Enter 快速保存
+          </span>
+        </div>
+        <textarea
+          className="player-course-intro-input"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="在此输入课程背景介绍、先修知识、核心章节大纲或学习备忘…"
+          rows={4}
+          autoFocus
+          onKeyDown={(e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+              e.preventDefault();
+              handleSave();
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              handleCancel();
+            }
+          }}
+        />
+        <div className="player-course-intro-actions">
+          <button
+            type="button"
+            className="player-button is-primary"
+            onClick={handleSave}
+          >
+            保存介绍
+          </button>
+          <button
+            type="button"
+            className="player-button"
+            onClick={handleCancel}
+          >
+            取消
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!intro) {
+    return (
+      <div
+        className="player-course-intro is-empty"
+        onClick={() => {
+          setDraft('');
+          setIsEditing(true);
+        }}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setIsEditing(true);
+          }
+        }}
+        title="点击为此课程添加手动介绍与备忘"
+      >
+        <span className="player-course-intro-empty-label">
+          + 添加课程介绍 / 学习目标与大纲备忘…
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="player-course-intro is-saved">
+      <div className="player-course-intro-head">
+        <span className="player-course-intro-tag">课程简介与备忘</span>
+        <div className="player-course-intro-tools">
+          <button
+            type="button"
+            className="player-course-intro-tool-btn"
+            onClick={() => {
+              setDraft(intro);
+              setIsEditing(true);
+            }}
+          >
+            编辑介绍
+          </button>
+          <button
+            type="button"
+            className="player-course-intro-tool-btn is-danger"
+            onClick={handleClear}
+          >
+            清空
+          </button>
+        </div>
+      </div>
+      <div className="player-course-intro-content">{intro}</div>
+    </div>
+  );
 }
 
 /** Favorites, watch later, the history and a course: lists the app keeps for the user. */
@@ -197,6 +363,14 @@ export default function CollectionView({
         }
       />
       <div className="player-view-body">
+        {collection.kind === 'course' && (
+          <CourseIntroBanner
+            courseKey={
+              course?.remoteId || course?.playlistId || collection.playlistId
+            }
+            courseTitle={title}
+          />
+        )}
         {list.error && (
           <StateMessage
             kind="error"

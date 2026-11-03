@@ -65,9 +65,9 @@ export interface LearningPathLayoutResult {
 }
 
 const NODE_WIDTH_VIDEO = 276;
-const NODE_HEIGHT_VIDEO = 152;
-const NODE_WIDTH_STAGE = 224;
-const NODE_HEIGHT_STAGE = 104;
+const NODE_HEIGHT_VIDEO = 148;
+const NODE_WIDTH_STAGE = 276;
+const NODE_HEIGHT_STAGE = 108;
 const PADDING_X = 64;
 const PADDING_Y = 64;
 
