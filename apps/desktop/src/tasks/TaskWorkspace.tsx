@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { LibrarySnapshot } from '../library';
 import {
@@ -49,6 +49,13 @@ type TaskResourceDraft = {
   targetUnit: ResourceTargetUnit;
   targetValue: string;
   manualValue: string;
+};
+
+type StatusUndo = {
+  taskId: string;
+  previousStatus: TaskStatus;
+  nextStatus: TaskStatus;
+  title: string;
 };
 
 function resourceDraft(
@@ -432,6 +439,12 @@ export default function TaskWorkspace({
   );
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [statusSavingIds, setStatusSavingIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [statusUndo, setStatusUndo] = useState<StatusUndo | null>(null);
+  const statusSavingIdsRef = useRef(new Set<string>());
+  const previousActiveStatusRef = useRef(new Map<string, TaskStatus>());
   const [planFilter, setPlanFilter] = useState('all');
   const [query, setQuery] = useState('');
   const [view, setView] = useState<'board' | 'list' | 'calendar'>(readTaskView);
@@ -463,6 +476,12 @@ export default function TaskWorkspace({
     Record<string, WatchState | null | 'error'>
   >({});
   const [progressRevision, setProgressRevision] = useState(0);
+
+  useEffect(() => {
+    if (!statusUndo) return;
+    const timeout = window.setTimeout(() => setStatusUndo(null), 8000);
+    return () => window.clearTimeout(timeout);
+  }, [statusUndo]);
 
   useEffect(() => {
     try {
@@ -918,14 +937,101 @@ export default function TaskWorkspace({
     }
   };
 
-  const changeStatus = async (entry: LearningTask, status: TaskStatus) => {
+  const changeStatus = async (
+    entry: LearningTask,
+    status: TaskStatus,
+    recordUndo = true,
+  ): Promise<boolean> => {
+    const current =
+      snapshot.tasks.find((task) => task.id === entry.id) ?? entry;
+    if (current.status === status) return true;
+    if (statusSavingIdsRef.current.has(entry.id)) return false;
+
+    statusSavingIdsRef.current.add(entry.id);
+    setStatusSavingIds(new Set(statusSavingIdsRef.current));
+    setError('');
+    setStatusUndo(null);
+    const previousStatus = current.status;
+    const previousRestoreStatus = previousActiveStatusRef.current.get(entry.id);
+    if (status === 'done') {
+      previousActiveStatusRef.current.set(entry.id, previousStatus);
+    } else {
+      previousActiveStatusRef.current.delete(entry.id);
+    }
+    setSnapshot((currentSnapshot) => ({
+      ...currentSnapshot,
+      tasks: currentSnapshot.tasks.map((task) =>
+        task.id === entry.id ? { ...task, status } : task,
+      ),
+    }));
+
     try {
-      await taskApi.saveTask({ ...editTask(entry), status });
-      setNotice('任务状态已更新');
+      const saved = await taskApi.saveTask({ ...editTask(current), status });
+      setSnapshot((currentSnapshot) => ({
+        ...currentSnapshot,
+        tasks: currentSnapshot.tasks.map((task) =>
+          task.id === saved.id ? saved : task,
+        ),
+      }));
+      if (recordUndo) {
+        setStatusUndo({
+          taskId: current.id,
+          previousStatus,
+          nextStatus: status,
+          title: current.title,
+        });
+      }
+      setNotice(
+        status === 'done'
+          ? `已完成「${current.title}」`
+          : `「${current.title}」已更新为${statusName[status]}`,
+      );
+      return true;
     } catch (reason) {
+      if (previousRestoreStatus) {
+        previousActiveStatusRef.current.set(entry.id, previousRestoreStatus);
+      } else {
+        previousActiveStatusRef.current.delete(entry.id);
+      }
+      setSnapshot((currentSnapshot) => ({
+        ...currentSnapshot,
+        tasks: currentSnapshot.tasks.map((task) =>
+          task.id === entry.id ? { ...task, status: previousStatus } : task,
+        ),
+      }));
       setError(errorText(reason));
       void reload();
+      return false;
+    } finally {
+      statusSavingIdsRef.current.delete(entry.id);
+      setStatusSavingIds(new Set(statusSavingIdsRef.current));
     }
+  };
+
+  const toggleTaskCompletion = (entry: LearningTask) => {
+    const current =
+      snapshot.tasks.find((task) => task.id === entry.id) ?? entry;
+    if (current.status === 'done') {
+      void changeStatus(
+        current,
+        previousActiveStatusRef.current.get(current.id) ?? 'todo',
+      );
+      return;
+    }
+    void changeStatus(
+      current,
+      current.status === 'cancelled' ? 'todo' : 'done',
+    );
+  };
+
+  const undoStatusChange = async () => {
+    if (!statusUndo) return;
+    const undo = statusUndo;
+    const task = snapshot.tasks.find((entry) => entry.id === undo.taskId);
+    setStatusUndo(null);
+    if (!task || task.status !== undo.nextStatus) return;
+    const undone = await changeStatus(task, undo.previousStatus, false);
+    if (undone) setNotice(`已撤销「${undo.title}」的状态更改`);
   };
 
   const openResource = async (entry: LearningTask, resource: TaskResource) => {
@@ -1400,6 +1506,30 @@ export default function TaskWorkspace({
         ) : (
           <span className="task-disclosure-placeholder" aria-hidden="true" />
         )}
+        <button
+          type="button"
+          className={`task-completion-toggle is-${entry.status}`}
+          disabled={statusSavingIds.has(entry.id)}
+          aria-label={
+            entry.status === 'done'
+              ? `重新打开任务 ${entry.title}`
+              : entry.status === 'cancelled'
+                ? `恢复任务 ${entry.title}`
+                : `标记任务完成 ${entry.title}`
+          }
+          aria-pressed={entry.status === 'done'}
+          title={entry.status === 'done' ? '重新打开任务' : '标记为已完成'}
+          onClick={(event) => {
+            event.stopPropagation();
+            toggleTaskCompletion(entry);
+          }}
+        >
+          {entry.status === 'done'
+            ? '✓'
+            : entry.status === 'cancelled'
+              ? '↻'
+              : '○'}
+        </button>
         <div className="task-card-title">{entry.title}</div>
       </div>
       <div className="task-card-meta">
@@ -1680,6 +1810,18 @@ export default function TaskWorkspace({
         {notice && (
           <div className="task-message">
             {notice}
+            {statusUndo &&
+              (notice === `已完成「${statusUndo.title}」` ||
+                notice ===
+                  `「${statusUndo.title}」已更新为${statusName[statusUndo.nextStatus]}`) && (
+                <button
+                  type="button"
+                  disabled={statusSavingIds.has(statusUndo.taskId)}
+                  onClick={() => void undoStatusChange()}
+                >
+                  撤销
+                </button>
+              )}
             <button type="button" onClick={() => setNotice('')}>
               关闭
             </button>
@@ -1906,6 +2048,8 @@ export default function TaskWorkspace({
             onOpenTask={setSelectedId}
             onCreateTask={createTaskForDate}
             onMoveTask={moveTaskDate}
+            onToggleTaskCompletion={toggleTaskCompletion}
+            statusSavingIds={statusSavingIds}
           />
         ) : (
           <div className="task-list">
@@ -1941,20 +2085,55 @@ export default function TaskWorkspace({
           </div>
           <div className="task-detail-body">
             <h2>{selected.title}</h2>
-            <div className="task-detail-row">
+            <div className="task-detail-status-row">
               <span>状态</span>
-              <select
-                value={selected.status}
-                onChange={(event) =>
-                  void changeStatus(selected, event.target.value as TaskStatus)
-                }
-              >
-                {Object.entries(statusName).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
+              <div className="task-detail-status-controls">
+                <span className={`task-status-current is-${selected.status}`}>
+                  {statusName[selected.status]}
+                </span>
+                <button
+                  type="button"
+                  className={
+                    selected.status === 'done'
+                      ? 'task-status-reopen'
+                      : 'task-primary task-completion-action'
+                  }
+                  disabled={statusSavingIds.has(selected.id)}
+                  onClick={() => toggleTaskCompletion(selected)}
+                >
+                  {selected.status === 'done' || selected.status === 'cancelled'
+                    ? '重新打开'
+                    : '✓ 标记完成'}
+                </button>
+                <details className="task-status-menu">
+                  <summary
+                    aria-label={`当前状态：${statusName[selected.status]}，更改状态`}
+                  >
+                    更多
+                  </summary>
+                  <div role="group" aria-label="更改任务状态">
+                    {Object.entries(statusName).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        aria-pressed={selected.status === value}
+                        disabled={
+                          selected.status === value ||
+                          statusSavingIds.has(selected.id)
+                        }
+                        onClick={(event) => {
+                          event.currentTarget
+                            .closest('details')
+                            ?.removeAttribute('open');
+                          void changeStatus(selected, value as TaskStatus);
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </details>
+              </div>
             </div>
             <div className="task-detail-row">
               <span>计划</span>
@@ -2030,6 +2209,7 @@ export default function TaskWorkspace({
                 {selected.status !== 'done' && (
                   <button
                     type="button"
+                    disabled={statusSavingIds.has(selected.id)}
                     onClick={() => void changeStatus(selected, 'done')}
                   >
                     确认标记完成

@@ -11,12 +11,19 @@ export interface TranscriptTrack {
   languageCode: string;
   name: string;
   isTranslatable?: boolean;
+  isGenerated?: boolean;
   isDefault?: boolean;
+}
+
+export interface TranscriptTranslationLanguage {
+  languageCode: string;
+  name: string;
 }
 
 export interface TranscriptResult {
   videoId: string;
   tracks: TranscriptTrack[];
+  translationLanguages?: TranscriptTranslationLanguage[];
   activeTrackId: string | null;
   cues: TranscriptCue[];
 }

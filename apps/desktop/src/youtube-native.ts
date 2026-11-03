@@ -61,6 +61,12 @@ export interface ResolveNativeOptions {
   clients?: NativeClient[];
 }
 
+export interface NativeTranscriptInfo {
+  client: NativeClient;
+  info: any;
+  poToken?: string;
+}
+
 export type Library = typeof import('youtubei.js/web.bundle');
 type Format = InstanceType<Library['Misc']['Format']>;
 
@@ -321,7 +327,7 @@ function normalizeError(error: unknown): NativePlaybackError {
     return new NativePlaybackError('network', '解析超过 45 秒。');
   const message = error instanceof Error ? error.message : String(error);
   if (
-    /status code (401|403|502|504)|failed to fetch|networkerror|load failed/i.test(
+    /status code (401|403|429|502|504)|failed to fetch|networkerror|load failed/i.test(
       message,
     )
   )
@@ -423,7 +429,25 @@ async function resolveWithClient(
   signal: AbortSignal,
   visitorData?: string,
   onVisitorData?: (value: string) => void,
-): Promise<NativePlayback> {
+): Promise<NativePlayback>;
+async function resolveWithClient(
+  library: Library,
+  client: NativeClient,
+  videoId: string,
+  signal: AbortSignal,
+  visitorData: string | undefined,
+  onVisitorData: ((value: string) => void) | undefined,
+  purpose: 'transcript',
+): Promise<NativeTranscriptInfo>;
+async function resolveWithClient(
+  library: Library,
+  client: NativeClient,
+  videoId: string,
+  signal: AbortSignal,
+  visitorData?: string,
+  onVisitorData?: (value: string) => void,
+  purpose: 'playback' | 'transcript' = 'playback',
+): Promise<NativePlayback | NativeTranscriptInfo> {
   let resolutionActive = true;
   const fetchThroughProxy: typeof fetch = (input, init) =>
     proxiedFetch(input, {
@@ -518,6 +542,13 @@ async function resolveWithClient(
       failure,
       `${client}: ${playability?.status ?? ''} ${playability?.reason ?? ''}`.trim(),
     );
+
+  // Transcript discovery needs the same client, visitor data and BotGuard context as playback,
+  // but must not fail just because a client does not expose a playable media stream.
+  if (purpose === 'transcript') {
+    resolutionActive = false;
+    return { client, info, poToken };
+  }
 
   const streaming = info.streaming_data;
   const live = Boolean(
@@ -760,6 +791,69 @@ export async function resolveNativePlayback(
     selected.code,
     `客户端尝试：${clientFailures.join('；').slice(0, 680)}`,
   );
+}
+
+/**
+ * Resolves YouTube player info for captions using the same client, proxy and BotGuard flow as
+ * native playback. Unlike playback resolution, this succeeds without a usable media stream.
+ */
+export async function resolveNativeTranscriptInfo(
+  videoId: string,
+  options: ResolveNativeOptions = {},
+): Promise<NativeTranscriptInfo> {
+  const timeout = AbortSignal.timeout(RESOLVE_TIMEOUT_MS);
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, timeout])
+    : timeout;
+  const library = await loadLibrary();
+  const failures: NativePlaybackError[] = [];
+  let infoWithoutTracks: NativeTranscriptInfo | null = null;
+  let visitorData: string | undefined;
+
+  for (const client of options.clients ?? defaultNativeClients) {
+    signal.throwIfAborted();
+    try {
+      const result = await resolveWithClient(
+        library,
+        client,
+        videoId,
+        signal,
+        visitorData,
+        (value) => {
+          visitorData ??= value;
+        },
+        'transcript',
+      );
+      const tracks = result.info?.captions?.caption_tracks;
+      if (Array.isArray(tracks) && tracks.length > 0) {
+        const tokenRequired = tracks.some((track: any) => {
+          const baseUrl = track?.base_url ?? track?.baseUrl;
+          try {
+            return (
+              typeof baseUrl === 'string' &&
+              new URL(baseUrl).searchParams.get('exp') === 'xpe'
+            );
+          } catch {
+            return false;
+          }
+        });
+        if (!tokenRequired || result.poToken) return result;
+      }
+      infoWithoutTracks ??= result;
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      const failure = normalizeError(error);
+      failures.push(failure);
+      if (isDefinitiveFailure(failure.code)) break;
+      if (timeout.aborted) break;
+    }
+  }
+
+  if (options.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+  if (timeout.aborted)
+    throw new NativePlaybackError('network', '字幕轨道请求超时（45 秒）。');
+  if (infoWithoutTracks) return infoWithoutTracks;
+  throw pickFailure(failures);
 }
 
 export function isPlaybackExpired(

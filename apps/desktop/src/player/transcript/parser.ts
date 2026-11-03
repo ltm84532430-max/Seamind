@@ -1,5 +1,12 @@
 import type { TranscriptCue } from './types';
 
+export class TranscriptParseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TranscriptParseError';
+  }
+}
+
 function cleanText(raw: string): string {
   return raw
     .replace(/<[^>]+>/g, '')
@@ -28,9 +35,11 @@ export function parseYouTubeJson3(json: unknown): TranscriptCue[] {
       dDurationMs?: number;
       segs?: Array<{ utf8?: string }>;
     };
-    if (typeof item.tStartMs !== 'number') continue;
+    if (typeof item.tStartMs !== 'number' || !Number.isFinite(item.tStartMs))
+      continue;
     const start = item.tStartMs / 1000;
     const duration = (item.dDurationMs ?? 2000) / 1000;
+    if (!Number.isFinite(duration) || duration < 0) continue;
     const end = start + duration;
 
     let text = '';
@@ -53,20 +62,45 @@ export function parseYouTubeJson3(json: unknown): TranscriptCue[] {
 
 /** Parses YouTube XML format (timedtext). */
 export function parseYouTubeXml(xmlText: string): TranscriptCue[] {
+  if (typeof DOMParser === 'undefined')
+    throw new TranscriptParseError(
+      'XML parsing is unavailable in this runtime.',
+    );
+
   const parser = new DOMParser();
   const doc = parser.parseFromString(xmlText, 'text/xml');
-  const textNodes = doc.querySelectorAll('text');
+  if (doc.querySelector('parsererror'))
+    throw new TranscriptParseError('YouTube returned malformed XML captions.');
+
+  // Classic timedtext uses <text start="..." dur="...">. The srv3 variant
+  // uses <p t="..." d="..."><s>...</s></p>, with time values in ms.
+  const textNodes = doc.querySelectorAll('text, p');
   const cues: TranscriptCue[] = [];
   let index = 0;
 
   textNodes.forEach((node) => {
-    const startStr = node.getAttribute('start');
-    const durStr = node.getAttribute('dur');
-    if (!startStr) return;
-    const start = parseFloat(startStr);
-    const duration = durStr ? parseFloat(durStr) : 2.0;
+    const isSrv3 = node.tagName.toLowerCase() === 'p';
+    const startStr = node.getAttribute(isSrv3 ? 't' : 'start');
+    const durStr = node.getAttribute(isSrv3 ? 'd' : 'dur');
+    if (startStr === null) return;
+    const rawStart = Number.parseFloat(startStr);
+    const rawDuration = durStr === null ? 2 : Number.parseFloat(durStr);
+    const start = isSrv3 ? rawStart / 1000 : rawStart;
+    const duration =
+      isSrv3 && durStr !== null ? rawDuration / 1000 : rawDuration;
+    if (
+      !Number.isFinite(start) ||
+      !Number.isFinite(duration) ||
+      start < 0 ||
+      duration < 0
+    )
+      return;
     const end = start + duration;
-    const text = cleanText(node.textContent || '');
+    const segments = node.querySelectorAll('s');
+    const rawText = segments.length
+      ? Array.from(segments, (segment) => segment.textContent || '').join('')
+      : node.textContent || '';
+    const text = cleanText(rawText);
     if (!text) return;
 
     cues.push({
@@ -78,6 +112,49 @@ export function parseYouTubeXml(xmlText: string): TranscriptCue[] {
   });
 
   return cues;
+}
+
+/** Parses the response body returned by a YouTube caption track URL. */
+export function parseYouTubeCaptionResponse(content: string): TranscriptCue[] {
+  const trimmed = content.trim();
+  if (!trimmed)
+    throw new TranscriptParseError(
+      'YouTube returned an empty caption response.',
+    );
+
+  let cues: TranscriptCue[];
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      throw new TranscriptParseError('YouTube returned invalid JSON captions.');
+    }
+    cues = parseYouTubeJson3(parsed);
+    if (!Array.isArray((parsed as { events?: unknown[] })?.events))
+      throw new TranscriptParseError(
+        'The JSON response is not a JSON3 caption track.',
+      );
+  } else if (/^WEBVTT(?:\s|$)/i.test(trimmed)) {
+    cues = parseVttOrSrt(trimmed);
+  } else if (trimmed.startsWith('<')) {
+    cues = parseYouTubeXml(trimmed);
+    if (!trimmed.includes('<text') && !trimmed.includes('<p'))
+      throw new TranscriptParseError(
+        'The XML response does not contain a supported caption format.',
+      );
+  } else {
+    throw new TranscriptParseError(
+      'YouTube returned an unknown caption format.',
+    );
+  }
+
+  if (cues.length === 0)
+    throw new TranscriptParseError(
+      'The caption response contained no readable cues.',
+    );
+
+  return cues.sort((left, right) => left.start - right.start);
 }
 
 export interface TimedTextTrackInfo {

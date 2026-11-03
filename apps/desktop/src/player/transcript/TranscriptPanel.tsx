@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
-import { fetchVideoTranscript } from './fetcher';
+import {
+  clearTranscriptCache,
+  fetchVideoTranscript,
+  transcriptErrorMessage,
+  TranscriptFetchError,
+} from './fetcher';
 import { parseVttOrSrt } from './parser';
-import type { TranscriptCue, TranscriptViewMode } from './types';
+import type {
+  TranscriptCue,
+  TranscriptTrack,
+  TranscriptTranslationLanguage,
+  TranscriptViewMode,
+} from './types';
 
 export interface TranscriptPanelProps {
   videoId: string;
@@ -29,6 +39,34 @@ function formatCueTime(seconds: number): string {
   return `${m}:${secs.toString().padStart(2, '0')}`;
 }
 
+function transcriptErrorTitle(code: TranscriptFetchError['code']): string {
+  switch (code) {
+    case 'transcriptsDisabled':
+      return '没有可用字幕';
+    case 'languageUnavailable':
+    case 'trackUnavailable':
+      return '字幕轨道不可用';
+    case 'requestBlocked':
+    case 'poTokenRequired':
+      return 'YouTube 验证受限';
+    case 'rateLimited':
+      return '字幕请求频率受限';
+    case 'ageRestricted':
+      return '年龄限制视频';
+    case 'videoUnavailable':
+      return '视频不可访问';
+    case 'network':
+    case 'timeout':
+      return '字幕网络请求失败';
+    case 'http':
+      return '字幕服务返回错误';
+    case 'parse':
+      return '字幕格式无法解析';
+    default:
+      return '字幕读取失败';
+  }
+}
+
 export default function TranscriptPanel({
   videoId,
   videoTitle,
@@ -42,8 +80,18 @@ export default function TranscriptPanel({
   onCuesLoaded,
 }: TranscriptPanelProps) {
   const [cues, setCues] = useState<TranscriptCue[]>([]);
+  const [tracks, setTracks] = useState<TranscriptTrack[]>([]);
+  const [translationLanguages, setTranslationLanguages] = useState<
+    TranscriptTranslationLanguage[]
+  >([]);
+  const [translationLang, setTranslationLang] = useState('zh-Hans');
+  const [activeTrackId, setActiveTrackId] = useState<string | null>(null);
+  const [trackSelection, setTrackSelection] = useState<{
+    videoId: string;
+    trackId: string;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<TranscriptFetchError | null>(null);
   const [retryCount, setRetryCount] = useState(0);
   const [search, setSearch] = useState('');
   const [viewMode, setViewMode] = useState<TranscriptViewMode>('bilingual');
@@ -51,33 +99,71 @@ export default function TranscriptPanel({
   const listRef = useRef<HTMLDivElement | null>(null);
   const activeElementRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const lastVideoIdRef = useRef(videoId);
+  const requestedTrackId =
+    trackSelection?.videoId === videoId ? trackSelection.trackId : undefined;
+  const translationTrackId = requestedTrackId ?? activeTrackId;
+  const translationTrack = tracks.find(
+    (track) => track.id === translationTrackId,
+  );
+  const selectedTranslationLanguage = translationLanguages.find(
+    (language) =>
+      language.languageCode.toLowerCase() === translationLang.toLowerCase(),
+  );
+  const effectiveTranslationLang =
+    selectedTranslationLanguage?.languageCode ??
+    translationLanguages.find((language) =>
+      language.languageCode.toLowerCase().startsWith('zh'),
+    )?.languageCode ??
+    translationLanguages[0]?.languageCode ??
+    translationLang;
 
   const handleRetry = useCallback(() => {
-    try {
-      localStorage.removeItem(`seamind:transcript:v1:${videoId}`);
-    } catch {
-      // ignore
-    }
+    clearTranscriptCache(videoId);
     setRetryCount((c) => c + 1);
   }, [videoId]);
 
-  // Load transcript when videoId or retryCount changes
+  // Load the selected track. Cleanup aborts the network request, not only the UI update.
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
+    if (lastVideoIdRef.current !== videoId) {
+      lastVideoIdRef.current = videoId;
+      setTracks([]);
+      setTranslationLanguages([]);
+      setActiveTrackId(null);
+      setTrackSelection(null);
+    }
     setLoading(true);
     setError(null);
+    setCues([]);
+    onCuesLoaded?.([]);
 
-    fetchVideoTranscript(videoId)
+    fetchVideoTranscript(videoId, 'zh-Hans', {
+      signal: controller.signal,
+      trackId: requestedTrackId,
+      translationLang: effectiveTranslationLang,
+    })
       .then((res) => {
         if (cancelled) return;
+        setTracks(res.tracks);
+        setTranslationLanguages(res.translationLanguages ?? []);
+        setActiveTrackId(res.activeTrackId);
         setCues(res.cues);
         onCuesLoaded?.(res.cues);
         setLoading(false);
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
-        const msg = err instanceof Error ? err.message : '加载字幕失败';
-        setError(msg);
+        if (
+          cancelled ||
+          (err instanceof DOMException && err.name === 'AbortError')
+        )
+          return;
+        const normalized =
+          err instanceof TranscriptFetchError
+            ? err
+            : new TranscriptFetchError('unknown', transcriptErrorMessage(err));
+        setError(normalized);
         setCues([]);
         onCuesLoaded?.([]);
         setLoading(false);
@@ -85,8 +171,15 @@ export default function TranscriptPanel({
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [videoId, retryCount, onCuesLoaded]);
+  }, [
+    videoId,
+    retryCount,
+    requestedTrackId,
+    effectiveTranslationLang,
+    onCuesLoaded,
+  ]);
 
   // Find active cue based on currentTime
   const activeCue = useMemo(() => {
@@ -221,6 +314,52 @@ export default function TranscriptPanel({
             </button>
           )}
         </div>
+
+        {tracks.length > 0 && (
+          <label className="player-transcript-track-picker">
+            <span>字幕</span>
+            <select
+              aria-label="字幕轨道"
+              value={requestedTrackId ?? ''}
+              disabled={loading}
+              onChange={(event) => {
+                const trackId = event.target.value;
+                setTrackSelection(trackId ? { videoId, trackId } : null);
+              }}
+            >
+              <option value="">
+                {`自动选择 · ${tracks.find((track) => track.id === activeTrackId)?.name ?? '首选语言'}`}
+              </option>
+              {tracks.map((track) => (
+                <option key={track.id} value={track.id}>
+                  {`${track.name} · ${track.languageCode}${track.isGenerated ? ' · 自动生成' : ' · 人工字幕'}`}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        {translationTrack?.isTranslatable &&
+          translationLanguages.length > 0 && (
+            <label className="player-transcript-track-picker">
+              <span>译文</span>
+              <select
+                aria-label="字幕翻译语言"
+                value={effectiveTranslationLang}
+                disabled={loading}
+                onChange={(event) => setTranslationLang(event.target.value)}
+              >
+                {translationLanguages.map((language) => (
+                  <option
+                    key={language.languageCode}
+                    value={language.languageCode}
+                  >
+                    {language.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
 
         <div className="player-transcript-modes">
           <button
@@ -379,9 +518,9 @@ export default function TranscriptPanel({
         {!loading && error && cues.length === 0 && (
           <div className="player-transcript-state is-error">
             <span className="player-transcript-error-badge">
-              ⚠️ 网络或风控受限
+              ⚠️ {transcriptErrorTitle(error.code)}
             </span>
-            <p className="player-transcript-error-msg">{error}</p>
+            <p className="player-transcript-error-msg">{error.message}</p>
             <div className="player-transcript-state-actions">
               <button
                 type="button"

@@ -45,11 +45,15 @@ export default function TaskCalendar({
   onOpenTask,
   onCreateTask,
   onMoveTask,
+  onToggleTaskCompletion,
+  statusSavingIds,
 }: {
   tasks: LearningTask[];
   onOpenTask(id: string): void;
   onCreateTask(date: string): void;
   onMoveTask(task: LearningTask, date: string | null): Promise<void>;
+  onToggleTaskCompletion(task: LearningTask): void;
+  statusSavingIds: ReadonlySet<string>;
 }) {
   const today = localToday();
   const initial = parseDateKey(today)!;
@@ -106,31 +110,55 @@ export default function TaskCalendar({
     }
   };
   const taskButton = (task: LearningTask, compact: boolean) => (
-    <button
+    <div
       key={task.id}
-      type="button"
       className={`task-calendar-item is-${task.status}${compact ? ' is-compact' : ''}`}
-      draggable={!movingId}
+      draggable={!movingId && !statusSavingIds.has(task.id)}
+      role="group"
+      aria-label={`${task.title}，${STATUS[task.status]}，${taskKind(task)}`}
       onDragStart={(event) => {
         event.dataTransfer.setData('text/plain', task.id);
         event.dataTransfer.effectAllowed = 'move';
         setDraggingId(task.id);
       }}
       onDragEnd={() => setDraggingId(null)}
-      onClick={(event) => {
-        event.stopPropagation();
-        onOpenTask(task.id);
-      }}
-      title={`${task.title} · ${STATUS[task.status]} · ${taskKind(task)}`}
-      aria-label={`${task.title}，${STATUS[task.status]}，${taskKind(task)}`}
-      disabled={movingId === task.id}
     >
-      <span className="task-calendar-item-mark" aria-hidden="true" />
-      <span className="task-calendar-item-title">{task.title}</span>
-      {!compact && (
-        <span className="task-calendar-item-kind">{taskKind(task)}</span>
-      )}
-    </button>
+      <button
+        type="button"
+        className={`task-calendar-item-toggle is-${task.status}`}
+        aria-label={
+          task.status === 'done'
+            ? `重新打开任务 ${task.title}`
+            : `标记任务完成 ${task.title}`
+        }
+        aria-pressed={task.status === 'done'}
+        title={task.status === 'done' ? '重新打开任务' : '标记为已完成'}
+        disabled={movingId === task.id || statusSavingIds.has(task.id)}
+        onClick={(event) => {
+          event.stopPropagation();
+          onToggleTaskCompletion(task);
+        }}
+      >
+        {task.status === 'done' ? '✓' : '○'}
+      </button>
+      <button
+        type="button"
+        className="task-calendar-item-open"
+        onClick={(event) => {
+          event.stopPropagation();
+          onOpenTask(task.id);
+        }}
+        title={`${task.title} · ${STATUS[task.status]} · ${taskKind(task)}`}
+        aria-label={`${task.title}，${STATUS[task.status]}，${taskKind(task)}`}
+        disabled={movingId === task.id}
+      >
+        <span className="task-calendar-item-mark" aria-hidden="true" />
+        <span className="task-calendar-item-title">{task.title}</span>
+        {!compact && (
+          <span className="task-calendar-item-kind">{taskKind(task)}</span>
+        )}
+      </button>
+    </div>
   );
 
   return (
