@@ -1576,7 +1576,7 @@ fn configured_root(app: &AppHandle) -> Result<Option<PathBuf>, String> {
     Ok(Some(root))
 }
 
-fn require_root(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn require_root(app: &AppHandle) -> Result<PathBuf, String> {
     configured_root(app)?.ok_or_else(|| "请先设置文件库目录。".to_string())
 }
 
@@ -2181,7 +2181,7 @@ fn category_path(category: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn safe_file_stem(title: &str) -> Result<String, String> {
+pub(crate) fn safe_file_stem(title: &str) -> Result<String, String> {
     let mut result = String::new();
     let mut previous_space = false;
     for ch in title.trim().chars() {
@@ -2600,7 +2600,7 @@ fn write_atomically(path: &Path, contents: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn path_to_relative_string(path: &Path) -> String {
+pub(crate) fn path_to_relative_string(path: &Path) -> String {
     path.components()
         .filter_map(|component| match component {
             Component::Normal(value) => Some(value.to_string_lossy().into_owned()),

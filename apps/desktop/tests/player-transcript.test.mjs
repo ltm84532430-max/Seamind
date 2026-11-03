@@ -69,3 +69,4 @@ test('alignBilingualCues accurately pairs original and translated lines', () => 
   assert.equal(aligned[0].translation, '大家好，欢迎大家。');
   assert.equal(aligned[1].translation, '今天我们将讨论算法。');
 });
+

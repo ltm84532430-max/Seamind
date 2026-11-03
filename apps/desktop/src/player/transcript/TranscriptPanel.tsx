@@ -6,7 +6,7 @@ import type { TranscriptCue, TranscriptViewMode } from './types';
 
 export interface TranscriptPanelProps {
   videoId: string;
-  videoTitle: string;
+  videoTitle?: string;
   currentTime: number;
   onSeek(seconds: number): void;
   onToggleLoopCue?(cue: TranscriptCue | null): void;
@@ -68,15 +68,13 @@ export default function TranscriptPanel({
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : '加载字幕失败';
         setError(msg);
-        setCues([]);
-        onCuesLoaded?.([]);
         setLoading(false);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [videoId, onCuesLoaded]);
+  }, [videoId]);
 
   // Find active cue based on currentTime
   const activeCue = useMemo(() => {
@@ -149,8 +147,7 @@ export default function TranscriptPanel({
       const startSec = Math.floor(cue.start);
       const timeLabel = formatCueTime(cue.start);
       const url = `https://www.youtube.com/watch?v=${videoId}&t=${startSec}s`;
-      const titleTag = videoTitle ? ` 《${videoTitle}》` : '';
-      let snippet = `> [▶ ${timeLabel}${titleTag}](${url}) ${cue.text}`;
+      let snippet = `> [▶ ${timeLabel}](${url}) ${cue.text}`;
       if (cue.translation) {
         snippet += `\n> *${cue.translation}*`;
       }
@@ -164,13 +161,15 @@ export default function TranscriptPanel({
           onShowNotice?.('复制失败，请重试');
         });
     },
-    [videoId, videoTitle, onShowNotice],
+    [videoId, onShowNotice],
   );
 
   return (
     <div
       className="player-transcript-panel"
-      aria-label={`《${videoTitle}》视频台词与字幕`}
+      aria-label={
+        videoTitle ? `《${videoTitle}》视频台词与字幕` : '视频台词与字幕'
+      }
     >
       {/* 顶部工具栏 */}
       <div className="player-transcript-toolbar">

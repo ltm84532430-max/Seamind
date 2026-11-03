@@ -12,6 +12,7 @@ mod youtube_botguard;
 mod youtube_eval;
 mod youtube_net;
 mod youtube_proxy;
+mod zlib_bridge;
 
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
@@ -140,6 +141,10 @@ pub fn run() {
             player::player_import_backup,
             player::player_fetch_feed,
             player::player_fetch_video_info,
+            zlib_bridge::zlib_check_environment,
+            zlib_bridge::zlib_get_profile,
+            zlib_bridge::zlib_search,
+            zlib_bridge::zlib_download_book,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Markmap Desktop");

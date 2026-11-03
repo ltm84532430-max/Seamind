@@ -18,6 +18,7 @@ import type { EpubReadingPlan } from './ebook-storage';
 import EbookReadingDashboard from './EbookReadingDashboard';
 import type { EbookDashboardBook } from './EbookReadingDashboard';
 import EbookReadingHeatmap from './EbookReadingHeatmap';
+import ZlibSearchDialog from './ZlibSearchDialog';
 
 type ShelfSort = 'recent' | 'title' | 'added';
 
@@ -71,6 +72,7 @@ export default function EbookWorkspace({
   const [selectedExam, setSelectedExam] = useState<EpubExamSummary | null>(
     null,
   );
+  const [zlibDialogOpen, setZlibDialogOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -427,6 +429,19 @@ export default function EbookWorkspace({
             </button>
             <button type="button" onClick={onRefresh} disabled={busy}>
               刷新书架
+            </button>
+            <button
+              type="button"
+              className="ebook-shelf-zlib"
+              onClick={() => setZlibDialogOpen(true)}
+              disabled={!snapshot?.rootPath}
+              title={
+                snapshot?.rootPath
+                  ? '在线搜索 Z-Library 海量书籍并下载'
+                  : '请先选择文件库位置'
+              }
+            >
+              在线找书
             </button>
             <button
               type="button"
@@ -953,6 +968,18 @@ export default function EbookWorkspace({
           </form>
         </div>
       )}
+
+      <ZlibSearchDialog
+        open={zlibDialogOpen}
+        onClose={() => setZlibDialogOpen(false)}
+        hasRoot={Boolean(snapshot?.rootPath)}
+        onBookDownloaded={(doc, openImmediately) => {
+          onRefresh();
+          if (openImmediately) {
+            onOpenBook(doc);
+          }
+        }}
+      />
     </main>
   );
 }
