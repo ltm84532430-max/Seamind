@@ -1,6 +1,6 @@
 # Seamind
 
-Seamind 是一个本地优先的 Windows 桌面应用。用 Markdown 写思维导图，并把导图、文档、电子书、YouTube 学习视频和本地知识库放在同一个工作台里。
+Seamind 是一个本地优先的 Windows 学习与知识工作台。它以 Markdown 思维导图为核心，把文档、电子书与试卷、YouTube 播放与字幕、RSS 阅读、文献资料和任务整理放在同一个桌面应用中。导图、笔记和大部分应用数据保存在本机。
 
 项目目前是早期版本（0.1.0），只在 Windows 上开发和测试。
 
@@ -10,7 +10,8 @@ Seamind 是一个本地优先的 Windows 桌面应用。用 Markdown 写思维�
 - **图表与公式**：数学公式（KaTeX）、ECharts、PlantUML 围栏（由本机 Java 渲染）、Mermaid 代码块（浏览器内渲染），以及 Pele 图表（`pele` 代码块和 `.mmd` 文件，使用 Mermaid 语法，由 Pele 渲染为 SVG）。
 - **文档**：Markdown 文档工作台，左边编辑、右边预览。文档可以按导图查看，也可以转成导图。
 - **电子书**：导入 EPUB 阅读（基于 foliate-js），可以为书籍生成导图。试卷库按书整理试卷，记录作答和自评。
-- **播放器**：YouTube 订阅、新视频动态、收藏和课程，数据保存在本机数据库。
+- **播放器**：YouTube 订阅、新视频动态、收藏、课程和字幕整理，数据保存在本机数据库。
+- **信息与任务**：阅读 RSS 订阅、整理文献与 PDF，并通过任务工作区和日历跟踪待办事项。
 - **知识库**：本地 Markdown 笔记的列表、搜索、新建和删除，支持公式预览，并可以在导图中打开。
 - **AI 生成**：通过 OpenAI 兼容的 Chat Completions 接口，从一句话生成 Markdown 导图。
 - **终端**：内置终端，Windows 下运行 PowerShell。
@@ -21,8 +22,9 @@ Seamind 是一个本地优先的 Windows 桌面应用。用 Markdown 写思维�
 | --- | --- | --- |
 | 系统 | Windows 10/11 | API 密钥保存在 Windows 凭据管理器中 |
 | WebView2 | 运行时 | 大多数系统已自带；没有时从 [Microsoft 官网](https://developer.microsoft.com/microsoft-edge/webview2/) 安装 |
-| Node.js | 22 或更高 | 启用 corepack：`corepack enable` |
-| Rust | 稳定版，MSVC 工具链 | 需要 Visual Studio 的 C++ 生成工具，这是 Tauri 2 的要求 |
+| Node.js | 22 或更高 | 使用随 Node.js 提供的 Corepack 调用 pnpm 9.15.9 |
+| pnpm | 9.15.9 | 仓库命令通过 `corepack pnpm@9.15.9` 固定版本 |
+| Rust | 稳定版，`x86_64-pc-windows-msvc` 工具链 | 需要 Visual Studio 2022 Build Tools 的“使用 C++ 的桌面开发”工作负载和 Windows SDK |
 | Git | 支持 submodule | 克隆时需要 `--recurse-submodules` |
 | Java | 11 或更高 | 仅 PlantUML 需要，未安装时其他功能不受影响 |
 | Graphviz | 可选 | 安装后 PlantUML 使用 Graphviz 布局；没有时使用内置的 smetana 布局 |
@@ -42,6 +44,12 @@ corepack pnpm@9.15.9 --filter @markmap/desktop tauri dev
 - 第一次运行要编译 Rust 代码，耗时较长。窗口第一次加载也比较慢，可能先空白一段时间，属于正常现象。
 - `pnpm install` 会安装 Git 钩子，说明见 [开发与检查](#开发与检查)。
 
+开发模式会同时启动 Vite 和 Tauri 桌面窗口。若只需要打包 Windows 安装程序，在仓库根目录运行：
+
+```powershell
+corepack pnpm@9.15.9 --filter @markmap/desktop tauri build
+```
+
 ## 配置
 
 ### AI 模型
@@ -52,6 +60,7 @@ corepack pnpm@9.15.9 --filter @markmap/desktop tauri dev
 - 接口地址必须使用 HTTPS。只有 `localhost` 和回环地址（例如本机的 Ollama）可以使用 HTTP。
 - API 密钥保存在当前 Windows 用户的凭据管理器中，服务名为 `com.markmap.desktop`。前端只知道密钥是否已保存，看不到密钥本身。
 - 接口地址和模型名称保存在应用的本地 WebView 存储中。
+- 不要把 API 密钥、代理账号密码、Cookie 或个人数据写进源码、示例配置或提交记录。`.env` 和本地数据库已由 `.gitignore` 排除；应用的 AI 密钥通过设置界面保存，不需要放入 `.env`。
 
 ### 文件库
 
@@ -99,6 +108,8 @@ PlantUML 围栏需要 Java 11 或更高版本。应用会依次查找 `JAVA_HOME
 **YouTube**：点击导图里的 YouTube 卡片会打开播放窗口。播放器页面可以订阅频道、查看新视频、收藏视频和组织课程。
 
 ## 开发与检查
+
+pnpm 版本固定为 9.15.9，Rust 后端使用稳定版 MSVC 工具链。首次启动命令见[快速开始](#快速开始)；开发服务器使用 `http://127.0.0.1:1420`，端口被占用时会直接报错。
 
 ```powershell
 corepack pnpm@9.15.9 -r build:types                                    # 先构建各包的类型声明

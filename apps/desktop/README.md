@@ -1,6 +1,13 @@
 # Seamind 桌面端
 
-这里是桌面端（Tauri 2 + React 19 + Vite）的开发说明。安装、配置和使用方法见仓库根目录的 [README](../../README.md)。
+这里是 Seamind 桌面端（Tauri 2 + React 19 + Vite）的开发说明，覆盖播放器、文档、导图、电子书、RSS、文献和任务工作区。安装、功能配置与数据位置见仓库根目录的 [README](../../README.md)。
+
+## 开发环境
+
+- Windows 10/11、Node.js 22 或更高版本、Corepack 和 pnpm 9.15.9。
+- Rust 稳定版 `x86_64-pc-windows-msvc` 工具链，以及 Visual Studio 2022 Build Tools 的 C++ 桌面开发组件和 Windows SDK。
+- WebView2 Runtime。
+- `packages/foliate-js` submodule。首次克隆使用 `git clone --recurse-submodules`；已克隆的仓库使用 `git submodule update --init`。
 
 ## 运行
 
