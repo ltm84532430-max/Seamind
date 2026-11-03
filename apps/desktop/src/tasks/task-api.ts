@@ -51,9 +51,10 @@ export const taskApi = {
     targetPlanId: string | null,
     newPlanTitle: string | null,
     createNew: boolean,
+    sourceOrder?: number,
   ) => {
     const result = await invoke<ImportResult>('learning_tasks_sync_plan', {
-      request: { source, targetPlanId, newPlanTitle, createNew },
+      request: { source, targetPlanId, newPlanTitle, createNew, sourceOrder },
     });
     tasksChanged();
     return result;

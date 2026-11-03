@@ -54,6 +54,7 @@ export interface PlanSource {
   sourceKind: string;
   title: string;
   lastSyncedAt: number;
+  sortOrder: number;
   taskCount: number;
   removedCount: number;
 }

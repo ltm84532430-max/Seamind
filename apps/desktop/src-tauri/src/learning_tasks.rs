@@ -51,7 +51,8 @@ CREATE TABLE IF NOT EXISTS plan_sources (
     plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
     source_kind TEXT NOT NULL,
     title TEXT NOT NULL,
-    last_synced_at INTEGER NOT NULL
+    last_synced_at INTEGER NOT NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0
 );
 "#;
 
@@ -150,6 +151,7 @@ pub struct PlanSource {
     pub source_kind: String,
     pub title: String,
     pub last_synced_at: i64,
+    pub sort_order: i64,
     pub task_count: usize,
     pub removed_count: usize,
 }
@@ -178,6 +180,8 @@ pub struct SyncImportRequest {
     pub new_plan_title: Option<String>,
     #[serde(default)]
     pub create_new: bool,
+    #[serde(default)]
+    pub source_order: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,6 +234,12 @@ fn open_path(path: &Path) -> Result<Connection, String> {
         [],
     );
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN source_snapshot_json TEXT", []);
+    let source_order_column_added = conn
+        .execute(
+            "ALTER TABLE plan_sources ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
+            [],
+        )
+        .is_ok();
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source_key, source_present)",
         [],
@@ -240,7 +250,103 @@ fn open_path(path: &Path) -> Result<Connection, String> {
         [],
     )
     .map_err(db_error)?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_plan_sources_order ON plan_sources(plan_id,sort_order,source_key)",
+        [],
+    )
+    .map_err(db_error)?;
+    backfill_legacy_plan_sources(&conn)?;
+    if source_order_column_added {
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT plan_id FROM plan_sources ORDER BY plan_id")
+            .map_err(db_error)?;
+        let plan_ids = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(db_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(db_error)?;
+        drop(stmt);
+        for plan_id in plan_ids {
+            normalize_plan_source_order(&conn, &plan_id)?;
+        }
+    }
     Ok(conn)
+}
+
+fn backfill_legacy_plan_sources(conn: &Connection) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id,origin_key,title,updated_at FROM plans
+             WHERE origin_key IS NOT NULL ORDER BY created_at,id",
+        )
+        .map_err(db_error)?;
+    let plans = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })
+        .map_err(db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)?;
+    drop(stmt);
+
+    for (plan_id, source_key, title, last_synced_at) in plans {
+        let already_linked: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM plan_sources WHERE source_key=?1)",
+                params![source_key],
+                |row| row.get(0),
+            )
+            .map_err(db_error)?;
+        if already_linked {
+            continue;
+        }
+        let task_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE plan_id=?1 AND source_key IS NULL",
+                params![plan_id],
+                |row| row.get(0),
+            )
+            .map_err(db_error)?;
+        if task_count == 0 {
+            continue;
+        }
+        let source_kind = serde_json::from_str::<Vec<String>>(&source_key)
+            .ok()
+            .and_then(|parts| parts.first().cloned())
+            .unwrap_or_else(|| "legacy".to_string());
+        let sort_order: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(sort_order)+1,0) FROM plan_sources WHERE plan_id=?1",
+                params![plan_id],
+                |row| row.get(0),
+            )
+            .map_err(db_error)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO plan_sources(
+                source_key,plan_id,source_kind,title,last_synced_at,sort_order
+             ) VALUES (?1,?2,?3,?4,?5,?6)",
+            params![
+                source_key,
+                plan_id,
+                source_kind,
+                title,
+                last_synced_at,
+                sort_order
+            ],
+        )
+        .map_err(db_error)?;
+        conn.execute(
+            "UPDATE tasks SET source_key=?1 WHERE plan_id=?2 AND source_key IS NULL",
+            params![source_key, plan_id],
+        )
+        .map_err(db_error)?;
+    }
+    Ok(())
 }
 
 fn open(app: &AppHandle) -> Result<Connection, String> {
@@ -591,12 +697,12 @@ fn snapshot(conn: &Connection) -> Result<TaskSnapshot, String> {
     }
     let mut stmt = conn
         .prepare(
-            "SELECT s.source_key,s.plan_id,s.source_kind,s.title,s.last_synced_at,
+            "SELECT s.source_key,s.plan_id,s.source_kind,s.title,s.last_synced_at,s.sort_order,
                     SUM(CASE WHEN t.source_present=1 THEN 1 ELSE 0 END),
                     SUM(CASE WHEN t.source_present=0 THEN 1 ELSE 0 END)
              FROM plan_sources s LEFT JOIN tasks t ON t.source_key=s.source_key
-             GROUP BY s.source_key,s.plan_id,s.source_kind,s.title,s.last_synced_at
-             ORDER BY s.title,s.source_key",
+             GROUP BY s.source_key,s.plan_id,s.source_kind,s.title,s.last_synced_at,s.sort_order
+             ORDER BY s.plan_id,s.sort_order,s.title,s.source_key",
         )
         .map_err(db_error)?;
     let sources = stmt
@@ -607,8 +713,9 @@ fn snapshot(conn: &Connection) -> Result<TaskSnapshot, String> {
                 source_kind: row.get(2)?,
                 title: row.get(3)?,
                 last_synced_at: row.get(4)?,
-                task_count: row.get::<_, Option<i64>>(5)?.unwrap_or(0) as usize,
-                removed_count: row.get::<_, Option<i64>>(6)?.unwrap_or(0) as usize,
+                sort_order: row.get(5)?,
+                task_count: row.get::<_, Option<i64>>(6)?.unwrap_or(0) as usize,
+                removed_count: row.get::<_, Option<i64>>(7)?.unwrap_or(0) as usize,
             })
         })
         .map_err(db_error)?
@@ -648,12 +755,72 @@ fn merge_source_field<T: Clone + PartialEq>(
     }
 }
 
+fn reorder_plan_source(
+    conn: &Connection,
+    plan_id: &str,
+    source_key: &str,
+    requested_order: Option<i64>,
+) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT source_key FROM plan_sources
+             WHERE plan_id=?1 ORDER BY sort_order,title,source_key",
+        )
+        .map_err(db_error)?;
+    let mut keys = stmt
+        .query_map(params![plan_id], |row| row.get::<_, String>(0))
+        .map_err(db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)?;
+    drop(stmt);
+
+    keys.retain(|key| key != source_key);
+    let index = requested_order
+        .filter(|order| *order >= 0)
+        .map(|order| order as usize)
+        .unwrap_or(keys.len())
+        .min(keys.len());
+    keys.insert(index, source_key.to_string());
+    for (position, key) in keys.iter().enumerate() {
+        conn.execute(
+            "UPDATE plan_sources SET sort_order=?1 WHERE plan_id=?2 AND source_key=?3",
+            params![position as i64, plan_id, key],
+        )
+        .map_err(db_error)?;
+    }
+    Ok(())
+}
+
+fn normalize_plan_source_order(conn: &Connection, plan_id: &str) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT source_key FROM plan_sources
+             WHERE plan_id=?1 ORDER BY sort_order,title,source_key",
+        )
+        .map_err(db_error)?;
+    let keys = stmt
+        .query_map(params![plan_id], |row| row.get::<_, String>(0))
+        .map_err(db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)?;
+    drop(stmt);
+    for (position, key) in keys.iter().enumerate() {
+        conn.execute(
+            "UPDATE plan_sources SET sort_order=?1 WHERE plan_id=?2 AND source_key=?3",
+            params![position as i64, plan_id, key],
+        )
+        .map_err(db_error)?;
+    }
+    Ok(())
+}
+
 fn import_plan_with_target(
     conn: &Connection,
     draft: &ImportPlan,
     requested_target_id: Option<&str>,
     new_plan_title: Option<&str>,
     create_new: bool,
+    requested_source_order: Option<i64>,
     timestamp: i64,
 ) -> Result<ImportResult, String> {
     if draft.tasks.len() > 1000 {
@@ -674,6 +841,14 @@ fn import_plan_with_target(
     let mapped_plan: Option<String> = tx
         .query_row(
             "SELECT plan_id FROM plan_sources WHERE source_key=?1",
+            params![source_key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_error)?;
+    let existing_source_order: Option<i64> = tx
+        .query_row(
+            "SELECT sort_order FROM plan_sources WHERE source_key=?1",
             params![source_key],
             |row| row.get(0),
         )
@@ -703,9 +878,9 @@ fn import_plan_with_target(
         }
         target_id.to_string()
     } else if !create_new && mapped_plan.is_some() {
-        mapped_plan.unwrap()
+        mapped_plan.clone().unwrap()
     } else if !create_new && legacy_plan.is_some() {
-        legacy_plan.unwrap()
+        legacy_plan.clone().unwrap()
     } else {
         let title = new_plan_title
             .map(str::trim)
@@ -793,6 +968,23 @@ fn import_plan_with_target(
         params![source_key,plan_id,source_kind,draft.plan.title,timestamp],
     )
     .map_err(db_error)?;
+    let retained_source_order = if mapped_plan.as_deref() == Some(plan_id.as_str()) {
+        existing_source_order
+    } else {
+        None
+    };
+    reorder_plan_source(
+        &tx,
+        &plan_id,
+        source_key,
+        requested_source_order.or(retained_source_order),
+    )?;
+    if let Some(previous_plan_id) = mapped_plan
+        .as_deref()
+        .filter(|previous_plan_id| *previous_plan_id != plan_id)
+    {
+        normalize_plan_source_order(&tx, previous_plan_id)?;
+    }
 
     let mut added = 0usize;
     let mut updated = 0usize;
@@ -1038,7 +1230,7 @@ fn import_plan(
     draft: &ImportPlan,
     timestamp: i64,
 ) -> Result<ImportResult, String> {
-    import_plan_with_target(conn, draft, None, None, false, timestamp)
+    import_plan_with_target(conn, draft, None, None, false, None, timestamp)
 }
 
 #[tauri::command(async)]
@@ -1088,6 +1280,7 @@ pub fn learning_tasks_sync_plan(
         request.target_plan_id.as_deref(),
         request.new_plan_title.as_deref(),
         request.create_new,
+        request.source_order,
         now(),
     )
 }

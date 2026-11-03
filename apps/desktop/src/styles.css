@@ -51,7 +51,16 @@ button {
 .markdown-rendered-preview,
 .category-list,
 .document-list,
-.library-tree {
+.library-tree,
+.task-board,
+.task-column-items,
+.task-list,
+.task-calendar-grid-wrap,
+.task-calendar-agenda-list,
+.task-archive-view,
+.task-detail-body,
+.task-modal-body,
+.task-prerequisites {
   --scrollbar-thumb: transparent;
   transition: --scrollbar-thumb 800ms linear;
 }
@@ -59,7 +68,16 @@ button {
 .markdown-preview-frame:hover .markdown-rendered-preview,
 .category-list:hover,
 .document-list:hover,
-.library-tree:hover {
+.library-tree:hover,
+.task-board:hover,
+.task-column-items:hover,
+.task-list:hover,
+.task-calendar-grid-wrap:hover,
+.task-calendar-agenda-list:hover,
+.task-archive-view:hover,
+.task-detail-body:hover,
+.task-modal-body:hover,
+.task-prerequisites:hover {
   --scrollbar-thumb: var(--scrollbar-slider);
   transition-duration: 100ms;
 }
@@ -67,7 +85,16 @@ button {
 .markdown-rendered-preview::-webkit-scrollbar,
 .category-list::-webkit-scrollbar,
 .document-list::-webkit-scrollbar,
-.library-tree::-webkit-scrollbar {
+.library-tree::-webkit-scrollbar,
+.task-board::-webkit-scrollbar,
+.task-column-items::-webkit-scrollbar,
+.task-list::-webkit-scrollbar,
+.task-calendar-grid-wrap::-webkit-scrollbar,
+.task-calendar-agenda-list::-webkit-scrollbar,
+.task-archive-view::-webkit-scrollbar,
+.task-detail-body::-webkit-scrollbar,
+.task-modal-body::-webkit-scrollbar,
+.task-prerequisites::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
@@ -75,7 +102,16 @@ button {
 .markdown-rendered-preview::-webkit-scrollbar-thumb,
 .category-list::-webkit-scrollbar-thumb,
 .document-list::-webkit-scrollbar-thumb,
-.library-tree::-webkit-scrollbar-thumb {
+.library-tree::-webkit-scrollbar-thumb,
+.task-board::-webkit-scrollbar-thumb,
+.task-column-items::-webkit-scrollbar-thumb,
+.task-list::-webkit-scrollbar-thumb,
+.task-calendar-grid-wrap::-webkit-scrollbar-thumb,
+.task-calendar-agenda-list::-webkit-scrollbar-thumb,
+.task-archive-view::-webkit-scrollbar-thumb,
+.task-detail-body::-webkit-scrollbar-thumb,
+.task-modal-body::-webkit-scrollbar-thumb,
+.task-prerequisites::-webkit-scrollbar-thumb {
   min-width: 20px;
   min-height: 20px;
   background: var(--scrollbar-thumb);
@@ -84,27 +120,77 @@ button {
 .markdown-rendered-preview::-webkit-scrollbar-thumb:hover,
 .category-list::-webkit-scrollbar-thumb:hover,
 .document-list::-webkit-scrollbar-thumb:hover,
-.library-tree::-webkit-scrollbar-thumb:hover {
+.library-tree::-webkit-scrollbar-thumb:hover,
+.task-board::-webkit-scrollbar-thumb:hover,
+.task-column-items::-webkit-scrollbar-thumb:hover,
+.task-list::-webkit-scrollbar-thumb:hover,
+.task-calendar-grid-wrap::-webkit-scrollbar-thumb:hover,
+.task-calendar-agenda-list::-webkit-scrollbar-thumb:hover,
+.task-archive-view::-webkit-scrollbar-thumb:hover,
+.task-detail-body::-webkit-scrollbar-thumb:hover,
+.task-modal-body::-webkit-scrollbar-thumb:hover,
+.task-prerequisites::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-slider-hover);
 }
 .markdown-editor .cm-scroller::-webkit-scrollbar-thumb:active,
 .markdown-rendered-preview::-webkit-scrollbar-thumb:active,
 .category-list::-webkit-scrollbar-thumb:active,
 .document-list::-webkit-scrollbar-thumb:active,
-.library-tree::-webkit-scrollbar-thumb:active {
+.library-tree::-webkit-scrollbar-thumb:active,
+.task-board::-webkit-scrollbar-thumb:active,
+.task-column-items::-webkit-scrollbar-thumb:active,
+.task-list::-webkit-scrollbar-thumb:active,
+.task-calendar-grid-wrap::-webkit-scrollbar-thumb:active,
+.task-calendar-agenda-list::-webkit-scrollbar-thumb:active,
+.task-archive-view::-webkit-scrollbar-thumb:active,
+.task-detail-body::-webkit-scrollbar-thumb:active,
+.task-modal-body::-webkit-scrollbar-thumb:active,
+.task-prerequisites::-webkit-scrollbar-thumb:active {
   background: var(--scrollbar-slider-active);
 }
 .markdown-editor .cm-scroller::-webkit-scrollbar-corner,
 .markdown-rendered-preview::-webkit-scrollbar-corner,
 .category-list::-webkit-scrollbar-corner,
 .document-list::-webkit-scrollbar-corner,
-.library-tree::-webkit-scrollbar-corner {
+.library-tree::-webkit-scrollbar-corner,
+.task-board::-webkit-scrollbar-corner,
+.task-column-items::-webkit-scrollbar-corner,
+.task-list::-webkit-scrollbar-corner,
+.task-calendar-grid-wrap::-webkit-scrollbar-corner,
+.task-calendar-agenda-list::-webkit-scrollbar-corner,
+.task-archive-view::-webkit-scrollbar-corner,
+.task-detail-body::-webkit-scrollbar-corner,
+.task-modal-body::-webkit-scrollbar-corner,
+.task-prerequisites::-webkit-scrollbar-corner {
   background: transparent;
 }
 
 .library-tree {
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
+}
+.task-board,
+.task-column-items,
+.task-list,
+.task-calendar-grid-wrap,
+.task-calendar-agenda-list,
+.task-archive-view,
+.task-detail-body,
+.task-modal-body,
+.task-prerequisites {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.task-board:hover,
+.task-column-items:hover,
+.task-list:hover,
+.task-calendar-grid-wrap:hover,
+.task-calendar-agenda-list:hover,
+.task-archive-view:hover,
+.task-detail-body:hover,
+.task-modal-body:hover,
+.task-prerequisites:hover {
+  scrollbar-color: var(--scrollbar-slider) transparent;
 }
 .library-tree:hover {
   scrollbar-color: var(--scrollbar-slider) transparent;

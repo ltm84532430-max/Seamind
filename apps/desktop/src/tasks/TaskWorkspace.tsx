@@ -93,6 +93,50 @@ const statusName: Record<TaskStatus, string> = {
 };
 const emptySnapshot: TaskSnapshot = { plans: [], tasks: [], sources: [] };
 const TASK_VIEW_KEY = 'seamind:task-view:v1';
+const TASK_COLLAPSE_KEY = 'seamind:task-collapse:v1';
+
+interface TaskTreeEntry {
+  task: LearningTask;
+  depth: number;
+  hasChildren: boolean;
+  context: boolean;
+}
+
+interface TaskSourceGroup {
+  key: string;
+  collapseKey: string;
+  planId: string | null;
+  planTitle: string;
+  sourceKey: string | null;
+  sourceTitle: string;
+  sourceKind: string | null;
+  tasks: LearningTask[];
+  entries: TaskTreeEntry[];
+}
+
+function readCollapsedTaskState() {
+  try {
+    const parsed = JSON.parse(
+      localStorage.getItem(TASK_COLLAPSE_KEY) ?? '{}',
+    ) as { sources?: unknown; tasks?: unknown };
+    return {
+      sources: new Set(
+        Array.isArray(parsed.sources)
+          ? parsed.sources.filter(
+              (key): key is string => typeof key === 'string',
+            )
+          : [],
+      ),
+      tasks: new Set(
+        Array.isArray(parsed.tasks)
+          ? parsed.tasks.filter((key): key is string => typeof key === 'string')
+          : [],
+      ),
+    };
+  } catch {
+    return { sources: new Set<string>(), tasks: new Set<string>() };
+  }
+}
 
 function readTaskView(): 'board' | 'list' | 'calendar' {
   try {
@@ -350,6 +394,12 @@ export default function TaskWorkspace({
   const [planFilter, setPlanFilter] = useState('all');
   const [query, setQuery] = useState('');
   const [view, setView] = useState<'board' | 'list' | 'calendar'>(readTaskView);
+  const [collapsedSourceGroups, setCollapsedSourceGroups] = useState(
+    () => readCollapsedTaskState().sources,
+  );
+  const [collapsedTasks, setCollapsedTasks] = useState(
+    () => readCollapsedTaskState().tasks,
+  );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [newPlan, setNewPlan] = useState('');
   const [draft, setDraft] = useState<TaskInput | null>(null);
@@ -369,6 +419,20 @@ export default function TaskWorkspace({
     Record<string, WatchState | null | 'error'>
   >({});
   const [progressRevision, setProgressRevision] = useState(0);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        TASK_COLLAPSE_KEY,
+        JSON.stringify({
+          sources: [...collapsedSourceGroups],
+          tasks: [...collapsedTasks],
+        }),
+      );
+    } catch {
+      /* Storage may be unavailable. */
+    }
+  }, [collapsedSourceGroups, collapsedTasks]);
 
   const reload = useCallback(async () => {
     try {
@@ -493,7 +557,15 @@ export default function TaskWorkspace({
 
   const today = new Date();
   const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-  const filtered = useMemo(
+  const byId = useMemo(
+    () =>
+      new Map<string, LearningTask>(
+        snapshot.tasks.map((entry) => [entry.id, entry]),
+      ),
+    [snapshot.tasks],
+  );
+  const term = query.trim().toLocaleLowerCase();
+  const baseFiltered = useMemo(
     () =>
       snapshot.tasks.filter((entry) => {
         if (planFilter === 'archived') {
@@ -514,24 +586,187 @@ export default function TaskWorkspace({
                 : entry.planId === planFilter);
           if (!inPlan) return false;
         }
-        const term = query.trim().toLocaleLowerCase();
-        return (
-          !term ||
-          [
-            entry.title,
-            entry.note,
-            ...entry.resources.map((resource) => resource.title),
-          ].some((value) => value?.toLocaleLowerCase().includes(term))
-        );
+        return true;
       }),
-    [snapshot.tasks, planFilter, query, todayKey],
+    [snapshot.tasks, planFilter, todayKey],
   );
+  const matchingTasks = useMemo(() => {
+    if (!term) return baseFiltered;
+    const sourcesByKey = new Map(
+      snapshot.sources.map((source) => [source.sourceKey, source]),
+    );
+    const plansById = new Map(snapshot.plans.map((plan) => [plan.id, plan]));
+    return baseFiltered.filter((entry) => {
+      const source = entry.sourceKey
+        ? sourcesByKey.get(entry.sourceKey)
+        : undefined;
+      const plan = entry.planId ? plansById.get(entry.planId) : undefined;
+      return [
+        entry.title,
+        entry.note,
+        plan?.title,
+        source?.title,
+        ...entry.resources.map((resource) => resource.title),
+      ].some((value) => value?.toLocaleLowerCase().includes(term));
+    });
+  }, [baseFiltered, snapshot.plans, snapshot.sources, term]);
+  const contextTaskIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (!term) return ids;
+    matchingTasks.forEach((entry) => {
+      let parentId = entry.parentId;
+      const visited = new Set<string>([entry.id]);
+      while (parentId && !visited.has(parentId)) {
+        visited.add(parentId);
+        const parent = byId.get(parentId);
+        if (!parent || parent.planId !== entry.planId) break;
+        if (
+          (planFilter === 'archived' && !parent.archivedAt) ||
+          (planFilter !== 'archived' && parent.archivedAt)
+        )
+          break;
+        ids.add(parent.id);
+        parentId = parent.parentId;
+      }
+    });
+    return ids;
+  }, [byId, matchingTasks, planFilter, term]);
+  const filtered = useMemo(() => {
+    if (!term) return baseFiltered;
+    const displayed = new Map<string, LearningTask>();
+    matchingTasks.forEach((entry) => displayed.set(entry.id, entry));
+    contextTaskIds.forEach((id) => {
+      const parent = byId.get(id);
+      if (parent) displayed.set(id, parent);
+    });
+    return Array.from(displayed.values());
+  }, [baseFiltered, byId, contextTaskIds, matchingTasks, term]);
   const selected =
     snapshot.tasks.find((entry) => entry.id === selectedId) ?? null;
-  const byId = useMemo(
-    () => new Map(snapshot.tasks.map((entry) => [entry.id, entry])),
-    [snapshot.tasks],
-  );
+  const taskGroups = useMemo(() => {
+    const sourcesByKey = new Map(
+      snapshot.sources.map((source) => [source.sourceKey, source]),
+    );
+    const plansById = new Map(snapshot.plans.map((plan) => [plan.id, plan]));
+    const planOrder = new Map(
+      snapshot.plans.map((plan, index) => [plan.id, index]),
+    );
+    const groups = new Map<string, TaskSourceGroup>();
+    const effectiveSourceKey = (entry: LearningTask) => {
+      let current: LearningTask | undefined = entry;
+      const visited = new Set<string>();
+      while (current && !visited.has(current.id)) {
+        visited.add(current.id);
+        if (current.sourceKey) return current.sourceKey;
+        const parent: LearningTask | undefined = current.parentId
+          ? byId.get(current.parentId)
+          : undefined;
+        current = parent?.planId === entry.planId ? parent : undefined;
+      }
+      return null;
+    };
+
+    filtered.forEach((entry) => {
+      const sourceKey = effectiveSourceKey(entry);
+      const groupKey = JSON.stringify([entry.planId, sourceKey]);
+      let group = groups.get(groupKey);
+      if (!group) {
+        const source = sourceKey ? sourcesByKey.get(sourceKey) : undefined;
+        const planTitle = entry.planId
+          ? (plansById.get(entry.planId)?.title ?? '未知计划')
+          : '未归类任务';
+        group = {
+          key: groupKey,
+          collapseKey: sourceKey
+            ? 'source:' + sourceKey
+            : 'manual:' + (entry.planId ?? 'unplanned'),
+          planId: entry.planId,
+          planTitle,
+          sourceKey,
+          sourceTitle: source?.title ?? (sourceKey ? '来源任务' : '手动任务'),
+          sourceKind: source?.sourceKind ?? null,
+          tasks: [],
+          entries: [],
+        };
+        groups.set(groupKey, group);
+      }
+      group.tasks.push(entry);
+    });
+
+    const orderedGroups = Array.from(groups.values()).sort((a, b) => {
+      const planA = a.planId
+        ? (planOrder.get(a.planId) ?? Number.MAX_SAFE_INTEGER)
+        : Number.MAX_SAFE_INTEGER;
+      const planB = b.planId
+        ? (planOrder.get(b.planId) ?? Number.MAX_SAFE_INTEGER)
+        : Number.MAX_SAFE_INTEGER;
+      if (planA !== planB) return planA - planB;
+      if (a.planId !== b.planId)
+        return (a.planId ?? '').localeCompare(b.planId ?? '');
+      const sourceA = a.sourceKey
+        ? (sourcesByKey.get(a.sourceKey)?.sortOrder ?? Number.MAX_SAFE_INTEGER)
+        : Number.MAX_SAFE_INTEGER;
+      const sourceB = b.sourceKey
+        ? (sourcesByKey.get(b.sourceKey)?.sortOrder ?? Number.MAX_SAFE_INTEGER)
+        : Number.MAX_SAFE_INTEGER;
+      if (sourceA !== sourceB) return sourceA - sourceB;
+      return a.sourceTitle.localeCompare(b.sourceTitle);
+    });
+
+    orderedGroups.forEach((group) => {
+      const groupTaskIds = new Set(group.tasks.map((entry) => entry.id));
+      const children = new Map<string, LearningTask[]>();
+      group.tasks.forEach((entry) => {
+        if (entry.parentId && groupTaskIds.has(entry.parentId)) {
+          const siblings = children.get(entry.parentId) ?? [];
+          siblings.push(entry);
+          children.set(entry.parentId, siblings);
+        }
+      });
+      const compareTasks = (a: LearningTask, b: LearningTask) =>
+        a.position - b.position ||
+        a.createdAt - b.createdAt ||
+        a.title.localeCompare(b.title);
+      const visited = new Set<string>();
+      const isSourceCollapsed =
+        !term && collapsedSourceGroups.has(group.collapseKey);
+      const flatten = (entry: LearningTask, depth: number) => {
+        if (visited.has(entry.id)) return;
+        visited.add(entry.id);
+        const descendants = (children.get(entry.id) ?? []).sort(compareTasks);
+        group.entries.push({
+          task: entry,
+          depth,
+          hasChildren: descendants.length > 0,
+          context: contextTaskIds.has(entry.id),
+        });
+        if (!term && collapsedTasks.has(entry.id)) return;
+        descendants.forEach((child) => flatten(child, depth + 1));
+      };
+      if (!isSourceCollapsed) {
+        group.tasks
+          .filter(
+            (entry) => !entry.parentId || !groupTaskIds.has(entry.parentId),
+          )
+          .sort(compareTasks)
+          .forEach((entry) => flatten(entry, 0));
+        group.tasks
+          .filter((entry) => !visited.has(entry.id))
+          .sort(compareTasks)
+          .forEach((entry) => flatten(entry, 0));
+      }
+    });
+    return orderedGroups;
+  }, [
+    byId,
+    collapsedSourceGroups,
+    collapsedTasks,
+    contextTaskIds,
+    filtered,
+    snapshot.plans,
+    snapshot.sources,
+    term,
+  ]);
   const isBlocked = (entry: LearningTask) =>
     entry.prerequisiteIds.some((id) => byId.get(id)?.status !== 'done');
   const allResources = snapshot.tasks.flatMap((entry) => entry.resources);
@@ -872,8 +1107,6 @@ export default function TaskWorkspace({
       setPlayerConnected(false);
       setError('读取视频学习路径失败：' + errorText(reason));
     }
-    setCandidates(items);
-    setSelectedCandidateKeys(items.map((candidate) => candidate.key));
     const linkedPlanIds = items.map(
       (candidate) =>
         snapshot.sources.find((source) => source.sourceKey === candidate.key)
@@ -885,11 +1118,40 @@ export default function TaskWorkspace({
     const allAlreadyInOnePlan =
       typeof firstLinkedPlan === 'string' &&
       linkedPlanIds.every((planId) => planId === firstLinkedPlan);
+    if (allAlreadyInOnePlan) {
+      const originalOrder = new Map(
+        items.map((candidate, index) => [candidate.key, index]),
+      );
+      const sourceOrder = new Map(
+        snapshot.sources.map((source) => [source.sourceKey, source.sortOrder]),
+      );
+      items.sort(
+        (a, b) =>
+          (sourceOrder.get(a.key) ?? originalOrder.get(a.key) ?? 0) -
+          (sourceOrder.get(b.key) ?? originalOrder.get(b.key) ?? 0),
+      );
+    }
+    setCandidates(items);
+    setSelectedCandidateKeys(items.map((candidate) => candidate.key));
     setMergeTargetPlanId(allAlreadyInOnePlan ? firstLinkedPlan : 'new');
     setNewPlanTitle(
       items.length > 1 ? '综合学习计划' : (items[0]?.label ?? '综合学习计划'),
     );
     setImportBusy('');
+  };
+
+  const moveCandidate = (candidateKey: string, direction: -1 | 1) => {
+    setCandidates((current) => {
+      if (!current) return current;
+      const index = current.findIndex(
+        (candidate) => candidate.key === candidateKey,
+      );
+      const target = index + direction;
+      if (index < 0 || target < 0 || target >= current.length) return current;
+      const next = [...current];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
   };
 
   const syncSelectedCandidates = async () => {
@@ -912,6 +1174,7 @@ export default function TaskWorkspace({
             ? newPlanTitle.trim() || candidate.label
             : null,
           createNew && !targetPlanId,
+          candidates.findIndex((item) => item.key === candidate.key),
         );
         targetPlanId = result.planId;
         totals.added += result.added;
@@ -992,16 +1255,101 @@ export default function TaskWorkspace({
     }
   };
 
-  const renderCard = (entry: LearningTask) => (
+  const toggleSourceGroup = (key: string) => {
+    setCollapsedSourceGroups((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const toggleTask = (id: string) => {
+    setCollapsedTasks((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const renderSourceHeader = (group: TaskSourceGroup) => {
+    const expanded =
+      Boolean(term) || !collapsedSourceGroups.has(group.collapseKey);
+    const kindLabel = group.sourceKind?.startsWith('ebook')
+      ? '电子书'
+      : group.sourceKind === 'youtube' || group.sourceKind?.startsWith('video')
+        ? 'YouTube'
+        : group.sourceKind
+          ? '来源计划'
+          : '手动任务';
+    return (
+      <header className="task-source-group-head">
+        <button
+          type="button"
+          className="task-source-group-toggle"
+          aria-expanded={expanded}
+          disabled={Boolean(term)}
+          onClick={() => toggleSourceGroup(group.collapseKey)}
+        >
+          <span className="task-disclosure-mark" aria-hidden="true">
+            {expanded ? '▾' : '▸'}
+          </span>
+          <span className="task-source-group-labels">
+            <strong>{group.sourceTitle}</strong>
+            <small>
+              {group.planTitle} · {kindLabel} · {group.tasks.length} 项
+            </small>
+          </span>
+          <span className="task-source-group-count">{group.tasks.length}</span>
+        </button>
+      </header>
+    );
+  };
+
+  const renderCard = ({
+    task: entry,
+    depth,
+    hasChildren,
+    context,
+  }: TaskTreeEntry) => (
     <article
       key={entry.id}
-      className={`task-card${selectedId === entry.id ? ' is-selected' : ''}`}
+      className={
+        'task-card' +
+        (selectedId === entry.id ? ' is-selected' : '') +
+        (context ? ' is-search-context' : '')
+      }
+      style={{ marginInlineStart: depth * 14 }}
       draggable
       onDragStart={() => setDragging(entry.id)}
       onDragEnd={() => setDragging(null)}
       onClick={() => setSelectedId(entry.id)}
     >
-      <div className="task-card-title">{entry.title}</div>
+      <div className="task-card-heading">
+        {hasChildren ? (
+          <button
+            type="button"
+            className="task-disclosure-toggle"
+            disabled={Boolean(term)}
+            aria-label={
+              (collapsedTasks.has(entry.id) && !term ? '展开' : '收起') +
+              '任务 ' +
+              entry.title
+            }
+            aria-expanded={Boolean(term) || !collapsedTasks.has(entry.id)}
+            onClick={(event) => {
+              event.stopPropagation();
+              toggleTask(entry.id);
+            }}
+          >
+            {Boolean(term) || !collapsedTasks.has(entry.id) ? '▾' : '▸'}
+          </button>
+        ) : (
+          <span className="task-disclosure-placeholder" aria-hidden="true" />
+        )}
+        <div className="task-card-title">{entry.title}</div>
+      </div>
       <div className="task-card-meta">
         {entry.resources.map((resource) => (
           <span key={`${resource.kind}:${resource.resourceId}`}>
@@ -1454,7 +1802,28 @@ export default function TaskWorkspace({
                     )}
                   </header>
                   <div className="task-column-items">
-                    {entries.map(renderCard)}
+                    {taskGroups
+                      .filter((group) =>
+                        group.tasks.some(
+                          (entry) => entry.status === column.status,
+                        ),
+                      )
+                      .map((group) => (
+                        <section
+                          className="task-source-group task-source-group-board"
+                          key={group.key}
+                        >
+                          {renderSourceHeader(group)}
+                          <div className="task-source-group-items">
+                            {group.entries
+                              .filter(
+                                (treeEntry) =>
+                                  treeEntry.task.status === column.status,
+                              )
+                              .map(renderCard)}
+                          </div>
+                        </section>
+                      ))}
                     {entries.length === 0 && (
                       <div className="task-column-empty">暂无任务</div>
                     )}
@@ -1465,15 +1834,22 @@ export default function TaskWorkspace({
           </div>
         ) : view === 'calendar' ? (
           <TaskCalendar
-            tasks={filtered}
+            tasks={matchingTasks}
             onOpenTask={setSelectedId}
             onCreateTask={createTaskForDate}
             onMoveTask={moveTaskDate}
           />
         ) : (
           <div className="task-list">
-            {filtered.length ? (
-              filtered.map(renderCard)
+            {taskGroups.length ? (
+              taskGroups.map((group) => (
+                <section className="task-source-group" key={group.key}>
+                  {renderSourceHeader(group)}
+                  <div className="task-source-group-items">
+                    {group.entries.map(renderCard)}
+                  </div>
+                </section>
+              ))
             ) : (
               <div className="task-empty">
                 还没有任务。可以新建任务或预览已有计划。
@@ -2011,6 +2387,9 @@ export default function TaskWorkspace({
                 <>
                   <div className="task-import-selection-actions">
                     <strong>选择来源</strong>
+                    <small>
+                      默认按电子书、视频分组；可用箭头调整导入顺序。
+                    </small>
                     <button
                       type="button"
                       disabled={Boolean(importBusy)}
@@ -2062,7 +2441,7 @@ export default function TaskWorkspace({
                       </label>
                     )}
                   </div>
-                  {candidates.map((candidate) => {
+                  {candidates.map((candidate, candidateIndex) => {
                     const sourceLink = snapshot.sources.find(
                       (source) => source.sourceKey === candidate.key,
                     );
@@ -2114,6 +2493,31 @@ export default function TaskWorkspace({
                             </small>
                           </span>
                         </label>
+                        <div className="task-import-order-controls">
+                          <button
+                            type="button"
+                            aria-label="上移来源"
+                            title="上移来源"
+                            disabled={
+                              Boolean(importBusy) || candidateIndex === 0
+                            }
+                            onClick={() => moveCandidate(candidate.key, -1)}
+                          >
+                            ↑
+                          </button>
+                          <button
+                            type="button"
+                            aria-label="下移来源"
+                            title="下移来源"
+                            disabled={
+                              Boolean(importBusy) ||
+                              candidateIndex === candidates.length - 1
+                            }
+                            onClick={() => moveCandidate(candidate.key, 1)}
+                          >
+                            ↓
+                          </button>
+                        </div>
                         <div className="task-import-connection">
                           {linkedPlan
                             ? `已连接到「${linkedPlan.title}」`
