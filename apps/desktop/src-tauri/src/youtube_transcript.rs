@@ -79,22 +79,22 @@ const INNERTUBE_CLIENTS: &[InnerTubeClient] = &[
     },
 ];
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptTrack {
-    id: String,
-    language_code: String,
-    name: String,
-    is_generated: bool,
-    is_translatable: bool,
-    is_default: bool,
+    pub(crate) id: String,
+    pub(crate) language_code: String,
+    pub(crate) name: String,
+    pub(crate) is_generated: bool,
+    pub(crate) is_translatable: bool,
+    pub(crate) is_default: bool,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationLanguage {
-    language_code: String,
-    name: String,
+    pub(crate) language_code: String,
+    pub(crate) name: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -131,7 +131,7 @@ pub struct TranscriptFailure {
 }
 
 impl TranscriptFailure {
-    fn new(code: &'static str, stage: &'static str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: &'static str, stage: &'static str, message: impl Into<String>) -> Self {
         Self {
             code,
             stage,
@@ -141,7 +141,7 @@ impl TranscriptFailure {
         }
     }
 
-    fn with_status(mut self, status: u16) -> Self {
+    pub(crate) fn with_status(mut self, status: u16) -> Self {
         self.http_status = Some(status);
         self
     }
@@ -1062,7 +1062,10 @@ async fn fetch_body(
     })
 }
 
-fn reply<T>(result: Result<T, TranscriptFailure>, trace_id: String) -> TranscriptReply<T> {
+pub(crate) fn reply<T>(
+    result: Result<T, TranscriptFailure>,
+    trace_id: String,
+) -> TranscriptReply<T> {
     match result {
         Ok(value) => TranscriptReply::Ok(value),
         Err(mut error) => {

@@ -58,6 +58,8 @@ export async function loadYouTubeAttestationContext(
   const pages = [
     `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&bpctr=9999999999&has_verified=1`,
     'https://www.youtube.com/',
+    `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?playsinline=1&enablejsapi=1&hl=en&widget_referrer=${encodeURIComponent('https://www.youtube.com')}`,
+    `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?playsinline=1&enablejsapi=1&hl=en`,
   ];
   const failures: string[] = [];
 

@@ -21,7 +21,12 @@ const MAX_TARGET_URL_BYTES: usize = 8_192;
 const API_TIMEOUT: Duration = Duration::from_secs(45);
 const TOKEN_HEADER: &str = "x-seamind-token";
 const USER_AGENT_HEADER: &str = "x-seamind-ua";
-const ALLOWED_HOST_SUFFIXES: [&str; 3] = ["googlevideo.com", "youtube.com", "ytimg.com"];
+const ALLOWED_HOST_SUFFIXES: [&str; 4] = [
+    "googlevideo.com",
+    "youtube.com",
+    "youtube-nocookie.com",
+    "ytimg.com",
+];
 const ALLOWED_EXACT_HOSTS: [&str; 2] = ["jnn-pa.googleapis.com", "www.google.com"];
 const ALLOWED_ORIGINS: [&str; 5] = [
     "http://tauri.localhost",

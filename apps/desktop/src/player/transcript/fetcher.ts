@@ -19,7 +19,7 @@ const CACHE_PREFIX = 'seamind:transcript:v3:';
 const OLD_CACHE_PREFIXES = ['seamind:transcript:v1:', 'seamind:transcript:v2:'];
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const TRACK_CATALOG_TTL_MS = 3 * 60 * 1000;
-const REQUEST_TIMEOUT_MS = 95_000;
+const REQUEST_TIMEOUT_MS = 120_000;
 
 export type TranscriptFetchErrorCode =
   | 'transcriptsDisabled'
@@ -89,6 +89,17 @@ interface TranscriptCatalog {
 interface TranscriptBody {
   videoId: string;
   trackId: string;
+  body: string;
+  contentType: string;
+  translationBody?: string;
+  translationLanguage?: string;
+}
+
+interface EmbedTranscriptPayload {
+  videoId: string;
+  tracks: TranscriptTrack[];
+  translationLanguages: TranscriptTranslationLanguage[];
+  activeTrackId: string;
   body: string;
   contentType: string;
   translationBody?: string;
@@ -988,6 +999,61 @@ function parseTranscriptBodyWithTranslation(
   return cues;
 }
 
+async function fetchTranscriptViaEmbed(
+  videoId: string,
+  preferredLang: string,
+  options: FetchTranscriptOptions,
+  signal: AbortSignal,
+  key: string,
+  fallbackError?: TranscriptFetchError,
+): Promise<TranscriptResult> {
+  const translationLang = options.translationLang ?? preferredLang;
+  try {
+    const args: Record<string, unknown> = {
+      videoId,
+      preferredLang,
+      translationLang,
+    };
+    if (options.trackId) args.trackId = options.trackId;
+    const payload = await callBackend<EmbedTranscriptPayload>(
+      'youtube_transcript_embed_fetch',
+      args,
+      signal,
+    );
+    const cues = parseTranscriptBodyWithTranslation(
+      {
+        videoId: payload.videoId,
+        trackId: payload.activeTrackId,
+        body: payload.body,
+        contentType: payload.contentType,
+        translationBody: payload.translationBody,
+        translationLanguage: payload.translationLanguage,
+      },
+      '内嵌播放器返回了字幕数据，但其中没有可读取的时间轴内容。',
+    );
+    const result: TranscriptResult = {
+      videoId,
+      tracks: payload.tracks,
+      translationLanguages: payload.translationLanguages,
+      activeTrackId: payload.activeTrackId,
+      cues,
+    };
+    writeCache(key, result);
+    return result;
+  } catch (error) {
+    signal.throwIfAborted();
+    const normalized = normalizeError(error);
+    if (
+      normalized.code === 'transcriptsDisabled' ||
+      normalized.code === 'ageRestricted' ||
+      normalized.code === 'videoUnavailable'
+    ) {
+      throw normalized;
+    }
+    throw fallbackError ?? normalized;
+  }
+}
+
 async function fetchTranscriptViaYtDlp(
   videoId: string,
   preferredLang: string,
@@ -1040,7 +1106,44 @@ async function fetchTranscriptViaYtDlp(
   }
 }
 
-async function fetchViaNativeWithYtDlpFallback(
+async function fetchViaEmbedWithYtDlpFallback(
+  videoId: string,
+  preferredLang: string,
+  options: FetchTranscriptOptions,
+  signal: AbortSignal,
+  key: string,
+  fallbackError?: TranscriptFetchError,
+): Promise<TranscriptResult> {
+  try {
+    return await fetchTranscriptViaEmbed(
+      videoId,
+      preferredLang,
+      options,
+      signal,
+      key,
+      fallbackError,
+    );
+  } catch (embedError) {
+    signal.throwIfAborted();
+    const normalizedEmbed = normalizeError(embedError);
+    if (
+      !options.trackId?.startsWith('embed:') &&
+      shouldFallbackToNative(normalizedEmbed)
+    ) {
+      return fetchTranscriptViaYtDlp(
+        videoId,
+        preferredLang,
+        options,
+        signal,
+        key,
+        normalizedEmbed,
+      );
+    }
+    throw normalizedEmbed;
+  }
+}
+
+async function fetchViaNativeWithFallbacks(
   videoId: string,
   preferredLang: string,
   options: FetchTranscriptOptions,
@@ -1064,7 +1167,7 @@ async function fetchViaNativeWithYtDlpFallback(
       !options.trackId?.startsWith('native:') &&
       shouldFallbackToNative(normalizedNative)
     ) {
-      return fetchTranscriptViaYtDlp(
+      return fetchViaEmbedWithYtDlpFallback(
         videoId,
         preferredLang,
         options,
@@ -1093,6 +1196,15 @@ async function fetchTranscriptUncached(
       key,
     );
   }
+  if (options.trackId?.startsWith('embed:')) {
+    return fetchViaEmbedWithYtDlpFallback(
+      videoId,
+      preferredLang,
+      options,
+      signal,
+      key,
+    );
+  }
 
   const cachedNative = nativeCatalogs.get(videoId);
   const useNativeDirectly =
@@ -1104,7 +1216,7 @@ async function fetchTranscriptUncached(
           Date.now() - cachedNative.createdAt <= TRACK_CATALOG_TTL_MS,
       ));
   if (useNativeDirectly) {
-    return fetchViaNativeWithYtDlpFallback(
+    return fetchViaNativeWithFallbacks(
       videoId,
       preferredLang,
       options,
@@ -1174,7 +1286,7 @@ async function fetchTranscriptUncached(
       normalized.activeTrackId = activeTrackId;
     }
     if (shouldFallbackToNative(normalized)) {
-      return fetchViaNativeWithYtDlpFallback(
+      return fetchViaNativeWithFallbacks(
         videoId,
         preferredLang,
         options,

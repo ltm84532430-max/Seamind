@@ -471,6 +471,11 @@ async function decipherManifestUrl(
   return deciphered.toString();
 }
 
+interface SharedAttestationSlot {
+  loaded: boolean;
+  value?: Awaited<ReturnType<typeof loadYouTubeAttestationContext>>;
+}
+
 async function resolveWithClient(
   library: Library,
   client: NativeClient,
@@ -478,6 +483,9 @@ async function resolveWithClient(
   signal: AbortSignal,
   visitorData?: string,
   onVisitorData?: (value: string) => void,
+  purpose?: 'playback',
+  forceRefresh?: boolean,
+  sharedAttestation?: SharedAttestationSlot,
 ): Promise<NativePlayback>;
 async function resolveWithClient(
   library: Library,
@@ -488,6 +496,7 @@ async function resolveWithClient(
   onVisitorData: ((value: string) => void) | undefined,
   purpose: 'transcript',
   forceRefresh?: boolean,
+  sharedAttestation?: SharedAttestationSlot,
 ): Promise<NativeTranscriptInfo>;
 async function resolveWithClient(
   library: Library,
@@ -498,6 +507,7 @@ async function resolveWithClient(
   onVisitorData?: (value: string) => void,
   purpose: 'playback' | 'transcript' = 'playback',
   forceRefresh = false,
+  sharedAttestation?: SharedAttestationSlot,
 ): Promise<NativePlayback | NativeTranscriptInfo> {
   let resolutionActive = true;
   const fetchThroughProxy: typeof fetch = (input, init) =>
@@ -532,39 +542,55 @@ async function resolveWithClient(
   let poToken: string | undefined;
   if (client === 'WEB' || client === 'WEB_EMBEDDED') {
     // Use the page's own ytcfg and ytAtN challenge when available. If YouTube blocks the watch
-    // page, the BotGuard helper can still try its InnerTube/WAA challenge fallback.
-    let attestation;
-    try {
-      attestation = await loadYouTubeAttestationContext(videoId, signal);
-    } catch (error) {
-      console.warn(
-        '[YouTube PO token] Page attestation context unavailable:',
-        error,
-      );
+    // page, the BotGuard helper can still try its embed/InnerTube/WAA challenge fallback.
+    let attestation = sharedAttestation?.value;
+    if (!sharedAttestation?.loaded) {
+      try {
+        attestation = await loadYouTubeAttestationContext(videoId, signal);
+      } catch (error) {
+        console.warn(
+          '[YouTube PO token] Page attestation context unavailable:',
+          error,
+        );
+      }
+      if (sharedAttestation) {
+        sharedAttestation.loaded = true;
+        sharedAttestation.value = attestation;
+      }
     }
-    if (client === 'WEB' && attestation) {
+    if (attestation) {
       const session = innertube.session as unknown as {
         context: Record<string, any>;
         api_key: string;
         api_version: string;
         user_agent: string;
       };
-      Object.assign(session.context, attestation.context);
-      const apiKey = attestation.ytConfig.INNERTUBE_API_KEY;
-      const apiVersion = attestation.ytConfig.INNERTUBE_API_VERSION;
-      if (typeof apiKey === 'string' && apiKey) session.api_key = apiKey;
-      if (typeof apiVersion === 'string' && apiVersion)
-        session.api_version = apiVersion;
-      session.user_agent =
-        attestation.context.client.userAgent ?? session.user_agent;
-      const pageVisitorData = attestation.context.client.visitorData;
-      if (typeof pageVisitorData === 'string' && pageVisitorData)
+      const attClientName = attestation.context?.client?.clientName;
+      const matchesClient =
+        (client === 'WEB' && attClientName === 'WEB') ||
+        (client === 'WEB_EMBEDDED' && attClientName === 'WEB_EMBEDDED_PLAYER');
+      if (matchesClient) {
+        Object.assign(session.context, attestation.context);
+        const apiKey = attestation.ytConfig.INNERTUBE_API_KEY;
+        const apiVersion = attestation.ytConfig.INNERTUBE_API_VERSION;
+        if (typeof apiKey === 'string' && apiKey) session.api_key = apiKey;
+        if (typeof apiVersion === 'string' && apiVersion)
+          session.api_version = apiVersion;
+        session.user_agent =
+          attestation.context.client.userAgent ?? session.user_agent;
+      }
+      const pageVisitorData = attestation.context?.client?.visitorData;
+      if (typeof pageVisitorData === 'string' && pageVisitorData) {
+        session.context.client.visitorData ??= pageVisitorData;
         onVisitorData?.(pageVisitorData);
+      }
     }
 
-    // WEB_EMBEDDED uses the same content-bound token requirements for age-gated videos.
-    innertube.session.player = await createPlayer(library, signal);
-    signal.throwIfAborted();
+    if (purpose === 'playback') {
+      // Streaming format deciphering needs base.js; caption track discovery does not.
+      innertube.session.player = await createPlayer(library, signal);
+      signal.throwIfAborted();
+    }
     try {
       poToken = await getPlaybackPoToken(
         videoId,
@@ -573,9 +599,15 @@ async function resolveWithClient(
       );
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      throw new NativePlaybackError(
-        'botCheck',
-        `BotGuard could not mint the required content PO token: ${detail}`,
+      if (purpose === 'playback') {
+        throw new NativePlaybackError(
+          'botCheck',
+          `BotGuard could not mint the required content PO token: ${detail}`,
+        );
+      }
+      console.warn(
+        '[YouTube transcript] Continuing getBasicInfo without PO token:',
+        detail,
       );
     }
     signal.throwIfAborted();
@@ -771,6 +803,7 @@ export async function resolveNativePlayback(
   const clientFailures: string[] = [];
   const clients = options.clients ?? defaultNativeClients;
   let visitorData: string | undefined;
+  const sharedAttestation: SharedAttestationSlot = { loaded: false };
   let webAttempted = false;
   let webEmbeddedAttempted = false;
   let sabrCandidate: NativePlayback | null = null;
@@ -788,6 +821,9 @@ export async function resolveNativePlayback(
         (value) => {
           visitorData ??= value;
         },
+        'playback',
+        false,
+        sharedAttestation,
       );
       if (playback.source.kind === 'sabr') {
         if (client === 'WEB' || !sabrCandidate) sabrCandidate = playback;
@@ -890,6 +926,10 @@ export async function resolveNativeTranscriptInfo(
   const failures: NativePlaybackError[] = [];
   let infoWithoutTracks: NativeTranscriptInfo | null = null;
   let visitorData: string | undefined;
+  const sharedAttestation: {
+    loaded: boolean;
+    value?: Awaited<ReturnType<typeof loadYouTubeAttestationContext>>;
+  } = { loaded: false };
 
   for (const client of options.clients ?? defaultNativeClients) {
     signal.throwIfAborted();
@@ -905,6 +945,7 @@ export async function resolveNativeTranscriptInfo(
         },
         'transcript',
         Boolean(options.forceRefresh),
+        sharedAttestation,
       );
       if (hasUsableCaptionTracks(result)) return result;
       infoWithoutTracks ??= result;

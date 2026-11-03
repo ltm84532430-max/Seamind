@@ -21,6 +21,7 @@ mod prompts;
 mod terminal;
 mod youtube;
 mod youtube_botguard;
+mod youtube_embed_transcript;
 mod youtube_eval;
 mod youtube_net;
 mod youtube_proxy;
@@ -40,6 +41,7 @@ pub fn run() {
         .manage(agent_bridge::AgentBridgeState::default())
         .manage(youtube::YouTubeJobs::default())
         .manage(youtube_botguard::YouTubeBotGuardState::default())
+        .manage(youtube_embed_transcript::YouTubeEmbedTranscriptState::default())
         .manage(youtube_net::YouTubeNet::default())
         .manage(youtube_transcript::TranscriptState::default())
         .plugin(tauri_plugin_dialog::init())
@@ -129,6 +131,7 @@ pub fn run() {
             youtube_proxy::youtube_proxy_info,
             youtube_transcript::youtube_transcript_list,
             youtube_transcript::youtube_transcript_fetch,
+            youtube_embed_transcript::youtube_transcript_embed_fetch,
             youtube_transcript::youtube_transcript_ytdlp_fetch,
             youtube_transcript::youtube_transcript_browser_fetch,
             youtube_eval::youtube_eval_script,

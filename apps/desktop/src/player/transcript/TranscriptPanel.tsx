@@ -588,6 +588,7 @@ export default function TranscriptPanel({
                         network: '网络请求',
                         ipc: '桌面服务',
                         native: '受信播放器',
+                        embed: '内嵌播放器',
                         ytdlp: '本地提取器',
                         browser: '浏览器会话',
                       } as Record<string, string>

@@ -240,7 +240,98 @@ describe('desktop transcript request chain', () => {
     expect(proxiedFetch).toHaveBeenCalledTimes(1);
   });
 
-  it('automatically recovers via cookie-less Layer 3 yt-dlp with bilingual alignment when Layers 1 and 2 are blocked', async () => {
+  it('recovers via hidden WebView2 embed player when /watch hits HTTP 429 and BotGuard fails with 400', async () => {
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'youtube_transcript_list') {
+        return {
+          state: 'error',
+          data: {
+            code: 'requestBlocked',
+            stage: 'watch',
+            httpStatus: 429,
+            message: 'YouTube 要求验证当前字幕请求。',
+            traceId: '80217cfa',
+          },
+        };
+      }
+      if (command === 'youtube_transcript_embed_fetch') {
+        return {
+          state: 'ok',
+          data: {
+            videoId: 'CuknAdR6ofE',
+            tracks: [
+              {
+                id: 'embed:en:auto:0',
+                languageCode: 'en',
+                name: 'English (auto-generated)',
+                isGenerated: true,
+                isTranslatable: true,
+                isDefault: true,
+              },
+            ],
+            translationLanguages: [
+              { languageCode: 'zh-Hans', name: '简体中文' },
+            ],
+            activeTrackId: 'embed:en:auto:0',
+            contentType: 'application/json',
+            body: JSON.stringify({
+              events: [
+                {
+                  tStartMs: 8000,
+                  dDurationMs: 4000,
+                  segs: [
+                    {
+                      utf8: 'Each day, an average of 11 homes are effectively stolen in Mexico City.',
+                    },
+                  ],
+                },
+              ],
+            }),
+            translationLanguage: 'zh-Hans',
+            translationBody: JSON.stringify({
+              events: [
+                {
+                  tStartMs: 8000,
+                  dDurationMs: 4000,
+                  segs: [
+                    { utf8: '在墨西哥城，平均每天有 11 套房屋被变相盗占。' },
+                  ],
+                },
+              ],
+            }),
+          },
+        };
+      }
+      throw new Error(`Unexpected command: ${command}`);
+    });
+    resolveNativeTranscriptInfo.mockRejectedValue(
+      new NativePlaybackError(
+        'botCheck',
+        'BotGuard could not mint the required content PO token: BotGuard token request failed (400).',
+      ),
+    );
+
+    const result = await fetchVideoTranscript('CuknAdR6ofE', 'zh-Hans', {
+      forceRefresh: true,
+    });
+    expect(result.activeTrackId).toBe('embed:en:auto:0');
+    expect(result.tracks).toHaveLength(1);
+    expect(result.cues).toEqual([
+      {
+        id: 'cue-0',
+        start: 8,
+        end: 12,
+        text: 'Each day, an average of 11 homes are effectively stolen in Mexico City.',
+        translation: '在墨西哥城，平均每天有 11 套房屋被变相盗占。',
+      },
+    ]);
+    expect(invoke.mock.calls.map(([command]) => command)).toEqual([
+      'youtube_transcript_list',
+      'youtube_transcript_embed_fetch',
+    ]);
+  });
+
+  it('automatically recovers via cookie-less Layer 3 yt-dlp with bilingual alignment when Layers 1, 2, and embed are blocked', async () => {
     invoke.mockImplementation(async (command: string) => {
       if (command === 'youtube_transcript_list') {
         return {
@@ -250,6 +341,16 @@ describe('desktop transcript request chain', () => {
             stage: 'player',
             message: 'YouTube 要求先完成真人验证。',
             traceId: 'probe1234',
+          },
+        };
+      }
+      if (command === 'youtube_transcript_embed_fetch') {
+        return {
+          state: 'error',
+          data: {
+            code: 'requestBlocked',
+            stage: 'embed',
+            message: '视频作者禁用了内嵌播放。',
           },
         };
       }
@@ -314,6 +415,7 @@ describe('desktop transcript request chain', () => {
     ]);
     expect(invoke.mock.calls.map(([command]) => command)).toEqual([
       'youtube_transcript_list',
+      'youtube_transcript_embed_fetch',
       'youtube_transcript_ytdlp_fetch',
     ]);
   });
@@ -328,6 +430,16 @@ describe('desktop transcript request chain', () => {
             stage: 'player',
             message: 'YouTube 要求先完成真人验证。',
             traceId: 'probe1234',
+          },
+        };
+      }
+      if (command === 'youtube_transcript_embed_fetch') {
+        return {
+          state: 'error',
+          data: {
+            code: 'requestBlocked',
+            stage: 'embed',
+            message: 'YouTube 内嵌播放器未在时限内返回字幕数据。',
           },
         };
       }
@@ -357,6 +469,7 @@ describe('desktop transcript request chain', () => {
     } satisfies Partial<TranscriptFetchError>);
     expect(invoke.mock.calls.map(([command]) => command)).toEqual([
       'youtube_transcript_list',
+      'youtube_transcript_embed_fetch',
       'youtube_transcript_ytdlp_fetch',
     ]);
     expect(resolveNativeTranscriptInfo).toHaveBeenCalledTimes(1);
