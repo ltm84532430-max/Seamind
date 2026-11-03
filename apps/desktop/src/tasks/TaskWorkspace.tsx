@@ -11,6 +11,7 @@ import {
 import { playerApi } from '../player/player-api';
 import type { WatchState } from '../player/types';
 import { parseYouTubeTarget } from '../player/video-links';
+import TaskCalendar from './TaskCalendar';
 import { ebookImportCandidates, videoImportCandidate } from './legacy-import';
 import type { ImportCandidate } from './legacy-import';
 import {
@@ -55,6 +56,16 @@ const statusName: Record<TaskStatus, string> = {
   cancelled: '已取消',
 };
 const emptySnapshot: TaskSnapshot = { plans: [], tasks: [] };
+const TASK_VIEW_KEY = 'seamind:task-view:v1';
+
+function readTaskView(): 'board' | 'list' | 'calendar' {
+  try {
+    const stored = localStorage.getItem(TASK_VIEW_KEY);
+    return stored === 'list' || stored === 'calendar' ? stored : 'board';
+  } catch {
+    return 'board';
+  }
+}
 
 function blankTask(planId: string | null, resource?: TaskResource): TaskInput {
   return {
@@ -160,7 +171,7 @@ export default function TaskWorkspace({
   const [notice, setNotice] = useState('');
   const [planFilter, setPlanFilter] = useState('all');
   const [query, setQuery] = useState('');
-  const [view, setView] = useState<'board' | 'list'>('board');
+  const [view, setView] = useState<'board' | 'list' | 'calendar'>(readTaskView);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [newPlan, setNewPlan] = useState('');
   const [draft, setDraft] = useState<TaskInput | null>(null);
@@ -317,6 +328,32 @@ export default function TaskWorkspace({
   );
   const isBlocked = (entry: LearningTask) =>
     entry.prerequisiteIds.some((id) => byId.get(id)?.status !== 'done');
+
+  const changeView = (next: typeof view) => {
+    setView(next);
+    try {
+      localStorage.setItem(TASK_VIEW_KEY, next);
+    } catch {
+      /* Storage may be unavailable. */
+    }
+  };
+
+  const createTaskForDate = (date: string) => {
+    const planId = !['all', 'today', 'unplanned'].includes(planFilter)
+      ? planFilter
+      : null;
+    openDraft({ ...blankTask(planId), dueDate: date });
+  };
+
+  const moveTaskDate = async (entry: LearningTask, date: string | null) => {
+    try {
+      await taskApi.saveTask({ ...editTask(entry), dueDate: date });
+      setNotice(date ? `截止日期已改为 ${date}` : '已移除截止日期');
+    } catch (reason) {
+      await reload();
+      setError(errorText(reason));
+    }
+  };
 
   const changeStatus = async (entry: LearningTask, status: TaskStatus) => {
     try {
@@ -643,16 +680,23 @@ export default function TaskWorkspace({
             <button
               type="button"
               className={view === 'board' ? 'is-active' : ''}
-              onClick={() => setView('board')}
+              onClick={() => changeView('board')}
             >
               看板
             </button>
             <button
               type="button"
               className={view === 'list' ? 'is-active' : ''}
-              onClick={() => setView('list')}
+              onClick={() => changeView('list')}
             >
               列表
+            </button>
+            <button
+              type="button"
+              className={view === 'calendar' ? 'is-active' : ''}
+              onClick={() => changeView('calendar')}
+            >
+              日历
             </button>
             <button
               type="button"
@@ -726,6 +770,13 @@ export default function TaskWorkspace({
               );
             })}
           </div>
+        ) : view === 'calendar' ? (
+          <TaskCalendar
+            tasks={filtered}
+            onOpenTask={setSelectedId}
+            onCreateTask={createTaskForDate}
+            onMoveTask={moveTaskDate}
+          />
         ) : (
           <div className="task-list">
             {filtered.length ? (

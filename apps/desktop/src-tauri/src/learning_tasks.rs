@@ -204,9 +204,22 @@ fn validate_due_date(value: &Option<String>) -> Result<Option<String>, String> {
                 .iter()
                 .enumerate()
                 .all(|(i, b)| i == 4 || i == 7 || b.is_ascii_digit())
-            || !(1..=12).contains(&date[5..7].parse::<u8>().unwrap_or(0))
-            || !(1..=31).contains(&date[8..10].parse::<u8>().unwrap_or(0))
         {
+            return Err("截止日期格式无效。".to_string());
+        }
+        let year = date[0..4].parse::<u16>().unwrap_or(0);
+        let month = date[5..7].parse::<u8>().unwrap_or(0);
+        let day = date[8..10].parse::<u8>().unwrap_or(0);
+        if year == 0 || !(1..=12).contains(&month) {
+            return Err("截止日期格式无效。".to_string());
+        }
+        let days = match month {
+            2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+            2 => 28,
+            4 | 6 | 9 | 11 => 30,
+            _ => 31,
+        };
+        if day == 0 || day > days {
             return Err("截止日期格式无效。".to_string());
         }
     }
@@ -731,7 +744,52 @@ mod tests {
     fn corrupt_resource_data_is_reported() {
         let conn = db();
         save_task(&conn, &task("a"), 1).unwrap();
-        conn.execute("UPDATE tasks SET resources_json = 'invalid' WHERE id = 'a'", []).unwrap();
+        conn.execute(
+            "UPDATE tasks SET resources_json = 'invalid' WHERE id = 'a'",
+            [],
+        )
+        .unwrap();
         assert!(snapshot(&conn).is_err());
+    }
+
+    #[test]
+    fn due_date_respects_calendar_days_and_leap_years() {
+        for invalid in [
+            "2026-02-29",
+            "2026-02-31",
+            "2026-04-31",
+            "1900-02-29",
+            "0000-01-01",
+        ] {
+            assert!(
+                validate_due_date(&Some(invalid.into())).is_err(),
+                "{invalid}"
+            );
+        }
+        for valid in ["2024-02-29", "2000-02-29", "2026-12-31"] {
+            assert_eq!(
+                validate_due_date(&Some(valid.into())).unwrap().as_deref(),
+                Some(valid)
+            );
+        }
+    }
+
+    #[test]
+    fn changing_deadline_preserves_other_task_fields_and_rejects_stale_drag() {
+        let conn = db();
+        let mut original = task("calendar-item");
+        original.title = "Read chapter".into();
+        original.due_date = Some("2026-10-28".into());
+        let saved = save_task(&conn, &original, 1).unwrap();
+
+        let mut moved = original.clone();
+        moved.due_date = Some("2026-10-29".into());
+        moved.expected_revision = Some(saved.revision);
+        save_task(&conn, &moved, 2).unwrap();
+        assert!(save_task(&conn, &moved, 3).is_err());
+
+        let current = snapshot(&conn).unwrap().tasks.remove(0);
+        assert_eq!(current.due_date.as_deref(), Some("2026-10-29"));
+        assert_eq!(current.title, "Read chapter");
     }
 }
