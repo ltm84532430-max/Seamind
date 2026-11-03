@@ -59,6 +59,14 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
   const [bibtexDraft, setBibtexDraft] = useState('');
   const [bibtexLoading, setBibtexLoading] = useState(false);
 
+  // Copy notice toast
+  const [copyNotice, setCopyNotice] = useState<string | null>(null);
+
+  const showToast = (text: string) => {
+    setCopyNotice(text);
+    setTimeout(() => setCopyNotice(null), 2000);
+  };
+
   // ---------------------------------------------------------------------------
   // Data Loading
   // ---------------------------------------------------------------------------
@@ -85,7 +93,6 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
       };
       const list = await literatureApi.list(filter);
       setPapers(list);
-      // If selected paper is no longer in list, pick first
       if (list.length > 0) {
         setSelectedPaperId((prev) => {
           if (prev && list.some((p) => p.id === prev)) return prev;
@@ -109,7 +116,6 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
     loadPapers();
   }, [loadPapers]);
 
-  // Selected paper instance
   const selectedPaper = useMemo(
     () => papers.find((p) => p.id === selectedPaperId) || null,
     [papers, selectedPaperId],
@@ -124,7 +130,7 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
   }, [selectedPaper]);
 
   // ---------------------------------------------------------------------------
-  // Actions
+  // Handlers
   // ---------------------------------------------------------------------------
   const handleUpdateStatus = async (id: string, status: string) => {
     try {
@@ -161,13 +167,14 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
           p.id === selectedPaperId ? { ...p, notes: notesDraft } : p,
         ),
       );
+      showToast('笔记已保存');
     } catch (e) {
       console.error('保存笔记失败:', e);
     }
   };
 
   const handleDeletePaper = async (id: string) => {
-    if (!window.confirm('确定要从文献库中移除该篇论文吗？')) return;
+    if (!window.confirm('确认删除该文献记录？')) return;
     try {
       await literatureApi.delete(id);
       loadOverview();
@@ -181,30 +188,35 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
     if (!selectedPaperId || !onOpenMindmap) return;
     try {
       const md = await literatureApi.generateMindmap(selectedPaperId);
-      const title = selectedPaper?.title || '文献结构思维导图';
+      const title = selectedPaper?.title || '文献解构导图';
       onOpenMindmap(md, title);
     } catch (e: any) {
       alert(`生成导图失败: ${e}`);
     }
   };
 
-  const handleCopyCitation = (format: 'citekey' | 'bibtex' | 'apa') => {
+  const handleCopyCitation = (
+    format: 'citekey' | 'bibtex' | 'apa' | 'ieee',
+  ) => {
     if (!selectedPaper) return;
     let textToCopy = '';
     if (format === 'citekey') {
       textToCopy = `[@${selectedPaper.citeKey}]`;
     } else if (format === 'bibtex') {
       textToCopy = selectedPaper.bibtex || '';
+    } else if (format === 'ieee') {
+      const author =
+        selectedPaper.authors.length > 0 ? selectedPaper.authors[0] : 'Anon';
+      textToCopy = `${author} et al., "${selectedPaper.title}," ${selectedPaper.venue || ''}, ${selectedPaper.year || ''}.`;
     } else {
-      // Basic APA style fallback
-      const authors =
+      const author =
         selectedPaper.authors.length > 0 ? selectedPaper.authors[0] : 'Anon';
       const year = selectedPaper.year ? `(${selectedPaper.year})` : '(n.d.)';
-      textToCopy = `${authors} et al. ${year}. ${selectedPaper.title}. ${selectedPaper.venue || ''}.`;
+      textToCopy = `${author} et al. ${year}. ${selectedPaper.title}. ${selectedPaper.venue || ''}.`;
     }
 
     navigator.clipboard.writeText(textToCopy).then(() => {
-      alert('已成功复制到剪贴板！');
+      showToast('已复制到剪贴板');
     });
   };
 
@@ -213,9 +225,6 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
     window.open(url, '_blank');
   };
 
-  // ---------------------------------------------------------------------------
-  // Fetch Modal Handlers
-  // ---------------------------------------------------------------------------
   const handleExecuteFetch = async () => {
     if (!fetchInput.trim()) return;
     setFetchLoading(true);
@@ -230,7 +239,7 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
         setFetchedPreview(result);
       }
     } catch (e: any) {
-      setFetchError(e?.toString() || '未检索到该文献');
+      setFetchError(e?.toString() || '未检索到对应元数据');
     } finally {
       setFetchLoading(false);
     }
@@ -250,9 +259,6 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
     }
   };
 
-  // ---------------------------------------------------------------------------
-  // Bibtex Import Handlers
-  // ---------------------------------------------------------------------------
   const handleExecuteBibtexImport = async () => {
     if (!bibtexDraft.trim()) return;
     setBibtexLoading(true);
@@ -261,7 +267,7 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
         bibtexDraft,
         activeCollectionId || undefined,
       );
-      alert(`成功导入 ${count} 篇文献！`);
+      showToast(`已导入 ${count} 篇文献`);
       setShowBibtexModal(false);
       setBibtexDraft('');
       loadOverview();
@@ -278,206 +284,184 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
   // ---------------------------------------------------------------------------
   return (
     <div className="literature-workspace">
-      {/* ==================================================================== */}
-      {/* 1. Sidebar                                                          */}
-      {/* ==================================================================== */}
-      <aside className="literature-sidebar">
-        <div className="literature-sidebar-header">
-          <div className="literature-sidebar-title">
-            <span>📚 文献工作台</span>
-          </div>
+      {/* -------------------------------------------------------------------- */}
+      {/* Left Sidebar                                                         */}
+      {/* -------------------------------------------------------------------- */}
+      <aside className="lit-sidebar">
+        <div className="lit-sidebar-head">
+          <span className="lit-sidebar-title">文献管理</span>
         </div>
 
-        {/* Status Filters */}
-        <div className="literature-nav-group">
-          <button
-            type="button"
-            className={`literature-nav-item ${
-              statusFilter === 'all' && !activeCollectionId && !activeTag
-                ? 'is-active'
-                : ''
-            }`}
-            onClick={() => {
-              setStatusFilter('all');
-              setActiveCollectionId(null);
-              setActiveTag(null);
-            }}
-          >
-            <span className="literature-nav-label">📑 全部文献</span>
-            <span className="literature-nav-badge">
-              {overview?.totalPapers || 0}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            className={`literature-nav-item ${
-              statusFilter === 'unread' ? 'is-active' : ''
-            }`}
-            onClick={() => {
-              setStatusFilter('unread');
-              setActiveCollectionId(null);
-              setActiveTag(null);
-            }}
-          >
-            <span className="literature-nav-label">⚪ 未读</span>
-            <span className="literature-nav-badge">
-              {overview?.unreadCount || 0}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            className={`literature-nav-item ${
-              statusFilter === 'reading' ? 'is-active' : ''
-            }`}
-            onClick={() => {
-              setStatusFilter('reading');
-              setActiveCollectionId(null);
-              setActiveTag(null);
-            }}
-          >
-            <span className="literature-nav-label">🟡 在读</span>
-            <span className="literature-nav-badge">
-              {overview?.readingCount || 0}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            className={`literature-nav-item ${
-              statusFilter === 'completed' ? 'is-active' : ''
-            }`}
-            onClick={() => {
-              setStatusFilter('completed');
-              setActiveCollectionId(null);
-              setActiveTag(null);
-            }}
-          >
-            <span className="literature-nav-label">🟢 已读</span>
-            <span className="literature-nav-badge">
-              {overview?.completedCount || 0}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            className={`literature-nav-item ${
-              statusFilter === 'starred' ? 'is-active' : ''
-            }`}
-            onClick={() => {
-              setStatusFilter('starred');
-              setActiveCollectionId(null);
-              setActiveTag(null);
-            }}
-          >
-            <span className="literature-nav-label">⭐ 星标收藏</span>
-            <span className="literature-nav-badge">
-              {overview?.starredCount || 0}
-            </span>
-          </button>
-        </div>
-
-        {/* Collections */}
-        <div className="literature-nav-group">
-          <div className="literature-group-label">
-            <span>我的文献集</span>
+        <div className="lit-sidebar-scroll">
+          {/* Main categories */}
+          <div className="lit-nav-section">
+            <div className="lit-section-label">分类</div>
             <button
               type="button"
-              className="lit-btn"
-              style={{ padding: '2px 6px', fontSize: '11px' }}
-              title="新建群组"
-              onClick={() => setShowNewCollectionModal(true)}
-            >
-              +
-            </button>
-          </div>
-          {overview?.collections && overview.collections.length > 0 ? (
-            overview.collections.map((col) => (
-              <button
-                key={col.id}
-                type="button"
-                className={`literature-nav-item ${
-                  activeCollectionId === col.id ? 'is-active' : ''
-                }`}
-                onClick={() => {
-                  setActiveCollectionId(col.id);
-                  setActiveTag(null);
-                  setStatusFilter('all');
-                }}
-              >
-                <span className="literature-nav-label">📁 {col.name}</span>
-                <span className="literature-nav-badge">{col.paperCount}</span>
-              </button>
-            ))
-          ) : (
-            <div
-              style={{
-                padding: '4px 8px',
-                fontSize: '11.5px',
-                color: '#64748b',
+              className={`lit-nav-item ${
+                statusFilter === 'all' && !activeCollectionId && !activeTag
+                  ? 'is-active'
+                  : ''
+              }`}
+              onClick={() => {
+                setStatusFilter('all');
+                setActiveCollectionId(null);
+                setActiveTag(null);
               }}
             >
-              暂无自定义群组
+              <span className="lit-nav-name">全部文献</span>
+              <span className="lit-nav-count">
+                {overview?.totalPapers || 0}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              className={`lit-nav-item ${statusFilter === 'unread' ? 'is-active' : ''}`}
+              onClick={() => {
+                setStatusFilter('unread');
+                setActiveCollectionId(null);
+                setActiveTag(null);
+              }}
+            >
+              <span className="lit-nav-name">未读</span>
+              <span className="lit-nav-count">
+                {overview?.unreadCount || 0}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              className={`lit-nav-item ${statusFilter === 'reading' ? 'is-active' : ''}`}
+              onClick={() => {
+                setStatusFilter('reading');
+                setActiveCollectionId(null);
+                setActiveTag(null);
+              }}
+            >
+              <span className="lit-nav-name">在读</span>
+              <span className="lit-nav-count">
+                {overview?.readingCount || 0}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              className={`lit-nav-item ${statusFilter === 'completed' ? 'is-active' : ''}`}
+              onClick={() => {
+                setStatusFilter('completed');
+                setActiveCollectionId(null);
+                setActiveTag(null);
+              }}
+            >
+              <span className="lit-nav-name">已读</span>
+              <span className="lit-nav-count">
+                {overview?.completedCount || 0}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              className={`lit-nav-item ${statusFilter === 'starred' ? 'is-active' : ''}`}
+              onClick={() => {
+                setStatusFilter('starred');
+                setActiveCollectionId(null);
+                setActiveTag(null);
+              }}
+            >
+              <span className="lit-nav-name">星标文献</span>
+              <span className="lit-nav-count">
+                {overview?.starredCount || 0}
+              </span>
+            </button>
+          </div>
+
+          {/* Collections */}
+          <div className="lit-nav-section">
+            <div className="lit-section-label">
+              <span>文献集</span>
+              <button
+                type="button"
+                className="lit-section-btn"
+                title="新建文献集"
+                onClick={() => setShowNewCollectionModal(true)}
+              >
+                +
+              </button>
+            </div>
+            {overview?.collections && overview.collections.length > 0 ? (
+              overview.collections.map((col) => (
+                <button
+                  key={col.id}
+                  type="button"
+                  className={`lit-nav-item ${
+                    activeCollectionId === col.id ? 'is-active' : ''
+                  }`}
+                  onClick={() => {
+                    setActiveCollectionId(col.id);
+                    setActiveTag(null);
+                    setStatusFilter('all');
+                  }}
+                >
+                  <span className="lit-nav-name">{col.name}</span>
+                  <span className="lit-nav-count">{col.paperCount}</span>
+                </button>
+              ))
+            ) : (
+              <div className="lit-empty-hint">无自定义分组</div>
+            )}
+          </div>
+
+          {/* Tags */}
+          {overview?.allTags && overview.allTags.length > 0 && (
+            <div className="lit-nav-section">
+              <div className="lit-section-label">标签</div>
+              <div className="lit-tag-list">
+                {overview.allTags.slice(0, 16).map((t) => (
+                  <span
+                    key={t.name}
+                    className={`lit-tag-pill ${activeTag === t.name ? 'is-active' : ''}`}
+                    onClick={() => {
+                      setActiveTag((prev) => (prev === t.name ? null : t.name));
+                    }}
+                  >
+                    {t.name} ({t.count})
+                  </span>
+                ))}
+              </div>
             </div>
           )}
         </div>
-
-        {/* Tags */}
-        {overview?.allTags && overview.allTags.length > 0 && (
-          <div className="literature-nav-group">
-            <div className="literature-group-label">热门标签</div>
-            <div className="literature-tags-container">
-              {overview.allTags.slice(0, 15).map((t) => (
-                <span
-                  key={t.name}
-                  className={`literature-tag-pill ${
-                    activeTag === t.name ? 'is-active' : ''
-                  }`}
-                  onClick={() => {
-                    setActiveTag((prev) => (prev === t.name ? null : t.name));
-                  }}
-                >
-                  #{t.name} ({t.count})
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
       </aside>
 
-      {/* ==================================================================== */}
-      {/* 2. Main Paper List                                                  */}
-      {/* ==================================================================== */}
-      <main className="literature-main">
+      {/* -------------------------------------------------------------------- */}
+      {/* Center Main List                                                     */}
+      {/* -------------------------------------------------------------------- */}
+      <main className="lit-main">
         {/* Toolbar */}
-        <div className="literature-toolbar">
-          <div className="literature-search-box">
-            <span className="literature-search-icon">🔍</span>
+        <div className="lit-toolbar">
+          <div className="lit-search-wrap">
             <input
               type="text"
-              className="literature-search-input"
-              placeholder="搜索论文标题、作者、CiteKey、摘要、期刊..."
+              className="lit-search-input"
+              placeholder="搜索标题、作者、CiteKey、摘要、期刊..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>
 
-          <div className="literature-toolbar-actions">
-            {/* Sort Selector */}
+          <div className="lit-toolbar-actions">
             <select
-              className="lit-form-select"
-              style={{ width: 'auto', padding: '5px 8px', fontSize: '12px' }}
+              className="lit-select"
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as any)}
             >
               <option value="updatedAt">按更新时间</option>
               <option value="year">按发表年份</option>
-              <option value="title">按论文标题</option>
+              <option value="title">按标题排序</option>
               <option value="rating">按评分排序</option>
             </select>
 
-            {/* Smart Import Button */}
             <button
               type="button"
               className="lit-btn lit-btn-primary"
@@ -488,19 +472,17 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
                 setFetchInput('');
               }}
             >
-              ⚡ DOI / arXiv 导入
+              DOI / arXiv 检索
             </button>
 
-            {/* BibTeX Import */}
             <button
               type="button"
               className="lit-btn"
               onClick={() => setShowBibtexModal(true)}
             >
-              📥 导入 BibTeX
+              导入 BibTeX
             </button>
 
-            {/* Manual New Paper */}
             <button
               type="button"
               className="lit-btn"
@@ -515,33 +497,37 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
                 setShowEditModal(true);
               }}
             >
-              + 手动添加
+              新建条目
             </button>
           </div>
         </div>
 
-        {/* Paper List */}
-        <div className="literature-list-container">
+        {/* List Content */}
+        <div className="lit-list">
           {loading && (
-            <div className="empty-state">
-              <span>正在加载文献数据...</span>
+            <div className="lit-empty-state">
+              <span className="lit-empty-desc">正在加载文献数据...</span>
             </div>
           )}
 
           {!loading && errorMsg && (
-            <div className="empty-state" style={{ color: '#ef4444' }}>
-              <span>{errorMsg}</span>
+            <div className="lit-empty-state">
+              <span
+                className="lit-empty-desc"
+                style={{ color: 'var(--accent)' }}
+              >
+                {errorMsg}
+              </span>
             </div>
           )}
 
           {!loading && papers.length === 0 && (
-            <div className="empty-state">
-              <span style={{ fontSize: '32px' }}>📖</span>
-              <p>暂无符合条件的文献</p>
-              <p style={{ fontSize: '12px' }}>
-                点击上方的 <strong>“⚡ DOI / arXiv 导入”</strong> 或{' '}
-                <strong>“📥 导入 BibTeX”</strong> 快速添加
-              </p>
+            <div className="lit-empty-state">
+              <span className="lit-empty-title">暂无文献记录</span>
+              <span className="lit-empty-desc">
+                通过上方工具栏导入 BibTeX，或使用 DOI / arXiv
+                标识符在线检索添加条目。
+              </span>
             </div>
           )}
 
@@ -555,27 +541,36 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
                     : p.authors.join(', ')
                   : '佚名';
 
+              const statusText =
+                p.readStatus === 'completed'
+                  ? '已读'
+                  : p.readStatus === 'reading'
+                    ? '在读'
+                    : '未读';
+
               return (
                 <div
                   key={p.id}
-                  className={`paper-card ${isSelected ? 'is-selected' : ''}`}
+                  className={`lit-card ${isSelected ? 'is-selected' : ''}`}
                   onClick={() => setSelectedPaperId(p.id)}
                 >
-                  <div className="paper-card-header">
-                    <span className="paper-card-title">{p.title}</span>
-                    <span className="paper-card-citekey">@{p.citeKey}</span>
+                  <div className="lit-card-row-1">
+                    <span className="lit-card-title">{p.title}</span>
+                    <span className="lit-citekey-badge">@{p.citeKey}</span>
                   </div>
 
-                  <div className="paper-card-meta">
-                    <span>✍️ {authorsText}</span>
-                    {p.year && <span>📅 {p.year}</span>}
-                    {p.venue && <span>🏛️ {p.venue}</span>}
+                  <div className="lit-card-meta">
+                    <span>{authorsText}</span>
+                    {p.year && <span>{p.year}</span>}
+                    {p.venue && <span>{p.venue}</span>}
                     {p.doi && (
-                      <span style={{ color: '#60a5fa' }}>DOI: {p.doi}</span>
+                      <span style={{ color: 'var(--muted)' }}>
+                        DOI: {p.doi}
+                      </span>
                     )}
                   </div>
 
-                  <div className="paper-card-footer">
+                  <div className="lit-card-footer">
                     <div
                       style={{
                         display: 'flex',
@@ -583,20 +578,16 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
                         alignItems: 'center',
                       }}
                     >
-                      <span className={`paper-status-badge ${p.readStatus}`}>
-                        {p.readStatus === 'completed'
-                          ? '已读'
-                          : p.readStatus === 'reading'
-                            ? '在读'
-                            : '未读'}
+                      <span className={`lit-status-tag ${p.readStatus}`}>
+                        {statusText}
                       </span>
 
-                      {/* Interactive Stars */}
-                      <span className="star-rating">
+                      {/* Discrete Star Indicators */}
+                      <span className="lit-stars">
                         {[1, 2, 3, 4, 5].map((star) => (
                           <span
                             key={star}
-                            className={star <= p.rating ? '' : 'star-empty'}
+                            className={`lit-star ${star <= p.rating ? 'is-filled' : ''}`}
                             onClick={(e) => {
                               e.stopPropagation();
                               handleUpdateRating(
@@ -614,15 +605,7 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
                     {p.keywords && p.keywords.length > 0 && (
                       <div style={{ display: 'flex', gap: '4px' }}>
                         {p.keywords.slice(0, 3).map((k) => (
-                          <span
-                            key={k}
-                            style={{
-                              fontSize: '10.5px',
-                              background: 'rgba(255,255,255,0.06)',
-                              padding: '2px 6px',
-                              borderRadius: '4px',
-                            }}
-                          >
+                          <span key={k} className="lit-tag-pill">
                             {k}
                           </span>
                         ))}
@@ -635,256 +618,273 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
         </div>
       </main>
 
-      {/* ==================================================================== */}
-      {/* 3. Right Details Inspector                                          */}
-      {/* ==================================================================== */}
-      {selectedPaper ? (
-        <aside className="literature-inspector">
-          {/* Header & Quick Action Buttons */}
-          <div className="inspector-header">
-            <div className="inspector-actions-bar">
-              {/* Paper to Mindmap Button */}
+      {/* -------------------------------------------------------------------- */}
+      {/* Right Inspector                                                      */}
+      {/* -------------------------------------------------------------------- */}
+      {selectedPaper && (
+        <aside className="lit-inspector">
+          <div className="lit-inspector-head">
+            <span className="lit-inspector-head-title">条目检视</span>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
               {onOpenMindmap && (
                 <button
                   type="button"
-                  className="lit-btn lit-btn-mindmap"
-                  title="自动将此论文结构解构为思维导图"
+                  className="lit-btn lit-btn-primary"
+                  title="自动解构文献并转为思维导图"
                   onClick={handleGenerateMindmap}
                 >
-                  ✨ 转为思维导图
+                  生成思维导图
                 </button>
               )}
 
-              {/* Citation Copy Dropdown */}
-              <div style={{ display: 'flex', gap: '4px' }}>
-                <button
-                  type="button"
-                  className="lit-btn"
-                  title="复制 [@citekey] Markdown 引用"
-                  onClick={() => handleCopyCitation('citekey')}
-                >
-                  📋 复制引用
-                </button>
-                <button
-                  type="button"
-                  className="lit-btn"
-                  title="复制 BibTeX 源码"
-                  onClick={() => handleCopyCitation('bibtex')}
-                >
-                  BibTeX
-                </button>
-              </div>
-
-              {/* Edit & Delete */}
-              <div style={{ display: 'flex', gap: '4px' }}>
-                <button
-                  type="button"
-                  className="lit-btn"
-                  title="编辑文献元数据"
-                  onClick={() => {
-                    setEditingPaper({ ...selectedPaper });
-                    setShowEditModal(true);
-                  }}
-                >
-                  ✏️
-                </button>
-                <button
-                  type="button"
-                  className="lit-btn"
-                  style={{ color: '#ef4444' }}
-                  title="删除文献"
-                  onClick={() => handleDeletePaper(selectedPaper.id)}
-                >
-                  🗑️
-                </button>
-              </div>
-            </div>
-
-            <div className="inspector-title">{selectedPaper.title}</div>
-
-            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
               <select
-                className="lit-form-select"
-                style={{ width: 'auto', padding: '4px 8px', fontSize: '12px' }}
-                value={selectedPaper.readStatus}
-                onChange={(e) =>
-                  handleUpdateStatus(selectedPaper.id, e.target.value)
-                }
+                className="lit-select"
+                style={{ height: '28px', padding: '0 6px', fontSize: '11.5px' }}
+                onChange={(e) => {
+                  if (e.target.value) {
+                    handleCopyCitation(e.target.value as any);
+                    e.target.value = '';
+                  }
+                }}
+                defaultValue=""
               >
-                <option value="unread">⚪ 标记为未读</option>
-                <option value="reading">🟡 标记为在读</option>
-                <option value="completed">🟢 标记为已读</option>
+                <option value="" disabled>
+                  复制引用
+                </option>
+                <option value="citekey">Markdown [@citekey]</option>
+                <option value="bibtex">BibTeX 条目</option>
+                <option value="apa">APA 格式</option>
+                <option value="ieee">IEEE 格式</option>
               </select>
 
-              <span className="star-rating">
-                {[1, 2, 3, 4, 5].map((star) => (
-                  <span
-                    key={star}
-                    className={star <= selectedPaper.rating ? '' : 'star-empty'}
-                    onClick={() =>
-                      handleUpdateRating(
-                        selectedPaper.id,
-                        star === selectedPaper.rating ? 0 : star,
-                      )
-                    }
-                  >
-                    ★
-                  </span>
-                ))}
-              </span>
+              <button
+                type="button"
+                className="lit-btn"
+                title="编辑元数据"
+                onClick={() => {
+                  setEditingPaper({ ...selectedPaper });
+                  setShowEditModal(true);
+                }}
+              >
+                编辑
+              </button>
+
+              <button
+                type="button"
+                className="lit-btn"
+                style={{ color: 'var(--accent)' }}
+                title="删除文献"
+                onClick={() => handleDeletePaper(selectedPaper.id)}
+              >
+                删除
+              </button>
             </div>
           </div>
 
-          {/* Inspector Body */}
-          <div className="inspector-body">
-            {/* Metadata Grid */}
-            <div className="inspector-section">
-              <div className="inspector-section-label">文献元数据</div>
-              <div className="inspector-meta-grid">
-                <span className="meta-field-name">CiteKey</span>
-                <span className="meta-field-value" style={{ color: '#60a5fa' }}>
-                  @{selectedPaper.citeKey}
-                </span>
-
-                <span className="meta-field-name">作者</span>
-                <span className="meta-field-value">
-                  {selectedPaper.authors.join(', ') || '未记录'}
-                </span>
-
-                <span className="meta-field-name">发表刊物</span>
-                <span className="meta-field-value">
-                  {selectedPaper.venue || '—'}
-                </span>
-
-                <span className="meta-field-name">年份</span>
-                <span className="meta-field-value">
-                  {selectedPaper.year || '—'}
-                </span>
-
-                {selectedPaper.doi && (
-                  <>
-                    <span className="meta-field-name">DOI</span>
-                    <span className="meta-field-value">
-                      <a
-                        href={`https://doi.org/${selectedPaper.doi}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{ color: '#60a5fa', textDecoration: 'none' }}
-                      >
-                        {selectedPaper.doi} ↗
-                      </a>
-                    </span>
-                  </>
-                )}
-
-                {selectedPaper.url && (
-                  <>
-                    <span className="meta-field-name">原文链接</span>
-                    <span className="meta-field-value">
-                      <button
-                        type="button"
-                        className="lit-btn"
-                        style={{ padding: '2px 8px', fontSize: '11px' }}
-                        onClick={() => handleOpenLink(selectedPaper.url)}
-                      >
-                        打开原文网页 ↗
-                      </button>
-                    </span>
-                  </>
-                )}
+          <div className="lit-inspector-body">
+            {copyNotice && (
+              <div
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: '4px',
+                  background:
+                    'color-mix(in srgb, var(--accent) 15%, transparent)',
+                  color: 'var(--accent)',
+                  fontSize: '11.5px',
+                  textAlign: 'center',
+                }}
+              >
+                {copyNotice}
               </div>
+            )}
+
+            <div className="lit-doc-title">{selectedPaper.title}</div>
+
+            {/* Metadata Grid */}
+            <div className="lit-kv-grid">
+              <span className="lit-kv-key">引用键</span>
+              <span
+                className="lit-kv-val"
+                style={{ fontFamily: 'var(--mono)' }}
+              >
+                @{selectedPaper.citeKey}
+              </span>
+
+              <span className="lit-kv-key">作者</span>
+              <span className="lit-kv-val">
+                {selectedPaper.authors.join(', ') || '未记录'}
+              </span>
+
+              <span className="lit-kv-key">发表刊物</span>
+              <span className="lit-kv-val">{selectedPaper.venue || '—'}</span>
+
+              <span className="lit-kv-key">发表年份</span>
+              <span className="lit-kv-val">{selectedPaper.year || '—'}</span>
+
+              <span className="lit-kv-key">阅读状态</span>
+              <span className="lit-kv-val">
+                <select
+                  className="lit-select"
+                  style={{
+                    height: '24px',
+                    fontSize: '11.5px',
+                    padding: '0 6px',
+                  }}
+                  value={selectedPaper.readStatus}
+                  onChange={(e) =>
+                    handleUpdateStatus(selectedPaper.id, e.target.value)
+                  }
+                >
+                  <option value="unread">未读</option>
+                  <option value="reading">在读</option>
+                  <option value="completed">已读</option>
+                </select>
+              </span>
+
+              <span className="lit-kv-key">重要度评分</span>
+              <span className="lit-kv-val">
+                <span className="lit-stars">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <span
+                      key={star}
+                      className={`lit-star ${
+                        star <= selectedPaper.rating ? 'is-filled' : ''
+                      }`}
+                      onClick={() =>
+                        handleUpdateRating(
+                          selectedPaper.id,
+                          star === selectedPaper.rating ? 0 : star,
+                        )
+                      }
+                    >
+                      ★
+                    </span>
+                  ))}
+                </span>
+              </span>
+
+              {selectedPaper.doi && (
+                <>
+                  <span className="lit-kv-key">DOI</span>
+                  <span className="lit-kv-val">
+                    <a
+                      href={`https://doi.org/${selectedPaper.doi}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{
+                        color: 'var(--ink)',
+                        textDecoration: 'underline',
+                      }}
+                    >
+                      {selectedPaper.doi}
+                    </a>
+                  </span>
+                </>
+              )}
+
+              {selectedPaper.url && (
+                <>
+                  <span className="lit-kv-key">原文链接</span>
+                  <span className="lit-kv-val">
+                    <button
+                      type="button"
+                      className="lit-btn"
+                      style={{
+                        height: '22px',
+                        fontSize: '11px',
+                        padding: '0 6px',
+                      }}
+                      onClick={() => handleOpenLink(selectedPaper.url)}
+                    >
+                      打开原文链接
+                    </button>
+                  </span>
+                </>
+              )}
             </div>
 
             {/* Abstract */}
             {selectedPaper.abstractText && (
-              <div className="inspector-section">
-                <div className="inspector-section-label">摘要概览</div>
-                <div className="inspector-abstract-box">
+              <div className="lit-block-section">
+                <div className="lit-block-label">摘要概览</div>
+                <div className="lit-abstract-content">
                   {selectedPaper.abstractText}
                 </div>
               </div>
             )}
 
             {/* Notes Section */}
-            <div className="inspector-section">
-              <div className="inspector-section-label">
-                <span>个人学术笔记 & 批判性思考</span>
+            <div className="lit-block-section">
+              <div className="lit-block-label">
+                <span>研读笔记</span>
                 <button
                   type="button"
-                  className="lit-btn"
-                  style={{ padding: '2px 6px', fontSize: '11px' }}
+                  className="lit-section-btn"
                   onClick={handleSaveNotes}
                 >
-                  保存笔记
+                  保存
                 </button>
               </div>
               <textarea
-                className="inspector-notes-textarea"
-                placeholder="在此记录针对本论文的研读笔记、方法论优缺点、创新点与启发..."
+                className="lit-notes-input"
+                placeholder="记录论文方法论要点、批判性评价或启发思考..."
                 value={notesDraft}
                 onChange={(e) => setNotesDraft(e.target.value)}
                 onBlur={handleSaveNotes}
               />
             </div>
 
-            {/* BibTeX Raw View */}
+            {/* BibTeX Source Block */}
             {selectedPaper.bibtex && (
-              <div className="inspector-section">
-                <div className="inspector-section-label">
+              <div className="lit-block-section">
+                <div className="lit-block-label">
                   <span>BibTeX 源码</span>
                   <button
                     type="button"
-                    className="lit-btn"
-                    style={{ padding: '2px 6px', fontSize: '11px' }}
+                    className="lit-section-btn"
                     onClick={() => handleCopyCitation('bibtex')}
                   >
                     复制源码
                   </button>
                 </div>
-                <div className="inspector-bibtex-block">
-                  {selectedPaper.bibtex}
-                </div>
+                <pre className="lit-bibtex-pre">{selectedPaper.bibtex}</pre>
               </div>
             )}
           </div>
         </aside>
-      ) : null}
+      )}
 
-      {/* ==================================================================== */}
-      {/* 4. Modals                                                           */}
-      {/* ==================================================================== */}
+      {/* -------------------------------------------------------------------- */}
+      {/* Modals                                                               */}
+      {/* -------------------------------------------------------------------- */}
 
-      {/* DOI / arXiv Fetch Modal */}
+      {/* DOI / arXiv Search Modal */}
       {showFetchModal && (
         <div
-          className="lit-modal-backdrop"
+          className="lit-dialog-backdrop"
           onClick={() => setShowFetchModal(false)}
         >
-          <div
-            className="lit-modal-dialog"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="lit-modal-header">
-              <div className="lit-modal-title">
-                ⚡ 通过 DOI / arXiv ID 智能检索导入
-              </div>
+          <div className="lit-dialog-box" onClick={(e) => e.stopPropagation()}>
+            <div className="lit-dialog-head">
+              <span className="lit-dialog-title">通过标识符检索导入</span>
               <button
                 type="button"
                 className="lit-btn"
+                style={{ height: '24px', padding: '0 6px' }}
                 onClick={() => setShowFetchModal(false)}
               >
-                ✕
+                关闭
               </button>
             </div>
 
-            <div className="lit-modal-body">
-              <div style={{ display: 'flex', gap: '16px' }}>
+            <div className="lit-dialog-body">
+              <div style={{ display: 'flex', gap: '20px' }}>
                 <label
                   style={{
                     display: 'flex',
                     alignItems: 'center',
                     gap: '6px',
-                    fontSize: '13px',
+                    fontSize: '12px',
                   }}
                 >
                   <input
@@ -900,7 +900,7 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
                     display: 'flex',
                     alignItems: 'center',
                     gap: '6px',
-                    fontSize: '13px',
+                    fontSize: '12px',
                   }}
                 >
                   <input
@@ -913,15 +913,15 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
                 </label>
               </div>
 
-              <div className="lit-form-group">
+              <div className="lit-field-group">
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <input
                     type="text"
-                    className="lit-form-input"
+                    className="lit-text-input"
                     placeholder={
                       fetchType === 'doi'
-                        ? '例如 10.1145/3292500.3330964 或 10.48550/arXiv.1706.03762'
-                        : '例如 1706.03762 或 2302.13971'
+                        ? '输入 DOI，例如 10.48550/arXiv.1706.03762'
+                        : '输入 arXiv ID，例如 1706.03762'
                     }
                     value={fetchInput}
                     onChange={(e) => setFetchInput(e.target.value)}
@@ -939,19 +939,18 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
               </div>
 
               {fetchError && (
-                <div style={{ color: '#ef4444', fontSize: '12px' }}>
+                <div style={{ color: 'var(--accent)', fontSize: '11.5px' }}>
                   {fetchError}
                 </div>
               )}
 
-              {/* Fetched Preview */}
               {fetchedPreview && (
                 <div
                   style={{
-                    background: 'rgba(0,0,0,0.3)',
+                    background: 'color-mix(in srgb, var(--panel) 94%, #000)',
                     padding: '12px',
-                    borderRadius: '6px',
-                    border: '1px solid rgba(255,255,255,0.08)',
+                    borderRadius: '4px',
+                    border: '1px solid var(--line)',
                     display: 'flex',
                     flexDirection: 'column',
                     gap: '6px',
@@ -960,28 +959,29 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
                   <div
                     style={{
                       fontWeight: 600,
-                      fontSize: '14px',
-                      color: '#60a5fa',
+                      fontSize: '13px',
+                      color: 'var(--ink)',
                     }}
                   >
                     {fetchedPreview.title}
                   </div>
-                  <div style={{ fontSize: '12px', color: '#94a3b8' }}>
+                  <div style={{ fontSize: '11.5px', color: 'var(--muted)' }}>
                     {fetchedPreview.authors.join(', ')} (
-                    {fetchedPreview.year || '未知年份'})
+                    {fetchedPreview.year || '年份未标注'})
                   </div>
                   {fetchedPreview.venue && (
-                    <div style={{ fontSize: '12px', color: '#cbd5e1' }}>
-                      🏛️ {fetchedPreview.venue}
+                    <div style={{ fontSize: '11.5px', color: 'var(--muted)' }}>
+                      刊物/会议: {fetchedPreview.venue}
                     </div>
                   )}
                   {fetchedPreview.abstractText && (
                     <div
                       style={{
-                        fontSize: '11.5px',
-                        color: '#64748b',
+                        fontSize: '11px',
+                        color: 'var(--muted)',
                         maxHeight: '100px',
                         overflowY: 'auto',
+                        lineHeight: 1.5,
                       }}
                     >
                       {fetchedPreview.abstractText}
@@ -991,7 +991,7 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
               )}
             </div>
 
-            <div className="lit-modal-footer">
+            <div className="lit-dialog-foot">
               <button
                 type="button"
                 className="lit-btn"
@@ -1015,35 +1015,34 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
       {/* BibTeX Import Modal */}
       {showBibtexModal && (
         <div
-          className="lit-modal-backdrop"
+          className="lit-dialog-backdrop"
           onClick={() => setShowBibtexModal(false)}
         >
-          <div
-            className="lit-modal-dialog"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="lit-modal-header">
-              <div className="lit-modal-title">📥 粘贴 BibTeX 源码批量导入</div>
+          <div className="lit-dialog-box" onClick={(e) => e.stopPropagation()}>
+            <div className="lit-dialog-head">
+              <span className="lit-dialog-title">导入 BibTeX 源码</span>
               <button
                 type="button"
                 className="lit-btn"
+                style={{ height: '24px', padding: '0 6px' }}
                 onClick={() => setShowBibtexModal(false)}
               >
-                ✕
+                关闭
               </button>
             </div>
 
-            <div className="lit-modal-body">
+            <div className="lit-dialog-body">
               <textarea
-                className="lit-form-textarea"
+                className="lit-textarea"
                 rows={10}
-                placeholder={`@article{vaswani2017attention,\n  title={Attention is all you need},\n  author={Vaswani, Ashish and ...},\n  journal={NeurIPS},\n  year={2017}\n}`}
+                style={{ fontFamily: 'var(--mono)', fontSize: '11px' }}
+                placeholder={`@article{vaswani2017attention,\n  title = {Attention is all you need},\n  author = {Vaswani, Ashish and ...},\n  journal = {NeurIPS},\n  year = {2017}\n}`}
                 value={bibtexDraft}
                 onChange={(e) => setBibtexDraft(e.target.value)}
               />
             </div>
 
-            <div className="lit-modal-footer">
+            <div className="lit-dialog-foot">
               <button
                 type="button"
                 className="lit-btn"
@@ -1057,7 +1056,7 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
                 disabled={bibtexLoading || !bibtexDraft.trim()}
                 onClick={handleExecuteBibtexImport}
               >
-                {bibtexLoading ? '正在导入...' : '开始导入'}
+                {bibtexLoading ? '正在解析导入...' : '开始导入'}
               </button>
             </div>
           </div>
@@ -1067,32 +1066,30 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
       {/* Manual / Edit Paper Modal */}
       {showEditModal && editingPaper && (
         <div
-          className="lit-modal-backdrop"
+          className="lit-dialog-backdrop"
           onClick={() => setShowEditModal(false)}
         >
-          <div
-            className="lit-modal-dialog"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="lit-modal-header">
-              <div className="lit-modal-title">
-                {editingPaper.id ? '编辑文献信息' : '手动添加文献'}
-              </div>
+          <div className="lit-dialog-box" onClick={(e) => e.stopPropagation()}>
+            <div className="lit-dialog-head">
+              <span className="lit-dialog-title">
+                {editingPaper.id ? '编辑文献信息' : '新建文献记录'}
+              </span>
               <button
                 type="button"
                 className="lit-btn"
+                style={{ height: '24px', padding: '0 6px' }}
                 onClick={() => setShowEditModal(false)}
               >
-                ✕
+                关闭
               </button>
             </div>
 
-            <div className="lit-modal-body">
-              <div className="lit-form-group">
-                <label className="lit-form-label">论文标题 *</label>
+            <div className="lit-dialog-body">
+              <div className="lit-field-group">
+                <label className="lit-field-label">标题 *</label>
                 <input
                   type="text"
-                  className="lit-form-input"
+                  className="lit-text-input"
                   value={editingPaper.title}
                   onChange={(e) =>
                     setEditingPaper({ ...editingPaper, title: e.target.value })
@@ -1100,11 +1097,13 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
                 />
               </div>
 
-              <div className="lit-form-group">
-                <label className="lit-form-label">作者列表 (逗号分隔)</label>
+              <div className="lit-field-group">
+                <label className="lit-field-label">
+                  作者 (英文或中文，逗号分隔)
+                </label>
                 <input
                   type="text"
-                  className="lit-form-input"
+                  className="lit-text-input"
                   value={editingPaper.authors.join(', ')}
                   onChange={(e) =>
                     setEditingPaper({
@@ -1125,12 +1124,12 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
                   gap: '10px',
                 }}
               >
-                <div className="lit-form-group">
-                  <label className="lit-form-label">引用键 (CiteKey)</label>
+                <div className="lit-field-group">
+                  <label className="lit-field-label">引用键 (CiteKey)</label>
                   <input
                     type="text"
-                    className="lit-form-input"
-                    placeholder="留空自动生成"
+                    className="lit-text-input"
+                    placeholder="留空根据作者+年份自动生成"
                     value={editingPaper.citeKey || ''}
                     onChange={(e) =>
                       setEditingPaper({
@@ -1141,11 +1140,11 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
                   />
                 </div>
 
-                <div className="lit-form-group">
-                  <label className="lit-form-label">发表年份</label>
+                <div className="lit-field-group">
+                  <label className="lit-field-label">发表年份</label>
                   <input
                     type="number"
-                    className="lit-form-input"
+                    className="lit-text-input"
                     value={editingPaper.year || ''}
                     onChange={(e) =>
                       setEditingPaper({
@@ -1159,13 +1158,11 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
                 </div>
               </div>
 
-              <div className="lit-form-group">
-                <label className="lit-form-label">
-                  发表期刊 / 会议 (Venue)
-                </label>
+              <div className="lit-field-group">
+                <label className="lit-field-label">发表期刊 / 会议</label>
                 <input
                   type="text"
-                  className="lit-form-input"
+                  className="lit-text-input"
                   value={editingPaper.venue || ''}
                   onChange={(e) =>
                     setEditingPaper({ ...editingPaper, venue: e.target.value })
@@ -1180,11 +1177,11 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
                   gap: '10px',
                 }}
               >
-                <div className="lit-form-group">
-                  <label className="lit-form-label">DOI</label>
+                <div className="lit-field-group">
+                  <label className="lit-field-label">DOI</label>
                   <input
                     type="text"
-                    className="lit-form-input"
+                    className="lit-text-input"
                     value={editingPaper.doi || ''}
                     onChange={(e) =>
                       setEditingPaper({ ...editingPaper, doi: e.target.value })
@@ -1192,11 +1189,11 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
                   />
                 </div>
 
-                <div className="lit-form-group">
-                  <label className="lit-form-label">原文链接</label>
+                <div className="lit-field-group">
+                  <label className="lit-field-label">原文链接</label>
                   <input
                     type="text"
-                    className="lit-form-input"
+                    className="lit-text-input"
                     value={editingPaper.url || ''}
                     onChange={(e) =>
                       setEditingPaper({ ...editingPaper, url: e.target.value })
@@ -1205,10 +1202,10 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
                 </div>
               </div>
 
-              <div className="lit-form-group">
-                <label className="lit-form-label">摘要 (Abstract)</label>
+              <div className="lit-field-group">
+                <label className="lit-field-label">摘要</label>
                 <textarea
-                  className="lit-form-textarea"
+                  className="lit-textarea"
                   rows={4}
                   value={editingPaper.abstractText || ''}
                   onChange={(e) =>
@@ -1221,7 +1218,7 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
               </div>
             </div>
 
-            <div className="lit-modal-footer">
+            <div className="lit-dialog-foot">
               <button
                 type="button"
                 className="lit-btn"
@@ -1254,36 +1251,34 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
       {/* New Collection Modal */}
       {showNewCollectionModal && (
         <div
-          className="lit-modal-backdrop"
+          className="lit-dialog-backdrop"
           onClick={() => setShowNewCollectionModal(false)}
         >
-          <div
-            className="lit-modal-dialog"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="lit-modal-header">
-              <div className="lit-modal-title">新建文献集 / 群组</div>
+          <div className="lit-dialog-box" onClick={(e) => e.stopPropagation()}>
+            <div className="lit-dialog-head">
+              <span className="lit-dialog-title">新建文献集</span>
               <button
                 type="button"
                 className="lit-btn"
+                style={{ height: '24px', padding: '0 6px' }}
                 onClick={() => setShowNewCollectionModal(false)}
               >
-                ✕
+                关闭
               </button>
             </div>
-            <div className="lit-modal-body">
-              <div className="lit-form-group">
-                <label className="lit-form-label">群组名称</label>
+            <div className="lit-dialog-body">
+              <div className="lit-field-group">
+                <label className="lit-field-label">文献集名称</label>
                 <input
                   type="text"
-                  className="lit-form-input"
-                  placeholder="例如：大语言模型长文本、强化学习、视觉生成..."
+                  className="lit-text-input"
+                  placeholder="例如：大语言模型长文本、强化学习、视觉生成"
                   value={newCollectionName}
                   onChange={(e) => setNewCollectionName(e.target.value)}
                 />
               </div>
             </div>
-            <div className="lit-modal-footer">
+            <div className="lit-dialog-foot">
               <button
                 type="button"
                 className="lit-btn"
@@ -1304,7 +1299,7 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
                     setNewCollectionName('');
                     loadOverview();
                   } catch (e: any) {
-                    alert(`创建群组失败: ${e}`);
+                    alert(`创建文献集失败: ${e}`);
                   }
                 }}
               >
