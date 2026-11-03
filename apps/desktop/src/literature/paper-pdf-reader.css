@@ -221,8 +221,53 @@
   overflow: auto;
   overscroll-behavior: contain;
   background: color-mix(in srgb, var(--panel) 88%, #000);
-  scrollbar-color: color-mix(in srgb, var(--muted) 35%, transparent) transparent;
-  scrollbar-width: thin;
+  --scrollbar-thumb: transparent;
+  transition: --scrollbar-thumb 800ms linear;
+}
+
+.paper-reader-stage:hover {
+  --scrollbar-thumb: var(--scrollbar-slider);
+  transition-duration: 100ms;
+}
+
+.paper-reader-stage::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.paper-reader-stage::-webkit-scrollbar-thumb {
+  min-width: 20px;
+  min-height: 20px;
+  background: var(--scrollbar-thumb);
+}
+
+.paper-reader-stage::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-slider-hover);
+}
+
+.paper-reader-stage::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-slider-active);
+}
+
+.paper-reader-stage::-webkit-scrollbar-track,
+.paper-reader-stage::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.paper-reader-stage::-webkit-scrollbar-button {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  .paper-reader-stage {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+  .paper-reader-stage:hover {
+    scrollbar-color: var(--scrollbar-slider) transparent;
+  }
 }
 
 .app-shell[data-theme='light'] .paper-reader-stage {

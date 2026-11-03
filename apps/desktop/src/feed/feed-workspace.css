@@ -723,3 +723,87 @@
   border-color: var(--accent);
   color: var(--accent);
 }
+
+/* ==========================================================================
+   SeaMind Feed Workspace — Smooth Minimalist Scrollbars (VS Code / eBook Style)
+   ========================================================================== */
+
+.feed-nav,
+.feed-article-list,
+.feed-reader-body,
+.feed-opml-items-list,
+.feed-dialog-body {
+  --scrollbar-thumb: transparent;
+  transition: --scrollbar-thumb 800ms linear;
+}
+
+.feed-nav:hover,
+.feed-article-list:hover,
+.feed-reader-body:hover,
+.feed-opml-items-list:hover,
+.feed-dialog-body:hover {
+  --scrollbar-thumb: var(--scrollbar-slider);
+  transition-duration: 100ms;
+}
+
+.feed-workspace-stage *::-webkit-scrollbar-track,
+.feed-dialog-backdrop *::-webkit-scrollbar-track {
+  background: transparent !important;
+}
+
+.feed-workspace-stage *::-webkit-scrollbar-button,
+.feed-dialog-backdrop *::-webkit-scrollbar-button {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.feed-workspace-stage *::-webkit-scrollbar-corner,
+.feed-dialog-backdrop *::-webkit-scrollbar-corner {
+  background: transparent !important;
+}
+
+.feed-nav::-webkit-scrollbar,
+.feed-article-list::-webkit-scrollbar,
+.feed-reader-body::-webkit-scrollbar,
+.feed-opml-items-list::-webkit-scrollbar,
+.feed-dialog-body::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.feed-workspace-stage *::-webkit-scrollbar-thumb,
+.feed-dialog-backdrop *::-webkit-scrollbar-thumb {
+  min-width: 20px;
+  min-height: 20px;
+  background: var(--scrollbar-thumb, transparent);
+}
+
+.feed-workspace-stage *::-webkit-scrollbar-thumb:hover,
+.feed-dialog-backdrop *::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-slider-hover) !important;
+}
+
+.feed-workspace-stage *::-webkit-scrollbar-thumb:active,
+.feed-dialog-backdrop *::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-slider-active) !important;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  .feed-nav,
+  .feed-article-list,
+  .feed-reader-body,
+  .feed-opml-items-list,
+  .feed-dialog-body {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  .feed-nav:hover,
+  .feed-article-list:hover,
+  .feed-reader-body:hover,
+  .feed-opml-items-list:hover,
+  .feed-dialog-body:hover {
+    scrollbar-color: var(--scrollbar-slider) transparent;
+  }
+}

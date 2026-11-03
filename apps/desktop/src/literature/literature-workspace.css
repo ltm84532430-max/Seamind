@@ -1407,3 +1407,143 @@
 .lit-ai-card-toggle-abs:hover {
   color: var(--ink);
 }
+
+/* ==========================================================================
+   SeaMind Literature Workspace — Smooth Minimalist Scrollbars (VS Code / eBook Style)
+   Flat semi-transparent slider without arrow buttons or track, fading in on
+   hover (100ms) and smoothly fading out on leave (800ms).
+   ========================================================================== */
+
+.lit-sidebar-scroll,
+.lit-list,
+.lit-inspector,
+.lit-abstract-content,
+.lit-notes-input,
+.lit-bibtex-pre,
+.lit-dialog-body,
+.lit-textarea,
+.lit-search-results-list,
+.lit-search-result-abstract,
+.lit-ai-card-abstract,
+.lit-tags-popover-list,
+.literature-workspace-stage textarea,
+.literature-workspace-stage pre,
+.lit-dialog-backdrop textarea,
+.lit-dialog-backdrop pre {
+  --scrollbar-thumb: transparent;
+  transition: --scrollbar-thumb 800ms linear;
+}
+
+.lit-sidebar-scroll:hover,
+.lit-list:hover,
+.lit-inspector:hover,
+.lit-abstract-content:hover,
+.lit-notes-input:hover,
+.lit-bibtex-pre:hover,
+.lit-dialog-body:hover,
+.lit-textarea:hover,
+.lit-search-results-list:hover,
+.lit-search-result-abstract:hover,
+.lit-ai-card-abstract:hover,
+.lit-tags-popover-list:hover,
+.literature-workspace-stage textarea:hover,
+.literature-workspace-stage textarea:focus,
+.literature-workspace-stage pre:hover,
+.lit-dialog-backdrop textarea:hover,
+.lit-dialog-backdrop textarea:focus,
+.lit-dialog-backdrop pre:hover {
+  --scrollbar-thumb: var(--scrollbar-slider);
+  transition-duration: 100ms;
+}
+
+/* Ensure no native OS grey track, bevels, corners, or arrow buttons */
+.literature-workspace-stage *::-webkit-scrollbar-track,
+.lit-dialog-backdrop *::-webkit-scrollbar-track {
+  background: transparent !important;
+}
+
+.literature-workspace-stage *::-webkit-scrollbar-button,
+.lit-dialog-backdrop *::-webkit-scrollbar-button {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.literature-workspace-stage *::-webkit-scrollbar-corner,
+.lit-dialog-backdrop *::-webkit-scrollbar-corner {
+  background: transparent !important;
+}
+
+/* Scrollbar dimensions matching eBook sidebar and VS Code */
+.lit-sidebar-scroll::-webkit-scrollbar,
+.lit-list::-webkit-scrollbar,
+.lit-inspector::-webkit-scrollbar,
+.lit-dialog-body::-webkit-scrollbar,
+.lit-search-results-list::-webkit-scrollbar,
+.literature-workspace-stage [class*='scroll']::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.lit-abstract-content::-webkit-scrollbar,
+.lit-notes-input::-webkit-scrollbar,
+.lit-bibtex-pre::-webkit-scrollbar,
+.lit-textarea::-webkit-scrollbar,
+.lit-search-result-abstract::-webkit-scrollbar,
+.lit-ai-card-abstract::-webkit-scrollbar,
+.lit-tags-popover-list::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+/* Thumbs: Flat, semi-transparent, reacting to hover and active */
+.literature-workspace-stage *::-webkit-scrollbar-thumb,
+.lit-dialog-backdrop *::-webkit-scrollbar-thumb {
+  min-width: 20px;
+  min-height: 20px;
+  background: var(--scrollbar-thumb, transparent);
+}
+
+.literature-workspace-stage *::-webkit-scrollbar-thumb:hover,
+.lit-dialog-backdrop *::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-slider-hover) !important;
+}
+
+.literature-workspace-stage *::-webkit-scrollbar-thumb:active,
+.lit-dialog-backdrop *::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-slider-active) !important;
+}
+
+/* Standard CSS fallback (Firefox & others) */
+@supports not selector(::-webkit-scrollbar) {
+  .lit-sidebar-scroll,
+  .lit-list,
+  .lit-inspector,
+  .lit-abstract-content,
+  .lit-notes-input,
+  .lit-bibtex-pre,
+  .lit-dialog-body,
+  .lit-textarea,
+  .lit-search-results-list,
+  .lit-search-result-abstract,
+  .lit-ai-card-abstract,
+  .lit-tags-popover-list {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  .lit-sidebar-scroll:hover,
+  .lit-list:hover,
+  .lit-inspector:hover,
+  .lit-abstract-content:hover,
+  .lit-notes-input:hover,
+  .lit-bibtex-pre:hover,
+  .lit-dialog-body:hover,
+  .lit-textarea:hover,
+  .lit-search-results-list:hover,
+  .lit-search-result-abstract:hover,
+  .lit-ai-card-abstract:hover,
+  .lit-tags-popover-list:hover {
+    scrollbar-color: var(--scrollbar-slider) transparent;
+  }
+}
