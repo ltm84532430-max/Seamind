@@ -382,7 +382,7 @@ async fn fetch_channel_feed(client: &reqwest::Client, channel_id: &str) -> Resul
     let long_form = store::long_form_playlist_id(channel_id).ok_or_else(|| "频道编号无效。".to_string())?;
     let url = format!("https://www.youtube.com/feeds/videos.xml?playlist_id={long_form}");
     let (status, body) = get_text(client, &url, ATOM_ACCEPT).await?;
-    if status != StatusCode::NOT_FOUND {
+    if status != StatusCode::NOT_FOUND && status != StatusCode::FORBIDDEN {
         return read_feed(status, &body, channel_id);
     }
     let url = format!("https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}");
@@ -396,6 +396,16 @@ pub struct FeedFetchResult {
     channel_name: Option<String>,
     total: usize,
     new_video_ids: Vec<String>,
+}
+
+/// Clears feed update errors for a single channel or for all channels.
+#[tauri::command]
+pub async fn player_clear_channel_errors(
+    app: AppHandle,
+    channel_id: Option<String>,
+) -> Result<(), String> {
+    let connection = open(&app)?;
+    store::clear_channel_errors(&connection, channel_id.as_deref())
 }
 
 /// Checks one channel for new videos and keeps them. A failure is recorded on the channel, which

@@ -42,6 +42,20 @@ describe('outdatedChannels', () => {
     expect(outdatedChannels(channels, NOW, HOUR, true)).toHaveLength(4);
     expect(outdatedChannels(channels, NOW, 0)).toHaveLength(4);
   });
+
+  it('applies error backoff delay when errorRetryThresholdSeconds is specified', () => {
+    const errorChannels = [
+      channel('recent-error', NOW - 60, '网络超时'),
+      channel('old-error', NOW - 2000, '网络超时'),
+      channel('fresh', NOW - 10),
+    ];
+    // With 1800s backoff, recent-error (60s ago) is skipped, old-error (2000s ago) is retried
+    expect(
+      outdatedChannels(errorChannels, NOW, HOUR, false, 1800).map(
+        (c) => c.channelId,
+      ),
+    ).toEqual(['old-error']);
+  });
 });
 
 function deferred() {

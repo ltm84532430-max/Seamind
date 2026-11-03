@@ -8,6 +8,7 @@ import Avatar from './Avatar';
 import SubscriptionGroupsModal from './SubscriptionGroupsModal';
 import type { PlayerView } from './host';
 import {
+  CheckIcon,
   ClockIcon,
   CourseIcon,
   FeedIcon,
@@ -18,6 +19,7 @@ import {
   StarIcon,
   WarningIcon,
 } from './icons';
+import { playerApi } from './player-api';
 import { sortChannels } from './queue';
 import {
   deleteSubscriptionGroup,
@@ -95,6 +97,7 @@ export default function Sidebar({
   onOpenLink,
   onImport,
   onSettings,
+  onRefreshOverview,
   collapsed,
   onToggleCollapse,
 }: {
@@ -110,6 +113,7 @@ export default function Sidebar({
   onOpenLink(text: string): Promise<boolean>;
   onImport(): void;
   onSettings(): void;
+  onRefreshOverview?: () => Promise<void> | void;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
 }) {
@@ -133,6 +137,7 @@ export default function Sidebar({
   const [channelMenu, setChannelMenu] = useState<{
     channelId: string;
     channelName: string;
+    hasError?: boolean;
     x: number;
     y: number;
   } | null>(null);
@@ -227,9 +232,29 @@ export default function Sidebar({
     setChannelMenu({
       channelId: channel.channelId,
       channelName: channel.name,
+      hasError: Boolean(channel.lastError),
       x: rect.right + 4,
       y: Math.min(rect.top, window.innerHeight - 240),
     });
+  };
+
+  const handleClearChannelError = async (channelId: string) => {
+    try {
+      await playerApi.clearChannelErrors(channelId);
+      setChannelMenu(null);
+      await onRefreshOverview?.();
+    } catch (err) {
+      console.error('Failed to clear channel error', err);
+    }
+  };
+
+  const handleClearAllErrors = async () => {
+    try {
+      await playerApi.clearChannelErrors();
+      await onRefreshOverview?.();
+    } catch (err) {
+      console.error('Failed to clear all errors', err);
+    }
   };
 
   const handleGroupMenuOpen = (
@@ -319,7 +344,7 @@ export default function Sidebar({
         aria-current={current ? 'page' : undefined}
         title={
           channel.lastError
-            ? `${channel.name}\n上次更新失败：${channel.lastError}`
+            ? `${channel.name}\n上次动态同步提示：${channel.lastError}\n点击右侧菜单可清除此提示`
             : channel.name
         }
         onClick={() => onGo({ kind: 'channel', channelId: channel.channelId })}
@@ -327,7 +352,7 @@ export default function Sidebar({
         <Avatar name={channel.name} url={channel.avatarUrl} size={22} />
         <span className="player-nav-label">{channel.name}</span>
         {channel.lastError && (
-          <span className="player-nav-warning" aria-label="更新失败">
+          <span className="player-nav-warning" aria-label="动态同步提示">
             <WarningIcon />
           </span>
         )}
@@ -529,6 +554,18 @@ export default function Sidebar({
                 )}
               </h3>
               <div className="player-sub-header-actions">
+                {channels.some((c) => Boolean(c.lastError)) && (
+                  <button
+                    type="button"
+                    className="player-sub-header-btn is-clear-errors"
+                    title="部分频道上次动态同步受限，点击一键清除所有警告标记"
+                    aria-label="清除所有警告"
+                    onClick={handleClearAllErrors}
+                  >
+                    <CheckIcon size={11} />
+                    <span>重置提示</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   className="player-sub-header-btn"
@@ -745,6 +782,19 @@ export default function Sidebar({
           >
             + 管理与新建分组…
           </button>
+          {channelMenu.hasError && (
+            <>
+              <div className="player-popup-divider" />
+              <button
+                type="button"
+                className="player-popup-item"
+                style={{ color: 'var(--player-accent, #df735b)' }}
+                onClick={() => handleClearChannelError(channelMenu.channelId)}
+              >
+                清除同步提示标记
+              </button>
+            </>
+          )}
         </div>
       )}
 

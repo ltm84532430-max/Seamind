@@ -5,6 +5,7 @@ export interface RefreshChannel {
   name: string;
   lastCheckedAt: number | null;
   lastError: string | null;
+  lastAttemptedAt?: number | null;
 }
 
 export interface RefreshProgress {
@@ -43,6 +44,10 @@ export interface RefreshOptions {
   batchSize?: number;
   /** The wait, in milliseconds. NewPipe picks one between 6 and 12 seconds. */
   batchDelayMs?: () => number;
+  /** Pause between individual channel fetches to avoid YouTube rate limiting (HTTP 429). */
+  itemDelayMs?: number;
+  /** Minimum delay before retrying a channel that previously had an error. */
+  errorRetryThresholdSeconds?: number;
   /** Goes through the channels in a random order, as NewPipe does, unless turned off. */
   shuffle?: boolean;
   random?: () => number;
@@ -63,14 +68,24 @@ export function outdatedChannels(
   now: number,
   thresholdSeconds: number,
   force = false,
+  errorRetryThresholdSeconds?: number,
 ): RefreshChannel[] {
-  return channels.filter(
-    (channel) =>
-      force ||
-      channel.lastCheckedAt === null ||
-      channel.lastError !== null ||
-      now - channel.lastCheckedAt >= thresholdSeconds,
-  );
+  return channels.filter((channel) => {
+    if (force) return true;
+    if (channel.lastCheckedAt === null && !channel.lastAttemptedAt) return true;
+    if (channel.lastError !== null) {
+      if (
+        typeof errorRetryThresholdSeconds === 'number' &&
+        errorRetryThresholdSeconds > 0
+      ) {
+        const lastAttempt =
+          channel.lastAttemptedAt ?? channel.lastCheckedAt ?? 0;
+        return now - lastAttempt >= errorRetryThresholdSeconds;
+      }
+      return true;
+    }
+    return now - (channel.lastCheckedAt ?? 0) >= thresholdSeconds;
+  });
 }
 
 function shuffled<T>(items: T[], random: () => number): T[] {
@@ -90,9 +105,10 @@ export async function refreshFeeds(
   options: RefreshOptions,
 ): Promise<RefreshReport> {
   const random = options.random ?? Math.random;
-  const concurrency = Math.max(1, options.concurrency ?? 3);
+  const concurrency = Math.max(1, options.concurrency ?? 1);
   const batchSize = Math.max(1, options.batchSize ?? 50);
   const batchDelayMs = options.batchDelayMs ?? (() => 6000 + random() * 6000);
+  const itemDelayMs = options.itemDelayMs ?? 0;
   const sleep = options.sleep ?? defaultSleep;
 
   const due = outdatedChannels(
@@ -100,6 +116,7 @@ export async function refreshFeeds(
     options.now,
     options.thresholdSeconds,
     options.force,
+    options.errorRetryThresholdSeconds,
   );
   const queue = options.shuffle === false ? due : shuffled(due, random);
   const report: RefreshReport = {
@@ -123,8 +140,12 @@ export async function refreshFeeds(
       }
       const channel = queue[started];
       if (!channel) return;
+      const currentIndex = started;
       started += 1;
-      if (started > 1 && (started - 1) % batchSize === 0)
+      if (currentIndex > 0 && itemDelayMs > 0) {
+        await sleep(itemDelayMs);
+      }
+      if (currentIndex > 0 && currentIndex % batchSize === 0)
         pause = sleep(batchDelayMs());
       try {
         await options.fetchFeed(channel.channelId);

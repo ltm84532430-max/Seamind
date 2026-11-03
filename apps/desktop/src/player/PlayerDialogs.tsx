@@ -363,6 +363,21 @@ export function SettingsDialog({
         >
           清空观看历史
         </button>
+        <button
+          type="button"
+          className="player-button"
+          onClick={async () => {
+            try {
+              await playerApi.clearChannelErrors();
+              await host.reloadOverview();
+              report('已重置所有频道的更新警告标记。');
+            } catch (reason) {
+              report(errorText(reason, '清除失败'), true);
+            }
+          }}
+        >
+          清除频道同步警告
+        </button>
         <input
           ref={restoreRef}
           type="file"

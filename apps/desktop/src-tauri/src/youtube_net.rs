@@ -40,11 +40,75 @@ pub struct YouTubeSettings {
 #[serde(rename_all = "camelCase")]
 pub struct YouTubeSettingsView {
     proxy_url: Option<String>,
+    pub system_proxy_url: Option<String>,
     /// The proxy the embedded WebView was started with; a different value needs a restart.
     webview_proxy_url: Option<String>,
 }
 
 static WEBVIEW_PROXY: OnceLock<Option<String>> = OnceLock::new();
+static DETECTED_SYSTEM_PROXY: OnceLock<Option<String>> = OnceLock::new();
+
+#[cfg(windows)]
+fn detect_windows_system_proxy() -> Option<String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    let output = std::process::Command::new("reg")
+        .args(["query", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings", "/v", "ProxyEnable"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    if !text.contains("0x1") {
+        return None;
+    }
+
+    let output = std::process::Command::new("reg")
+        .args(["query", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings", "/v", "ProxyServer"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        if line.contains("ProxyServer") {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 3 {
+                let server = parts[2];
+                let actual = if server.contains('=') {
+                    server
+                        .split(';')
+                        .find(|s| s.starts_with("http=") || s.starts_with("https="))
+                        .and_then(|s| s.split('=').nth(1))
+                        .unwrap_or(server)
+                } else {
+                    server
+                };
+                let formatted = if !actual.starts_with("http://")
+                    && !actual.starts_with("https://")
+                    && !actual.starts_with("socks5://")
+                    && !actual.starts_with("socks5h://")
+                {
+                    format!("http://{actual}")
+                } else {
+                    actual.to_string()
+                };
+                return normalize_proxy_url(&formatted).ok().flatten();
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(windows))]
+fn detect_windows_system_proxy() -> Option<String> {
+    None
+}
+
+pub fn detected_system_proxy() -> Option<String> {
+    DETECTED_SYSTEM_PROXY
+        .get_or_init(detect_windows_system_proxy)
+        .clone()
+}
 
 /// Accepts `http`, `https`, `socks5` and `socks5h` proxies without credentials, because the same
 /// value is handed to Chromium, reqwest, yt-dlp and mpv, which disagree about authentication.
@@ -113,7 +177,7 @@ pub fn write_file_atomically(path: &std::path::Path, bytes: &[u8]) -> std::io::R
 /// WebView2 only reads extra Chromium switches while it creates its environment, so the proxy has to
 /// be in the process environment before the first window exists.
 pub fn apply_webview_proxy_env() {
-    let proxy = load_settings().proxy_url;
+    let proxy = load_settings().proxy_url.or_else(detected_system_proxy);
     if let Some(proxy) = &proxy {
         let flag = format!("--proxy-server={proxy}");
         let merged = match std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") {
@@ -205,7 +269,7 @@ impl YouTubeNet {
     }
 
     pub fn proxy_url(&self) -> Option<String> {
-        self.settings().proxy_url
+        self.settings().proxy_url.or_else(detected_system_proxy)
     }
 
     pub fn client(&self, scope: RedirectScope) -> Result<reqwest::Client, String> {
@@ -227,7 +291,8 @@ impl YouTubeNet {
 
     fn view(&self) -> YouTubeSettingsView {
         YouTubeSettingsView {
-            proxy_url: self.proxy_url(),
+            proxy_url: self.settings().proxy_url,
+            system_proxy_url: detected_system_proxy(),
             webview_proxy_url: WEBVIEW_PROXY.get().cloned().flatten(),
         }
     }

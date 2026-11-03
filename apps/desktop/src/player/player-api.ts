@@ -126,6 +126,10 @@ export const playerApi = {
 
   fetchFeed: (channelId: string) =>
     invoke<FeedFetchResult>('player_fetch_feed', { channelId }),
+  clearChannelErrors: (channelId?: string) =>
+    invoke<void>('player_clear_channel_errors', {
+      channelId: channelId ?? null,
+    }),
   fetchVideoInfo: (videoId: string) =>
     invoke<VideoBasics>('player_fetch_video_info', { videoId }),
 };

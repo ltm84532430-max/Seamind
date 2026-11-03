@@ -111,6 +111,17 @@ export default function FeedView({
               >
                 重试
               </button>
+              <button
+                type="button"
+                className="player-text-button"
+                onClick={async (event) => {
+                  event.preventDefault();
+                  await playerApi.clearChannelErrors();
+                  void host.reloadOverview();
+                }}
+              >
+                清除提示
+              </button>
             </summary>
             <ul>
               {failed.map((failure) => (

@@ -591,6 +591,26 @@ pub fn mark_channel_error(connection: &Connection, channel_id: &str, message: &s
     Ok(())
 }
 
+/// Clears the recorded error for a specific channel, or for all channels if `channel_id` is None.
+pub fn clear_channel_errors(connection: &Connection, channel_id: Option<&str>) -> Result<(), String> {
+    match channel_id {
+        Some(id) => {
+            connection
+                .execute(
+                    "UPDATE channels SET last_error = NULL WHERE channel_id = ?1",
+                    params![id],
+                )
+                .map_err(db_error)?;
+        }
+        None => {
+            connection
+                .execute("UPDATE channels SET last_error = NULL", [])
+                .map_err(db_error)?;
+        }
+    }
+    Ok(())
+}
+
 // ---- videos -------------------------------------------------------------------------------------
 
 /// SQL that says whether a video counts as watched, for rows joined as `v` (videos) and `ws`
@@ -3186,6 +3206,22 @@ mod tests {
         mark_channel_checked(&connection, CHANNEL_A, NOW + 20).unwrap();
         let fine = channel(&connection, CHANNEL_A).unwrap().unwrap();
         assert_eq!((fine.last_checked_at, fine.last_error), (Some(NOW + 20), None));
+    }
+
+    #[test]
+    fn clear_channel_errors_resets_error_for_one_or_all_channels() {
+        let connection = database();
+        subscribe(&connection, &channel_input(CHANNEL_A, "A"), NOW).unwrap();
+        subscribe(&connection, &channel_input(CHANNEL_B, "B"), NOW).unwrap();
+        mark_channel_error(&connection, CHANNEL_A, "error a").unwrap();
+        mark_channel_error(&connection, CHANNEL_B, "error b").unwrap();
+
+        clear_channel_errors(&connection, Some(CHANNEL_A)).unwrap();
+        assert_eq!(channel(&connection, CHANNEL_A).unwrap().unwrap().last_error, None);
+        assert_eq!(channel(&connection, CHANNEL_B).unwrap().unwrap().last_error.as_deref(), Some("error b"));
+
+        clear_channel_errors(&connection, None).unwrap();
+        assert_eq!(channel(&connection, CHANNEL_B).unwrap().unwrap().last_error, None);
     }
 
     #[test]

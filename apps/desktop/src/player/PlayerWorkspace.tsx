@@ -689,6 +689,7 @@ export default function PlayerWorkspace({
           onGo={go}
           onOpenLink={openLink}
           onImport={() => setDialog('import')}
+          onRefreshOverview={reloadOverview}
           onSettings={() => setDialog('settings')}
           collapsed={sidebarCollapsed}
           onToggleCollapse={toggleSidebar}

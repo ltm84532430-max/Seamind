@@ -144,6 +144,7 @@ pub fn run() {
             player::player_export_backup,
             player::player_import_backup,
             player::player_fetch_feed,
+            player::player_clear_channel_errors,
             player::player_fetch_video_info,
             learning_tasks::learning_tasks_snapshot,
             learning_tasks::learning_tasks_save_plan,

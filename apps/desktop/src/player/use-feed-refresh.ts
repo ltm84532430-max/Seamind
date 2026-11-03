@@ -34,6 +34,9 @@ interface Options {
   onFinished(report: RefreshReport): void;
 }
 
+/** In-memory cache of recent fetch attempts to prevent rapid re-fetching within session */
+const recentAttempts = new Map<string, number>();
+
 /** Brings the feed up to date, a channel at a time, and reports how far it got. */
 export function useFeedRefresh(options: Options) {
   const [state, setState] = useState<FeedRefreshState>(IDLE);
@@ -53,13 +56,21 @@ export function useFeedRefresh(options: Options) {
     let arrived = false;
     let reloadedAt = 0;
     try {
+      const enrichedChannels = channels.map((c) => ({
+        ...c,
+        lastAttemptedAt: recentAttempts.get(c.channelId) ?? null,
+      }));
       const report = await refreshFeeds({
-        channels,
+        channels: enrichedChannels,
         now: Math.floor(Date.now() / 1000),
         thresholdSeconds,
         force,
+        concurrency: 1,
+        itemDelayMs: 1200,
+        errorRetryThresholdSeconds: 1800,
         signal: controller.signal,
         fetchFeed: async (channelId) => {
+          recentAttempts.set(channelId, Math.floor(Date.now() / 1000));
           const result = await playerApi.fetchFeed(channelId);
           if (result.newVideoIds.length > 0) arrived = true;
           return result;
