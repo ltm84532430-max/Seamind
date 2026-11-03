@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { notifyResourceProgress } from './tasks/task-api';
 import ResourceTaskLinks from './tasks/ResourceTaskLinks';
 import type { KeyboardEvent } from 'react';
@@ -87,6 +88,10 @@ type FoliateLocation = {
     label?: string | Record<string, string>;
     id?: number;
   };
+  pageItem?: {
+    href?: string;
+    label?: string | Record<string, string>;
+  };
 };
 
 type ReaderPalette = 'light' | 'sepia' | 'dark';
@@ -126,6 +131,7 @@ type FoliateViewElement = HTMLElement & {
   book?: {
     metadata?: FoliateMetadata;
     toc?: FoliateTocItem[];
+    pageList?: FoliateTocItem[];
     sections?: Array<{
       loadText?: () => Promise<string | null | undefined>;
     }>;
@@ -369,6 +375,28 @@ function flattenTocItems(items: FoliateTocItem[]): FoliateTocItem[] {
   ]);
 }
 
+function tocPathForId(
+  items: FoliateTocItem[],
+  targetId: number,
+  parentKey = '',
+): string[] | null {
+  for (const [index, item] of items.entries()) {
+    const key = parentKey ? `${parentKey}.${index}` : String(index);
+    if (item.id === targetId) return [key];
+    const childPath = tocPathForId(item.subitems ?? [], targetId, key);
+    if (childPath) return [key, ...childPath];
+  }
+  return null;
+}
+
+function normalizeNavHref(href: string) {
+  try {
+    return decodeURIComponent(href).replaceAll('\\', '/');
+  } catch {
+    return href.replaceAll('\\', '/');
+  }
+}
+
 function countReadableWords(source: string) {
   const cjk =
     source.match(
@@ -570,11 +598,21 @@ export default function EpubReader({
   const viewRef = useRef<FoliateViewElement | null>(null);
   const [title, setTitle] = useState(selection.title);
   const [author, setAuthor] = useState('');
-  const [toc, setToc] = useState<FoliateTocItem[]>([]);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [sidebarSection, setSidebarSection] = useState<'toc' | 'annotations'>(
-    'toc',
+  const [coverDataUrl, setCoverDataUrl] = useState(
+    () => loadEpubBookMetadata(selection.progressKey)?.coverDataUrl ?? '',
   );
+  const [toc, setToc] = useState<FoliateTocItem[]>([]);
+  const [pageList, setPageList] = useState<FoliateTocItem[]>([]);
+  const [expandedTocNodes, setExpandedTocNodes] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [activeTocId, setActiveTocId] = useState<number | null>(null);
+  const [activeTocHref, setActiveTocHref] = useState('');
+  const [currentPageLabel, setCurrentPageLabel] = useState('');
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarSection, setSidebarSection] = useState<
+    'toc' | 'annotations' | 'bookmarks'
+  >('toc');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [navigationNotice, setNavigationNotice] = useState<{
@@ -600,7 +638,6 @@ export default function EpubReader({
   const [searchBusy, setSearchBusy] = useState(false);
   const [searchProgress, setSearchProgress] = useState(0);
   const [searchError, setSearchError] = useState('');
-  const [bookmarkMenuOpen, setBookmarkMenuOpen] = useState(false);
   const [editingBookmarkCfi, setEditingBookmarkCfi] = useState('');
   const [editingBookmarkLabel, setEditingBookmarkLabel] = useState('');
   const [selectionDraft, setSelectionDraft] = useState<ReaderSelection | null>(
@@ -674,6 +711,37 @@ export default function EpubReader({
     sectionIndex,
     sectionHref,
   };
+
+  useEffect(() => {
+    if (activeTocId === null) return;
+    const path = tocPathForId(toc, activeTocId);
+    if (!path?.length) return;
+    setExpandedTocNodes((previous) => {
+      if (path.every((key) => previous.has(key))) return previous;
+      return new Set([...previous, ...path]);
+    });
+  }, [activeTocId, toc]);
+
+  useEffect(() => {
+    if (activeTocId === null) return;
+    const path = tocPathForId(toc, activeTocId);
+    if (!path?.length) return;
+    const key = path[path.length - 1];
+    const frame = window.requestAnimationFrame(() => {
+      document
+        .querySelector<HTMLElement>(`[data-toc-key="${key}"]`)
+        ?.scrollIntoView({ block: 'nearest' });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeTocId, expandedTocNodes, toc]);
+
+  const pageLabelsByHref = new Map<string, string>();
+  for (const item of flattenTocItems(pageList)) {
+    const href = item.href ? normalizeNavHref(item.href) : '';
+    const label = displayLabel(item.label);
+    if (href && label && !pageLabelsByHref.has(href))
+      pageLabelsByHref.set(href, label);
+  }
 
   useEffect(() => {
     const bridge: EpubReaderAgentBridge = {
@@ -1617,6 +1685,13 @@ export default function EpubReader({
         displayLabel(flatToc[chapterIndex]?.label) ||
         (chapterCount ? `第 ${chapterIndex + 1} 章` : '');
       const chapterHref = tocHref || flatToc[chapterIndex]?.href || '';
+      const currentTocId =
+        typeof detail.tocItem?.id === 'number'
+          ? detail.tocItem.id
+          : flatToc[chapterIndex]?.id;
+      setActiveTocId(typeof currentTocId === 'number' ? currentTocId : null);
+      setActiveTocHref(chapterHref);
+      setCurrentPageLabel(displayLabel(detail.pageItem?.label));
       setSectionIndex(Math.max(0, detail.section?.current ?? 0));
       setSectionHref(chapterHref);
       if (typeof detail.fraction === 'number') {
@@ -1695,6 +1770,14 @@ export default function EpubReader({
       setError('');
       activityBaselineRef.current =
         loadEpubBookMetadata(selection.progressKey)?.progress ?? 0;
+      setCoverDataUrl(
+        loadEpubBookMetadata(selection.progressKey)?.coverDataUrl ?? '',
+      );
+      setExpandedTocNodes(new Set());
+      setActiveTocId(null);
+      setActiveTocHref('');
+      setCurrentPageLabel('');
+      setPageList([]);
       const initialSettings = loadReaderSettings(selection.progressKey, theme);
       readerSettingsRef.current = initialSettings;
       setReaderSettings(initialSettings);
@@ -1734,6 +1817,7 @@ export default function EpubReader({
         const loadedToc = view.book?.toc ?? [];
         tocRef.current = loadedToc;
         setToc(loadedToc);
+        setPageList(view.book?.pageList ?? []);
         saveEpubBookMetadata(selection.progressKey, {
           title: bookTitle,
           author: bookAuthor,
@@ -1766,6 +1850,7 @@ export default function EpubReader({
             .then((cover) => (cover ? createCoverThumbnail(cover) : ''))
             .then((coverDataUrl) => {
               if (!cancelled && coverDataUrl) {
+                setCoverDataUrl(coverDataUrl);
                 saveEpubBookMetadata(selection.progressKey, { coverDataUrl });
               }
             })
@@ -1877,12 +1962,15 @@ export default function EpubReader({
         (annotation) => annotation.id === activeAiFootnote.annotationId,
       )
     : undefined;
+  const currentBookmarkExists = bookmarks.some(
+    (bookmark) => bookmark.cfi === currentCfi,
+  );
 
   return (
     <div
       className={`epub-reader${embedded ? ' is-workspace' : ''}`}
       data-theme={theme}
-      data-palette={readerSettings.palette}
+      data-palette={isFixedLayout ? 'light' : readerSettings.palette}
       role={embedded ? 'region' : 'dialog'}
       aria-modal={embedded ? undefined : 'true'}
       aria-label={`EPUB 阅读器：${title}`}
@@ -1988,13 +2076,65 @@ export default function EpubReader({
             className="epub-reader-toc epub-reader-sidebar"
             aria-label="电子书侧栏"
           >
+            <div className="epub-reader-side-book">
+              {coverDataUrl ? (
+                <img src={coverDataUrl} alt={`${title}封面`} />
+              ) : (
+                <div
+                  className="epub-reader-side-cover-fallback"
+                  aria-hidden="true"
+                >
+                  <ReaderIcon name="book" />
+                </div>
+              )}
+              <div className="epub-reader-side-book-meta">
+                <strong title={title}>{title}</strong>
+                <span title={author || '作者未知'}>{author || '作者未知'}</span>
+              </div>
+              <details className="epub-reader-side-book-info">
+                <summary aria-label="书籍信息" title="书籍信息">
+                  i
+                </summary>
+                <div>
+                  <strong>{title}</strong>
+                  {author && <span>{author}</span>}
+                  {chapterTitle && <small>{chapterTitle}</small>}
+                  <small>{locationText}</small>
+                </div>
+              </details>
+            </div>
             <div
               className="epub-reader-sidebar-tools"
               role="toolbar"
               aria-label="阅读操作"
             >
+              <button
+                type="button"
+                className="epub-reader-sidebar-icon"
+                aria-label="收起目录侧栏"
+                title="收起目录侧栏"
+                onClick={() => setSidebarOpen(false)}
+              >
+                <ReaderIcon name="panel" />
+              </button>
+              <button
+                type="button"
+                className={`epub-reader-sidebar-icon${searchOpen ? ' is-active' : ''}`}
+                aria-label="全文查找"
+                aria-expanded={searchOpen}
+                title="全文查找"
+                onClick={() => setSearchOpen((open) => !open)}
+              >
+                <ReaderIcon name="search" />
+              </button>
               <details className="epub-reader-settings">
-                <summary className="epub-reader-tool">阅读设置</summary>
+                <summary
+                  className="epub-reader-sidebar-icon"
+                  aria-label="阅读设置"
+                  title="阅读设置"
+                >
+                  <ReaderIcon name="menu" />
+                </summary>
                 <div className="epub-reader-settings-panel">
                   <div className="epub-reader-setting-row">
                     <span>字号</span>
@@ -2098,11 +2238,22 @@ export default function EpubReader({
               </details>
               <button
                 type="button"
-                className={`epub-reader-tool${searchOpen ? ' is-active' : ''}`}
-                aria-expanded={searchOpen}
-                onClick={() => setSearchOpen((open) => !open)}
+                className={`epub-reader-sidebar-icon${currentBookmarkExists ? ' is-active' : ''}`}
+                aria-label={
+                  currentBookmarkExists
+                    ? '移除当前位置书签'
+                    : '添加当前位置书签'
+                }
+                aria-pressed={currentBookmarkExists}
+                title={
+                  currentBookmarkExists
+                    ? '移除当前位置书签'
+                    : '添加当前位置书签'
+                }
+                disabled={!currentCfi}
+                onClick={() => toggleBookmarkAt()}
               >
-                查找
+                <ReaderIcon name="bookmark" />
               </button>
               {searchOpen && (
                 <div className="epub-reader-search-panel">
@@ -2174,106 +2325,9 @@ export default function EpubReader({
                   </div>
                 </div>
               )}
-              <button
-                type="button"
-                className={`epub-reader-tool${bookmarkMenuOpen ? ' is-active' : ''}`}
-                aria-expanded={bookmarkMenuOpen}
-                onClick={() => setBookmarkMenuOpen((open) => !open)}
-              >
-                书签 {bookmarks.length}
-              </button>
-              {bookmarkMenuOpen && (
-                <div className="epub-reader-bookmark-panel">
-                  <button
-                    type="button"
-                    className={`epub-reader-bookmark-add${bookmarks.some((bookmark) => bookmark.cfi === currentCfi) ? ' is-saved' : ''}`}
-                    disabled={!currentCfi}
-                    aria-pressed={bookmarks.some(
-                      (bookmark) => bookmark.cfi === currentCfi,
-                    )}
-                    title="Ctrl+B"
-                    onClick={() => toggleBookmarkAt()}
-                  >
-                    {bookmarks.some((bookmark) => bookmark.cfi === currentCfi)
-                      ? '移除当前位置书签'
-                      : '添加当前位置 · Ctrl+B'}
-                  </button>
-                  {bookmarks.length ? (
-                    <div className="epub-reader-bookmark-list">
-                      {bookmarks.map((bookmark) => (
-                        <div
-                          className="epub-reader-bookmark-row"
-                          key={bookmark.cfi}
-                        >
-                          <button
-                            type="button"
-                            onClick={() =>
-                              void viewRef.current?.goTo(bookmark.cfi)
-                            }
-                          >
-                            <strong>{bookmark.label || '书签'}</strong>
-                            <small>
-                              {Math.round(bookmark.fraction * 100)}%
-                            </small>
-                          </button>
-                          <button
-                            type="button"
-                            className="epub-reader-bookmark-rename"
-                            aria-label={`重命名书签 ${bookmark.label || ''}`}
-                            onClick={() => beginRenameBookmark(bookmark)}
-                          >
-                            改名
-                          </button>
-                          <button
-                            type="button"
-                            className="epub-reader-bookmark-remove"
-                            aria-label={`删除书签 ${bookmark.label || ''}`}
-                            onClick={() => removeBookmark(bookmark.cfi)}
-                          >
-                            ×
-                          </button>
-                          {editingBookmarkCfi === bookmark.cfi && (
-                            <form
-                              className="epub-reader-bookmark-editor"
-                              onSubmit={(event) => {
-                                event.preventDefault();
-                                saveBookmarkLabel(bookmark.cfi);
-                              }}
-                            >
-                              <input
-                                autoFocus
-                                aria-label="书签名称"
-                                value={editingBookmarkLabel}
-                                maxLength={80}
-                                onChange={(event) =>
-                                  setEditingBookmarkLabel(event.target.value)
-                                }
-                              />
-                              <button
-                                type="submit"
-                                disabled={!editingBookmarkLabel.trim()}
-                              >
-                                保存
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setEditingBookmarkCfi('')}
-                              >
-                                取消
-                              </button>
-                            </form>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="epub-reader-search-status">暂时没有书签</p>
-                  )}
-                </div>
-              )}
             </div>
             <div
-              className="epub-reader-sidebar-tabs"
+              className="epub-reader-sidebar-tabs is-bottom-nav"
               role="tablist"
               aria-label="阅读器侧栏"
             >
@@ -2283,10 +2337,12 @@ export default function EpubReader({
                 id="epub-reader-toc-tab"
                 aria-selected={sidebarSection === 'toc'}
                 aria-controls="epub-reader-toc-panel"
+                aria-label="目录"
+                title="目录"
                 className={sidebarSection === 'toc' ? 'is-active' : ''}
                 onClick={() => setSidebarSection('toc')}
               >
-                目录
+                <ReaderIcon name="toc" />
               </button>
               <button
                 type="button"
@@ -2294,10 +2350,27 @@ export default function EpubReader({
                 id="epub-reader-annotations-tab"
                 aria-selected={sidebarSection === 'annotations'}
                 aria-controls="epub-reader-annotations-panel"
+                aria-label={`标注 ${annotations.length}`}
+                title={`标注 ${annotations.length}`}
                 className={sidebarSection === 'annotations' ? 'is-active' : ''}
                 onClick={() => setSidebarSection('annotations')}
               >
-                标注 <span>{annotations.length}</span>
+                <ReaderIcon name="notes" />
+                <span>{annotations.length}</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                id="epub-reader-bookmarks-tab"
+                aria-selected={sidebarSection === 'bookmarks'}
+                aria-controls="epub-reader-bookmarks-panel"
+                aria-label={`书签 ${bookmarks.length}`}
+                title={`书签 ${bookmarks.length}`}
+                className={sidebarSection === 'bookmarks' ? 'is-active' : ''}
+                onClick={() => setSidebarSection('bookmarks')}
+              >
+                <ReaderIcon name="bookmark" />
+                <span>{bookmarks.length}</span>
               </button>
             </div>
             {sidebarSection === 'toc' ? (
@@ -2309,12 +2382,30 @@ export default function EpubReader({
               >
                 <div className="epub-reader-toc-heading">目录</div>
                 {toc.length ? (
-                  <nav>{renderToc(toc, navigateTo)}</nav>
+                  <nav aria-label="章节目录">
+                    {renderToc(toc, {
+                      activeId: activeTocId,
+                      activeHref: activeTocHref,
+                      currentCfi,
+                      currentPageLabel,
+                      locationText,
+                      expanded: expandedTocNodes,
+                      pageLabels: pageLabelsByHref,
+                      onNavigate: navigateTo,
+                      onToggle: (key) =>
+                        setExpandedTocNodes((previous) => {
+                          const next = new Set(previous);
+                          if (next.has(key)) next.delete(key);
+                          else next.add(key);
+                          return next;
+                        }),
+                    })}
+                  </nav>
                 ) : (
                   <p className="epub-reader-toc-empty">这本书没有可用目录</p>
                 )}
               </div>
-            ) : (
+            ) : sidebarSection === 'annotations' ? (
               <div
                 className="epub-reader-sidebar-content epub-reader-annotation-content"
                 id="epub-reader-annotations-panel"
@@ -2423,6 +2514,98 @@ export default function EpubReader({
                   </div>
                 ) : (
                   <p className="epub-reader-search-status">还没有标注</p>
+                )}
+              </div>
+            ) : (
+              <div
+                className="epub-reader-sidebar-content epub-reader-annotation-content epub-reader-bookmark-content"
+                id="epub-reader-bookmarks-panel"
+                role="tabpanel"
+                aria-labelledby="epub-reader-bookmarks-tab"
+              >
+                <div className="epub-reader-annotation-heading">
+                  <strong>书签</strong>
+                  <span>保存并返回书中的位置</span>
+                </div>
+                <button
+                  type="button"
+                  className={`epub-reader-bookmark-add${currentBookmarkExists ? ' is-saved' : ''}`}
+                  disabled={!currentCfi}
+                  aria-pressed={currentBookmarkExists}
+                  onClick={() => toggleBookmarkAt()}
+                >
+                  {currentBookmarkExists
+                    ? '移除当前位置书签'
+                    : '添加当前位置书签'}
+                </button>
+                {bookmarks.length ? (
+                  <div className="epub-reader-bookmark-list">
+                    {bookmarks.map((bookmark) => (
+                      <div
+                        className="epub-reader-bookmark-row"
+                        key={bookmark.cfi}
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void viewRef.current?.goTo(bookmark.cfi)
+                          }
+                        >
+                          <strong>{bookmark.label || '书签'}</strong>
+                          <small>{Math.round(bookmark.fraction * 100)}%</small>
+                        </button>
+                        <button
+                          type="button"
+                          className="epub-reader-bookmark-rename"
+                          aria-label={`重命名书签 ${bookmark.label || ''}`}
+                          onClick={() => beginRenameBookmark(bookmark)}
+                        >
+                          改名
+                        </button>
+                        <button
+                          type="button"
+                          className="epub-reader-bookmark-remove"
+                          aria-label={`删除书签 ${bookmark.label || ''}`}
+                          onClick={() => removeBookmark(bookmark.cfi)}
+                        >
+                          ×
+                        </button>
+                        {editingBookmarkCfi === bookmark.cfi && (
+                          <form
+                            className="epub-reader-bookmark-editor"
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              saveBookmarkLabel(bookmark.cfi);
+                            }}
+                          >
+                            <input
+                              autoFocus
+                              aria-label="书签名称"
+                              value={editingBookmarkLabel}
+                              maxLength={80}
+                              onChange={(event) =>
+                                setEditingBookmarkLabel(event.target.value)
+                              }
+                            />
+                            <button
+                              type="submit"
+                              disabled={!editingBookmarkLabel.trim()}
+                            >
+                              保存
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingBookmarkCfi('')}
+                            >
+                              取消
+                            </button>
+                          </form>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="epub-reader-search-status">暂时没有书签</p>
                 )}
               </div>
             )}
@@ -2826,29 +3009,162 @@ export default function EpubReader({
 
 function renderToc(
   items: FoliateTocItem[],
-  onNavigate: (href: string) => void,
-  depth = 0,
+  options: {
+    activeId: number | null;
+    activeHref: string;
+    currentCfi: string;
+    currentPageLabel: string;
+    locationText: string;
+    expanded: Set<string>;
+    pageLabels: Map<string, string>;
+    onNavigate: (href: string) => void;
+    onToggle: (key: string) => void;
+  },
+  parentKey = '',
 ) {
   return (
     <ul className="epub-reader-toc-list">
       {items.map((item, index) => {
+        const key = parentKey ? `${parentKey}.${index}` : String(index);
         const label = displayLabel(item.label) || '未命名章节';
+        const children = item.subitems ?? [];
+        const hasChildren = children.length > 0;
+        const isExpanded = options.expanded.has(key);
+        const isCurrent =
+          options.activeId !== null
+            ? item.id === options.activeId
+            : Boolean(
+                options.activeHref &&
+                  normalizeTocHref(item.href) ===
+                    normalizeTocHref(options.activeHref),
+              );
+        const pageLabel = options.pageLabels.get(normalizeNavHref(item.href));
+
         return (
-          <li key={`${item.href}-${index}`}>
-            <button
-              type="button"
-              className="epub-reader-toc-item"
-              style={{ paddingInlineStart: `${10 + depth * 12}px` }}
-              onClick={() => onNavigate(item.href)}
-              title={label}
-            >
-              {label}
-            </button>
-            {!!item.subitems?.length &&
-              renderToc(item.subitems, onNavigate, depth + 1)}
+          <li
+            className={`epub-reader-toc-node${isCurrent ? ' is-current' : ''}`}
+            key={key}
+            data-toc-key={key}
+          >
+            <div className="epub-reader-toc-row">
+              {hasChildren ? (
+                <button
+                  type="button"
+                  className="epub-reader-toc-expand"
+                  aria-label={`${isExpanded ? '收起' : '展开'}${label}`}
+                  aria-expanded={isExpanded}
+                  onClick={() => options.onToggle(key)}
+                >
+                  <span aria-hidden="true">{isExpanded ? '▾' : '▸'}</span>
+                </button>
+              ) : (
+                <span className="epub-reader-toc-expand-placeholder" />
+              )}
+              <button
+                type="button"
+                className="epub-reader-toc-item"
+                aria-current={isCurrent ? 'location' : undefined}
+                onClick={() => options.onNavigate(item.href)}
+                title={label}
+              >
+                <span className="epub-reader-toc-label">{label}</span>
+                {pageLabel && (
+                  <span className="epub-reader-toc-page">{pageLabel}</span>
+                )}
+              </button>
+            </div>
+            {isCurrent && options.currentCfi && (
+              <button
+                type="button"
+                className="epub-reader-current-location"
+                onClick={() => options.onNavigate(options.currentCfi)}
+                title={`返回当前位置：${label}`}
+              >
+                <ReaderIcon name="current" />
+                <span>当前位置</span>
+                <small>
+                  {options.currentPageLabel || options.locationText}
+                </small>
+              </button>
+            )}
+            {hasChildren && isExpanded && renderToc(children, options, key)}
           </li>
         );
       })}
     </ul>
+  );
+}
+
+function ReaderIcon({
+  name,
+}: {
+  name:
+    | 'panel'
+    | 'search'
+    | 'menu'
+    | 'bookmark'
+    | 'book'
+    | 'toc'
+    | 'notes'
+    | 'current';
+}) {
+  const paths: Record<NonNullable<typeof name>, ReactNode> = {
+    panel: (
+      <>
+        <rect x="3.5" y="4" width="17" height="16" rx="1" />
+        <path d="M9 4v16" />
+      </>
+    ),
+    search: (
+      <>
+        <circle cx="10.8" cy="10.8" r="6.8" />
+        <path d="m16 16 4.5 4.5" />
+      </>
+    ),
+    menu: (
+      <>
+        <path d="M4 6h16M4 12h16M4 18h16" />
+      </>
+    ),
+    bookmark: <path d="M6 4.5h12v16l-6-3.8-6 3.8z" />,
+    book: (
+      <>
+        <path d="M4.5 5.5A2.5 2.5 0 0 1 7 3h12.5v17H7a2.5 2.5 0 0 0-2.5 2z" />
+        <path d="M4.5 5.5v16.5M8 7h8M8 10h8" />
+      </>
+    ),
+    toc: (
+      <>
+        <path d="M8 5h12M8 12h12M8 19h12" />
+        <circle cx="4" cy="5" r=".8" />
+        <circle cx="4" cy="12" r=".8" />
+        <circle cx="4" cy="19" r=".8" />
+      </>
+    ),
+    notes: (
+      <>
+        <path d="M5 3.5h14v17H5z" />
+        <path d="M8 8h8M8 12h8M8 16h5" />
+      </>
+    ),
+    current: (
+      <>
+        <circle cx="12" cy="12" r="7.5" />
+        <circle cx="12" cy="12" r="2" />
+      </>
+    ),
+  };
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      {paths[name]}
+    </svg>
   );
 }
