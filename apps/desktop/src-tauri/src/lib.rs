@@ -12,6 +12,7 @@ mod player;
 mod player_store;
 mod prompts;
 mod terminal;
+mod c_runner;
 mod youtube;
 mod youtube_botguard;
 mod youtube_eval;
@@ -95,6 +96,9 @@ pub fn run() {
             terminal::terminal_remove_script,
             terminal::terminal_resize,
             terminal::terminal_close,
+            c_runner::c_check_environment,
+            c_runner::c_run_code,
+            c_runner::c_stage_source_file,
             youtube::youtube_playback_capabilities,
             youtube::youtube_resolve_playback,
             youtube::youtube_resolve_playback_with_browser,

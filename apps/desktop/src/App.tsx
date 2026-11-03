@@ -1,4 +1,12 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type {
   CSSProperties,
   FormEvent,
@@ -365,6 +373,12 @@ export default function App() {
     useState<TerminalCommandRequest | null>(null);
   const [pendingTerminalRawInput, setPendingTerminalRawInput] =
     useState<PendingTerminalRawInput | null>(null);
+  const [runnerTerminalOpen, setRunnerTerminalOpen] = useState(false);
+  const [pendingRunnerCommand, setPendingRunnerCommand] =
+    useState<TerminalCommandRequest | null>(null);
+  const [pendingRunnerRawInput, setPendingRunnerRawInput] =
+    useState<PendingTerminalRawInput | null>(null);
+  const [terminalSplitRatio, setTerminalSplitRatio] = useState(0.5);
   const terminalCommandResultsRef = useRef(
     new Map<string, (output: string) => void>(),
   );
@@ -411,8 +425,9 @@ export default function App() {
     activeWorkspace === 'reader' && readerKnowledgeOpen && Boolean(epubReader);
   const canDockTerminalRight =
     activeWorkspace === 'reader' && viewportWidth >= 1250;
+  const isTerminalDrawerOpen = terminalOpen || runnerTerminalOpen;
   const terminalRightActive =
-    terminalOpen && terminalDock === 'right' && canDockTerminalRight;
+    isTerminalDrawerOpen && terminalDock === 'right' && canDockTerminalRight;
   const terminalSideWidth =
     readerSplitActive || readerKnowledgeActive
       ? Math.min(terminalWidth, Math.max(300, viewportWidth - 880))
@@ -1997,6 +2012,66 @@ export default function App() {
       focus: true,
     });
   };
+
+  const handleRunCodeInTerminal = useCallback(
+    async (language: string, source: string, title?: string) => {
+      try {
+        const isCpp =
+          language === 'cpp' || language === 'c++' || language === 'cxx';
+        const stageResult = await invoke<{
+          filePath: string;
+          fileName: string;
+          command: string;
+        }>('c_stage_source_file', {
+          source,
+          suggestedName: title ?? null,
+          workspaceRoot: librarySnapshot?.rootPath ?? null,
+          isCpp,
+        });
+
+        setRunnerTerminalOpen(true);
+        setPendingRunnerRawInput({
+          id: `run-c-${Date.now()}`,
+          text: stageResult.command,
+          execute: true,
+        });
+      } catch (error) {
+        setSaveMessage(
+          `启动 C 终端运行失败：${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    },
+    [librarySnapshot?.rootPath],
+  );
+
+  const onSplitDividerPointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      const panelEl = document.getElementById('seamind-terminal-panel');
+      if (!panelEl) return;
+      const rect = panelEl.getBoundingClientRect();
+      const startY = event.clientY;
+      const initialRatio = terminalSplitRatio;
+
+      const onPointerMove = (e: PointerEvent) => {
+        const deltaY = e.clientY - startY;
+        const newRatio = Math.max(
+          0.15,
+          Math.min(0.85, initialRatio + deltaY / rect.height),
+        );
+        setTerminalSplitRatio(newRatio);
+      };
+
+      const onPointerUp = () => {
+        window.removeEventListener('pointermove', onPointerMove);
+        window.removeEventListener('pointerup', onPointerUp);
+      };
+
+      window.addEventListener('pointermove', onPointerMove);
+      window.addEventListener('pointerup', onPointerUp);
+    },
+    [terminalSplitRatio],
+  );
 
   const installLibrarySnapshot = (snapshot: LibrarySnapshot) => {
     librarySnapshotRef.current = snapshot;
@@ -4220,6 +4295,7 @@ export default function App() {
             terminalCommandResultsRef.current.set(id, onResult);
             setTerminalCommandConfirmation({ id, language, source });
           },
+          onRunInTerminal: handleRunCodeInTerminal,
         },
       );
       if (codeBlocksAbort.signal.aborted) cleanupCodeBlocks();
@@ -4660,7 +4736,7 @@ export default function App() {
   return (
     <main
       ref={appShellRef}
-      className={`app-shell${readerSplitActive ? ' is-reader-split' : ''}${readerKnowledgeActive ? ' is-reader-knowledge' : ''}${terminalOpen ? ' is-terminal-open' : ''}${terminalRightActive ? ' is-terminal-right' : ''}`}
+      className={`app-shell${readerSplitActive ? ' is-reader-split' : ''}${readerKnowledgeActive ? ' is-reader-knowledge' : ''}${isTerminalDrawerOpen ? ' is-terminal-open' : ''}${terminalRightActive ? ' is-terminal-right' : ''}`}
       data-theme={theme}
       data-map-style={mindmapStyle}
       style={
@@ -4998,6 +5074,7 @@ export default function App() {
               }
               onChangeTags={(tags) => workbench.controller.setTags(tags)}
               onOpenWikilink={(target) => void openWikilinkTarget(target)}
+              onRunInTerminal={handleRunCodeInTerminal}
               onOpenAsMindmap={() => void openActiveDocumentAsMindmap()}
               onConvertToMindmap={() => void convertActiveDocumentToMindmap()}
             />
@@ -5217,6 +5294,7 @@ export default function App() {
                 onOpenPlantUmlEditor={(source, language, onSave) =>
                   openPlantUmlWorkspace({ source, language, onSave })
                 }
+                onRunInTerminal={handleRunCodeInTerminal}
               />
             )}
           </div>
@@ -6008,6 +6086,7 @@ export default function App() {
                 workbench.controller.setCategory(category),
               onChangeTags: (tags) => workbench.controller.setTags(tags),
               onOpenWikilink: (target) => void openWikilinkTarget(target),
+              onRunInTerminal: handleRunCodeInTerminal,
               onOpenAsMindmap: () => void openKnowledgeNoteAsMindmap(),
               onConvertToMindmap: () => void convertActiveDocumentToMindmap(),
             }}
@@ -6102,7 +6181,7 @@ export default function App() {
         </section>
       )}
 
-      {terminalOpen && (
+      {isTerminalDrawerOpen && (
         <section
           className={`seamind-terminal-drawer${terminalRightActive ? ' is-right' : ''}`}
           aria-label="全局终端抽屉"
@@ -6158,48 +6237,184 @@ export default function App() {
                 <div className="seamind-terminal-loading">正在加载终端…</div>
               }
             >
-              <TerminalPanel
-                key={librarySnapshot?.rootPath ?? 'default-terminal-directory'}
-                cwd={librarySnapshot?.rootPath ?? ''}
-                theme={theme}
-                dock={terminalRightActive ? 'right' : 'bottom'}
-                canDockRight={canDockTerminalRight}
-                onToggleDock={() =>
-                  setTerminalDockAndStore(
-                    terminalRightActive ? 'bottom' : 'right',
-                  )
-                }
-                pendingCommand={pendingTerminalCommand}
-                pendingRawInput={pendingTerminalRawInput}
-                onCommandSubmitted={(id) =>
-                  setPendingTerminalCommand((current) =>
-                    current?.id === id ? null : current,
-                  )
-                }
-                onRawInputSent={(id) =>
-                  setPendingTerminalRawInput((current) =>
-                    current?.id === id ? null : current,
-                  )
-                }
-                onCommandOutput={(id, output) => {
-                  const callback = terminalCommandResultsRef.current.get(id);
-                  if (!callback) return;
-                  terminalCommandResultsRef.current.delete(id);
-                  callback(output);
-                }}
-                onClose={() => {
-                  const request = pendingTerminalCommand;
-                  if (request) {
-                    const callback = terminalCommandResultsRef.current.get(
-                      request.id,
-                    );
-                    terminalCommandResultsRef.current.delete(request.id);
-                    callback?.('终端已关闭，命令未执行。');
+              {terminalOpen && runnerTerminalOpen ? (
+                <div className="terminal-split-container">
+                  <div
+                    className="terminal-split-pane terminal-split-pane-top"
+                    style={{ height: `${terminalSplitRatio * 100}%` }}
+                  >
+                    <TerminalPanel
+                      key={`ai-terminal-${librarySnapshot?.rootPath ?? 'default'}`}
+                      title="AI · 终端"
+                      cwd={librarySnapshot?.rootPath ?? ''}
+                      theme={theme}
+                      dock={terminalRightActive ? 'right' : 'bottom'}
+                      canDockRight={canDockTerminalRight}
+                      onToggleDock={() =>
+                        setTerminalDockAndStore(
+                          terminalRightActive ? 'bottom' : 'right',
+                        )
+                      }
+                      pendingCommand={pendingTerminalCommand}
+                      pendingRawInput={pendingTerminalRawInput}
+                      onCommandSubmitted={(id) =>
+                        setPendingTerminalCommand((current) =>
+                          current?.id === id ? null : current,
+                        )
+                      }
+                      onRawInputSent={(id) =>
+                        setPendingTerminalRawInput((current) =>
+                          current?.id === id ? null : current,
+                        )
+                      }
+                      onCommandOutput={(id, output) => {
+                        const callback =
+                          terminalCommandResultsRef.current.get(id);
+                        if (!callback) return;
+                        terminalCommandResultsRef.current.delete(id);
+                        callback(output);
+                      }}
+                      onClose={() => {
+                        const request = pendingTerminalCommand;
+                        if (request) {
+                          const callback =
+                            terminalCommandResultsRef.current.get(request.id);
+                          terminalCommandResultsRef.current.delete(request.id);
+                          callback?.('终端已关闭，命令未执行。');
+                        }
+                        setPendingTerminalCommand(null);
+                        setTerminalOpen(false);
+                      }}
+                    />
+                  </div>
+                  <div
+                    className="terminal-split-horizontal-divider"
+                    role="separator"
+                    aria-orientation="horizontal"
+                    onPointerDown={onSplitDividerPointerDown}
+                    title="上下拖动调整 AI 终端与代码运行终端的高度比例"
+                  >
+                    <div className="terminal-split-divider-handle" />
+                  </div>
+                  <div
+                    className="terminal-split-pane terminal-split-pane-bottom"
+                    style={{ height: `${(1 - terminalSplitRatio) * 100}%` }}
+                  >
+                    <TerminalPanel
+                      key={`runner-terminal-${librarySnapshot?.rootPath ?? 'default'}`}
+                      title="代码运行 · C/C++"
+                      badge="C RUNNER"
+                      hideCliButtons
+                      hideDockButton
+                      noteText="已就绪 C/C++ 运行环境。支持实时交互、scanf 输入与单步执行。"
+                      cwd={librarySnapshot?.rootPath ?? ''}
+                      theme={theme}
+                      dock={terminalRightActive ? 'right' : 'bottom'}
+                      canDockRight={canDockTerminalRight}
+                      onToggleDock={() => {}}
+                      pendingCommand={pendingRunnerCommand}
+                      pendingRawInput={pendingRunnerRawInput}
+                      onCommandSubmitted={(id) =>
+                        setPendingRunnerCommand((current) =>
+                          current?.id === id ? null : current,
+                        )
+                      }
+                      onRawInputSent={(id) =>
+                        setPendingRunnerRawInput((current) =>
+                          current?.id === id ? null : current,
+                        )
+                      }
+                      onCommandOutput={() => {}}
+                      onClose={() => {
+                        setPendingRunnerCommand(null);
+                        setPendingRunnerRawInput(null);
+                        setRunnerTerminalOpen(false);
+                      }}
+                    />
+                  </div>
+                </div>
+              ) : terminalOpen ? (
+                <TerminalPanel
+                  key={
+                    librarySnapshot?.rootPath ?? 'default-terminal-directory'
                   }
-                  setPendingTerminalCommand(null);
-                  setTerminalOpen(false);
-                }}
-              />
+                  cwd={librarySnapshot?.rootPath ?? ''}
+                  theme={theme}
+                  dock={terminalRightActive ? 'right' : 'bottom'}
+                  canDockRight={canDockTerminalRight}
+                  onToggleDock={() =>
+                    setTerminalDockAndStore(
+                      terminalRightActive ? 'bottom' : 'right',
+                    )
+                  }
+                  pendingCommand={pendingTerminalCommand}
+                  pendingRawInput={pendingTerminalRawInput}
+                  onCommandSubmitted={(id) =>
+                    setPendingTerminalCommand((current) =>
+                      current?.id === id ? null : current,
+                    )
+                  }
+                  onRawInputSent={(id) =>
+                    setPendingTerminalRawInput((current) =>
+                      current?.id === id ? null : current,
+                    )
+                  }
+                  onCommandOutput={(id, output) => {
+                    const callback = terminalCommandResultsRef.current.get(id);
+                    if (!callback) return;
+                    terminalCommandResultsRef.current.delete(id);
+                    callback(output);
+                  }}
+                  onClose={() => {
+                    const request = pendingTerminalCommand;
+                    if (request) {
+                      const callback = terminalCommandResultsRef.current.get(
+                        request.id,
+                      );
+                      terminalCommandResultsRef.current.delete(request.id);
+                      callback?.('终端已关闭，命令未执行。');
+                    }
+                    setPendingTerminalCommand(null);
+                    setTerminalOpen(false);
+                  }}
+                />
+              ) : runnerTerminalOpen ? (
+                <TerminalPanel
+                  key={`runner-terminal-${librarySnapshot?.rootPath ?? 'default'}`}
+                  title="代码运行 · C/C++"
+                  badge="C RUNNER"
+                  hideCliButtons
+                  hideDockButton
+                  noteText="已就绪 C/C++ 运行环境。支持实时交互、scanf 输入与单步执行。"
+                  cwd={librarySnapshot?.rootPath ?? ''}
+                  theme={theme}
+                  dock={terminalRightActive ? 'right' : 'bottom'}
+                  canDockRight={canDockTerminalRight}
+                  onToggleDock={() =>
+                    setTerminalDockAndStore(
+                      terminalRightActive ? 'bottom' : 'right',
+                    )
+                  }
+                  pendingCommand={pendingRunnerCommand}
+                  pendingRawInput={pendingRunnerRawInput}
+                  onCommandSubmitted={(id) =>
+                    setPendingRunnerCommand((current) =>
+                      current?.id === id ? null : current,
+                    )
+                  }
+                  onRawInputSent={(id) =>
+                    setPendingRunnerRawInput((current) =>
+                      current?.id === id ? null : current,
+                    )
+                  }
+                  onCommandOutput={() => {}}
+                  onClose={() => {
+                    setPendingRunnerCommand(null);
+                    setPendingRunnerRawInput(null);
+                    setRunnerTerminalOpen(false);
+                  }}
+                />
+              ) : null}
             </Suspense>
           </div>
         </section>
@@ -6235,6 +6450,7 @@ export default function App() {
               }
               onChangeTags={(tags) => workbench.controller.setTags(tags)}
               onOpenWikilink={(target) => void openWikilinkTarget(target)}
+              onRunInTerminal={handleRunCodeInTerminal}
               onOpenAsMindmap={() => void openActiveDocumentAsMindmap()}
               onConvertToMindmap={() => void convertActiveDocumentToMindmap()}
             />

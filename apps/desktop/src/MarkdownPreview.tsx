@@ -12,6 +12,7 @@ interface MarkdownPreviewProps {
   onCodeChange?: CodeBlockHandlers['onCodeChange'];
   onOpenPlantUmlEditor?: CodeBlockHandlers['onOpenPlantUmlEditor'];
   onOpenWikilink?: (target: string) => void;
+  onRunInTerminal?: CodeBlockHandlers['onRunInTerminal'];
 }
 
 export default function MarkdownPreview({
@@ -22,6 +23,7 @@ export default function MarkdownPreview({
   onCodeChange,
   onOpenPlantUmlEditor,
   onOpenWikilink,
+  onRunInTerminal,
 }: MarkdownPreviewProps) {
   const rootRef = useRef<HTMLElement>(null);
   const minimapHostRef = useRef<HTMLDivElement>(null);
@@ -44,7 +46,7 @@ export default function MarkdownPreview({
       root,
       theme,
       controller.signal,
-      { onCodeChange, onOpenPlantUmlEditor },
+      { onCodeChange, onOpenPlantUmlEditor, onRunInTerminal },
       { mode: 'markdown-preview' },
     ).then((release) => {
       if (disposed) release();
@@ -56,7 +58,15 @@ export default function MarkdownPreview({
       cleanup();
       minimap?.destroy();
     };
-  }, [html, source, theme, hideMinimap, onCodeChange, onOpenPlantUmlEditor]);
+  }, [
+    html,
+    source,
+    theme,
+    hideMinimap,
+    onCodeChange,
+    onOpenPlantUmlEditor,
+    onRunInTerminal,
+  ]);
 
   const handleClick = (event: ReactMouseEvent<HTMLElement>) => {
     if (!onOpenWikilink) return;

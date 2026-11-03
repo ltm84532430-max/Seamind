@@ -28,7 +28,7 @@ export interface PendingTerminalRawInput {
   execute?: boolean;
 }
 
-interface TerminalPanelProps {
+export interface TerminalPanelProps {
   cwd: string;
   theme: AppTheme;
   dock: 'bottom' | 'right';
@@ -40,6 +40,11 @@ interface TerminalPanelProps {
   onCommandOutput: (id: string, output: string) => void;
   onRawInputSent?: (id: string) => void;
   onClose: () => void;
+  title?: string;
+  badge?: string;
+  hideCliButtons?: boolean;
+  hideDockButton?: boolean;
+  noteText?: string;
 }
 
 interface CommandCapture {
@@ -115,6 +120,11 @@ export default function TerminalPanel({
   onCommandOutput,
   onRawInputSent,
   onClose,
+  title,
+  badge,
+  hideCliButtons = false,
+  hideDockButton = false,
+  noteText,
 }: TerminalPanelProps) {
   const terminalHostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -497,45 +507,52 @@ export default function TerminalPanel({
     <section className="seamind-terminal" aria-label="Seamind 终端">
       <header className="seamind-terminal-heading">
         <div>
-          <strong>终端 · CLI</strong>
+          <strong>{title ?? '终端 · CLI'}</strong>
+          {badge && <span className="seamind-terminal-badge">{badge}</span>}
           <span title={cwd}>{status}</span>
         </div>
         <div className="seamind-terminal-actions">
-          <button
-            type="button"
-            onClick={onToggleDock}
-            disabled={dock === 'bottom' && !canDockRight}
-            title={
-              dock === 'right'
-                ? '将终端移回底部'
-                : canDockRight
-                  ? '将终端收至阅读区右侧，与导图并排显示'
-                  : '请在宽屏电子书阅读区使用侧边停靠'
-            }
-          >
-            {dock === 'right' ? '移到底部' : '收至侧边'}
-          </button>
-          <button
-            type="button"
-            onClick={() => sendQuickCli('agy')}
-            title="在当前终端启动已接入 Seamind MCP 的 Google AGY CLI"
-          >
-            agy
-          </button>
-          <button
-            type="button"
-            onClick={() => sendQuickCli('claude')}
-            title="在当前终端启动已接入 Seamind MCP 的 Claude Code"
-          >
-            claude
-          </button>
-          <button
-            type="button"
-            onClick={() => sendQuickCli('codex')}
-            title="在当前终端启动已接入 Seamind MCP 的 Codex CLI"
-          >
-            codex
-          </button>
+          {!hideDockButton && (
+            <button
+              type="button"
+              onClick={onToggleDock}
+              disabled={dock === 'bottom' && !canDockRight}
+              title={
+                dock === 'right'
+                  ? '将终端移回底部'
+                  : canDockRight
+                    ? '将终端收至阅读区右侧，与导图并排显示'
+                    : '请在宽屏电子书阅读区使用侧边停靠'
+              }
+            >
+              {dock === 'right' ? '移到底部' : '收至侧边'}
+            </button>
+          )}
+          {!hideCliButtons && (
+            <>
+              <button
+                type="button"
+                onClick={() => sendQuickCli('agy')}
+                title="在当前终端启动已接入 Seamind MCP 的 Google AGY CLI"
+              >
+                agy
+              </button>
+              <button
+                type="button"
+                onClick={() => sendQuickCli('claude')}
+                title="在当前终端启动已接入 Seamind MCP 的 Claude Code"
+              >
+                claude
+              </button>
+              <button
+                type="button"
+                onClick={() => sendQuickCli('codex')}
+                title="在当前终端启动已接入 Seamind MCP 的 Codex CLI"
+              >
+                codex
+              </button>
+            </>
+          )}
           <button
             type="button"
             onClick={() => terminalRef.current?.clear()}
@@ -559,11 +576,17 @@ export default function TerminalPanel({
         ref={terminalHostRef}
         title="选中终端文字后按 Ctrl+C 复制；没有选区时 Ctrl+C 会中断当前命令"
       />
-      <div className="seamind-terminal-note">
-        已自动注入 Seamind MCP 工具（导图 · 知识库 · 播放器学习路径 · 当前 EPUB
-        章节）。可直接输入 <code>agy</code>、<code>claude</code> 或{' '}
-        <code>codex</code> 调用。
-      </div>
+      {noteText !== undefined ? (
+        noteText ? (
+          <div className="seamind-terminal-note">{noteText}</div>
+        ) : null
+      ) : (
+        <div className="seamind-terminal-note">
+          已自动注入 Seamind MCP 工具（导图 · 知识库 · 播放器学习路径 · 当前
+          EPUB 章节）。可直接输入 <code>agy</code>、<code>claude</code> 或{' '}
+          <code>codex</code> 调用。
+        </div>
+      )}
     </section>
   );
 }

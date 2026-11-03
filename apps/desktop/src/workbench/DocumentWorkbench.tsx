@@ -2,6 +2,7 @@ import type { ActiveDocument } from './active-document';
 import MarkdownDocWorkbench from './MarkdownDocWorkbench';
 import MermaidWorkbench from './MermaidWorkbench';
 import type { MapDocument } from '../library';
+import type { CodeBlockHandlers } from '../code-blocks';
 
 export interface DocumentWorkbenchProps {
   document: ActiveDocument;
@@ -17,6 +18,7 @@ export interface DocumentWorkbenchProps {
   onChangeCategory?(category: string): Promise<boolean>;
   onChangeTags?(tags: string[]): Promise<boolean>;
   onOpenWikilink?(target: string): void;
+  onRunInTerminal?: CodeBlockHandlers['onRunInTerminal'];
   onOpenAsMindmap(): void;
   onConvertToMindmap(): void;
 }
@@ -33,6 +35,7 @@ export default function DocumentWorkbench({
   onChangeCategory,
   onChangeTags,
   onOpenWikilink,
+  onRunInTerminal,
   theme,
   documents,
   categories,
@@ -58,6 +61,7 @@ export default function DocumentWorkbench({
       onChangeCategory={onChangeCategory}
       onChangeTags={onChangeTags}
       onOpenWikilink={onOpenWikilink}
+      onRunInTerminal={onRunInTerminal}
       onOpenAsMindmap={onOpenAsMindmap}
       onConvertToMindmap={onConvertToMindmap}
       {...shared}

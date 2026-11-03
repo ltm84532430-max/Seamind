@@ -14098,3 +14098,312 @@ button {
     box-shadow: 6px 0 20px rgb(0 0 0 / 12%);
   }
 }
+
+/* ==========================================================================
+   Terminal Split Container & Vertical Draggable Divider (上下分割)
+   ========================================================================== */
+.terminal-split-container {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  position: relative;
+}
+
+.terminal-split-pane {
+  position: relative;
+  min-height: 80px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.terminal-split-pane-top {
+  border-bottom: none;
+}
+
+.terminal-split-horizontal-divider {
+  position: relative;
+  z-index: 10;
+  height: 6px;
+  background: #dce2e5;
+  cursor: row-resize;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease;
+  user-select: none;
+}
+
+.terminal-split-horizontal-divider:hover,
+.terminal-split-horizontal-divider:active {
+  background: #e06d55;
+}
+
+.terminal-split-divider-handle {
+  width: 36px;
+  height: 2px;
+  border-radius: 2px;
+  background: #aebbc2;
+  transition: background 0.15s ease;
+}
+
+.terminal-split-horizontal-divider:hover .terminal-split-divider-handle,
+.terminal-split-horizontal-divider:active .terminal-split-divider-handle {
+  background: #ffffff;
+}
+
+.seamind-terminal-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(224, 109, 85, 0.15);
+  color: #e06d55;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.app-shell[data-theme='dark'] .terminal-split-horizontal-divider {
+  background: #232d34;
+}
+
+.app-shell[data-theme='dark'] .terminal-split-horizontal-divider:hover,
+.app-shell[data-theme='dark'] .terminal-split-horizontal-divider:active {
+  background: #e06d55;
+}
+
+.app-shell[data-theme='dark'] .terminal-split-divider-handle {
+  background: #4a5c66;
+}
+
+.app-shell[data-theme='dark']
+  .terminal-split-horizontal-divider:hover
+  .terminal-split-divider-handle,
+.app-shell[data-theme='dark']
+  .terminal-split-horizontal-divider:active
+  .terminal-split-divider-handle {
+  background: #ffffff;
+}
+
+.app-shell[data-theme='dark'] .seamind-terminal-badge {
+  background: rgba(224, 109, 85, 0.22);
+  color: #ff856e;
+}
+
+/* ==========================================================================
+   C / C++ Native Runner Panels (Knowledge Base & Mindmap)
+   ========================================================================== */
+.seamind-c-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.seamind-c-actions button {
+  padding: 3px 8px;
+  border: 1px solid #d4dce0;
+  border-radius: 3px;
+  background: #fff;
+  color: #3f4e56;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.seamind-c-actions button:hover {
+  border-color: #aebbc2;
+  color: #1a2226;
+}
+
+.seamind-c-actions .seamind-c-run {
+  background: #2da44e;
+  border-color: #2c974b;
+  color: #fff;
+  font-weight: 600;
+}
+
+.seamind-c-actions .seamind-c-run:hover {
+  background: #2c974b;
+  border-color: #24813f;
+  color: #fff;
+}
+
+.seamind-c-actions .seamind-c-run:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.seamind-c-actions .seamind-c-term-run {
+  border-color: #58a6ff;
+  color: #0969da;
+}
+
+.seamind-c-actions .seamind-c-term-run:hover {
+  background: rgba(9, 105, 218, 0.08);
+}
+
+.seamind-c-stdin-drawer {
+  margin: 6px 0;
+}
+
+.seamind-c-stdin-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 52px;
+  max-height: 120px;
+  padding: 6px 8px;
+  border: 1px dashed #c0cbd0;
+  border-radius: 4px;
+  background: #fdfefe;
+  color: #2b3840;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.seamind-c-stdin-input:focus {
+  border-style: solid;
+  border-color: #58a6ff;
+  outline: none;
+}
+
+.seamind-c-source {
+  max-height: 380px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid #e2e7e9;
+  border-radius: 3px;
+  color: #33434b;
+  background: #f7f9fa;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.seamind-c-editor .cm-editor {
+  max-height: 320px;
+  border: 1px solid #e2e7e9;
+  border-radius: 3px;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
+}
+
+.seamind-c-console {
+  margin-top: 8px;
+  border: 1px solid #e2e7e9;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #11171b;
+}
+
+.seamind-c-console-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  background: #1b242a;
+  border-bottom: 1px solid #293740;
+  font-size: 11px;
+}
+
+.seamind-c-console-status {
+  color: #9cb1bc;
+  font-size: 11px;
+}
+
+.seamind-c-console-status.is-running {
+  color: #e3b341;
+}
+
+.seamind-c-console-status.is-success {
+  color: #56d364;
+}
+
+.seamind-c-console-status.is-error {
+  color: #f85149;
+}
+
+.seamind-c-console-clear {
+  padding: 2px 6px;
+  border: 1px solid #364853;
+  border-radius: 3px;
+  background: transparent;
+  color: #8397a3;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.seamind-c-console-clear:hover {
+  background: #25333b;
+  color: #d7e0e4;
+}
+
+.seamind-c-output {
+  margin: 0;
+  padding: 8px 10px;
+  max-height: 200px;
+  overflow: auto;
+  color: #d7e0e4;
+  background: #11171b;
+  font-family: 'Cascadia Code', Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.app-shell[data-theme='dark'] .seamind-c-actions button {
+  border-color: #2e3c45;
+  background: #182025;
+  color: #b7c5cc;
+}
+
+.app-shell[data-theme='dark'] .seamind-c-actions button:hover {
+  border-color: #4a5c66;
+  color: #e5ecef;
+}
+
+.app-shell[data-theme='dark'] .seamind-c-actions .seamind-c-run {
+  background: #238636;
+  border-color: #2ea043;
+  color: #fff;
+}
+
+.app-shell[data-theme='dark'] .seamind-c-actions .seamind-c-run:hover {
+  background: #2ea043;
+  border-color: #3fb950;
+}
+
+.app-shell[data-theme='dark'] .seamind-c-actions .seamind-c-term-run {
+  border-color: #388bfd;
+  color: #58a6ff;
+}
+
+.app-shell[data-theme='dark'] .seamind-c-actions .seamind-c-term-run:hover {
+  background: rgba(56, 139, 253, 0.15);
+}
+
+.app-shell[data-theme='dark'] .seamind-c-stdin-input {
+  border-color: #303d45;
+  background: #12191d;
+  color: #d7e0e4;
+}
+
+.app-shell[data-theme='dark'] .seamind-c-source {
+  border-color: #26333a;
+  background: #141c21;
+  color: #d7e0e4;
+}
+
+.app-shell[data-theme='dark'] .seamind-c-editor .cm-editor {
+  border-color: #26333a;
+}

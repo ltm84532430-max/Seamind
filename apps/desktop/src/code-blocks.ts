@@ -53,6 +53,7 @@ export interface CodeBlockHandlers {
     source: string,
     onResult: (output: string) => void,
   ) => void;
+  onRunInTerminal?: (language: string, source: string, title?: string) => void;
 }
 
 export interface CodeBlockSourceRange {
@@ -1256,6 +1257,314 @@ function createTerminalCommandPanel(
   return panel;
 }
 
+interface CRunResult {
+  success: boolean;
+  stdout: string;
+  stderr: string;
+  exitCode?: number | null;
+  durationMs: number;
+  stage: string;
+}
+
+function createCPanel(
+  pre: HTMLElement,
+  source: string,
+  language: string,
+  theme: AppTheme,
+  signal: AbortSignal,
+  dispose: (callback: () => void) => void,
+  onCodeChange?: CodeBlockHandlers['onCodeChange'],
+  onRunInTerminal?: CodeBlockHandlers['onRunInTerminal'],
+): HTMLElement {
+  const isCpp = language === 'cpp' || language === 'c++' || language === 'cxx';
+  const langName = isCpp ? 'C++' : 'C';
+  const panel = createPanel(`${langName} · 本机编译运行`, 'c-runner');
+  const header = panel.querySelector<HTMLElement>(
+    '.seamind-code-panel-heading',
+  );
+
+  const actions = document.createElement('div');
+  actions.className = 'seamind-c-actions';
+
+  const runButton = document.createElement('button');
+  runButton.type = 'button';
+  runButton.className = 'seamind-c-run';
+  runButton.textContent = '▶ 运行';
+  runButton.setAttribute('aria-label', `编译并在本地运行 ${langName} 代码`);
+
+  const termButton = document.createElement('button');
+  termButton.type = 'button';
+  termButton.className = 'seamind-c-term-run';
+  termButton.textContent = '在终端运行 ↗';
+  termButton.setAttribute(
+    'aria-label',
+    `在右侧/底部终端中编译并交互运行 ${langName} 代码`,
+  );
+
+  const stdinToggle = document.createElement('button');
+  stdinToggle.type = 'button';
+  stdinToggle.className = 'seamind-c-stdin-btn';
+  stdinToggle.textContent = '输入 (stdin) ▾';
+  stdinToggle.setAttribute('aria-label', '展开或收起标准输入框');
+
+  const editButton = document.createElement('button');
+  editButton.type = 'button';
+  editButton.className = 'seamind-c-edit';
+  editButton.textContent = '编辑代码';
+
+  const saveButton = document.createElement('button');
+  saveButton.type = 'button';
+  saveButton.className = 'seamind-c-save';
+  saveButton.textContent = '保存';
+  saveButton.hidden = true;
+
+  const cancelButton = document.createElement('button');
+  cancelButton.type = 'button';
+  cancelButton.className = 'seamind-c-cancel';
+  cancelButton.textContent = '取消';
+  cancelButton.hidden = true;
+
+  actions.append(
+    runButton,
+    termButton,
+    stdinToggle,
+    editButton,
+    saveButton,
+    cancelButton,
+  );
+  header?.append(actions);
+
+  // Stdin drawer
+  const stdinDrawer = document.createElement('div');
+  stdinDrawer.className = 'seamind-c-stdin-drawer';
+  stdinDrawer.hidden = true;
+
+  const stdinTextarea = document.createElement('textarea');
+  stdinTextarea.className = 'seamind-c-stdin-input';
+  stdinTextarea.placeholder =
+    '预设标准输入 (stdin)：若代码包含 scanf / getchar / fgets，请在此预置输入（多项以换行或空格分隔）...';
+  stdinDrawer.append(stdinTextarea);
+
+  // Code source
+  const code = document.createElement('pre');
+  code.className = 'seamind-c-source';
+  const codeText = document.createElement('code');
+  codeText.textContent = source;
+  code.append(codeText);
+
+  // CodeMirror editor host
+  const editorHost = document.createElement('div');
+  editorHost.className = 'seamind-c-editor';
+  editorHost.hidden = true;
+
+  // Console output area
+  const consoleArea = document.createElement('div');
+  consoleArea.className = 'seamind-c-console';
+
+  const consoleBar = document.createElement('div');
+  consoleBar.className = 'seamind-c-console-bar';
+  const consoleStatus = document.createElement('span');
+  consoleStatus.className = 'seamind-c-console-status';
+  consoleStatus.textContent = '本地 GCC 就绪';
+  const clearButton = document.createElement('button');
+  clearButton.type = 'button';
+  clearButton.className = 'seamind-c-console-clear';
+  clearButton.textContent = '清空控制台';
+  consoleBar.append(consoleStatus, clearButton);
+
+  const output = document.createElement('pre');
+  output.className = 'seamind-c-output';
+  output.textContent =
+    '点击「▶ 运行」在本地环境编译执行，或点击「在终端运行 ↗」以全功能终端交互。';
+  consoleArea.append(consoleBar, output);
+
+  panel.append(stdinDrawer, code, editorHost, consoleArea);
+
+  let currentSource = source;
+  let persistedSource = source;
+  let editor: CodeMirrorEditorView | null = null;
+
+  // Stdin drawer toggle
+  const toggleStdin = () => {
+    stdinDrawer.hidden = !stdinDrawer.hidden;
+    stdinToggle.textContent = stdinDrawer.hidden
+      ? '输入 (stdin) ▾'
+      : '收起输入 ▴';
+    if (!stdinDrawer.hidden) {
+      stdinTextarea.focus();
+    }
+  };
+  stdinToggle.addEventListener('click', toggleStdin);
+
+  // Clear output
+  const clearConsole = () => {
+    output.textContent = '';
+    consoleStatus.textContent = '已清空';
+    consoleStatus.className = 'seamind-c-console-status';
+  };
+  clearButton.addEventListener('click', clearConsole);
+
+  // Editor functions
+  const closeEditor = () => {
+    editor?.destroy();
+    editor = null;
+    editorHost.hidden = true;
+    code.hidden = false;
+    runButton.disabled = false;
+    termButton.disabled = false;
+    editButton.disabled = false;
+    editButton.hidden = false;
+    saveButton.hidden = true;
+    cancelButton.hidden = true;
+  };
+
+  const startEditing = async () => {
+    editButton.disabled = true;
+    try {
+      const codemirror = await import('codemirror');
+      if (signal.aborted) return;
+      editorHost.hidden = false;
+      code.hidden = true;
+      runButton.disabled = true;
+      termButton.disabled = true;
+      editButton.hidden = true;
+      saveButton.hidden = false;
+      cancelButton.hidden = false;
+      editor = new codemirror.EditorView({
+        doc: currentSource,
+        parent: editorHost,
+        extensions: [
+          codemirror.basicSetup,
+          codemirror.EditorView.theme(
+            {
+              '&': {
+                fontSize: '12px',
+                maxHeight: '320px',
+                backgroundColor: theme === 'dark' ? '#11171b' : '#ffffff',
+                color: theme === 'dark' ? '#d7e0e4' : '#263238',
+              },
+              '.cm-scroller': { overflow: 'auto', fontFamily: 'monospace' },
+              '.cm-gutters': {
+                backgroundColor: theme === 'dark' ? '#11171b' : '#f5f7f8',
+                color: theme === 'dark' ? '#71818a' : '#7a878d',
+                border: 'none',
+              },
+            },
+            { dark: theme === 'dark' },
+          ),
+        ],
+      });
+      editor.focus();
+    } catch (error) {
+      output.textContent = `编辑器加载失败：${error instanceof Error ? error.message : String(error)}`;
+      editButton.disabled = false;
+    }
+  };
+
+  const saveEditing = () => {
+    if (!editor) return;
+    currentSource = editor.state.doc.toString();
+    codeText.textContent = currentSource;
+    const previousSource = persistedSource;
+    persistedSource = currentSource;
+    closeEditor();
+    onCodeChange?.(language, previousSource, currentSource);
+    consoleStatus.textContent = '代码已保存到笔记';
+  };
+
+  const cancelEditing = () => {
+    if (!editor) return;
+    closeEditor();
+  };
+
+  editButton.addEventListener('click', () => void startEditing());
+  saveButton.addEventListener('click', saveEditing);
+  cancelButton.addEventListener('click', cancelEditing);
+
+  // Run in Mode A
+  const runCode = async () => {
+    if (signal.aborted) return;
+    runButton.disabled = true;
+    runButton.textContent = '编译运行中…';
+    consoleStatus.textContent = '正在编译…';
+    consoleStatus.className = 'seamind-c-console-status is-running';
+
+    try {
+      const stdinInput = stdinTextarea.value.trim()
+        ? stdinTextarea.value
+        : null;
+      const result = await invoke<CRunResult>('c_run_code', {
+        source: currentSource,
+        stdinInput,
+        isCpp,
+      });
+
+      if (signal.aborted) return;
+
+      runButton.disabled = false;
+      runButton.textContent = '▶ 重新运行';
+
+      if (result.success) {
+        consoleStatus.textContent = `运行成功 (耗时 ${result.durationMs}ms, 退出码 ${result.exitCode ?? 0})`;
+        consoleStatus.className = 'seamind-c-console-status is-success';
+        const displayOut = result.stdout || '(程序执行完成，无标准输出)';
+        output.textContent = result.stderr
+          ? `${displayOut}\n\n[编译提示/警告]:\n${result.stderr}`
+          : displayOut;
+      } else {
+        const stageDesc =
+          result.stage === 'compilation'
+            ? '编译错误'
+            : result.stage === 'timeout'
+              ? '执行超时'
+              : '运行时错误';
+        consoleStatus.textContent = `${stageDesc} (退出码 ${result.exitCode ?? -1})`;
+        consoleStatus.className = 'seamind-c-console-status is-error';
+        const combined = [result.stderr, result.stdout]
+          .filter(Boolean)
+          .join('\n');
+        output.textContent = combined || '程序异常退出。';
+      }
+    } catch (err) {
+      if (signal.aborted) return;
+      runButton.disabled = false;
+      runButton.textContent = '▶ 运行';
+      consoleStatus.textContent = '执行失败';
+      consoleStatus.className = 'seamind-c-console-status is-error';
+      output.textContent = `启动失败：${err instanceof Error ? err.message : String(err)}`;
+    }
+  };
+
+  runButton.addEventListener('click', () => void runCode());
+
+  // Run in Mode B (Terminal)
+  const runInTerminal = () => {
+    if (signal.aborted) return;
+    // Extract title if present from comments like // summing.c or /* summing.c */
+    const titleMatch = currentSource.match(
+      /(?:\/\/|\/\*)\s*([a-zA-Z0-9_\-.]+\.(?:c|cpp|cc|cxx|h))/i,
+    );
+    const suggestedTitle = titleMatch
+      ? titleMatch[1].replace(/\.[^.]+$/, '')
+      : undefined;
+    onRunInTerminal?.(language, currentSource, suggestedTitle);
+    consoleStatus.textContent = '已在右侧终端启动运行';
+  };
+  termButton.addEventListener('click', runInTerminal);
+
+  dispose(() => {
+    stdinToggle.removeEventListener('click', toggleStdin);
+    clearButton.removeEventListener('click', clearConsole);
+    saveButton.removeEventListener('click', saveEditing);
+    cancelButton.removeEventListener('click', cancelEditing);
+    editor?.destroy();
+    editor = null;
+  });
+
+  replacePre(pre, panel, source, language, dispose);
+  return panel;
+}
+
 export async function hydrateCodeBlocks(
   container: ParentNode,
   theme: AppTheme,
@@ -1304,9 +1613,32 @@ export async function hydrateCodeBlocks(
         'py',
         'powershell',
         'pwsh',
+        'c',
+        'cpp',
+        'c++',
+        'cxx',
       ].includes(language)
     )
       continue;
+
+    if (
+      language === 'c' ||
+      language === 'cpp' ||
+      language === 'c++' ||
+      language === 'cxx'
+    ) {
+      createCPanel(
+        pre,
+        source,
+        language,
+        theme,
+        signal,
+        dispose,
+        handlers.onCodeChange,
+        handlers.onRunInTerminal,
+      );
+      continue;
+    }
 
     if (language === 'python' || language === 'py') {
       if (options.mode === 'markdown-preview') continue;

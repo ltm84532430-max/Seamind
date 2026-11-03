@@ -54,6 +54,7 @@ export interface MarkdownDocWorkbenchProps {
   onChangeCategory?(category: string): Promise<boolean>;
   onChangeTags?(tags: string[]): Promise<boolean>;
   onOpenWikilink?(target: string): void;
+  onRunInTerminal?: CodeBlockHandlers['onRunInTerminal'];
   /** Opens the file on the mind map canvas without changing what kind of file it is. */
   onOpenAsMindmap(): void;
   /** Turns the file into a mind map for good. */
@@ -81,6 +82,7 @@ export default function MarkdownDocWorkbench({
   onChangeCategory,
   onChangeTags,
   onOpenWikilink,
+  onRunInTerminal,
   onOpenAsMindmap,
   onConvertToMindmap,
 }: MarkdownDocWorkbenchProps) {
@@ -407,6 +409,7 @@ export default function MarkdownDocWorkbench({
               hideMinimap
               onCodeChange={handleCodeChange}
               onOpenWikilink={onOpenWikilink}
+              onRunInTerminal={onRunInTerminal}
             />
           </section>
         )}
