@@ -219,6 +219,8 @@ pub enum RedirectScope {
     YouTube,
     /// Follow redirects between GitHub release hosts.
     GitHub,
+    /// Follow redirects from the Eclipse Adoptium API to its signed GitHub releases.
+    RuntimeDownloads,
 }
 
 fn is_github_host(host: &str) -> bool {
@@ -243,6 +245,20 @@ fn redirect_policy(scope: RedirectScope) -> reqwest::redirect::Policy {
                 && attempt.url().scheme() == "https"
                 && attempt.url().host_str().is_some_and(is_github_host);
             if allowed {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }),
+        RedirectScope::RuntimeDownloads => reqwest::redirect::Policy::custom(|attempt| {
+            let allowed_host = attempt
+                .url()
+                .host_str()
+                .is_some_and(|host| host == "api.adoptium.net" || is_github_host(host));
+            if attempt.previous().len() < MAX_REDIRECTS
+                && attempt.url().scheme() == "https"
+                && allowed_host
+            {
                 attempt.follow()
             } else {
                 attempt.stop()

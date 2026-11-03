@@ -1,0 +1,6 @@
+LangString SeamindComponentsTitle ${LANG_ENGLISH} "Choose optional components"
+LangString SeamindComponentsSubtitle ${LANG_ENGLISH} "Install only the features you need"
+LangString SeamindComponentsDescription ${LANG_ENGLISH} "Selected components are downloaded and verified after Seamind starts. Clear a selection to skip that component."
+LangString SeamindJavaComponent ${LANG_ENGLISH} "PlantUML Java runtime (for rendering PlantUML diagrams)"
+LangString SeamindYtDlpComponent ${LANG_ENGLISH} "yt-dlp (for YouTube subtitles and external playback resolution)"
+LangString SeamindDeleteAppData ${LANG_ENGLISH} "Also remove app data folders and optional components downloaded by Seamind"

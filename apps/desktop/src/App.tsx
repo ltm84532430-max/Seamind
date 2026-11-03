@@ -17,6 +17,8 @@ import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import InstallerComponentSetup from './InstallerComponentSetup';
+import UpdateManager from './UpdateManager';
 import katex from 'katex';
 import markdownItKatex from '@vscode/markdown-it-katex';
 import { Transformer } from 'markmap-lib';
@@ -5172,6 +5174,7 @@ export default function App() {
         } as CSSProperties
       }
     >
+      <InstallerComponentSetup />
       <header
         className={`topbar${activeWorkspace === 'reader' ? ' is-ebook-workspace' : ''}`}
       >
@@ -7524,6 +7527,7 @@ export default function App() {
                 {settingsMessage}
               </p>
             )}
+            <UpdateManager />
             <div className="settings-footer">
               <span>支持 OpenAI Chat Completions 兼容接口</span>
               <button

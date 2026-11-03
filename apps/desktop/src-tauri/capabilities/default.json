@@ -3,5 +3,10 @@
   "identifier": "default",
   "description": "Desktop window permissions for Markmap Desktop",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:default"]
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "process:allow-restart",
+    "updater:default"
+  ]
 }

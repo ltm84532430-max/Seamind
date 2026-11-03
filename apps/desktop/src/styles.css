@@ -15943,3 +15943,185 @@ button {
 .app-shell[data-theme='dark'] .seamind-c-editor .cm-editor {
   border-color: #26333a;
 }
+.seamind-component-setup-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgb(8 12 14 / 68%);
+}
+
+.seamind-component-setup-dialog {
+  display: flex;
+  width: min(520px, 100%);
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  border: 1px solid #3b474d;
+  background: #1b2327;
+  color: #e3e9eb;
+}
+
+.seamind-component-setup-dialog h2,
+.seamind-component-setup-dialog p {
+  margin: 0;
+}
+
+.seamind-component-setup-dialog ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.seamind-component-setup-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #aebbc0;
+}
+
+.seamind-component-setup-progress progress {
+  width: 100%;
+  accent-color: #e45d4f;
+}
+
+.seamind-component-setup-error {
+  color: #f0907d;
+}
+
+.seamind-component-setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.seamind-component-setup-actions button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid #46535a;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.seamind-component-setup-actions button:last-child {
+  border-color: #dd6656;
+  background: #332b2c;
+  color: #f28d7d;
+}
+
+.seamind-component-setup-actions button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.app-shell[data-theme='light'] .seamind-component-setup-dialog {
+  border-color: #cbd4d8;
+  background: #f7f9fa;
+  color: #222d32;
+}
+
+.app-shell[data-theme='light'] .seamind-component-setup-progress {
+  color: #56656b;
+}
+
+.app-shell[data-theme='light'] .seamind-component-setup-actions button {
+  border-color: #aebbc1;
+}
+
+.app-shell[data-theme='light']
+  .seamind-component-setup-actions
+  button:last-child {
+  border-color: #ce6051;
+  background: #fff0ed;
+  color: #963d32;
+}
+
+.settings-update-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.settings-update-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-update-heading > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.settings-update-heading h3,
+.settings-update-section p {
+  margin: 0;
+}
+
+.settings-update-heading h3 {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-update-heading span,
+.settings-update-note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.settings-update-button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.settings-update-button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.settings-update-available,
+.settings-update-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.settings-update-notes {
+  max-height: 120px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.settings-update-progress {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.settings-update-progress progress {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.settings-update-error {
+  color: #b74432;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.app-shell[data-theme='dark'] .settings-update-button {
+  border-color: #3b474d;
+}

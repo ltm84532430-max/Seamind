@@ -1,0 +1,6 @@
+LangString SeamindComponentsTitle ${LANG_SIMPCHINESE} "选择可选组件"
+LangString SeamindComponentsSubtitle ${LANG_SIMPCHINESE} "只安装你需要的功能"
+LangString SeamindComponentsDescription ${LANG_SIMPCHINESE} "选中的组件会在 Seamind 首次启动后下载并校验。取消勾选即可跳过安装。"
+LangString SeamindJavaComponent ${LANG_SIMPCHINESE} "PlantUML Java 运行环境（用于渲染 PlantUML 图表）"
+LangString SeamindYtDlpComponent ${LANG_SIMPCHINESE} "yt-dlp（用于 YouTube 字幕与外部播放解析）"
+LangString SeamindDeleteAppData ${LANG_SIMPCHINESE} "同时删除应用数据文件夹和 Seamind 下载的可选组件"

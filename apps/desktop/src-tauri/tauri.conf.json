@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "seamind",
+  "productName": "Seamind",
   "version": "0.1.0",
   "identifier": "com.markmap.desktop",
   "build": {
@@ -30,6 +30,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "resources": {
       "resources/plantuml/plantuml-mit-1.2026.8.jar": "plantuml/plantuml-mit-1.2026.8.jar",
       "resources/plantuml/LICENSE.txt": "plantuml/LICENSE.txt"
@@ -37,6 +38,30 @@
     "icon": ["icons/icon.ico"],
     "category": "Productivity",
     "shortDescription": "Markdown mind maps on your desktop",
-    "targets": ["nsis"]
+    "targets": ["nsis"],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "template": "nsis/installer.nsi",
+        "installerHooks": "nsis/installer-hooks.nsh",
+        "languages": ["SimpChinese", "English"],
+        "customLanguageFiles": {
+          "SimpChinese": "nsis/language-zh.nsh",
+          "English": "nsis/language-en.nsh"
+        }
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ4RUFDMkY4NDUzRjJGNUIKUldSYkx6OUYrTUxxU0pSK05HeHRkYzJWN1VCN09qdjB6RjV4anlvOTFkVi9JTGFqci80aFRhbGEK",
+      "endpoints": [
+        "https://github.com/ltm84532430-max/Seamind/releases/latest/download/latest.json"
+      ],
+      "requireSignedVersion": true,
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

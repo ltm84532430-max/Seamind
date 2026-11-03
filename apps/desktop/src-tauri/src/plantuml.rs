@@ -383,8 +383,16 @@ async fn find_supported_java() -> Result<JavaRuntime, String> {
     }
 }
 
+pub(crate) async fn has_supported_java() -> bool {
+    find_supported_java().await.is_ok()
+}
+
 fn java_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
+    #[cfg(windows)]
+    if let Some(candidate) = crate::java_runtime::managed_java_candidate() {
+        candidates.push(candidate);
+    }
     if let Some(java_home) = env::var_os("JAVA_HOME") {
         candidates.push(
             PathBuf::from(java_home)

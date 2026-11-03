@@ -6,9 +6,11 @@ mod epub_exam;
 mod epub_exam_generation;
 mod epub_exam_grading;
 mod epub_translation;
+mod installer_components;
 mod feed;
 mod feed_store;
 mod learning_tasks;
+mod java_runtime;
 mod library;
 mod literature;
 mod literature_resolver;
@@ -37,6 +39,8 @@ mod agent_bridge;
 pub fn run() {
     youtube_net::apply_webview_proxy_env();
     tauri::Builder::default()
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(library::WatcherState::default())
         .manage(terminal::TerminalState::default())
         .manage(agent_bridge::AgentBridgeState::default())
@@ -59,6 +63,9 @@ pub fn run() {
             list_provider_models,
             generate_mindmap,
             plantuml::render_plantuml,
+            java_runtime::plantuml_install_java_runtime,
+            installer_components::installer_get_pending_components,
+            installer_components::installer_clear_pending_components,
             summarize_epub_chapters,
             analyze_epub_highlight,
             epub_exam::generate_epub_exam,
