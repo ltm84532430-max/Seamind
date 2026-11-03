@@ -53,6 +53,12 @@ export interface EpubExamSummary {
   createdAt: number;
   questionCount: number;
   status: EpubExamStatus;
+  sourceSectionIndex?: number;
+  difficulty?: EpubExamDifficulty;
+  attemptsCount?: number;
+  masteredCount?: number;
+  partialCount?: number;
+  reviewCount?: number;
 }
 
 export interface EpubExamGenerationResult {

@@ -107,6 +107,18 @@ pub struct EpubExamSummary {
     pub created_at: u64,
     pub question_count: usize,
     pub status: EpubExamStatus,
+    #[serde(default)]
+    pub source_section_index: usize,
+    #[serde(default)]
+    pub difficulty: Option<EpubExamDifficulty>,
+    #[serde(default)]
+    pub attempts_count: usize,
+    #[serde(default)]
+    pub mastered_count: usize,
+    #[serde(default)]
+    pub partial_count: usize,
+    #[serde(default)]
+    pub review_count: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -398,6 +410,16 @@ pub(crate) fn delete_epub_exams_for_book(app: &AppHandle, book_key: &str) -> Res
 
 impl From<&EpubExam> for EpubExamSummary {
     fn from(exam: &EpubExam) -> Self {
+        let mut mastered_count = 0;
+        let mut partial_count = 0;
+        let mut review_count = 0;
+        for review in exam.self_reviews.values() {
+            match review {
+                EpubExamSelfReview::Mastered => mastered_count += 1,
+                EpubExamSelfReview::Partial => partial_count += 1,
+                EpubExamSelfReview::Review => review_count += 1,
+            }
+        }
         Self {
             id: exam.id.clone(),
             book_key: exam.book_key.clone(),
@@ -406,6 +428,12 @@ impl From<&EpubExam> for EpubExamSummary {
             created_at: exam.created_at,
             question_count: exam.question_count,
             status: exam.status.clone(),
+            source_section_index: exam.source_section_index,
+            difficulty: Some(exam.difficulty.clone()),
+            attempts_count: exam.attempts.len(),
+            mastered_count,
+            partial_count,
+            review_count,
         }
     }
 }
@@ -784,6 +812,12 @@ mod tests {
             created_at: 1,
             question_count: 5,
             status: EpubExamStatus::InProgress,
+            source_section_index: 0,
+            difficulty: Some(EpubExamDifficulty::Medium),
+            attempts_count: 0,
+            mastered_count: 0,
+            partial_count: 0,
+            review_count: 0,
         })
         .unwrap();
         assert_eq!(value["bookKey"], "books/a.epub");
