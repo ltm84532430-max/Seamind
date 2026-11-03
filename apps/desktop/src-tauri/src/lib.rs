@@ -129,6 +129,7 @@ pub fn run() {
             youtube_proxy::youtube_proxy_info,
             youtube_transcript::youtube_transcript_list,
             youtube_transcript::youtube_transcript_fetch,
+            youtube_transcript::youtube_transcript_ytdlp_fetch,
             youtube_transcript::youtube_transcript_browser_fetch,
             youtube_eval::youtube_eval_script,
             youtube_eval::youtube_player_cache_get,

@@ -47,8 +47,9 @@ pub struct YouTubeSettingsView {
     webview_proxy_url: Option<String>,
 }
 
+const SYSTEM_PROXY_CACHE_TTL: Duration = Duration::from_secs(5);
 static WEBVIEW_PROXY: OnceLock<Option<String>> = OnceLock::new();
-static DETECTED_SYSTEM_PROXY: OnceLock<Option<String>> = OnceLock::new();
+static DETECTED_SYSTEM_PROXY: OnceLock<Mutex<Option<(Instant, Option<String>)>>> = OnceLock::new();
 
 #[cfg(windows)]
 fn detect_windows_system_proxy() -> Option<String> {
@@ -117,9 +118,19 @@ fn detect_windows_system_proxy() -> Option<String> {
 }
 
 pub fn detected_system_proxy() -> Option<String> {
-    DETECTED_SYSTEM_PROXY
-        .get_or_init(detect_windows_system_proxy)
-        .clone()
+    let cache = DETECTED_SYSTEM_PROXY.get_or_init(|| Mutex::new(None));
+    if let Ok(guard) = cache.lock() {
+        if let Some((checked_at, ref value)) = *guard {
+            if checked_at.elapsed() < SYSTEM_PROXY_CACHE_TTL {
+                return value.clone();
+            }
+        }
+    }
+    let detected = detect_windows_system_proxy();
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some((Instant::now(), detected.clone()));
+    }
+    detected
 }
 
 /// Accepts `http`, `https`, `socks5` and `socks5h` proxies without credentials, because the same
@@ -264,7 +275,7 @@ pub(crate) fn build_client(
 
 pub struct YouTubeNet {
     settings: RwLock<YouTubeSettings>,
-    clients: Mutex<HashMap<RedirectScope, reqwest::Client>>,
+    clients: Mutex<HashMap<RedirectScope, (Option<String>, reqwest::Client)>>,
     endpoint: tokio::sync::OnceCell<crate::youtube_proxy::ProxyEndpoint>,
 }
 
@@ -291,15 +302,18 @@ impl YouTubeNet {
     }
 
     pub fn client(&self, scope: RedirectScope) -> Result<reqwest::Client, String> {
+        let effective_proxy = self.proxy_url();
         let mut clients = self
             .clients
             .lock()
             .map_err(|_| "网络客户端状态不可用。".to_string())?;
-        if let Some(client) = clients.get(&scope) {
-            return Ok(client.clone());
+        if let Some((cached_proxy, client)) = clients.get(&scope) {
+            if *cached_proxy == effective_proxy {
+                return Ok(client.clone());
+            }
         }
-        let client = build_client(self.proxy_url().as_deref(), scope)?;
-        clients.insert(scope, client.clone());
+        let client = build_client(effective_proxy.as_deref(), scope)?;
+        clients.insert(scope, (effective_proxy, client.clone()));
         Ok(client)
     }
 

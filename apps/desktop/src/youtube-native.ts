@@ -59,12 +59,15 @@ export interface NativePlayback {
 export interface ResolveNativeOptions {
   signal?: AbortSignal;
   clients?: NativeClient[];
+  forceRefresh?: boolean;
 }
 
 export interface NativeTranscriptInfo {
   client: NativeClient;
   info: any;
   poToken?: string;
+  userAgent?: string | null;
+  visitorData?: string | null;
 }
 
 export type Library = typeof import('youtubei.js/web.bundle');
@@ -88,6 +91,52 @@ interface NativeClientConfig {
 }
 
 const sabrSessions = new Map<string, SabrSession>();
+const TRANSCRIPT_INFO_TTL_MS = 15 * 60 * 1000;
+const recentTranscriptInfos = new Map<
+  string,
+  { createdAt: number; value: NativeTranscriptInfo }
+>();
+
+function hasUsableCaptionTracks(candidate: NativeTranscriptInfo): boolean {
+  const tracks = candidate.info?.captions?.caption_tracks;
+  if (!Array.isArray(tracks) || tracks.length === 0) return false;
+  const tokenRequired = tracks.some((track: any) => {
+    const baseUrl = track?.base_url ?? track?.baseUrl;
+    try {
+      return (
+        typeof baseUrl === 'string' &&
+        new URL(baseUrl).searchParams.get('exp') === 'xpe'
+      );
+    } catch {
+      return false;
+    }
+  });
+  return !tokenRequired || Boolean(candidate.poToken);
+}
+
+function rememberTranscriptInfo(
+  videoId: string,
+  value: NativeTranscriptInfo,
+): void {
+  const now = Date.now();
+  for (const [key, entry] of recentTranscriptInfos) {
+    if (now - entry.createdAt > TRANSCRIPT_INFO_TTL_MS)
+      recentTranscriptInfos.delete(key);
+  }
+  recentTranscriptInfos.delete(videoId);
+  recentTranscriptInfos.set(videoId, { createdAt: now, value });
+  while (recentTranscriptInfos.size > 12) {
+    const oldest = recentTranscriptInfos.keys().next().value as
+      | string
+      | undefined;
+    if (!oldest) break;
+    recentTranscriptInfos.delete(oldest);
+  }
+}
+
+export function clearCachedNativeTranscriptInfo(videoId: string): void {
+  recentTranscriptInfos.delete(videoId);
+}
 
 let libraryPromise: Promise<Library> | null = null;
 
@@ -438,6 +487,7 @@ async function resolveWithClient(
   visitorData: string | undefined,
   onVisitorData: ((value: string) => void) | undefined,
   purpose: 'transcript',
+  forceRefresh?: boolean,
 ): Promise<NativeTranscriptInfo>;
 async function resolveWithClient(
   library: Library,
@@ -447,6 +497,7 @@ async function resolveWithClient(
   visitorData?: string,
   onVisitorData?: (value: string) => void,
   purpose: 'playback' | 'transcript' = 'playback',
+  forceRefresh = false,
 ): Promise<NativePlayback | NativeTranscriptInfo> {
   let resolutionActive = true;
   const fetchThroughProxy: typeof fetch = (input, init) =>
@@ -515,7 +566,11 @@ async function resolveWithClient(
     innertube.session.player = await createPlayer(library, signal);
     signal.throwIfAborted();
     try {
-      poToken = await getPlaybackPoToken(videoId, true, attestation);
+      poToken = await getPlaybackPoToken(
+        videoId,
+        purpose === 'transcript' ? forceRefresh : true,
+        attestation,
+      );
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       throw new NativePlaybackError(
@@ -543,11 +598,31 @@ async function resolveWithClient(
       `${client}: ${playability?.status ?? ''} ${playability?.reason ?? ''}`.trim(),
     );
 
+  const userAgent =
+    innertube.session.context.client.userAgent ??
+    clientConfig.USER_AGENT ??
+    innertube.session.user_agent ??
+    null;
+  const sessionVisitorData =
+    typeof innertube.session.context.client.visitorData === 'string' &&
+    innertube.session.context.client.visitorData
+      ? innertube.session.context.client.visitorData
+      : (visitorData ?? null);
+  const transcriptSnapshot: NativeTranscriptInfo = {
+    client,
+    info,
+    poToken,
+    userAgent,
+    visitorData: sessionVisitorData,
+  };
+  if (hasUsableCaptionTracks(transcriptSnapshot))
+    rememberTranscriptInfo(videoId, transcriptSnapshot);
+
   // Transcript discovery needs the same client, visitor data and BotGuard context as playback,
   // but must not fail just because a client does not expose a playable media stream.
   if (purpose === 'transcript') {
     resolutionActive = false;
-    return { client, info, poToken };
+    return transcriptSnapshot;
   }
 
   const streaming = info.streaming_data;
@@ -562,11 +637,6 @@ async function resolveWithClient(
   const adaptive = (streaming?.adaptive_formats ?? []).filter(
     (format) => !unusable(format),
   );
-  const userAgent =
-    innertube.session.context.client.userAgent ??
-    clientConfig.USER_AGENT ??
-    innertube.session.user_agent ??
-    null;
   const common = {
     videoId,
     client,
@@ -801,6 +871,17 @@ export async function resolveNativeTranscriptInfo(
   videoId: string,
   options: ResolveNativeOptions = {},
 ): Promise<NativeTranscriptInfo> {
+  if (!options.forceRefresh) {
+    const cached = recentTranscriptInfos.get(videoId);
+    if (
+      cached &&
+      Date.now() - cached.createdAt <= TRANSCRIPT_INFO_TTL_MS &&
+      hasUsableCaptionTracks(cached.value) &&
+      (!options.clients || options.clients.includes(cached.value.client))
+    )
+      return cached.value;
+  }
+
   const timeout = AbortSignal.timeout(RESOLVE_TIMEOUT_MS);
   const signal = options.signal
     ? AbortSignal.any([options.signal, timeout])
@@ -823,22 +904,9 @@ export async function resolveNativeTranscriptInfo(
           visitorData ??= value;
         },
         'transcript',
+        Boolean(options.forceRefresh),
       );
-      const tracks = result.info?.captions?.caption_tracks;
-      if (Array.isArray(tracks) && tracks.length > 0) {
-        const tokenRequired = tracks.some((track: any) => {
-          const baseUrl = track?.base_url ?? track?.baseUrl;
-          try {
-            return (
-              typeof baseUrl === 'string' &&
-              new URL(baseUrl).searchParams.get('exp') === 'xpe'
-            );
-          } catch {
-            return false;
-          }
-        });
-        if (!tokenRequired || result.poToken) return result;
-      }
+      if (hasUsableCaptionTracks(result)) return result;
       infoWithoutTracks ??= result;
     } catch (error) {
       if (options.signal?.aborted) throw error;

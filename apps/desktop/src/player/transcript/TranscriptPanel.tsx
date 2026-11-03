@@ -139,7 +139,11 @@ export default function TranscriptPanel({
     setLoading(true);
     setError(null);
     try {
-      const result = await fetchBrowserTranscript(videoId, browser);
+      const result = await fetchBrowserTranscript(
+        videoId,
+        browser,
+        effectiveTranslationLang,
+      );
       if (lastVideoIdRef.current !== videoId) return;
       browserResultVideoRef.current = videoId;
       setTracks(result.tracks);
@@ -362,29 +366,31 @@ export default function TranscriptPanel({
           )}
         </div>
 
-        {tracks.length > 0 && !activeTrackId?.startsWith('browser:') && (
-          <label className="player-transcript-track-picker">
-            <span>字幕</span>
-            <select
-              aria-label="字幕轨道"
-              value={requestedTrackId ?? ''}
-              disabled={loading}
-              onChange={(event) => {
-                const trackId = event.target.value;
-                setTrackSelection(trackId ? { videoId, trackId } : null);
-              }}
-            >
-              <option value="">
-                {`自动选择 · ${tracks.find((track) => track.id === activeTrackId)?.name ?? '首选语言'}`}
-              </option>
-              {tracks.map((track) => (
-                <option key={track.id} value={track.id}>
-                  {`${track.name} · ${track.languageCode}${track.isGenerated ? ' · 自动生成' : ' · 人工字幕'}`}
+        {tracks.length > 0 &&
+          !activeTrackId?.startsWith('browser:') &&
+          !activeTrackId?.startsWith('ytdlp:') && (
+            <label className="player-transcript-track-picker">
+              <span>字幕</span>
+              <select
+                aria-label="字幕轨道"
+                value={requestedTrackId ?? ''}
+                disabled={loading}
+                onChange={(event) => {
+                  const trackId = event.target.value;
+                  setTrackSelection(trackId ? { videoId, trackId } : null);
+                }}
+              >
+                <option value="">
+                  {`自动选择 · ${tracks.find((track) => track.id === activeTrackId)?.name ?? '首选语言'}`}
                 </option>
-              ))}
-            </select>
-          </label>
-        )}
+                {tracks.map((track) => (
+                  <option key={track.id} value={track.id}>
+                    {`${track.name} · ${track.languageCode}${track.isGenerated ? ' · 自动生成' : ' · 人工字幕'}`}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
 
         {translationTrack?.isTranslatable &&
           translationLanguages.length > 0 && (
@@ -581,6 +587,8 @@ export default function TranscriptPanel({
                         parse: '字幕解析',
                         network: '网络请求',
                         ipc: '桌面服务',
+                        native: '受信播放器',
+                        ytdlp: '本地提取器',
                         browser: '浏览器会话',
                       } as Record<string, string>
                     )[error.stage] ?? error.stage

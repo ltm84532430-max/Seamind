@@ -1,5 +1,6 @@
-//! YouTube captions use the Android player response and a timedtext URL.
-//! Keep this route independent from media stream resolution and BotGuard.
+//! YouTube captions resolve from the watch page player response first, fall back across multiple
+//! InnerTube client profiles, hand off PO-token-gated tracks to the WebView, and expose a
+//! cookie-less `yt-dlp` fallback before any explicit user-chosen browser session retry.
 
 use crate::player_store::is_video_id;
 use crate::youtube_net::{RedirectScope, YouTubeNet};
@@ -14,11 +15,69 @@ use tauri::State;
 use url::Url;
 use uuid::Uuid;
 
-const CLIENT_VERSION: &str = "20.10.38";
 const CATALOG_TTL: Duration = Duration::from_secs(180);
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(40);
 const CAPTION_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_RESPONSE_BYTES: usize = 5 * 1024 * 1024;
+
+struct InnerTubeClient {
+    name: &'static str,
+    version: &'static str,
+    client_id: &'static str,
+    user_agent: &'static str,
+    os_name: &'static str,
+    os_version: &'static str,
+    device_make: Option<&'static str>,
+    device_model: Option<&'static str>,
+    android_sdk_version: Option<u32>,
+}
+
+const INNERTUBE_CLIENTS: &[InnerTubeClient] = &[
+    InnerTubeClient {
+        name: "ANDROID_VR",
+        version: "1.65.10",
+        client_id: "28",
+        user_agent: "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
+        os_name: "Android",
+        os_version: "12L",
+        device_make: Some("Oculus"),
+        device_model: Some("Quest 3"),
+        android_sdk_version: Some(32),
+    },
+    InnerTubeClient {
+        name: "VISIONOS",
+        version: "1.02",
+        client_id: "101",
+        user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
+        os_name: "visionOS",
+        os_version: "26.5.23O471",
+        device_make: Some("Apple"),
+        device_model: Some("RealityDevice17,1"),
+        android_sdk_version: None,
+    },
+    InnerTubeClient {
+        name: "iOS",
+        version: "20.11.6",
+        client_id: "5",
+        user_agent: "com.google.ios.youtube/20.11.6 (iPhone10,4; U; CPU iOS 16_7_7 like Mac OS X)",
+        os_name: "iOS",
+        os_version: "16.7.7.20H330",
+        device_make: Some("Apple"),
+        device_model: Some("iPhone10,4"),
+        android_sdk_version: None,
+    },
+    InnerTubeClient {
+        name: "ANDROID",
+        version: "21.03.36",
+        client_id: "3",
+        user_agent: "com.google.android.youtube/21.03.36(Linux; U; Android 16; en_US; SM-S908E Build/TP1A.220624.014) gzip",
+        os_name: "Android",
+        os_version: "16",
+        device_make: Some("Samsung"),
+        device_model: Some("SM-S908E"),
+        android_sdk_version: Some(36),
+    },
+];
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,6 +112,10 @@ pub struct TranscriptBody {
     track_id: String,
     body: String,
     content_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    translation_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    translation_language: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -102,6 +165,8 @@ struct CatalogEntry {
     public: TranscriptCatalog,
     tracks: Vec<TrackEntry>,
     consent_cookie: Option<String>,
+    user_agent: Option<&'static str>,
+    visitor_data: Option<String>,
     proxy_url: Option<String>,
     created_at: Instant,
 }
@@ -207,6 +272,32 @@ fn is_bot_challenge(body: &str) -> bool {
         || lower.contains("unusual traffic")
         || lower.contains("class=\"g-recaptcha\"")
         || lower.contains("sign in to confirm")
+        || body.contains("不是机器人")
+        || body.contains("异常流量")
+}
+
+fn has_age_gate_reason(reason: &str) -> bool {
+    let lower = reason.to_ascii_lowercase();
+    lower.contains("confirm your age")
+        || lower.contains("age-restricted")
+        || lower.contains("inappropriate for some users")
+        || reason.contains("年龄")
+}
+
+fn is_private_or_members_reason(reason: &str) -> bool {
+    let lower = reason.to_ascii_lowercase();
+    lower.contains("private")
+        || lower.contains("members-only")
+        || lower.contains("members only")
+        || reason.contains("私享")
+        || reason.contains("私人")
+        || reason.contains("会员")
+}
+
+fn is_valid_visitor_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 512
+        && value.bytes().all(|byte| (0x21..0x7f).contains(&byte))
 }
 
 fn extract_consent_cookie(html: &str) -> Option<String> {
@@ -226,6 +317,97 @@ fn extract_consent_cookie(html: &str) -> Option<String> {
 fn extract_api_key(html: &str) -> Option<String> {
     let regex = Regex::new(r#""INNERTUBE_API_KEY":\s*"([a-zA-Z0-9_-]+)""#).ok()?;
     Some(regex.captures(html)?.get(1)?.as_str().to_owned())
+}
+
+fn extract_json_object_after(html: &str, marker: &str) -> Option<Value> {
+    let mut search_from = 0;
+    while let Some(offset) = html[search_from..].find(marker) {
+        let after_marker = search_from + offset + marker.len();
+        search_from = after_marker;
+        let tail = &html[after_marker..];
+        let trimmed = tail.trim_start_matches(|ch: char| {
+            ch.is_ascii_whitespace() || matches!(ch, '"' | '\'' | ']')
+        });
+        let Some(after_assign) = trimmed
+            .strip_prefix('=')
+            .or_else(|| trimmed.strip_prefix(':'))
+        else {
+            continue;
+        };
+        let after_ws = after_assign.trim_start();
+        if !after_ws.starts_with('{') {
+            continue;
+        }
+        let bytes = after_ws.as_bytes();
+        let mut depth = 0_usize;
+        let mut in_string = false;
+        let mut escaped = false;
+        let mut end_index = None;
+        for (index, &byte) in bytes.iter().enumerate() {
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if byte == b'\\' {
+                    escaped = true;
+                } else if byte == b'"' {
+                    in_string = false;
+                }
+                continue;
+            }
+            match byte {
+                b'"' => in_string = true,
+                b'{' => depth += 1,
+                b'}' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        end_index = Some(index);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(end) = end_index {
+            if let Ok(parsed) = serde_json::from_str::<Value>(&after_ws[..=end]) {
+                if parsed.get("playabilityStatus").is_some()
+                    || parsed.get("captions").is_some()
+                    || parsed.get("videoDetails").is_some()
+                {
+                    return Some(parsed);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn extract_visitor_data(html: &str, player_data: Option<&Value>) -> Option<String> {
+    if let Some(visitor) = player_data
+        .and_then(|data| data.get("responseContext"))
+        .and_then(|ctx| ctx.get("visitorData"))
+        .and_then(Value::as_str)
+    {
+        if is_valid_visitor_id(visitor) {
+            return Some(visitor.to_owned());
+        }
+    }
+    let regex = Regex::new(r#""(?:VISITOR_DATA|visitorData)"\s*:\s*"([^"]+)""#).ok()?;
+    let value = regex.captures(html)?.get(1)?.as_str();
+    is_valid_visitor_id(value).then(|| value.to_owned())
+}
+
+fn requires_po_token(base_url: &str) -> bool {
+    Url::parse(base_url).ok().is_some_and(|url| {
+        url.query_pairs()
+            .any(|(key, value)| key == "exp" && value == "xpe")
+    })
+}
+
+fn has_direct_track(catalog: &CatalogEntry) -> bool {
+    catalog
+        .tracks
+        .iter()
+        .any(|track| !requires_po_token(&track.base_url))
 }
 
 async fn watch_html(
@@ -265,6 +447,8 @@ fn parse_catalog(
     data: &Value,
     consent_cookie: Option<String>,
     proxy_url: Option<String>,
+    user_agent: Option<&'static str>,
+    visitor_data: Option<String>,
 ) -> Result<CatalogEntry, TranscriptFailure> {
     if let Some(playability) = data.get("playabilityStatus") {
         let status = playability
@@ -276,10 +460,19 @@ fn parse_catalog(
                 .get("reason")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            let code = if status == "LOGIN_REQUIRED" && is_bot_challenge(reason) {
-                "requestBlocked"
-            } else if reason.to_ascii_lowercase().contains("age") {
+            let code = if status == "AGE_CHECK_REQUIRED"
+                || status == "CONTENT_CHECK_REQUIRED"
+                || has_age_gate_reason(reason)
+            {
                 "ageRestricted"
+            } else if status == "LOGIN_REQUIRED" {
+                if is_private_or_members_reason(reason) {
+                    "videoUnavailable"
+                } else {
+                    "requestBlocked"
+                }
+            } else if is_bot_challenge(reason) {
+                "requestBlocked"
             } else {
                 "videoUnavailable"
             };
@@ -371,8 +564,109 @@ fn parse_catalog(
         },
         tracks,
         consent_cookie,
+        user_agent,
+        visitor_data,
         proxy_url,
         created_at: Instant::now(),
+    })
+}
+
+fn build_player_payload(
+    profile: &InnerTubeClient,
+    video_id: &str,
+    visitor_data: Option<&str>,
+) -> Value {
+    let mut client = json!({
+        "clientName": profile.name,
+        "clientVersion": profile.version,
+        "osName": profile.os_name,
+        "osVersion": profile.os_version,
+        "hl": "en",
+        "gl": "US"
+    });
+    if let Some(object) = client.as_object_mut() {
+        if let Some(make) = profile.device_make {
+            object.insert("deviceMake".to_owned(), json!(make));
+        }
+        if let Some(model) = profile.device_model {
+            object.insert("deviceModel".to_owned(), json!(model));
+        }
+        if let Some(sdk) = profile.android_sdk_version {
+            object.insert("androidSdkVersion".to_owned(), json!(sdk));
+        }
+        if let Some(visitor) = visitor_data.filter(|value| is_valid_visitor_id(value)) {
+            object.insert("visitorData".to_owned(), json!(visitor));
+        }
+    }
+    json!({
+        "context": { "client": client },
+        "videoId": video_id,
+        "contentCheckOk": true,
+        "racyCheckOk": true
+    })
+}
+
+fn failure_priority(code: &str) -> u8 {
+    match code {
+        "ageRestricted" => 0,
+        "transcriptsDisabled" => 1,
+        "requestBlocked" => 2,
+        "rateLimited" => 3,
+        "poTokenRequired" => 4,
+        "network" => 5,
+        "timeout" => 6,
+        "videoUnavailable" => 7,
+        "http" => 8,
+        "unexpectedResponse" => 9,
+        _ => 10,
+    }
+}
+
+fn pick_failure(failures: Vec<TranscriptFailure>) -> TranscriptFailure {
+    failures
+        .into_iter()
+        .min_by_key(|failure| failure_priority(failure.code))
+        .unwrap_or_else(|| {
+            TranscriptFailure::new("unknown", "catalog", "无法解析 YouTube 字幕轨道。")
+        })
+}
+
+async fn request_client_player(
+    client: &Client,
+    profile: &InnerTubeClient,
+    video_id: &str,
+    api_key: Option<&str>,
+    consent_cookie: Option<&str>,
+    visitor_data: Option<&str>,
+) -> Result<Value, TranscriptFailure> {
+    let player_url = match api_key {
+        Some(key) => format!("https://www.youtube.com/youtubei/v1/player?key={key}&prettyPrint=false"),
+        None => "https://www.youtube.com/youtubei/v1/player?prettyPrint=false".to_owned(),
+    };
+    let payload = build_player_payload(profile, video_id, visitor_data);
+    let mut request = client
+        .post(player_url)
+        .header(header::USER_AGENT, profile.user_agent)
+        .header("x-youtube-client-name", profile.client_id)
+        .header("x-youtube-client-version", profile.version)
+        .json(&payload);
+    if let Some(visitor) = visitor_data.filter(|value| is_valid_visitor_id(value)) {
+        request = request.header("x-goog-visitor-id", visitor);
+    }
+    if let Some(cookie) = consent_cookie {
+        request = request.header(header::COOKIE, cookie);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| network_failure("player", error))?;
+    let player = read_response(response, "player").await?;
+    serde_json::from_str(&player.body).map_err(|_| {
+        TranscriptFailure::new(
+            "unexpectedResponse",
+            "player",
+            "YouTube Player 接口没有返回有效 JSON。",
+        )
     })
 }
 
@@ -381,56 +675,119 @@ async fn discover_catalog(
     video_id: &str,
     proxy_url: Option<String>,
 ) -> Result<CatalogEntry, TranscriptFailure> {
-    let first_page = watch_html(client, video_id, None).await?;
-    let mut consent_cookie = None;
-    let page = if first_page
-        .body
-        .contains("action=\"https://consent.youtube.com/s\"")
-    {
-        consent_cookie = Some(extract_consent_cookie(&first_page.body).ok_or_else(|| {
-            TranscriptFailure::new(
-                "requestBlocked",
-                "watch",
-                "YouTube 同意页面无法建立字幕请求会话。",
-            )
-        })?);
-        watch_html(client, video_id, consent_cookie.as_deref()).await?
-    } else {
-        first_page
-    };
-    let api_key = extract_api_key(&page.body).ok_or_else(|| {
-        if is_bot_challenge(&page.body) {
-            TranscriptFailure::new("requestBlocked", "watch", "YouTube 在观看页要求真人验证。")
-        } else {
-            TranscriptFailure::new(
-                "unexpectedResponse",
-                "watch",
-                "观看页没有返回字幕服务所需的 InnerTube 配置。",
-            )
+    let mut consent_cookie: Option<String> = None;
+    let mut api_key: Option<String> = None;
+    let mut visitor_data: Option<String> = None;
+    let mut po_token_catalog: Option<CatalogEntry> = None;
+    let mut failures: Vec<TranscriptFailure> = Vec::new();
+
+    match watch_html(client, video_id, None).await {
+        Ok(first_page) => {
+            let page_result = if first_page
+                .body
+                .contains("action=\"https://consent.youtube.com/s\"")
+            {
+                match extract_consent_cookie(&first_page.body) {
+                    Some(cookie) => {
+                        let retry = watch_html(client, video_id, Some(&cookie)).await;
+                        consent_cookie = Some(cookie);
+                        retry
+                    }
+                    None => Err(TranscriptFailure::new(
+                        "requestBlocked",
+                        "watch",
+                        "YouTube 同意页面无法建立字幕请求会话。",
+                    )),
+                }
+            } else {
+                Ok(first_page)
+            };
+
+            match page_result {
+                Ok(page) => {
+                    api_key = extract_api_key(&page.body);
+                    let initial_player =
+                        extract_json_object_after(&page.body, "ytInitialPlayerResponse");
+                    visitor_data = extract_visitor_data(&page.body, initial_player.as_ref());
+                    if let Some(ref player_data) = initial_player {
+                        match parse_catalog(
+                            video_id,
+                            player_data,
+                            consent_cookie.clone(),
+                            proxy_url.clone(),
+                            None,
+                            visitor_data.clone(),
+                        ) {
+                            Ok(catalog) if has_direct_track(&catalog) => return Ok(catalog),
+                            Ok(catalog) => po_token_catalog = Some(catalog),
+                            Err(error) if error.code == "ageRestricted" => return Err(error),
+                            Err(error) => failures.push(error),
+                        }
+                    } else if is_bot_challenge(&page.body) {
+                        failures.push(TranscriptFailure::new(
+                            "requestBlocked",
+                            "watch",
+                            "YouTube 在观看页要求真人验证。",
+                        ));
+                    }
+                }
+                Err(error) if matches!(error.code, "network" | "timeout") => return Err(error),
+                Err(error) => failures.push(error),
+            }
         }
-    })?;
-    let player_url = format!("https://www.youtube.com/youtubei/v1/player?key={api_key}");
-    let payload = json!({
-        "context": {"client": {"clientName": "ANDROID", "clientVersion": CLIENT_VERSION}},
-        "videoId": video_id
-    });
-    let mut request = client.post(player_url).json(&payload);
-    if let Some(cookie) = &consent_cookie {
-        request = request.header(header::COOKIE, cookie);
+        Err(error) if matches!(error.code, "network" | "timeout") => return Err(error),
+        Err(error) => failures.push(error),
     }
-    let response = request
-        .send()
-        .await
-        .map_err(|error| network_failure("player", error))?;
-    let player = read_response(response, "player").await?;
-    let data: Value = serde_json::from_str(&player.body).map_err(|_| {
-        TranscriptFailure::new(
-            "unexpectedResponse",
-            "player",
-            "YouTube Player 接口没有返回有效 JSON。",
+
+    for profile in INNERTUBE_CLIENTS {
+        let data = match request_client_player(
+            client,
+            profile,
+            video_id,
+            api_key.as_deref(),
+            consent_cookie.as_deref(),
+            visitor_data.as_deref(),
         )
-    })?;
-    parse_catalog(video_id, &data, consent_cookie, proxy_url)
+        .await
+        {
+            Ok(data) => data,
+            Err(error) if matches!(error.code, "network" | "timeout") => {
+                failures.push(error);
+                break;
+            }
+            Err(error) => {
+                failures.push(error);
+                continue;
+            }
+        };
+        if visitor_data.is_none() {
+            visitor_data = extract_visitor_data("", Some(&data));
+        }
+        match parse_catalog(
+            video_id,
+            &data,
+            consent_cookie.clone(),
+            proxy_url.clone(),
+            Some(profile.user_agent),
+            visitor_data.clone(),
+        ) {
+            Ok(catalog) if has_direct_track(&catalog) => return Ok(catalog),
+            Ok(catalog) => {
+                if po_token_catalog.is_none() {
+                    po_token_catalog = Some(catalog);
+                }
+            }
+            Err(error) if matches!(error.code, "transcriptsDisabled" | "ageRestricted") => {
+                return Err(error)
+            }
+            Err(error) => failures.push(error),
+        }
+    }
+
+    if let Some(catalog) = po_token_catalog {
+        return Ok(catalog);
+    }
+    Err(pick_failure(failures))
 }
 
 async fn get_catalog(
@@ -506,7 +863,7 @@ fn caption_url(base_url: &str, translation_lang: Option<&str>) -> Result<Url, Tr
         return Err(TranscriptFailure::new(
             "poTokenRequired",
             "caption",
-            "这个字幕轨道要求专用 PO Token，当前 Android 请求无法使用。",
+            "这个字幕轨道要求专用 PO Token，需要切换受信客户端获取。",
         ));
     }
     let pairs = url
@@ -525,8 +882,16 @@ async fn download_caption(
     client: &Client,
     url: &Url,
     cookie: Option<&str>,
+    user_agent: Option<&str>,
+    visitor_data: Option<&str>,
 ) -> Result<HttpText, TranscriptFailure> {
     let mut request = client.get(url.clone());
+    if let Some(ua) = user_agent {
+        request = request.header(header::USER_AGENT, ua);
+    }
+    if let Some(visitor) = visitor_data.filter(|value| is_valid_visitor_id(value)) {
+        request = request.header("x-goog-visitor-id", visitor);
+    }
     if let Some(cookie) = cookie {
         request = request.header(header::COOKIE, cookie);
     }
@@ -629,7 +994,13 @@ async fn fetch_body(
         .map_err(|_| TranscriptFailure::new("network", "caption", "无法创建 YouTube 网络连接。"))?;
     let response = tokio::time::timeout(
         CAPTION_TIMEOUT,
-        download_caption(&client, &original_url, catalog.consent_cookie.as_deref()),
+        download_caption(
+            &client,
+            &original_url,
+            catalog.consent_cookie.as_deref(),
+            catalog.user_agent,
+            catalog.visitor_data.as_deref(),
+        ),
     )
     .await
     .map_err(|_| TranscriptFailure::new("timeout", "caption", "字幕正文请求超时。"))?;
@@ -641,6 +1012,8 @@ async fn fetch_body(
                     track_id: track_id.to_owned(),
                     body: response.body,
                     content_type: response.content_type,
+                    translation_body: None,
+                    translation_language: None,
                 })
             }
             Err(error) => error,
@@ -668,7 +1041,13 @@ async fn fetch_body(
         .append_pair("fmt", "json3");
     let response = tokio::time::timeout(
         CAPTION_TIMEOUT,
-        download_caption(&client, &json3_url, catalog.consent_cookie.as_deref()),
+        download_caption(
+            &client,
+            &json3_url,
+            catalog.consent_cookie.as_deref(),
+            catalog.user_agent,
+            catalog.visitor_data.as_deref(),
+        ),
     )
     .await
     .map_err(|_| TranscriptFailure::new("timeout", "caption", "字幕正文请求超时。"))??;
@@ -678,6 +1057,8 @@ async fn fetch_body(
         track_id: track_id.to_owned(),
         body: response.body,
         content_type: response.content_type,
+        translation_body: None,
+        translation_language: None,
     })
 }
 
@@ -734,9 +1115,39 @@ pub async fn youtube_transcript_fetch(
 }
 
 #[tauri::command]
+pub async fn youtube_transcript_ytdlp_fetch(
+    video_id: String,
+    preferred_lang: Option<String>,
+    net: State<'_, YouTubeNet>,
+) -> Result<TranscriptReply<TranscriptBody>, String> {
+    let trace_id = Uuid::new_v4().simple().to_string();
+    let proxy_url = net.proxy_url();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::youtube::fetch_youtube_caption_without_cookies(
+            &video_id,
+            preferred_lang.as_deref(),
+            proxy_url.as_deref(),
+        )
+        .map(|caption| TranscriptBody {
+            video_id,
+            track_id: format!("ytdlp:{}", caption.language),
+            body: caption.body,
+            content_type: caption.content_type.to_string(),
+            translation_body: caption.translation_body,
+            translation_language: caption.translation_language,
+        })
+        .map_err(|(code, message)| TranscriptFailure::new(code, "ytdlp", message))
+    })
+    .await
+    .map_err(|_| "本地字幕提取任务意外退出。".to_string());
+    Ok(reply(result?, trace_id))
+}
+
+#[tauri::command]
 pub async fn youtube_transcript_browser_fetch(
     video_id: String,
     browser: String,
+    preferred_lang: Option<String>,
     net: State<'_, YouTubeNet>,
 ) -> Result<TranscriptReply<TranscriptBody>, String> {
     let trace_id = Uuid::new_v4().simple().to_string();
@@ -745,13 +1156,16 @@ pub async fn youtube_transcript_browser_fetch(
         crate::youtube::fetch_youtube_caption_with_browser(
             &video_id,
             &browser,
+            preferred_lang.as_deref(),
             proxy_url.as_deref(),
         )
-        .map(|(language, body)| TranscriptBody {
+        .map(|caption| TranscriptBody {
             video_id,
-            track_id: format!("browser:{language}"),
-            body,
-            content_type: "text/vtt".to_string(),
+            track_id: format!("browser:{}", caption.language),
+            body: caption.body,
+            content_type: caption.content_type.to_string(),
+            translation_body: caption.translation_body,
+            translation_language: caption.translation_language,
         })
         .map_err(|(code, message)| TranscriptFailure::new(code, "browser", message))
     })
@@ -776,7 +1190,7 @@ mod tests {
                 "translationLanguages": [{"languageCode": "zh-Hans", "languageName": {"simpleText": "简体中文"}}]
             }}
         });
-        let catalog = parse_catalog("dQw4w9WgXcQ", &data, None, None).unwrap();
+        let catalog = parse_catalog("dQw4w9WgXcQ", &data, None, None, None, None).unwrap();
         assert_eq!(catalog.tracks.len(), 2);
         assert!(!catalog.tracks[0].public.is_generated);
         assert!(catalog.tracks[1].public.is_generated);
@@ -792,12 +1206,90 @@ mod tests {
             "status": "LOGIN_REQUIRED",
             "reason": "Sign in to confirm you're not a bot"
         }});
-        let error = parse_catalog("dQw4w9WgXcQ", &data, None, None)
+        let error = parse_catalog("dQw4w9WgXcQ", &data, None, None, None, None)
             .err()
             .unwrap();
         assert_eq!(error.code, "requestBlocked");
         assert_eq!(error.stage, "player");
         assert_eq!(error.http_status, None);
+
+        // Localized Chinese bot challenge and generic login gates also map to requestBlocked
+        // rather than videoUnavailable so Layer 2 / browser recovery can proceed.
+        let localized = json!({"playabilityStatus": {
+            "status": "LOGIN_REQUIRED",
+            "reason": "请登录以确认你不是机器人"
+        }});
+        assert_eq!(
+            parse_catalog("dQw4w9WgXcQ", &localized, None, None, None, None)
+                .err()
+                .unwrap()
+                .code,
+            "requestBlocked"
+        );
+
+        // "page" must not falsely match "age" as ageRestricted.
+        let reload = json!({"playabilityStatus": {
+            "status": "UNPLAYABLE",
+            "reason": "The page needs to be reloaded."
+        }});
+        assert_eq!(
+            parse_catalog("dQw4w9WgXcQ", &reload, None, None, None, None)
+                .err()
+                .unwrap()
+                .code,
+            "videoUnavailable"
+        );
+
+        let private = json!({"playabilityStatus": {
+            "status": "LOGIN_REQUIRED",
+            "reason": "This is a private video."
+        }});
+        assert_eq!(
+            parse_catalog("dQw4w9WgXcQ", &private, None, None, None, None)
+                .err()
+                .unwrap()
+                .code,
+            "videoUnavailable"
+        );
+
+        let age = json!({"playabilityStatus": {
+            "status": "LOGIN_REQUIRED",
+            "reason": "Sign in to confirm your age"
+        }});
+        assert_eq!(
+            parse_catalog("dQw4w9WgXcQ", &age, None, None, None, None)
+                .err()
+                .unwrap()
+                .code,
+            "ageRestricted"
+        );
+    }
+
+    #[test]
+    fn extracts_embedded_watch_player_response_and_visitor_data() {
+        let html = r#"
+            <script>var dummy = "ytInitialPlayerResponse";</script>
+            <script>var ytInitialPlayerResponse = {"responseContext":{"visitorData":"Cgt2aXNpdG9yXzEyMw%3D%3D"},"playabilityStatus":{"status":"OK"},"captions":{"playerCaptionsTracklistRenderer":{"captionTracks":[{"baseUrl":"https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&lang=en","languageCode":"en","name":{"simpleText":"English ("quoted } brace")"}}]}}}; var other = 1;</script>
+        "#;
+        // Wait: escaped quotes inside JSON string:
+        let valid_html = html.replace(r#""quoted } brace""#, r#"\"quoted } brace\""#);
+        let parsed = extract_json_object_after(&valid_html, "ytInitialPlayerResponse").unwrap();
+        let visitor = extract_visitor_data(&valid_html, Some(&parsed));
+        assert_eq!(visitor.as_deref(), Some("Cgt2aXNpdG9yXzEyMw%3D%3D"));
+        let catalog = parse_catalog("dQw4w9WgXcQ", &parsed, None, None, None, visitor).unwrap();
+        assert!(has_direct_track(&catalog));
+        assert_eq!(catalog.tracks[0].public.name, "English (\"quoted } brace\")");
+
+        let xpe_only = json!({
+            "playabilityStatus": {"status": "OK"},
+            "captions": {"playerCaptionsTracklistRenderer": {
+                "captionTracks": [
+                    {"baseUrl": "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ&exp=xpe&lang=en", "languageCode": "en"}
+                ]
+            }}
+        });
+        let xpe_catalog = parse_catalog("dQw4w9WgXcQ", &xpe_only, None, None, None, None).unwrap();
+        assert!(!has_direct_track(&xpe_catalog));
     }
 
     #[test]

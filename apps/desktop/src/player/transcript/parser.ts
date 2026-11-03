@@ -319,22 +319,43 @@ export function parseVttOrSrt(content: string): TranscriptCue[] {
   const timeRegex =
     /((?:\d{1,2}:)?\d{1,2}:\d{2}[,.]\d{2,3})\s*-->\s*((?:\d{1,2}:)?\d{1,2}:\d{2}[,.]\d{2,3})/;
 
+  const pushCueBlock = () => {
+    if (currentStart < 0 || currentTextLines.length === 0) return;
+    let linesToJoin = currentTextLines;
+    const prev = cues[cues.length - 1];
+    if (
+      prev &&
+      linesToJoin.length >= 2 &&
+      cleanText(linesToJoin[0]) === prev.text
+    ) {
+      linesToJoin = linesToJoin.slice(1);
+    }
+    const text = cleanText(linesToJoin.join(' '));
+    if (!text) return;
+    const roundedStart = Math.round(currentStart * 100) / 100;
+    const roundedEnd = Math.round(currentEnd * 100) / 100;
+    if (
+      prev &&
+      prev.text === text &&
+      (currentEnd - currentStart <= 0.025 || currentStart <= prev.end + 0.025)
+    ) {
+      prev.end = Math.max(prev.end, roundedEnd);
+      return;
+    }
+    cues.push({
+      id: `cue-${index++}`,
+      start: roundedStart,
+      end: roundedEnd,
+      text,
+    });
+  };
+
   for (const line of lines) {
     const trimmed = line.trim();
     const timeMatch = timeRegex.exec(trimmed);
 
     if (timeMatch) {
-      if (currentStart >= 0 && currentTextLines.length > 0) {
-        const text = cleanText(currentTextLines.join(' '));
-        if (text) {
-          cues.push({
-            id: `cue-${index++}`,
-            start: Math.round(currentStart * 100) / 100,
-            end: Math.round(currentEnd * 100) / 100,
-            text,
-          });
-        }
-      }
+      pushCueBlock();
       currentStart = parseTimestampToSeconds(timeMatch[1]);
       currentEnd = parseTimestampToSeconds(timeMatch[2]);
       currentTextLines = [];
@@ -344,15 +365,7 @@ export function parseVttOrSrt(content: string): TranscriptCue[] {
       currentTextLines.push(trimmed);
     } else if (!trimmed && currentStart >= 0) {
       if (currentTextLines.length > 0) {
-        const text = cleanText(currentTextLines.join(' '));
-        if (text) {
-          cues.push({
-            id: `cue-${index++}`,
-            start: Math.round(currentStart * 100) / 100,
-            end: Math.round(currentEnd * 100) / 100,
-            text,
-          });
-        }
+        pushCueBlock();
         currentStart = -1;
         currentEnd = -1;
         currentTextLines = [];
@@ -360,17 +373,7 @@ export function parseVttOrSrt(content: string): TranscriptCue[] {
     }
   }
 
-  if (currentStart >= 0 && currentTextLines.length > 0) {
-    const text = cleanText(currentTextLines.join(' '));
-    if (text) {
-      cues.push({
-        id: `cue-${index++}`,
-        start: Math.round(currentStart * 100) / 100,
-        end: Math.round(currentEnd * 100) / 100,
-        text,
-      });
-    }
-  }
+  pushCueBlock();
 
   return cues;
 }

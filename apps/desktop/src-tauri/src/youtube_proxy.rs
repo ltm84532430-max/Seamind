@@ -179,8 +179,19 @@ fn valid_user_agent(value: &HeaderValue) -> Option<HeaderValue> {
     .then(|| value.clone())
 }
 
+fn is_native_app_innertube_request(incoming: &HeaderMap, target: &Url) -> bool {
+    if is_media_host(target) {
+        return false;
+    }
+    incoming
+        .get("x-youtube-client-name")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|id| matches!(id.trim(), "3" | "5" | "28"))
+}
+
 /// Builds the headers that go upstream: a fixed allow-list from the page, a YouTube-looking
-/// Origin/Referer, and the user agent the page asked for. Cookies and credentials never pass.
+/// Origin/Referer for web/media requests, and the user agent the page asked for. Cookies and
+/// credentials never pass.
 fn upstream_headers(incoming: &HeaderMap, target: &Url) -> HeaderMap {
     let mut headers = HeaderMap::new();
     for name in FORWARDED_REQUEST_HEADERS {
@@ -193,14 +204,16 @@ fn upstream_headers(incoming: &HeaderMap, target: &Url) -> HeaderMap {
         .and_then(valid_user_agent)
         .unwrap_or_else(|| HeaderValue::from_static(default_user_agent()));
     headers.insert(header::USER_AGENT, user_agent);
-    headers.insert(
-        header::ORIGIN,
-        HeaderValue::from_static("https://www.youtube.com"),
-    );
-    headers.insert(
-        header::REFERER,
-        HeaderValue::from_static("https://www.youtube.com/"),
-    );
+    if !is_native_app_innertube_request(incoming, target) {
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://www.youtube.com"),
+        );
+        headers.insert(
+            header::REFERER,
+            HeaderValue::from_static("https://www.youtube.com/"),
+        );
+    }
     if is_media_host(target) || incoming.contains_key(header::RANGE) {
         headers.insert(
             header::ACCEPT_ENCODING,
@@ -614,6 +627,29 @@ mod tests {
         );
         assert_eq!(headers["user-agent"], default_user_agent());
         assert!(!headers.contains_key("accept-encoding"));
+    }
+
+    #[test]
+    fn omits_web_origin_for_mobile_innertube_clients() {
+        let mut incoming = HeaderMap::new();
+        incoming.insert("x-youtube-client-name", HeaderValue::from_static("28"));
+        incoming.insert(
+            "x-seamind-ua",
+            HeaderValue::from_static("com.google.android.apps.youtube.vr.oculus/1.65.10"),
+        );
+        let api_headers = upstream_headers(
+            &incoming,
+            &url("https://www.youtube.com/youtubei/v1/player"),
+        );
+        assert!(!api_headers.contains_key("origin"));
+        assert!(!api_headers.contains_key("referer"));
+
+        let media_headers = upstream_headers(
+            &incoming,
+            &url("https://rr1---sn-a.googlevideo.com/videoplayback"),
+        );
+        assert_eq!(media_headers["origin"], "https://www.youtube.com");
+        assert_eq!(media_headers["referer"], "https://www.youtube.com/");
     }
 
     #[test]

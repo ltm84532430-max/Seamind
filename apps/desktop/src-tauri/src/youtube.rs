@@ -1084,6 +1084,39 @@ fn parse_newpipe_bridge_response(output: &[u8]) -> Result<PlaybackResolution, St
     Ok(resolution)
 }
 
+fn has_node_in_path() -> bool {
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    #[cfg(windows)]
+    const CANDIDATES: &[&str] = &["node.exe", "node.cmd", "node.bat"];
+    #[cfg(not(windows))]
+    const CANDIDATES: &[&str] = &["node"];
+    std::env::split_paths(&paths).any(|dir| CANDIDATES.iter().any(|name| dir.join(name).is_file()))
+}
+
+fn is_unsupported_js_runtimes_error(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    lower.contains("no such option: --js-runtimes")
+        || lower.contains("unrecognized arguments: --js-runtimes")
+}
+
+fn is_cookie_decrypt_error(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    lower.contains("failed to decrypt")
+        || lower.contains("dpapi")
+        || lower.contains("app-bound")
+        || lower.contains("v20")
+}
+
+fn is_cookie_lock_error(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    lower.contains("could not copy")
+        || lower.contains("permission denied")
+        || lower.contains("permissionerror")
+        || lower.contains("database is locked")
+}
+
 fn resolve_youtube_playback_with_yt_dlp(
     video_id: &str,
     browser: Option<&str>,
@@ -1091,12 +1124,13 @@ fn resolve_youtube_playback_with_yt_dlp(
     proxy: Option<&str>,
 ) -> Result<PlaybackResolution, String> {
     let video_url = format!("https://www.youtube.com/watch?v={video_id}");
+    let allow_js_runtime = has_node_in_path();
     let candidates = extractor_candidates();
     for (program, prefix_args) in candidates {
-        let mut command = Command::new(&program);
-        command
-            .args(prefix_args)
-            .args([
+        let mut use_js_runtime = allow_js_runtime;
+        let output = loop {
+            let mut command = Command::new(&program);
+            command.args(&prefix_args).args([
                 "--ignore-config",
                 "--no-playlist",
                 "--quiet",
@@ -1107,35 +1141,54 @@ fn resolve_youtube_playback_with_yt_dlp(
                 "0",
                 "--extractor-retries",
                 "0",
-                "--js-runtimes",
-                "node",
+            ]);
+            if use_js_runtime {
+                command.args(["--js-runtimes", "node"]);
+            }
+            command.args([
                 "--format",
                 "best[ext=mp4][vcodec^=avc1][acodec^=mp4a][protocol=https]/bestvideo[ext=mp4][vcodec^=avc1][protocol=https]+bestaudio[ext=m4a][acodec^=mp4a][protocol=https]/bestvideo*+bestaudio/best",
                 "--dump-single-json",
                 "--skip-download",
             ]);
-        if let Some(proxy) = proxy {
-            command.arg("--proxy").arg(proxy);
-        }
-        if let Some(browser) = browser {
-            command.arg("--cookies-from-browser").arg(browser);
-        }
-        command.arg(&video_url).stdin(std::process::Stdio::null());
-        hide_command_window(&mut command);
+            if let Some(proxy) = proxy {
+                command.arg("--proxy").arg(proxy);
+            }
+            if let Some(browser) = browser {
+                command.arg("--cookies-from-browser").arg(browser);
+            }
+            command
+                .arg("--")
+                .arg(&video_url)
+                .stdin(std::process::Stdio::null());
+            hide_command_window(&mut command);
 
-        let output = match run_command_bounded(command, YT_DLP_TIMEOUT, Some(control)) {
-            Ok(output) => output,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
-                return Err(CANCELLED_MESSAGE.to_string());
+            match run_command_bounded(command, YT_DLP_TIMEOUT, Some(control)) {
+                Ok(output) => {
+                    if !output.status.success() && use_js_runtime {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        if is_unsupported_js_runtimes_error(&stderr) {
+                            use_js_runtime = false;
+                            continue;
+                        }
+                    }
+                    break Some(output);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => break None,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                    return Err(CANCELLED_MESSAGE.to_string());
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+                    return Err(format!(
+                        "yt-dlp 解析超过 {} 秒，已终止进程及其子进程。",
+                        YT_DLP_TIMEOUT.as_secs()
+                    ));
+                }
+                Err(error) => return Err(format!("无法启动 yt-dlp：{error}")),
             }
-            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
-                return Err(format!(
-                    "yt-dlp 解析超过 {} 秒，已终止进程及其子进程。",
-                    YT_DLP_TIMEOUT.as_secs()
-                ));
-            }
-            Err(error) => return Err(format!("无法启动 yt-dlp：{error}")),
+        };
+        let Some(output) = output else {
+            continue;
         };
 
         if !output.status.success() {
@@ -1152,12 +1205,15 @@ fn resolve_youtube_playback_with_yt_dlp(
                 return Err("yt-dlp 没有找到可播放的媒体格式。".to_string());
             }
             if browser.is_some() {
-                if detail.contains("Could not copy")
-                    || detail.contains("Failed to decrypt")
-                    || detail.contains("failed to decrypt")
-                {
+                if is_cookie_decrypt_error(detail) {
                     return Err(
-                        "无法读取所选浏览器的本机会话；请关闭浏览器后重试，或改用其他浏览器。"
+                        "Chrome / Edge 启用了 Windows 应用绑定加密，外部工具无法解密会话；建议改用 Firefox 会话重试。"
+                            .to_string(),
+                    );
+                }
+                if is_cookie_lock_error(detail) {
+                    return Err(
+                        "无法读取所选浏览器的本机会话（数据库被占用）；请完全关闭该浏览器后重试，或改用 Firefox。"
                             .to_string(),
                     );
                 }
@@ -1190,17 +1246,447 @@ fn resolve_youtube_playback_with_yt_dlp(
     )
 }
 
-/// Explicit user action only: yt-dlp reads one selected browser's local session
-/// and downloads subtitle files into an isolated temporary directory. No cookies
-/// or signed URLs are returned to the webview or persisted by Seamind.
-pub(crate) fn fetch_youtube_caption_with_browser(
-    video_id: &str,
-    browser: &str,
-    proxy: Option<&str>,
-) -> Result<(String, String), (&'static str, String)> {
-    if !is_valid_video_id(video_id) || !matches!(browser, "firefox" | "edge" | "chrome") {
-        return Err(("videoUnavailable", "无效的视频或浏览器选择。".into()));
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct YtDlpCaptionResult {
+    pub language: String,
+    pub body: String,
+    pub content_type: &'static str,
+    pub translation_language: Option<String>,
+    pub translation_body: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct DownloadedSubFile {
+    clean_lang: String,
+    is_orig: bool,
+    is_json3: bool,
+    content_type: &'static str,
+    path: std::path::PathBuf,
+}
+
+fn sanitize_preferred_lang(preferred_lang: Option<&str>) -> String {
+    if let Some(raw) = preferred_lang {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty()
+            && trimmed.len() <= 24
+            && trimmed
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return trimmed.replace('_', "-");
+        }
     }
+    "zh-Hans".to_string()
+}
+
+fn build_ytdlp_sub_langs(preferred_lang: &str) -> String {
+    let mut specs = Vec::with_capacity(14);
+    let mut push_unique = |item: &str| {
+        if !specs
+            .iter()
+            .any(|existing: &String| existing.eq_ignore_ascii_case(item))
+        {
+            specs.push(item.to_string());
+        }
+    };
+    push_unique(preferred_lang);
+    for item in [
+        ".*-orig",
+        "yue.*",
+        "zh-Hans",
+        "zh-CN",
+        "zh-Hant",
+        "zh-TW",
+        "zh-HK",
+        "zh",
+        "en",
+        "en-US",
+        "en-GB",
+        "-live_chat",
+    ] {
+        push_unique(item);
+    }
+    specs.join(",")
+}
+
+fn normalize_lang_tag(tag: &str) -> String {
+    tag.trim().replace('_', "-").to_ascii_lowercase()
+}
+
+fn base_lang_tag(norm_tag: &str) -> &str {
+    norm_tag.split('-').next().unwrap_or(norm_tag)
+}
+
+fn parse_subtitle_filename(
+    video_id: &str,
+    filename: &str,
+) -> Option<(String, bool, bool, &'static str)> {
+    let prefix = format!("{video_id}.");
+    let rest = filename.strip_prefix(&prefix)?;
+    let (raw_lang, is_json3, content_type) = if let Some(lang) = rest.strip_suffix(".json3") {
+        (lang, true, "application/json")
+    } else if let Some(lang) = rest.strip_suffix(".vtt") {
+        (lang, false, "text/vtt")
+    } else {
+        return None;
+    };
+    if raw_lang.is_empty() || raw_lang.eq_ignore_ascii_case("live_chat") {
+        return None;
+    }
+    let lower = raw_lang.to_ascii_lowercase();
+    let (clean_lang, is_orig) = if lower.ends_with("-orig") && raw_lang.len() > 5 {
+        (raw_lang[..raw_lang.len() - 5].to_string(), true)
+    } else {
+        (raw_lang.to_string(), false)
+    };
+    if clean_lang.is_empty() {
+        return None;
+    }
+    Some((clean_lang, is_orig, is_json3, content_type))
+}
+
+fn preferred_lang_rank(clean_lang: &str, preferred_norm: &str) -> Option<u8> {
+    let norm = normalize_lang_tag(clean_lang);
+    if norm == preferred_norm {
+        return Some(0);
+    }
+    if matches!(preferred_norm, "zh-hans" | "zh-cn" | "zh-sg" | "zh") {
+        return match norm.as_str() {
+            "zh-hans" | "zh-cn" | "zh-sg" => Some(0),
+            "zh" => Some(1),
+            "zh-hant" | "zh-tw" | "zh-hk" => Some(2),
+            _ => None,
+        };
+    }
+    if matches!(preferred_norm, "zh-hant" | "zh-tw" | "zh-hk") {
+        return match norm.as_str() {
+            "zh-hant" | "zh-tw" | "zh-hk" => Some(0),
+            "zh" => Some(1),
+            "zh-hans" | "zh-cn" | "zh-sg" => Some(2),
+            _ => None,
+        };
+    }
+    if base_lang_tag(&norm) == base_lang_tag(preferred_norm) {
+        return Some(1);
+    }
+    None
+}
+
+fn is_explicit_manual_chinese(clean_lang: &str) -> bool {
+    matches!(
+        normalize_lang_tag(clean_lang).as_str(),
+        "zh-cn" | "zh-sg" | "zh-tw" | "zh-hk" | "zh"
+    )
+}
+
+fn select_caption_pair(
+    candidates: &[DownloadedSubFile],
+    preferred_lang: &str,
+) -> Option<(usize, Option<usize>)> {
+    if candidates.is_empty() {
+        return None;
+    }
+    let preferred_norm = normalize_lang_tag(preferred_lang);
+    let preferred_base = base_lang_tag(&preferred_norm);
+
+    let best_preferred_idx = |max_rank: u8| -> Option<usize> {
+        candidates
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, item)| {
+                let rank = preferred_lang_rank(&item.clean_lang, &preferred_norm)?;
+                (rank <= max_rank).then_some((idx, (rank, item.is_orig, !item.is_json3)))
+            })
+            .min_by_key(|(_, key)| *key)
+            .map(|(idx, _)| idx)
+    };
+
+    // 1. If yt-dlp wrote an explicit `<lang>-orig` track, that identifies the video's true spoken language.
+    if let Some((orig_idx, orig_file)) = candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item.is_orig)
+        .min_by_key(|(_, item)| !item.is_json3)
+    {
+        let orig_norm = normalize_lang_tag(&orig_file.clean_lang);
+        if base_lang_tag(&orig_norm) == preferred_base {
+            let primary = best_preferred_idx(2).unwrap_or(orig_idx);
+            return Some((primary, None));
+        }
+        let translation = best_preferred_idx(1).filter(|&idx| idx != orig_idx);
+        return Some((orig_idx, translation));
+    }
+
+    // 2. Manual-subtitles-only videos (no `*-orig` track).
+    let best_yue_idx = candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| base_lang_tag(&normalize_lang_tag(&item.clean_lang)) == "yue")
+        .min_by_key(|(_, item)| !item.is_json3)
+        .map(|(idx, _)| idx);
+
+    if let Some(yue_idx) = best_yue_idx {
+        if preferred_base != "yue" {
+            let translation = best_preferred_idx(1).filter(|&idx| idx != yue_idx);
+            return Some((yue_idx, translation));
+        }
+        return Some((yue_idx, None));
+    }
+
+    if preferred_base == "zh"
+        && candidates
+            .iter()
+            .any(|item| is_explicit_manual_chinese(&item.clean_lang))
+    {
+        if let Some(zh_idx) = best_preferred_idx(2) {
+            return Some((zh_idx, None));
+        }
+    }
+
+    let best_non_preferred_source = candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| {
+            base_lang_tag(&normalize_lang_tag(&item.clean_lang)) != preferred_base
+        })
+        .min_by_key(|(_, item)| {
+            let norm = normalize_lang_tag(&item.clean_lang);
+            let base = base_lang_tag(&norm);
+            let lang_priority = match base {
+                "yue" => 0_u8,
+                "en" => 1,
+                _ => 2,
+            };
+            (lang_priority, !item.is_json3)
+        })
+        .map(|(idx, _)| idx);
+
+    if let (Some(source_idx), Some(trans_idx)) = (best_non_preferred_source, best_preferred_idx(1))
+    {
+        if source_idx != trans_idx {
+            return Some((source_idx, Some(trans_idx)));
+        }
+    }
+
+    let single_idx = candidates
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, item)| {
+            let norm = normalize_lang_tag(&item.clean_lang);
+            let base = base_lang_tag(&norm);
+            let priority = match preferred_lang_rank(&item.clean_lang, &preferred_norm) {
+                Some(rank) => rank,
+                None if base == "yue" => 3,
+                None if base == "en" => 4,
+                None => 5,
+            };
+            (priority, !item.is_json3, item.clean_lang.as_str())
+        })
+        .map(|(idx, _)| idx)?;
+
+    Some((single_idx, None))
+}
+
+fn read_validated_subtitle_file(file: &DownloadedSubFile) -> Result<String, (&'static str, String)> {
+    let metadata = std::fs::metadata(&file.path)
+        .map_err(|_| ("unexpectedResponse", "无法读取下载的字幕。".into()))?;
+    if metadata.len() > 5 * 1024 * 1024 {
+        return Err(("unexpectedResponse", "下载的字幕文件过大。".into()));
+    }
+    let body = std::fs::read_to_string(&file.path)
+        .map_err(|_| ("unexpectedResponse", "下载的字幕编码无效。".into()))?;
+    let trimmed = body.trim_start_matches('\u{feff}').trim_start();
+    if file.is_json3 {
+        if !trimmed.starts_with('{') {
+            return Err(("unexpectedResponse", "下载的文件不是有效的 JSON3 字幕。".into()));
+        }
+    } else if !trimmed.starts_with("WEBVTT") {
+        return Err(("unexpectedResponse", "下载的文件不是 VTT 字幕。".into()));
+    }
+    Ok(body)
+}
+
+fn collect_downloaded_subtitles(
+    directory: &std::path::Path,
+    video_id: &str,
+) -> Result<Vec<DownloadedSubFile>, (&'static str, String)> {
+    let entries = std::fs::read_dir(directory)
+        .map_err(|_| ("unknown", "无法读取临时字幕目录。".into()))?;
+    let mut files = Vec::new();
+    for entry in entries.flatten() {
+        let filename = entry.file_name().to_string_lossy().to_string();
+        if let Some((clean_lang, is_orig, is_json3, content_type)) =
+            parse_subtitle_filename(video_id, &filename)
+        {
+            files.push(DownloadedSubFile {
+                clean_lang,
+                is_orig,
+                is_json3,
+                content_type,
+                path: entry.path(),
+            });
+        }
+    }
+    Ok(files)
+}
+
+fn classify_ytdlp_caption_stderr(
+    stderr: &str,
+    status_ok: bool,
+    browser: Option<&str>,
+) -> (&'static str, String) {
+    let lower = stderr.to_ascii_lowercase();
+    if browser.is_some() {
+        if is_cookie_decrypt_error(stderr) {
+            return (
+                "requestBlocked",
+                "Chrome / Edge 启用了 Windows 应用绑定加密（App-Bound Encryption），外部工具无法解密会话；请改用 Firefox 会话重试，或手动导入字幕。".into(),
+            );
+        }
+        if is_cookie_lock_error(stderr) {
+            return (
+                "requestBlocked",
+                "所选浏览器正在占用 Cookie 数据库；请完全关闭该浏览器（含后台进程）后重试，或直接改用 Firefox。".into(),
+            );
+        }
+    }
+    if lower.contains("confirm your age")
+        || lower.contains("age-restricted")
+        || lower.contains("inappropriate for some users")
+    {
+        return ("ageRestricted", "年龄限制视频需要已验证的登录会话。".into());
+    }
+    if lower.contains("sign in to confirm")
+        || lower.contains("not a bot")
+        || lower.contains("unusual traffic")
+    {
+        return if browser.is_some() {
+            (
+                "requestBlocked",
+                "所选浏览器会话仍需在 YouTube 完成真人验证，并确认浏览器与 Seamind 使用同一网络出口。".into(),
+            )
+        } else {
+            (
+                "requestBlocked",
+                "YouTube 对本地 yt-dlp 请求也要求真人验证。".into(),
+            )
+        };
+    }
+    if lower.contains("private video")
+        || lower.contains("members-only")
+        || lower.contains("video unavailable")
+        || lower.contains("this video is not available")
+    {
+        return ("videoUnavailable", "视频当前不可访问，无法取得字幕轨道。".into());
+    }
+    if lower.contains("429") || lower.contains("too many requests") {
+        return ("rateLimited", "YouTube 限制了字幕请求频率，请稍后再试。".into());
+    }
+    if !status_ok {
+        return if browser.is_some() {
+            ("network", "浏览器会话字幕提取失败，请检查网络与 yt-dlp。".into())
+        } else {
+            ("network", "本地 yt-dlp 字幕提取失败，请检查网络或代理设置。".into())
+        };
+    }
+    ("transcriptsDisabled", "这个视频没有找到可用的字幕轨道。".into())
+}
+
+fn run_ytdlp_subtitle_pass(
+    program: &std::ffi::OsStr,
+    prefix_args: &[std::ffi::OsString],
+    directory: &std::path::Path,
+    video_url: &str,
+    sub_langs: &str,
+    include_auto_subs: bool,
+    browser: Option<&str>,
+    proxy: Option<&str>,
+    allow_js_runtime: bool,
+) -> Result<Option<Output>, (&'static str, String)> {
+    let mut use_js_runtime = allow_js_runtime;
+    loop {
+        let mut command = Command::new(program);
+        command.args(prefix_args).args([
+            "--ignore-config",
+            "--no-playlist",
+            "--quiet",
+            "--no-progress",
+            "--socket-timeout",
+            EXTRACTOR_TIMEOUT_SECONDS,
+            "--retries",
+            "0",
+            "--extractor-retries",
+            "0",
+            "--ignore-no-formats-error",
+        ]);
+        if use_js_runtime {
+            command.args(["--js-runtimes", "node"]);
+        }
+        command.args(["--skip-download", "--write-subs"]);
+        if include_auto_subs {
+            command.arg("--write-auto-subs");
+        }
+        command
+            .args([
+                "--sub-langs",
+                sub_langs,
+                "--sub-format",
+                "json3/vtt",
+                "--output",
+                "%(id)s.%(ext)s",
+            ])
+            .current_dir(directory);
+        if let Some(browser) = browser {
+            command.arg("--cookies-from-browser").arg(browser);
+        }
+        if let Some(proxy) = proxy {
+            command.arg("--proxy").arg(proxy);
+        }
+        command.arg("--").arg(video_url).stdin(Stdio::null());
+        hide_command_window(&mut command);
+
+        match run_command_bounded(command, YT_DLP_TIMEOUT, None) {
+            Ok(output) => {
+                if !output.status.success() && use_js_runtime {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if is_unsupported_js_runtimes_error(&stderr) {
+                        use_js_runtime = false;
+                        continue;
+                    }
+                }
+                return Ok(Some(output));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+                return Err((
+                    "timeout",
+                    if browser.is_some() {
+                        "浏览器会话字幕请求超时。".into()
+                    } else {
+                        "本地 yt-dlp 字幕请求超时。".into()
+                    },
+                ));
+            }
+            Err(_) => return Err(("network", "无法运行本地字幕提取器。".into())),
+        }
+    }
+}
+
+fn fetch_youtube_caption_via_ytdlp(
+    video_id: &str,
+    browser: Option<&str>,
+    preferred_lang: Option<&str>,
+    proxy: Option<&str>,
+) -> Result<YtDlpCaptionResult, (&'static str, String)> {
+    if !is_valid_video_id(video_id) {
+        return Err(("videoUnavailable", "无效的 YouTube 视频 ID。".into()));
+    }
+    if let Some(browser_name) = browser {
+        if !matches!(browser_name, "firefox" | "edge" | "chrome") {
+            return Err(("videoUnavailable", "无效的浏览器选择。".into()));
+        }
+    }
+
     struct SubtitleDirectory(std::path::PathBuf);
     impl Drop for SubtitleDirectory {
         fn drop(&mut self) {
@@ -1212,6 +1698,7 @@ pub(crate) fn fetch_youtube_caption_with_browser(
             let _ = std::fs::remove_dir(&self.0);
         }
     }
+
     let directory = std::env::temp_dir().join(format!(
         "seamind-caption-{}-{}",
         std::process::id(),
@@ -1220,121 +1707,102 @@ pub(crate) fn fetch_youtube_caption_with_browser(
     std::fs::create_dir(&directory).map_err(|_| ("unknown", "无法创建临时字幕目录。".into()))?;
     let directory = SubtitleDirectory(directory);
     let video_url = format!("https://www.youtube.com/watch?v={video_id}");
+    let preferred = sanitize_preferred_lang(preferred_lang);
+    let sub_langs = build_ytdlp_sub_langs(&preferred);
+    let allow_js_runtime = has_node_in_path();
+
     for (program, prefix_args) in extractor_candidates() {
-        let mut command = Command::new(&program);
-        command
-            .args(prefix_args)
-            .args([
-                "--ignore-config",
-                "--no-playlist",
-                "--quiet",
-                "--no-progress",
-                "--socket-timeout",
-                EXTRACTOR_TIMEOUT_SECONDS,
-                "--retries",
-                "0",
-                "--extractor-retries",
-                "0",
-                "--ignore-no-formats-error",
-                "--js-runtimes",
-                "node",
-                "--skip-download",
-                "--write-subs",
-                "--write-auto-subs",
-                "--sub-langs",
-                "zh.*,en.*",
-                "--sub-format",
-                "vtt",
-                "--output",
-                "%(id)s.%(ext)s",
-                "--cookies-from-browser",
-                browser,
-            ])
-            .current_dir(&directory.0);
-        if let Some(proxy) = proxy {
-            command.arg("--proxy").arg(proxy);
-        }
-        command.arg(&video_url).stdin(Stdio::null());
-        hide_command_window(&mut command);
-        let output = match run_command_bounded(command, YT_DLP_TIMEOUT, None) {
-            Ok(output) => output,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
-                return Err(("timeout", "浏览器会话字幕请求超时。".into()));
-            }
-            Err(_) => return Err(("network", "无法运行本地字幕提取器。".into())),
+        let Some(output) = run_ytdlp_subtitle_pass(
+            &program,
+            &prefix_args,
+            &directory.0,
+            &video_url,
+            &sub_langs,
+            true,
+            browser,
+            proxy,
+            allow_js_runtime,
+        )?
+        else {
+            continue;
         };
-        let mut files = std::fs::read_dir(&directory.0)
-            .map_err(|_| ("unknown", "无法读取临时字幕目录。".into()))?
-            .flatten()
-            .filter(|entry| {
-                let name = entry.file_name().to_string_lossy().to_string();
-                name.starts_with(video_id) && name.ends_with(".vtt")
-            })
-            .collect::<Vec<_>>();
-        files.sort_by_key(|entry| {
-            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-            if name.contains(".zh-hans.") || name.contains(".zh-cn.") {
-                0
-            } else if name.contains(".zh.") {
-                1
-            } else if name.contains(".en.") {
-                2
-            } else {
-                3
+
+        let mut files = collect_downloaded_subtitles(&directory.0, video_id)?;
+        // If yt-dlp succeeded cleanly without matching zh/yue/en/*-orig, check creator-uploaded
+        // manual subtitles in any language (without --write-auto-subs so 100+ auto-translations
+        // are never requested).
+        if files.is_empty() && output.status.success() {
+            if let Some(_manual_output) = run_ytdlp_subtitle_pass(
+                &program,
+                &prefix_args,
+                &directory.0,
+                &video_url,
+                "all,-live_chat",
+                false,
+                browser,
+                proxy,
+                allow_js_runtime,
+            )? {
+                files = collect_downloaded_subtitles(&directory.0, video_id)?;
             }
-        });
-        if let Some(entry) = files.first() {
-            let path = entry.path();
-            let metadata = std::fs::metadata(&path)
-                .map_err(|_| ("unexpectedResponse", "无法读取下载的字幕。".into()))?;
-            if metadata.len() > 5 * 1024 * 1024 {
-                return Err(("unexpectedResponse", "下载的字幕文件过大。".into()));
-            }
-            let body = std::fs::read_to_string(&path)
-                .map_err(|_| ("unexpectedResponse", "下载的字幕编码无效。".into()))?;
-            let filename = entry.file_name().to_string_lossy().to_string();
-            let language = filename
-                .strip_prefix(&format!("{video_id}."))
-                .and_then(|name| name.strip_suffix(".vtt"))
-                .unwrap_or("unknown")
-                .to_string();
-            if !body.trim_start().starts_with("WEBVTT") {
-                return Err(("unexpectedResponse", "下载的文件不是 VTT 字幕。".into()));
-            }
-            return Ok((language, body));
         }
+
+        if let Some((primary_idx, translation_idx)) = select_caption_pair(&files, &preferred) {
+            let primary = &files[primary_idx];
+            let body = read_validated_subtitle_file(primary)?;
+            let (translation_language, translation_body) = match translation_idx {
+                Some(idx) => match read_validated_subtitle_file(&files[idx]) {
+                    Ok(trans_body) => (Some(files[idx].clean_lang.clone()), Some(trans_body)),
+                    Err(_) => (None, None),
+                },
+                None => (None, None),
+            };
+            return Ok(YtDlpCaptionResult {
+                language: primary.clean_lang.clone(),
+                body,
+                content_type: primary.content_type,
+                translation_language,
+                translation_body,
+            });
+        }
+
         let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("Could not copy")
-            || stderr.contains("Failed to decrypt")
-            || stderr.contains("failed to decrypt")
-        {
-            return Err((
-                "requestBlocked",
-                "无法读取所选浏览器的会话；可关闭浏览器后重试，或换用 Firefox。".into(),
-            ));
-        }
-        if stderr.contains("Sign in to confirm") || stderr.contains("not a bot") {
-            return Err((
-                "requestBlocked",
-                "所选浏览器会话仍需在 YouTube 完成真人验证。".into(),
-            ));
-        }
-        if !output.status.success() {
-            return Err((
-                "network",
-                "浏览器会话字幕提取失败，请检查网络与 yt-dlp。".into(),
-            ));
-        }
-        return Err((
-            "transcriptsDisabled",
-            "浏览器会话没有找到可用的中英文字幕轨道。".into(),
+        return Err(classify_ytdlp_caption_stderr(
+            &stderr,
+            output.status.success(),
+            browser,
         ));
     }
-    Err((
-        "unexpectedResponse",
-        "未找到 yt-dlp，请先在播放器设置中安装。".into(),
-    ))
+
+    if browser.is_some() {
+        Err((
+            "unexpectedResponse",
+            "未找到 yt-dlp，请先在播放器设置中安装。".into(),
+        ))
+    } else {
+        Err(("ytdlpUnavailable", "未安装本地 yt-dlp 提取器。".into()))
+    }
+}
+
+/// Automatic Layer 3 fallback: runs local `yt-dlp` strictly WITHOUT browser cookies.
+pub(crate) fn fetch_youtube_caption_without_cookies(
+    video_id: &str,
+    preferred_lang: Option<&str>,
+    proxy: Option<&str>,
+) -> Result<YtDlpCaptionResult, (&'static str, String)> {
+    fetch_youtube_caption_via_ytdlp(video_id, None, preferred_lang, proxy)
+}
+
+/// Explicit user action only: yt-dlp reads one selected browser's local session
+/// and downloads subtitle files into an isolated temporary directory. No cookies
+/// or signed URLs are returned to the webview or persisted by Seamind.
+pub(crate) fn fetch_youtube_caption_with_browser(
+    video_id: &str,
+    browser: &str,
+    preferred_lang: Option<&str>,
+    proxy: Option<&str>,
+) -> Result<YtDlpCaptionResult, (&'static str, String)> {
+    fetch_youtube_caption_via_ytdlp(video_id, Some(browser), preferred_lang, proxy)
 }
 
 fn playback_resolution_from_info(info: YtDlpInfo) -> Result<PlaybackResolution, String> {
@@ -1580,9 +2048,12 @@ fn truncate_message(message: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_allowed_media_url, is_valid_request_id, is_valid_video_id, media_expiry_unix,
-        parse_newpipe_bridge_response, playback_resolution_from_info, resolution_ttl,
-        run_command_bounded, JobControl, MediaType, PlaybackResolution, YouTubeJobs, YtDlpInfo,
+        build_ytdlp_sub_langs, classify_ytdlp_caption_stderr, is_allowed_media_url,
+        is_unsupported_js_runtimes_error, is_valid_request_id, is_valid_video_id,
+        media_expiry_unix, parse_newpipe_bridge_response, parse_subtitle_filename,
+        playback_resolution_from_info, resolution_ttl, run_command_bounded,
+        sanitize_preferred_lang, select_caption_pair, DownloadedSubFile, JobControl, MediaType,
+        PlaybackResolution, YouTubeJobs, YtDlpInfo,
     };
     use std::process::Command;
     use std::sync::Arc;
@@ -1826,6 +2297,111 @@ mod tests {
         assert!(YouTubeJobs::default()
             .begin(Some("bad id".to_string()))
             .is_err());
+    }
+
+    fn sub_file(video_id: &str, filename: &str) -> DownloadedSubFile {
+        let (clean_lang, is_orig, is_json3, content_type) =
+            parse_subtitle_filename(video_id, filename).expect("valid subtitle filename");
+        DownloadedSubFile {
+            clean_lang,
+            is_orig,
+            is_json3,
+            content_type,
+            path: std::path::PathBuf::from(filename),
+        }
+    }
+
+    #[test]
+    fn selects_bilingual_and_multilingual_ytdlp_caption_pairs() {
+        assert!(parse_subtitle_filename("CuknAdR6ofE", "CuknAdR6ofE.live_chat.json3").is_none());
+
+        // 1. English ASR + Chinese auto-translation -> English primary + zh-Hans translation.
+        let en_asr = vec![
+            sub_file("dQw4w9WgXcQ", "dQw4w9WgXcQ.en-orig.json3"),
+            sub_file("dQw4w9WgXcQ", "dQw4w9WgXcQ.en.json3"),
+            sub_file("dQw4w9WgXcQ", "dQw4w9WgXcQ.zh-Hans.json3"),
+        ];
+        assert_eq!(select_caption_pair(&en_asr, "zh-Hans"), Some((0, Some(2))));
+        assert_eq!(en_asr[0].clean_lang, "en");
+
+        // 2. Cantonese manual track (Hong Kong video) -> preserved instead of discarded.
+        let hk_only = vec![sub_file("CuknAdR6ofE", "CuknAdR6ofE.yue-HK.vtt")];
+        assert_eq!(select_caption_pair(&hk_only, "zh-Hans"), Some((0, None)));
+
+        let hk_bilingual = vec![
+            sub_file("CuknAdR6ofE", "CuknAdR6ofE.yue-HK.json3"),
+            sub_file("CuknAdR6ofE", "CuknAdR6ofE.zh-Hans.json3"),
+        ];
+        assert_eq!(
+            select_caption_pair(&hk_bilingual, "zh-Hans"),
+            Some((0, Some(1)))
+        );
+
+        // 3. Mandarin ASR video with auto-translated English -> Chinese primary, English ignored.
+        let mandarin_asr = vec![
+            sub_file("aqz-KE-bpKQ", "aqz-KE-bpKQ.zh-Hans-orig.json3"),
+            sub_file("aqz-KE-bpKQ", "aqz-KE-bpKQ.zh-Hans.json3"),
+            sub_file("aqz-KE-bpKQ", "aqz-KE-bpKQ.en.json3"),
+        ];
+        assert_eq!(
+            select_caption_pair(&mandarin_asr, "zh-Hans"),
+            Some((1, None))
+        );
+
+        // 4. Mandarin manual zh-CN video with auto-translated English -> zh-CN primary, English ignored.
+        let mandarin_manual = vec![
+            sub_file("aqz-KE-bpKQ", "aqz-KE-bpKQ.en.vtt"),
+            sub_file("aqz-KE-bpKQ", "aqz-KE-bpKQ.zh-CN.vtt"),
+        ];
+        assert_eq!(
+            select_caption_pair(&mandarin_manual, "zh-Hans"),
+            Some((1, None))
+        );
+
+        // 5. Foreign manual-only fallback (e.g. Japanese) -> preserved.
+        let ja_manual = vec![sub_file("aqz-KE-bpKQ", "aqz-KE-bpKQ.ja.vtt")];
+        assert_eq!(select_caption_pair(&ja_manual, "zh-Hans"), Some((0, None)));
+    }
+
+    #[test]
+    fn sanitizes_sub_langs_and_classifies_windows_cookie_and_runtime_errors() {
+        assert_eq!(sanitize_preferred_lang(Some("zh_TW")), "zh-TW");
+        assert_eq!(
+            sanitize_preferred_lang(Some("--exec=evil")),
+            "zh-Hans",
+            "rejects CLI flags or unsafe characters"
+        );
+        let spec = build_ytdlp_sub_langs(&sanitize_preferred_lang(Some("zh-Hans")));
+        assert!(spec.contains(".*-orig"));
+        assert!(spec.contains("yue.*"));
+        assert!(spec.ends_with("-live_chat"));
+
+        assert!(is_unsupported_js_runtimes_error(
+            "yt-dlp: error: no such option: --js-runtimes"
+        ));
+
+        let (code, dpapi_msg) = classify_ytdlp_caption_stderr(
+            "ERROR: Failed to decrypt with DPAPI (v20 App-Bound Encryption)",
+            false,
+            Some("chrome"),
+        );
+        assert_eq!(code, "requestBlocked");
+        assert!(dpapi_msg.contains("App-Bound Encryption") && dpapi_msg.contains("Firefox"));
+
+        let (code, lock_msg) = classify_ytdlp_caption_stderr(
+            "ERROR: Could not copy Chrome cookie database: PermissionError",
+            false,
+            Some("edge"),
+        );
+        assert_eq!(code, "requestBlocked");
+        assert!(lock_msg.contains("占用") && lock_msg.contains("Firefox"));
+
+        let (code, _) = classify_ytdlp_caption_stderr(
+            "ERROR: Sign in to confirm you're not a bot",
+            false,
+            None,
+        );
+        assert_eq!(code, "requestBlocked");
     }
 
     #[cfg(windows)]
