@@ -7987,6 +7987,27 @@ button {
 .seamind-terminal-host .xterm {
   height: 100%;
 }
+.seamind-terminal-host .xterm,
+.seamind-terminal-host .xterm-viewport,
+.seamind-terminal-host .xterm-screen {
+  background-color: inherit !important;
+}
+
+/* Modern, minimalist terminal scrollbar */
+.seamind-terminal-host .xterm-viewport::-webkit-scrollbar {
+  width: 6px;
+}
+.seamind-terminal-host .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+.seamind-terminal-host .xterm-viewport::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.16);
+  border-radius: 3px;
+  transition: background 0.15s ease;
+}
+.seamind-terminal-host .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.28);
+}
 .seamind-terminal-note {
   min-height: 20px;
   padding: 3px 12px;
@@ -8333,6 +8354,16 @@ button {
 }
 .app-shell[data-theme='dark'] .seamind-terminal-host {
   background: #11171b;
+}
+.app-shell[data-theme='dark']
+  .seamind-terminal-host
+  .xterm-viewport::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+}
+.app-shell[data-theme='dark']
+  .seamind-terminal-host
+  .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.32);
 }
 .app-shell[data-theme='dark'] .seamind-terminal-note {
   border-color: #303b42;
