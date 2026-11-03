@@ -44,6 +44,7 @@ export default function TranscriptPanel({
   const [cues, setCues] = useState<TranscriptCue[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
   const [search, setSearch] = useState('');
   const [viewMode, setViewMode] = useState<TranscriptViewMode>('bilingual');
   const [autoScroll, setAutoScroll] = useState(true);
@@ -51,7 +52,16 @@ export default function TranscriptPanel({
   const activeElementRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Load transcript when videoId changes
+  const handleRetry = useCallback(() => {
+    try {
+      localStorage.removeItem(`seamind:transcript:v1:${videoId}`);
+    } catch {
+      // ignore
+    }
+    setRetryCount((c) => c + 1);
+  }, [videoId]);
+
+  // Load transcript when videoId or retryCount changes
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -68,13 +78,15 @@ export default function TranscriptPanel({
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : '加载字幕失败';
         setError(msg);
+        setCues([]);
+        onCuesLoaded?.([]);
         setLoading(false);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [videoId]);
+  }, [videoId, retryCount, onCuesLoaded]);
 
   // Find active cue based on currentTime
   const activeCue = useMemo(() => {
@@ -366,27 +378,49 @@ export default function TranscriptPanel({
 
         {!loading && error && cues.length === 0 && (
           <div className="player-transcript-state is-error">
-            <p>{error}</p>
-            <button
-              type="button"
-              className="player-btn"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              导入本地字幕 (.vtt / .srt)
-            </button>
+            <span className="player-transcript-error-badge">
+              ⚠️ 网络或风控受限
+            </span>
+            <p className="player-transcript-error-msg">{error}</p>
+            <div className="player-transcript-state-actions">
+              <button
+                type="button"
+                className="player-btn is-primary"
+                onClick={handleRetry}
+              >
+                🔄 重新检测字幕
+              </button>
+              <button
+                type="button"
+                className="player-btn"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                导入本地字幕 (.vtt / .srt)
+              </button>
+            </div>
           </div>
         )}
 
         {!loading && !error && cues.length === 0 && (
           <div className="player-transcript-state">
             <p>此视频未提供官方台词字幕</p>
-            <button
-              type="button"
-              className="player-btn is-primary"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              导入字幕 (.vtt / .srt)
-            </button>
+            <div className="player-transcript-state-actions">
+              <button
+                type="button"
+                className="player-btn"
+                onClick={handleRetry}
+                title="重新请求网络检测字幕"
+              >
+                🔄 刷新检测
+              </button>
+              <button
+                type="button"
+                className="player-btn is-primary"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                导入字幕 (.vtt / .srt)
+              </button>
+            </div>
           </div>
         )}
 

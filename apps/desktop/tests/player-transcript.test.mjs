@@ -6,6 +6,8 @@ import {
   parseYouTubeXml,
   parseVttOrSrt,
   alignBilingualCues,
+  parseYouTubeTimedTextList,
+  extractCaptionTracksFromHtml,
 } from '../src/player/transcript/parser.ts';
 
 test('parseYouTubeJson3 parses events correctly', () => {
@@ -68,5 +70,51 @@ test('alignBilingualCues accurately pairs original and translated lines', () => 
   assert.equal(aligned.length, 2);
   assert.equal(aligned[0].translation, '大家好，欢迎大家。');
   assert.equal(aligned[1].translation, '今天我们将讨论算法。');
+});
+
+test('parseYouTubeTimedTextList extracts available tracks from XML', () => {
+  const xml = `<?xml version="1.0" encoding="utf-8" ?>
+<transcript_list docid="123456">
+  <track id="0" name="" lang_code="en" lang_original="English" lang_translated="English" lang_default="true" />
+  <track id="1" name="" lang_code="zh-Hans" lang_original="中文（简体）" lang_translated="Chinese (Simplified)" />
+</transcript_list>`;
+
+  const tracks = parseYouTubeTimedTextList(xml);
+  assert.equal(tracks.length, 2);
+  assert.equal(tracks[0].langCode, 'en');
+  assert.equal(tracks[0].name, 'English');
+  assert.equal(tracks[0].isDefault, true);
+  assert.equal(tracks[1].langCode, 'zh-Hans');
+  assert.equal(tracks[1].name, '中文（简体）');
+  assert.equal(tracks[1].isDefault, false);
+});
+
+test('extractCaptionTracksFromHtml extracts tracks from watch page HTML', () => {
+  const html = `<!DOCTYPE html><html><body>
+<script>
+  var ytInitialPlayerResponse = {
+    "captions": {
+      "playerCaptionsTracklistRenderer": {
+        "captionTracks": [
+          {
+            "baseUrl": "https://www.youtube.com/api/timedtext?v=test&lang=en",
+            "name": { "simpleText": "English" },
+            "vssId": ".en",
+            "languageCode": "en",
+            "isTranslatable": true
+          }
+        ]
+      }
+    }
+  };
+</script>
+</body></html>`;
+
+  const tracks = extractCaptionTracksFromHtml(html);
+  assert.equal(tracks.length, 1);
+  assert.equal(tracks[0].languageCode, 'en');
+  assert.equal(tracks[0].name, 'English');
+  assert.equal(tracks[0].isTranslatable, true);
+  assert.ok(tracks[0].baseUrl.includes('api/timedtext'));
 });
 

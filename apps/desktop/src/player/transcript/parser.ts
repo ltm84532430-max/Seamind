@@ -80,6 +80,140 @@ export function parseYouTubeXml(xmlText: string): TranscriptCue[] {
   return cues;
 }
 
+export interface TimedTextTrackInfo {
+  id: string;
+  langCode: string;
+  name: string;
+  isDefault?: boolean;
+}
+
+/** Parses YouTube timedtext track list XML (<transcript_list>). */
+export function parseYouTubeTimedTextList(
+  xmlText: string,
+): TimedTextTrackInfo[] {
+  const tracks: TimedTextTrackInfo[] = [];
+  try {
+    if (typeof DOMParser !== 'undefined') {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(xmlText, 'text/xml');
+      const nodes = doc.querySelectorAll('track');
+      nodes.forEach((node, idx) => {
+        const langCode = node.getAttribute('lang_code');
+        if (!langCode) return;
+        const name =
+          node.getAttribute('lang_original') ||
+          node.getAttribute('lang_translated') ||
+          langCode;
+        const isDefault = node.getAttribute('lang_default') === 'true';
+        tracks.push({
+          id: `tt-${idx}-${langCode}`,
+          langCode,
+          name,
+          isDefault,
+        });
+      });
+      if (tracks.length > 0) return tracks;
+    }
+  } catch {
+    // fallback regex below
+  }
+
+  const matches = xmlText.matchAll(/<track\s+([^>]+)>/g);
+  let idx = 0;
+  for (const match of matches) {
+    const attrs = match[1];
+    const langCodeMatch = attrs.match(/lang_code="([^"]+)"/);
+    if (!langCodeMatch) continue;
+    const langCode = langCodeMatch[1];
+    const nameMatch =
+      attrs.match(/lang_original="([^"]+)"/) ||
+      attrs.match(/lang_translated="([^"]+)"/);
+    const name = nameMatch ? nameMatch[1] : langCode;
+    tracks.push({
+      id: `tt-${idx++}-${langCode}`,
+      langCode,
+      name,
+      isDefault: attrs.includes('lang_default="true"'),
+    });
+  }
+  return tracks;
+}
+
+export interface ExtractedHtmlCaptionTrack {
+  baseUrl: string;
+  languageCode: string;
+  name: string;
+  isTranslatable: boolean;
+}
+
+/** Extracts captionTracks array from YouTube watch page HTML. */
+export function extractCaptionTracksFromHtml(
+  html: string,
+): ExtractedHtmlCaptionTrack[] {
+  const tracks: ExtractedHtmlCaptionTrack[] = [];
+  let rawTracks: any[] | null = null;
+
+  // 1. Try ytInitialPlayerResponse match
+  const match = html.match(
+    /ytInitialPlayerResponse\s*=\s*(\{.+?\});(?:\s*var\s+|\s*<\/script>|\s*window\.)/s,
+  );
+  if (match) {
+    try {
+      const parsed = JSON.parse(match[1]);
+      const list =
+        parsed?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+      if (Array.isArray(list) && list.length > 0) {
+        rawTracks = list;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // 2. Direct regex match for "captionTracks": [ ... ]
+  if (!rawTracks) {
+    const directMatch = html.match(
+      /"captionTracks":\s*(\[\s*\{[\s\S]*?\}\s*\])/,
+    );
+    if (directMatch) {
+      try {
+        const list = JSON.parse(directMatch[1]);
+        if (Array.isArray(list) && list.length > 0) {
+          rawTracks = list;
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  if (Array.isArray(rawTracks)) {
+    for (const t of rawTracks) {
+      const baseUrl = t.baseUrl || t.base_url;
+      if (!baseUrl) continue;
+      const languageCode = t.languageCode || t.language_code || 'en';
+      let name = languageCode;
+      if (typeof t.name === 'string') {
+        name = t.name;
+      } else if (t.name?.simpleText) {
+        name = t.name.simpleText;
+      } else if (Array.isArray(t.name?.runs) && t.name.runs.length > 0) {
+        name = t.name.runs.map((r: any) => r.text || '').join('');
+      } else if (t.name?.text) {
+        name = t.name.text;
+      }
+      tracks.push({
+        baseUrl,
+        languageCode,
+        name,
+        isTranslatable: Boolean(t.isTranslatable ?? t.is_translatable ?? true),
+      });
+    }
+  }
+
+  return tracks;
+}
+
 function parseTimestampToSeconds(ts: string): number {
   const parts = ts.trim().replace(',', '.').split(':');
   if (parts.length === 3) {

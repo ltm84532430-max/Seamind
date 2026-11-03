@@ -1433,6 +1433,41 @@
   gap: 12px;
 }
 
+.player-transcript-state.is-error {
+  color: #f87171;
+}
+
+.player-transcript-error-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  color: #fca5a5;
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.player-transcript-error-msg {
+  margin: 0;
+  max-width: 320px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #f87171;
+  word-break: break-word;
+}
+
+.player-transcript-state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 .player-transcript-spinner {
   display: inline-block;
   width: 22px;
