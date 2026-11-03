@@ -17,6 +17,7 @@ import type {
 import './literature-workspace.css';
 
 const PaperPdfReader = React.lazy(() => import('./PaperPdfReader'));
+const PaperPdfPreview = React.lazy(() => import('./PaperPdfPreview'));
 
 export interface LiteratureWorkspaceProps {
   onOpenMindmap?: (markdown: string, title: string) => void;
@@ -948,6 +949,23 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
             )}
 
             <div className="lit-doc-title">{selectedPaper.title}</div>
+
+            {selectedPaper.pdfPath && (
+              <React.Suspense
+                fallback={
+                  <div className="lit-pdf-preview-loading" role="status">
+                    正在加载首页预览…
+                  </div>
+                }
+              >
+                <PaperPdfPreview
+                  key={`${selectedPaper.id}:${selectedPaper.pdfSha256 || selectedPaper.pdfPath}`}
+                  paperId={selectedPaper.id}
+                  revision={selectedPaper.pdfSha256 || selectedPaper.pdfPath}
+                  onOpenReader={handleOpenPdfReader}
+                />
+              </React.Suspense>
+            )}
 
             <div className="lit-pdf-source-actions">
               <button

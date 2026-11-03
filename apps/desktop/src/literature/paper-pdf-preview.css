@@ -1,0 +1,69 @@
+.lit-pdf-preview {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.lit-pdf-preview-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.lit-pdf-preview-heading strong {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.lit-pdf-preview-frame {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+  min-height: 100px;
+  padding: 10px 12px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 86%, var(--ink));
+}
+
+.lit-pdf-preview-page {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--line) 70%, #000);
+  background: #fff;
+  cursor: zoom-in;
+}
+
+.lit-pdf-preview-page:disabled {
+  cursor: default;
+}
+
+.lit-pdf-preview-page canvas {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.lit-pdf-preview-status {
+  display: grid;
+  min-height: 100px;
+  place-items: center;
+  padding: 12px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.lit-pdf-preview-frame > .lit-pdf-preview-status {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  pointer-events: none;
+}

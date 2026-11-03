@@ -456,6 +456,15 @@
   user-select: text;
 }
 
+.lit-pdf-preview-loading {
+  display: grid;
+  min-height: 100px;
+  place-items: center;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .lit-pdf-source-actions {
   display: flex;
   align-items: center;

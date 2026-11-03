@@ -80,6 +80,29 @@ function stripAnsi(value: string): string {
     .trim();
 }
 
+async function copyTerminalText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-10000px';
+    textarea.style.top = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      return document.execCommand('copy');
+    } catch {
+      return false;
+    } finally {
+      textarea.remove();
+    }
+  }
+}
+
 export default function TerminalPanel({
   cwd,
   theme,
@@ -350,6 +373,27 @@ export default function TerminalPanel({
         theme: terminalTheme(theme),
       });
       terminalRef.current = terminal;
+      terminal.attachCustomKeyEventHandler((event) => {
+        const isCopyShortcut =
+          (event.ctrlKey || event.metaKey) &&
+          !event.shiftKey &&
+          event.key.toLowerCase() === 'c';
+        if (
+          event.type !== 'keydown' ||
+          !isCopyShortcut ||
+          event.repeat ||
+          !terminal?.hasSelection()
+        ) {
+          return true;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        void copyTerminalText(terminal.getSelection()).then((copied) => {
+          if (!copied && active) setStatus('复制失败，请再试一次');
+        });
+        return false;
+      });
       fitAddon = new FitAddon();
       terminal.loadAddon(fitAddon);
       terminal.open(host);
@@ -510,7 +554,11 @@ export default function TerminalPanel({
           </button>
         </div>
       </header>
-      <div className="seamind-terminal-host" ref={terminalHostRef} />
+      <div
+        className="seamind-terminal-host"
+        ref={terminalHostRef}
+        title="选中终端文字后按 Ctrl+C 复制；没有选区时 Ctrl+C 会中断当前命令"
+      />
       <div className="seamind-terminal-note">
         已自动注入 Seamind MCP 工具（导图 · 知识库 · 播放器学习路径 · 当前 EPUB
         章节）。可直接输入 <code>agy</code>、<code>claude</code> 或{' '}

@@ -94,6 +94,23 @@ const statusName: Record<TaskStatus, string> = {
 const emptySnapshot: TaskSnapshot = { plans: [], tasks: [], sources: [] };
 const TASK_VIEW_KEY = 'seamind:task-view:v1';
 const TASK_COLLAPSE_KEY = 'seamind:task-collapse:v1';
+const TASK_SIDEBAR_COLLAPSED_KEY = 'seamind:task-sidebar-collapsed:v1';
+
+function readTaskSidebarCollapsed(): boolean {
+  try {
+    return localStorage.getItem(TASK_SIDEBAR_COLLAPSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeTaskSidebarCollapsed(collapsed: boolean): void {
+  try {
+    localStorage.setItem(TASK_SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0');
+  } catch {
+    // Keep the current state for this session when storage is unavailable.
+  }
+}
 
 interface TaskTreeEntry {
   task: LearningTask;
@@ -145,6 +162,30 @@ function readTaskView(): 'board' | 'list' | 'calendar' {
   } catch {
     return 'board';
   }
+}
+
+function TaskSidebarToggleIcon({ collapsed }: { collapsed: boolean }) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect
+        x="2"
+        y="2.5"
+        width="12"
+        height="11"
+        rx="1"
+        stroke="currentColor"
+        strokeWidth="1.25"
+      />
+      <path d="M6.2 2.5v11" stroke="currentColor" strokeWidth="1.25" />
+      <path
+        d={collapsed ? 'm8.8 6.2 1.8 1.8-1.8 1.8' : 'm10.6 6.2-1.8 1.8 1.8 1.8'}
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
 }
 
 function blankTask(planId: string | null, resource?: TaskResource): TaskInput {
@@ -394,6 +435,9 @@ export default function TaskWorkspace({
   const [planFilter, setPlanFilter] = useState('all');
   const [query, setQuery] = useState('');
   const [view, setView] = useState<'board' | 'list' | 'calendar'>(readTaskView);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    readTaskSidebarCollapsed,
+  );
   const [collapsedSourceGroups, setCollapsedSourceGroups] = useState(
     () => readCollapsedTaskState().sources,
   );
@@ -839,6 +883,14 @@ export default function TaskWorkspace({
       setPlayerConnected(false);
     }
   };
+
+  const toggleSidebarCollapsed = useCallback(() => {
+    setSidebarCollapsed((current) => {
+      const next = !current;
+      writeTaskSidebarCollapsed(next);
+      return next;
+    });
+  }, []);
 
   const changeView = (next: typeof view) => {
     setView(next);
@@ -1379,8 +1431,24 @@ export default function TaskWorkspace({
 
   return (
     <div className="task-workspace">
-      <aside className="task-sidebar">
-        <div className="task-sidebar-title">学习计划</div>
+      <aside
+        className={`task-sidebar${sidebarCollapsed ? ' is-collapsed' : ''}`}
+        id="task-sidebar"
+      >
+        <header className="task-sidebar-heading">
+          <div className="task-sidebar-title">学习计划</div>
+          <button
+            type="button"
+            className="task-sidebar-toggle"
+            title={sidebarCollapsed ? '展开任务侧栏' : '收起任务侧栏'}
+            aria-label={sidebarCollapsed ? '展开任务侧栏' : '收起任务侧栏'}
+            aria-expanded={!sidebarCollapsed}
+            aria-controls="task-sidebar"
+            onClick={toggleSidebarCollapsed}
+          >
+            <TaskSidebarToggleIcon collapsed={sidebarCollapsed} />
+          </button>
+        </header>
         <button
           type="button"
           className={`task-filter${planFilter === 'all' ? ' is-active' : ''}`}
