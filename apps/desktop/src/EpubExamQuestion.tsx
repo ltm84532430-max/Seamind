@@ -82,7 +82,7 @@ export default function EpubExamQuestion(props: Props) {
           {question.codeSpec && (
             <div className="epub-exam-code-samples">
               <strong>公开样例</strong>
-              {question.codeSpec.cases
+              {(question.codeSpec.cases ?? [])
                 .filter((item) => !item.hidden)
                 .map((item, index) => (
                   <div key={index}>
@@ -155,26 +155,29 @@ export default function EpubExamQuestion(props: Props) {
                   {props.codeResult && (
                     <div className="epub-exam-code-results" role="status">
                       <strong>
-                        {props.codeResult.evaluation.error ||
-                          `通过 ${props.codeResult.evaluation.passed} / ${props.codeResult.evaluation.total} 个测试`}
+                        {props.codeResult.evaluation?.error ||
+                          `通过 ${props.codeResult.evaluation?.passed ?? 0} / ${props.codeResult.evaluation?.total ?? 0} 个测试`}
                       </strong>
-                      {props.codeResult.evaluation.cases.map((item, index) => (
-                        <div
-                          key={index}
-                          className={item.passed ? 'is-passed' : 'is-failed'}
-                        >
-                          {item.visible ? '公开' : '隐藏'}用例 {index + 1}：
-                          {item.passed ? '通过' : '未通过'}
-                          {item.visible && !item.passed && (
-                            <pre>
-                              实际输出：{item.stdout || '（空）'}
-                              {'\n'}预期输出：{item.expectedStdout || '（空）'}
-                              {'\n'}
-                              {item.stderr}
-                            </pre>
-                          )}
-                        </div>
-                      ))}
+                      {(props.codeResult.evaluation?.cases ?? []).map(
+                        (item, index) => (
+                          <div
+                            key={index}
+                            className={item.passed ? 'is-passed' : 'is-failed'}
+                          >
+                            {item.visible ? '公开' : '隐藏'}用例 {index + 1}：
+                            {item.passed ? '通过' : '未通过'}
+                            {item.visible && !item.passed && (
+                              <pre>
+                                实际输出：{item.stdout || '（空）'}
+                                {'\n'}预期输出：
+                                {item.expectedStdout || '（空）'}
+                                {'\n'}
+                                {item.stderr}
+                              </pre>
+                            )}
+                          </div>
+                        ),
+                      )}
                     </div>
                   )}
                 </>
