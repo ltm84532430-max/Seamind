@@ -489,4 +489,4 @@ export function EpubExamLibraryPanel({
   );
 }
 
-export { EpubExamWorkspace } from './EpubExamWorkspace';
+export { EpubExamWorkspace, ExamErrorBoundary } from './EpubExamWorkspace';

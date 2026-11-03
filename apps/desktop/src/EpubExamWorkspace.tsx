@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Component,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import type { ErrorInfo, ReactNode } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import type {
   EpubExam,
@@ -13,6 +21,110 @@ export interface EpubExamWorkspaceProps {
   examId: string;
   bookKey: string;
   onBack: () => void;
+  initialExam?: EpubExam;
+}
+
+interface ExamErrorBoundaryProps {
+  onBack: () => void;
+  children: ReactNode;
+}
+
+interface ExamErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+export class ExamErrorBoundary extends Component<
+  ExamErrorBoundaryProps,
+  ExamErrorBoundaryState
+> {
+  override state: ExamErrorBoundaryState = {
+    hasError: false,
+    error: null,
+  };
+
+  static getDerivedStateFromError(error: Error): ExamErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  override componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error(
+      '[ExamErrorBoundary] Uncaught render error in exam workspace:',
+      error,
+      errorInfo,
+    );
+  }
+
+  override render() {
+    if (this.state.hasError) {
+      return (
+        <div className="epub-exam-workspace-shell">
+          <main className="epub-exam-stage">
+            <div className="epub-exam-page-error">
+              <button
+                type="button"
+                className="epub-exam-back-btn"
+                onClick={this.props.onBack}
+              >
+                ← 返回试卷库
+              </button>
+              <h2
+                style={{
+                  fontSize: '1.1rem',
+                  fontWeight: 600,
+                  color: 'var(--text-main, #0f172a)',
+                  margin: '16px 0 8px',
+                }}
+              >
+                试卷加载发生异常
+              </h2>
+              <p
+                role="alert"
+                style={{
+                  color: 'var(--text-muted, #64748b)',
+                  fontSize: '0.9rem',
+                  marginBottom: '16px',
+                }}
+              >
+                {this.state.error?.message || '未知渲染错误，已阻止应用白屏。'}
+              </p>
+              <button
+                type="button"
+                className="epub-exam-action-btn is-primary"
+                onClick={() => {
+                  this.setState({ hasError: false, error: null });
+                }}
+              >
+                重试加载
+              </button>
+            </div>
+          </main>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export function normalizeExam(raw?: EpubExam | null): EpubExam | null {
+  if (!raw) return null;
+  return {
+    ...raw,
+    attempts: Array.isArray(raw.attempts) ? raw.attempts : [],
+    questions: Array.isArray(raw.questions) ? raw.questions : [],
+    answers: raw.answers && typeof raw.answers === 'object' ? raw.answers : {},
+    selfReviews:
+      raw.selfReviews && typeof raw.selfReviews === 'object'
+        ? raw.selfReviews
+        : {},
+    sourceSectionLabel: raw.sourceSectionLabel || '',
+    bookTitle: raw.bookTitle || '',
+    questionCount:
+      typeof raw.questionCount === 'number'
+        ? raw.questionCount
+        : (raw.questions?.length ?? 0),
+    status: raw.status || 'inProgress',
+  };
 }
 
 function formatExamAnswer(answer: EpubExamAnswer | undefined): string {
@@ -33,19 +145,24 @@ function getDifficultyLabel(difficulty?: string): string {
   return '中等';
 }
 
-export function EpubExamWorkspace({
+function EpubExamWorkspaceInner({
   examId: initialExamId,
   bookKey,
   onBack,
+  initialExam,
 }: EpubExamWorkspaceProps) {
   const [activeExamId, setActiveExamId] = useState(initialExamId);
-  const [exam, setExam] = useState<EpubExam | null>(null);
+  const [exam, setExam] = useState<EpubExam | null>(() =>
+    normalizeExam(initialExam),
+  );
   const [bookExams, setBookExams] = useState<EpubExamSummary[]>([]);
-  const [answers, setAnswers] = useState<Record<string, EpubExamAnswer>>({});
+  const [answers, setAnswers] = useState<Record<string, EpubExamAnswer>>(
+    initialExam?.answers ?? {},
+  );
   const [selfReviews, setSelfReviews] = useState<
     Record<string, EpubExamSelfReview>
-  >({});
-  const [loading, setLoading] = useState(true);
+  >(initialExam?.selfReviews ?? {});
+  const [loading, setLoading] = useState(!initialExam);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>(
@@ -84,9 +201,10 @@ export function EpubExamWorkspace({
     void invoke<EpubExam>('get_epub_exam', { bookKey, examId: activeExamId })
       .then((loaded) => {
         if (!active) return;
-        setExam({ ...loaded, attempts: loaded.attempts ?? [] });
-        setAnswers(loaded.answers ?? {});
-        setSelfReviews(loaded.selfReviews ?? {});
+        const normalized = normalizeExam(loaded);
+        setExam(normalized);
+        setAnswers(normalized?.answers ?? {});
+        setSelfReviews(normalized?.selfReviews ?? {});
         dirtyRef.current = false;
         revisionRef.current = 0;
       })
@@ -191,7 +309,15 @@ export function EpubExamWorkspace({
       await enqueueSave(answers, selfReviews, true);
       dirtyRef.current = false;
       setSaveState('saved');
-      setExam({ ...exam, status: 'submitted', submittedAt: Date.now() });
+      setExam((prev) =>
+        prev
+          ? normalizeExam({
+              ...prev,
+              status: 'submitted',
+              submittedAt: Date.now(),
+            })
+          : null,
+      );
       void refreshBookExams();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -203,7 +329,7 @@ export function EpubExamWorkspace({
   // Restart exam
   const restartExam = async () => {
     if (!exam || exam.status !== 'submitted' || busy) return;
-    const nextAttempt = exam.attempts.length + 1;
+    const nextAttempt = (exam.attempts?.length ?? 0) + 1;
     const accepted = window.confirm(
       `开始第 ${nextAttempt} 次作答？本轮答案会清空，上次答案和自评会保存在历史记录中。`,
     );
@@ -224,11 +350,12 @@ export function EpubExamWorkspace({
         bookKey,
         examId: activeExamId,
       });
+      const normalized = normalizeExam(restarted);
       revisionRef.current += 1;
       dirtyRef.current = false;
-      setExam({ ...restarted, attempts: restarted.attempts ?? [] });
-      setAnswers(restarted.answers ?? {});
-      setSelfReviews(restarted.selfReviews ?? {});
+      setExam(normalized);
+      setAnswers(normalized?.answers ?? {});
+      setSelfReviews(normalized?.selfReviews ?? {});
       setSaveState('saved');
       void refreshBookExams();
     } catch (cause) {
@@ -340,7 +467,7 @@ export function EpubExamWorkspace({
     if (!q) return sortedBookExams;
     return sortedBookExams.filter(
       (item) =>
-        item.sourceSectionLabel.toLowerCase().includes(q) ||
+        (item.sourceSectionLabel || '').toLowerCase().includes(q) ||
         (item.difficulty && getDifficultyLabel(item.difficulty).includes(q)) ||
         (item.status === 'submitted' ? '已交卷' : '未交卷').includes(q),
     );
@@ -356,7 +483,8 @@ export function EpubExamWorkspace({
     let submittedExams = 0;
 
     for (const item of sortedBookExams) {
-      totalQuestions += item.questionCount;
+      const itemQCount = item.questionCount ?? 0;
+      totalQuestions += itemQCount;
       if (item.status === 'submitted') {
         submittedExams += 1;
         // If it's the currently active loaded exam, use current state for real-time reactivity
@@ -368,12 +496,12 @@ export function EpubExamWorkspace({
           totalMastered += mastered;
           totalPartial += partial;
           totalReview += review;
-          answeredQuestions += item.questionCount;
+          answeredQuestions += itemQCount;
         } else {
           totalMastered += item.masteredCount ?? 0;
           totalPartial += item.partialCount ?? 0;
           totalReview += item.reviewCount ?? 0;
-          answeredQuestions += item.questionCount;
+          answeredQuestions += itemQCount;
         }
       } else if (item.id === activeExamId && exam) {
         // Count in-progress answers for current exam
@@ -407,8 +535,13 @@ export function EpubExamWorkspace({
   // Current exam weak points (marked for review)
   const weakQuestions = useMemo(() => {
     if (!exam || exam.status !== 'submitted') return [];
-    return exam.questions.filter((q) => selfReviews[q.id] === 'review');
+    const questions = exam.questions ?? [];
+    return questions.filter((q) => selfReviews[q.id] === 'review');
   }, [exam, selfReviews]);
+
+  const attemptsList = exam?.attempts ?? [];
+  const attemptsCount = attemptsList.length;
+  const questionsList = exam?.questions ?? [];
 
   return (
     <div
@@ -490,7 +623,7 @@ export function EpubExamWorkspace({
                       statusBadge = (
                         <span className="epub-exam-pill is-review">需复习</span>
                       );
-                    } else if (mastered >= item.questionCount * 0.7) {
+                    } else if (mastered >= (item.questionCount ?? 0) * 0.7) {
                       statusBadge = (
                         <span className="epub-exam-pill is-mastered">
                           已掌握
@@ -519,14 +652,14 @@ export function EpubExamWorkspace({
                         </span>
                         <span
                           className="epub-exam-sidebar-item-title"
-                          title={item.sourceSectionLabel}
+                          title={item.sourceSectionLabel || ''}
                         >
-                          {item.sourceSectionLabel}
+                          {item.sourceSectionLabel || '未命名章节'}
                         </span>
                       </div>
                       <div className="epub-exam-sidebar-item-meta">
                         <span>
-                          {item.questionCount} 题 ·{' '}
+                          {item.questionCount ?? 0} 题 ·{' '}
                           {getDifficultyLabel(item.difficulty)}
                         </span>
                         {statusBadge}
@@ -574,7 +707,8 @@ export function EpubExamWorkspace({
               <div className="epub-exam-header-main">
                 <div className="epub-exam-header-kicker-row">
                   <span className="epub-exam-kicker">
-                    LOCAL EXAM · {exam.questionCount} QUESTIONS
+                    LOCAL EXAM · {exam.questionCount ?? questionsList.length}{' '}
+                    QUESTIONS
                   </span>
                   <span className={`epub-exam-status-tag is-${exam.status}`}>
                     {exam.status === 'submitted' ? '已交卷' : '未交卷'}
@@ -582,9 +716,10 @@ export function EpubExamWorkspace({
                 </div>
                 <h1>{exam.sourceSectionLabel || '当前章节试卷'}</h1>
                 <p className="epub-exam-header-meta">
-                  {exam.bookTitle} · {formatEpubExamDate(exam.createdAt)} ·{' '}
+                  {exam.bookTitle || '试卷'} ·{' '}
+                  {formatEpubExamDate(exam.createdAt)} ·{' '}
                   {getDifficultyLabel(exam.difficulty)}难度 · 第{' '}
-                  {exam.attempts.length + 1} 次作答
+                  {attemptsCount + 1} 次作答
                 </p>
               </div>
 
@@ -622,21 +757,21 @@ export function EpubExamWorkspace({
               <span>
                 {exam.status === 'submitted'
                   ? 'AI 答案和深度解析已显示；请针对各题自评掌握度，系统将实时更新右侧热力看板。'
-                  : exam.attempts.length > 0
-                    ? `第 ${exam.attempts.length + 1} 次作答中；提交前 AI 答案隐藏，作答将实时自动保存到本机。`
+                  : attemptsCount > 0
+                    ? `第 ${attemptsCount + 1} 次作答中；提交前 AI 答案隐藏，作答将实时自动保存到本机。`
                     : '提交前 AI 答案保持隐藏；作答过程自动静默保存在本机。'}
               </span>
             </div>
 
             {/* Attempt history accordion */}
-            {exam.attempts.length > 0 && (
+            {attemptsCount > 0 && (
               <details className="epub-exam-attempt-accordion">
                 <summary>
-                  <span>查看历史作答记录 ({exam.attempts.length} 次)</span>
+                  <span>查看历史作答记录 ({attemptsCount} 次)</span>
                   <span className="epub-exam-accordion-arrow">▼</span>
                 </summary>
                 <div className="epub-exam-attempt-list">
-                  {exam.attempts.map((attempt: EpubExamAttempt, attIdx) => (
+                  {attemptsList.map((attempt: EpubExamAttempt, attIdx) => (
                     <section
                       className="epub-exam-attempt-card"
                       key={`${attempt.completedAt}-${attIdx}`}
@@ -646,19 +781,21 @@ export function EpubExamWorkspace({
                         {formatEpubExamDate(attempt.completedAt)}
                       </h3>
                       <ol>
-                        {exam.questions.map((question, qIdx) => (
+                        {questionsList.map((question, qIdx) => (
                           <li key={question.id}>
                             <strong>
                               {qIdx + 1}. {question.prompt}
                             </strong>
                             <p>
                               我的答案：
-                              {formatExamAnswer(attempt.answers[question.id])}
+                              {formatExamAnswer(
+                                attempt?.answers?.[question.id],
+                              )}
                             </p>
                             <p>
                               自评：
                               {formatSelfReview(
-                                attempt.selfReviews[question.id],
+                                attempt?.selfReviews?.[question.id],
                               )}
                             </p>
                           </li>
@@ -672,7 +809,7 @@ export function EpubExamWorkspace({
 
             {/* Questions list */}
             <div className="epub-exam-questions-list">
-              {exam.questions.map((question, index) => {
+              {questionsList.map((question, index) => {
                 const answer = answers[question.id];
                 const selected = Array.isArray(answer) ? answer : [];
                 const options =
@@ -841,8 +978,8 @@ export function EpubExamWorkspace({
                 >
                   {busy
                     ? '正在提交…'
-                    : exam.attempts.length > 0
-                      ? `提交第 ${exam.attempts.length + 1} 次并查看 AI 答案`
+                    : attemptsCount > 0
+                      ? `提交第 ${attemptsCount + 1} 次并查看 AI 答案`
                       : '提交并查看 AI 答案与解析'}
                 </button>
               )}
@@ -879,14 +1016,14 @@ export function EpubExamWorkspace({
               <div className="epub-exam-card-title-row">
                 <h3>答题卡热力矩阵</h3>
                 <span className="epub-exam-card-badge">
-                  {exam?.questions.length ?? 0} 题
+                  {questionsList.length} 题
                 </span>
               </div>
               <p className="epub-exam-card-hint">点击题号快速跳转到对应题目</p>
 
               <div className="epub-exam-heatmap-grid">
-                {exam?.questions.map((q, idx) => {
-                  const submitted = exam.status === 'submitted';
+                {questionsList.map((q, idx) => {
+                  const submitted = exam?.status === 'submitted';
                   const hasAns =
                     answers[q.id] !== undefined &&
                     answers[q.id] !== '' &&
@@ -970,6 +1107,7 @@ export function EpubExamWorkspace({
                 {sortedBookExams.map((item, idx) => {
                   const isActive = item.id === activeExamId;
                   const isSubmitted = item.status === 'submitted';
+                  const itemQCount = item.questionCount ?? 0;
                   const mastered =
                     item.id === activeExamId && exam
                       ? Object.values(selfReviews).filter(
@@ -984,10 +1122,7 @@ export function EpubExamWorkspace({
 
                   let cellClass = 'is-not-submitted';
                   if (isSubmitted) {
-                    const rate =
-                      item.questionCount > 0
-                        ? mastered / item.questionCount
-                        : 0;
+                    const rate = itemQCount > 0 ? mastered / itemQCount : 0;
                     if (review > 0) {
                       cellClass = 'is-level-review';
                     } else if (rate >= 0.8) {
@@ -1005,7 +1140,7 @@ export function EpubExamWorkspace({
                       type="button"
                       className={`epub-exam-chapter-cell ${cellClass}${isActive ? ' is-active' : ''}`}
                       onClick={() => void handleSwitchExam(item.id)}
-                      title={`[第${idx + 1}套] ${item.sourceSectionLabel}\n${isSubmitted ? `已掌握: ${mastered}/${item.questionCount}` : '未交卷'}`}
+                      title={`[第${idx + 1}套] ${item.sourceSectionLabel || ''}\n${isSubmitted ? `已掌握: ${mastered}/${itemQCount}` : '未交卷'}`}
                     >
                       <span>{idx + 1}</span>
                     </button>
@@ -1097,27 +1232,27 @@ export function EpubExamWorkspace({
                 </div>
               ) : (
                 <div className="epub-exam-focus-list">
-                  {weakQuestions.map((q) => (
-                    <button
-                      key={q.id}
-                      type="button"
-                      className="epub-exam-focus-item"
-                      onClick={() => scrollToQuestion(q.id)}
-                      title="点击定位到该题查看 AI 解析"
-                    >
-                      <span className="epub-exam-focus-dot">!</span>
-                      <div className="epub-exam-focus-text">
-                        <strong>
-                          第{' '}
-                          {(exam?.questions.findIndex(
-                            (item) => item.id === q.id,
-                          ) ?? 0) + 1}{' '}
-                          题
-                        </strong>
-                        <p>{q.prompt}</p>
-                      </div>
-                    </button>
-                  ))}
+                  {weakQuestions.map((q) => {
+                    const qIndex = questionsList.findIndex(
+                      (item) => item.id === q.id,
+                    );
+                    const displayNum = qIndex >= 0 ? qIndex + 1 : 1;
+                    return (
+                      <button
+                        key={q.id}
+                        type="button"
+                        className="epub-exam-focus-item"
+                        onClick={() => scrollToQuestion(q.id)}
+                        title="点击定位到该题查看 AI 解析"
+                      >
+                        <span className="epub-exam-focus-dot">!</span>
+                        <div className="epub-exam-focus-text">
+                          <strong>第 {displayNum} 题</strong>
+                          <p>{q.prompt}</p>
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </section>
@@ -1125,5 +1260,13 @@ export function EpubExamWorkspace({
         )}
       </aside>
     </div>
+  );
+}
+
+export function EpubExamWorkspace(props: EpubExamWorkspaceProps) {
+  return (
+    <ExamErrorBoundary onBack={props.onBack}>
+      <EpubExamWorkspaceInner {...props} />
+    </ExamErrorBoundary>
   );
 }
