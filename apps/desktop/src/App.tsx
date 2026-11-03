@@ -3483,7 +3483,7 @@ export default function App() {
         const starter = chapterQuery
           ? createChapterKnowledgeStarter({
               bookTitle: book.title,
-              creator: book.creator,
+              creator: loadEpubBookMetadata(selection.progressKey)?.author,
               chapterTitle: chapterQuery.label,
               parentChapter: chapterQuery.hierarchy?.[0],
               chapterHref: chapterQuery.href,

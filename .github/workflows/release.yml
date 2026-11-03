@@ -33,6 +33,11 @@ jobs:
           corepack enable
           corepack pnpm@9.15.9 install --frozen-lockfile
 
+      - name: Build workspace packages
+        run: |
+          corepack pnpm@9.15.9 -r build:types
+          corepack pnpm@9.15.9 -r build:js
+
       - name: Check desktop TypeScript
         run: corepack pnpm@9.15.9 --filter @markmap/desktop exec tsc --noEmit -p tsconfig.json
 

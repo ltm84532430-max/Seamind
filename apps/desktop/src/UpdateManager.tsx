@@ -68,7 +68,7 @@ export default function UpdateManager() {
       let totalDownloaded = 0;
       await update.downloadAndInstall((event) => {
         if (event.event === 'Started') {
-          setContentLength(event.data.contentLength);
+          setContentLength(event.data.contentLength ?? null);
         } else if (event.event === 'Progress') {
           totalDownloaded += event.data.chunkLength;
           setDownloaded(totalDownloaded);
