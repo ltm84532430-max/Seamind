@@ -30,8 +30,8 @@
   "scripts": {
     "prepare": "husky || true",
     "build": "pnpm lint && pnpm clean && pnpm build:types && pnpm build:js && pnpm test",
-    "lint": "eslint && prettier --check \"packages/*/src/**/*.{ts,tsx}\"",
-    "lint:fix": "eslint --fix && prettier --write \"packages/*/src/**/*.{ts,tsx}\"",
+    "lint": "eslint && prettier --check \"{packages,apps}/*/src/**/*.{ts,tsx}\"",
+    "lint:fix": "eslint --fix && prettier --write \"{packages,apps}/*/src/**/*.{ts,tsx}\"",
     "test": "vitest --run",
     "clean": "pnpm -r clean",
     "build:types": "pnpm -r build:types",

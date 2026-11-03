@@ -14,6 +14,11 @@ import type { QueueSource } from './queue';
 import type { VideoItem, WatchState } from './types';
 import { isWorthSaving } from './watch-state';
 import VideoList from './VideoList';
+import {
+  TranscriptPanel,
+  SubtitleOverlay,
+  type TranscriptCue,
+} from './transcript';
 
 /** The video being played, the list it came from and where it starts. */
 export interface Watching {
@@ -29,6 +34,8 @@ const SAVE_EVERY_MS = 10_000;
 const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];
 const RATE_KEY = 'seamind:player-rate:v1';
 const QUEUE_COLLAPSED_KEY = 'seamind:player-queue-collapsed:v1';
+const WATCH_TAB_KEY = 'seamind:watch-tab:v1';
+const SUBTITLES_VISIBLE_KEY = 'seamind:watch-subtitles:v1';
 
 function readRate(): number {
   try {
@@ -64,6 +71,7 @@ export default function WatchView({
 }) {
   const host = usePlayerHost();
   const { queue } = watching;
+  const hasQueue = queue.items.length > 1;
   const videoId = watching.item.videoId;
   const item = applyOverlay(watching.item, host.overlay);
   const [handle, setHandle] = useState<YouTubePlayerHandle | null>(null);
@@ -79,6 +87,56 @@ export default function WatchView({
       return false;
     }
   });
+
+  const [activeTab, setActiveTab] = useState<'queue' | 'transcript'>(() => {
+    try {
+      const saved = localStorage.getItem(WATCH_TAB_KEY);
+      if (saved === 'queue' || saved === 'transcript') {
+        if (saved === 'queue' && !hasQueue) return 'transcript';
+        return saved;
+      }
+    } catch {
+      // ignore
+    }
+    return hasQueue ? 'queue' : 'transcript';
+  });
+
+  const [subtitlesVisible, setSubtitlesVisible] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(SUBTITLES_VISIBLE_KEY) !== 'false';
+    } catch {
+      return true;
+    }
+  });
+
+  const [cues, setCues] = useState<TranscriptCue[]>([]);
+  const [loopingCue, setLoopingCue] = useState<TranscriptCue | null>(null);
+  const [shadowMode, setShadowMode] = useState<boolean>(false);
+  const [currentTime, setCurrentTime] = useState<number>(
+    watching.startSeconds || 0,
+  );
+  const lastShadowPausedCueIdRef = useRef<string | null>(null);
+
+  const switchTab = useCallback((tab: 'queue' | 'transcript') => {
+    setActiveTab(tab);
+    try {
+      localStorage.setItem(WATCH_TAB_KEY, tab);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const toggleSubtitles = useCallback(() => {
+    setSubtitlesVisible((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(SUBTITLES_VISIBLE_KEY, String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  }, []);
 
   const toggleQueue = useCallback(() => {
     setQueueCollapsed((prev) => {
@@ -169,11 +227,133 @@ export default function WatchView({
       });
   }, [videoId]);
 
+  useEffect(() => {
+    setLoopingCue(null);
+    setCues([]);
+    setCurrentTime(watching.startSeconds || 0);
+    lastShadowPausedCueIdRef.current = null;
+  }, [videoId, watching.token]);
+
+  const jumpToRelativeCue = useCallback(
+    (offset: -1 | 1) => {
+      if (!cues.length || !handle) return;
+      const cur = progressRef.current?.seconds ?? currentTime;
+      const idx = cues.findIndex((c) => cur >= c.start && cur <= c.end + 0.35);
+      let targetIdx = idx;
+      if (idx === -1) {
+        if (offset === 1) {
+          targetIdx = cues.findIndex((c) => c.start > cur);
+        } else {
+          for (let i = cues.length - 1; i >= 0; i--) {
+            if (cues[i].end < cur) {
+              targetIdx = i;
+              break;
+            }
+          }
+        }
+      } else {
+        targetIdx = idx + offset;
+      }
+      if (targetIdx >= 0 && targetIdx < cues.length) {
+        const targetCue = cues[targetIdx];
+        handle.seekTo(targetCue.start);
+        setCurrentTime(targetCue.start);
+        host.notify(
+          `跳转句 [${targetIdx + 1}/${cues.length}]: ${targetCue.text.slice(0, 32)}...`,
+        );
+      }
+    },
+    [cues, currentTime, handle, host],
+  );
+
+  const toggleSentenceLoop = useCallback(
+    (targetCue?: TranscriptCue | null) => {
+      if (targetCue !== undefined) {
+        setLoopingCue(targetCue);
+        if (targetCue) {
+          host.notify(`已开启单句循环: ${targetCue.text.slice(0, 32)}...`);
+        } else {
+          host.notify('已退出单句循环');
+        }
+        return;
+      }
+      if (loopingCue) {
+        setLoopingCue(null);
+        host.notify('已退出单句循环');
+        return;
+      }
+      const cur = progressRef.current?.seconds ?? currentTime;
+      const active = cues.find((c) => cur >= c.start && cur <= c.end + 0.35);
+      if (active) {
+        setLoopingCue(active);
+        host.notify(`已开启单句循环: ${active.text.slice(0, 32)}...`);
+      } else {
+        host.notify('当前播放时间未匹配到台词句子');
+      }
+    },
+    [cues, currentTime, loopingCue, host],
+  );
+
   const handleProgress = (progress: PlayerProgress) => {
     progressRef.current = progress;
+    setCurrentTime(progress.seconds);
+
+    // Sentence repeat loop check
+    if (loopingCue && progress.playing) {
+      if (progress.seconds >= loopingCue.end) {
+        handle?.seekTo(loopingCue.start);
+      }
+    }
+
+    // Shadowing mode auto-pause check
+    if (shadowMode && cues.length > 0 && progress.playing) {
+      const cur = progress.seconds;
+      const matchingCue = cues.find(
+        (c) => cur >= c.start && cur <= c.end + 0.2,
+      );
+      if (matchingCue && cur >= matchingCue.end - 0.25) {
+        if (lastShadowPausedCueIdRef.current !== matchingCue.id) {
+          lastShadowPausedCueIdRef.current = matchingCue.id;
+          handle?.pause();
+          host.notify('跟读模式：句子已结束，请跟读；按空格继续播放');
+        }
+      }
+    }
+
     if (!progress.playing || Date.now() - savedAtRef.current >= SAVE_EVERY_MS)
       save();
   };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (
+        tag === 'input' ||
+        tag === 'textarea' ||
+        tag === 'select' ||
+        target?.isContentEditable
+      ) {
+        return;
+      }
+
+      if (e.key === '[') {
+        e.preventDefault();
+        jumpToRelativeCue(-1);
+      } else if (e.key === ']') {
+        e.preventDefault();
+        jumpToRelativeCue(1);
+      } else if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault();
+        toggleSentenceLoop();
+      } else if (e.key === 'c' || e.key === 'C') {
+        e.preventDefault();
+        toggleSubtitles();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [jumpToRelativeCue, toggleSentenceLoop, toggleSubtitles]);
 
   const handleEnded = () => {
     save();
@@ -192,9 +372,7 @@ export default function WatchView({
 
   return (
     <section
-      className={`player-watch${queue.items.length > 1 ? '' : ' is-single'}${
-        queueCollapsed && queue.items.length > 1 ? ' is-queue-collapsed' : ''
-      }`}
+      className={`player-watch${queueCollapsed ? ' is-queue-collapsed' : ''}`}
       aria-label="正在播放"
     >
       <div className="player-watch-main">
@@ -211,7 +389,13 @@ export default function WatchView({
           onStatusChange={setStatus}
           onEnded={handleEnded}
           onHandle={setHandle}
-        />
+        >
+          <SubtitleOverlay
+            cues={cues}
+            currentTime={currentTime}
+            visible={subtitlesVisible}
+          />
+        </YouTubePlayerPanel>
         <div className="player-watch-info">
           <h2 title={item.title}>{item.title}</h2>
           <p className="player-watch-meta">
@@ -287,6 +471,65 @@ export default function WatchView({
               <CheckIcon filled={item.finished} />
               {item.finished ? '已看完' : '标记已看'}
             </button>
+
+            {/* 字幕显示/隐藏切换 */}
+            <button
+              type="button"
+              className={`player-button${subtitlesVisible ? ' is-on' : ''}`}
+              aria-pressed={subtitlesVisible}
+              onClick={toggleSubtitles}
+              title="切换画面双语字幕显示 (快捷键 C)"
+            >
+              <svg
+                viewBox="0 0 16 16"
+                width="13"
+                height="13"
+                aria-hidden="true"
+              >
+                <rect
+                  x="2"
+                  y="3.5"
+                  width="12"
+                  height="9"
+                  rx="1.5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                />
+                <path
+                  d="M5 8h2M5 10h1.5M9 8h2M9 10h2"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                />
+              </svg>
+              {subtitlesVisible ? '字幕开' : '字幕关'}
+            </button>
+
+            {/* 单句循环指示/取消 */}
+            {loopingCue && (
+              <button
+                type="button"
+                className="player-button is-on"
+                onClick={() => toggleSentenceLoop(null)}
+                title="正在单句循环，点击退出 (快捷键 R)"
+              >
+                🔁 循环中
+              </button>
+            )}
+
+            {/* 影子跟读指示/取消 */}
+            {shadowMode && (
+              <button
+                type="button"
+                className="player-button is-on"
+                onClick={() => setShadowMode(false)}
+                title="影子跟读已开启，点击退出"
+              >
+                🗣️ 跟读中
+              </button>
+            )}
+
             <label className="player-rate">
               倍速
               <select
@@ -307,83 +550,130 @@ export default function WatchView({
           </div>
         </div>
       </div>
-      {queue.items.length > 1 && (
-        <aside
-          className={`player-watch-queue${queueCollapsed ? ' is-collapsed' : ''}`}
-          aria-label="播放队列"
-        >
-          <header>
-            {!queueCollapsed ? (
-              <>
-                <strong title={queue.title}>{queue.title}</strong>
-                <div className="player-watch-queue-controls">
+      <aside
+        className={`player-watch-queue${queueCollapsed ? ' is-collapsed' : ''}`}
+        aria-label="播放队列与视频字幕"
+      >
+        <header>
+          {!queueCollapsed ? (
+            <>
+              {hasQueue ? (
+                <div className="player-watch-tabs" role="tablist">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={activeTab === 'queue'}
+                    className={`player-watch-tab${activeTab === 'queue' ? ' is-active' : ''}`}
+                    onClick={() => switchTab('queue')}
+                  >
+                    播放队列 ({queue.items.length})
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={activeTab === 'transcript'}
+                    className={`player-watch-tab${activeTab === 'transcript' ? ' is-active' : ''}`}
+                    onClick={() => switchTab('transcript')}
+                  >
+                    台词 / 字幕
+                  </button>
+                </div>
+              ) : (
+                <div className="player-watch-tabs">
+                  <span className="player-watch-tab is-active is-static">
+                    视频台词 / 字幕
+                  </span>
+                </div>
+              )}
+              <div className="player-watch-queue-controls">
+                {hasQueue && activeTab === 'queue' && (
                   <span>
                     {position >= 0 ? `${position + 1}/` : ''}
                     {queue.items.length}
                   </span>
-                  <button
-                    type="button"
-                    className="player-queue-toggle-btn"
-                    onClick={toggleQueue}
-                    title="收起播放列表 (扩大播放窗口)"
-                    aria-label="收起播放列表"
-                  >
-                    <svg
-                      viewBox="0 0 16 16"
-                      width="13"
-                      height="13"
-                      aria-hidden="true"
-                    >
-                      <path
-                        d="M6 3l5 5-5 5"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.8"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </button>
-                </div>
-              </>
-            ) : (
-              <button
-                type="button"
-                className="player-queue-toggle-btn is-collapsed"
-                onClick={toggleQueue}
-                title="展开播放列表"
-                aria-label="展开播放列表"
-              >
-                <svg
-                  viewBox="0 0 16 16"
-                  width="13"
-                  height="13"
-                  aria-hidden="true"
+                )}
+                <button
+                  type="button"
+                  className="player-queue-toggle-btn"
+                  onClick={toggleQueue}
+                  title="收起侧边栏 (扩大播放窗口)"
+                  aria-label="收起侧边栏"
                 >
-                  <path
-                    d="M10 3L5 8l5 5"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </button>
-            )}
-          </header>
-          {!queueCollapsed && (
-            <div ref={queueListRef} className="player-watch-queue-list">
-              <VideoList
-                items={queue.items}
-                queueTitle={queue.title}
-                activeId={videoId}
-                compact
-              />
-            </div>
+                  <svg
+                    viewBox="0 0 16 16"
+                    width="13"
+                    height="13"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M6 3l5 5-5 5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+              </div>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="player-queue-toggle-btn is-collapsed"
+              onClick={toggleQueue}
+              title="展开侧边栏"
+              aria-label="展开侧边栏"
+            >
+              <svg
+                viewBox="0 0 16 16"
+                width="13"
+                height="13"
+                aria-hidden="true"
+              >
+                <path
+                  d="M10 3L5 8l5 5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
           )}
-        </aside>
-      )}
+        </header>
+        {!queueCollapsed && (
+          <>
+            {hasQueue && activeTab === 'queue' ? (
+              <div ref={queueListRef} className="player-watch-queue-list">
+                <VideoList
+                  items={queue.items}
+                  queueTitle={queue.title}
+                  activeId={videoId}
+                  compact
+                />
+              </div>
+            ) : (
+              <TranscriptPanel
+                videoId={videoId}
+                videoTitle={watching.item.title}
+                currentTime={currentTime}
+                onSeek={(sec) => {
+                  handle?.seekTo(sec);
+                  setCurrentTime(sec);
+                }}
+                onToggleLoopCue={toggleSentenceLoop}
+                loopingCueId={loopingCue?.id}
+                onToggleShadowMode={setShadowMode}
+                shadowMode={shadowMode}
+                onShowNotice={host.notify}
+                onCuesLoaded={setCues}
+              />
+            )}
+          </>
+        )}
+      </aside>
     </section>
   );
 }

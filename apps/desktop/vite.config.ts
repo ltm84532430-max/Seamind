@@ -1,3 +1,4 @@
+/// <reference types="vitest" />
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import type { Plugin, PreviewServer, ViteDevServer } from 'vite';
@@ -61,6 +62,9 @@ const sourcePath = (packageName: string) =>
   );
 
 export default defineConfig({
+  test: {
+    include: ['test/**/*.test.ts'],
+  },
   plugins: [react(), pyodideAssetsPlugin()],
   clearScreen: false,
   server: {

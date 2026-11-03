@@ -1,7 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Avatar from './Avatar';
 import { usePlayerHost } from './host';
 import { playerApi, errorText } from './player-api';
+import {
+  getChannelGroupId,
+  loadSubscriptionGroups,
+  onSubscriptionGroupsChanged,
+  saveSubscriptionGroups,
+  setChannelGroup,
+} from './subscription-groups';
+import type { SubscriptionGroup } from './subscription-groups';
 import { channelUrl } from './video-links';
 import type { VideoItem } from './types';
 import { SLOW_LOOKUP_TEXT, useSlowHint } from './use-slow-hint';
@@ -31,6 +39,21 @@ export default function ChannelView({ channelId }: { channelId: string }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const slow = useSlowHint(loading);
+
+  const [groups, setGroups] = useState<SubscriptionGroup[]>(() =>
+    loadSubscriptionGroups(),
+  );
+
+  useEffect(() => {
+    return onSubscriptionGroupsChanged(() => {
+      setGroups(loadSubscriptionGroups());
+    });
+  }, []);
+
+  const currentGroupId = useMemo(
+    () => getChannelGroupId(groups, channelId),
+    [groups, channelId],
+  );
 
   useEffect(() => {
     let current = true;
@@ -137,6 +160,28 @@ export default function ChannelView({ channelId }: { channelId: string }) {
           )}
         </div>
         <div className="player-view-actions">
+          {followed && (
+            <select
+              className="player-button"
+              value={currentGroupId ?? ''}
+              title="设置订阅分组"
+              aria-label="设置订阅分组"
+              style={{ maxWidth: 130 }}
+              onChange={(e) => {
+                const target = e.target.value || null;
+                const next = setChannelGroup(groups, channelId, target);
+                setGroups(next);
+                saveSubscriptionGroups(next);
+              }}
+            >
+              <option value="">未分组</option>
+              {groups.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
+            </select>
+          )}
           <a
             className="player-button"
             href={channelUrl(channelId)}

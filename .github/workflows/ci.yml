@@ -22,5 +22,17 @@ jobs:
       - run: corepack pnpm@9.15.9 lint
       - run: corepack pnpm@9.15.9 test
       - run: corepack pnpm@9.15.9 --filter @markmap/desktop exec tsc --noEmit -p tsconfig.json
-      - run: corepack pnpm@9.15.9 --filter @markmap/desktop exec vitest run test/
       - run: node --test apps/desktop/tests/*.test.mjs
+
+  rust:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+      - name: Cargo Check
+        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+      - name: Cargo Test
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib

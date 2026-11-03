@@ -59,6 +59,7 @@ export interface YouTubePlayerPanelProps {
   onEnded?: () => void;
   /** The controls, once there is a player to control; null when it goes away. */
   onHandle?: (handle: YouTubePlayerHandle | null) => void;
+  children?: React.ReactNode;
 }
 
 type PlayerMode = 'embed' | 'native' | 'local';
@@ -94,6 +95,7 @@ export default function YouTubePlayerPanel({
   onStatusChange,
   onEnded,
   onHandle,
+  children,
 }: YouTubePlayerPanelProps) {
   const isDialog = variant === 'dialog';
   const [preloaded] = useState(selection.playback ?? null);
@@ -627,7 +629,7 @@ export default function YouTubePlayerPanel({
     };
     report();
     if (status !== 'playing') return undefined;
-    const timer = window.setInterval(report, 1000);
+    const timer = window.setInterval(report, 250);
     return () => window.clearInterval(timer);
   }, [status, handle]);
 
@@ -740,6 +742,7 @@ export default function YouTubePlayerPanel({
               {stageNotice}
             </div>
           )}
+          {children}
         </div>
         {message && (
           <div className="youtube-player-route-message" role="status">

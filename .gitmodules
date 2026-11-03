@@ -1,3 +1,4 @@
 [submodule "packages/foliate-js"]
 	path = packages/foliate-js
 	url = https://github.com/readest/foliate-js.git
+	ignore = all

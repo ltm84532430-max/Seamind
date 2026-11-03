@@ -361,9 +361,9 @@
 .fav-column {
   display: flex;
   flex-direction: column;
-  width: 316px;
-  min-width: 316px;
-  max-width: 316px;
+  width: 248px;
+  min-width: 248px;
+  max-width: 248px;
   height: 100%;
   min-height: 0;
   border-radius: 6px;
@@ -376,9 +376,9 @@
 }
 
 .fav-column.is-compact {
-  width: 284px;
-  min-width: 284px;
-  max-width: 284px;
+  width: 216px;
+  min-width: 216px;
+  max-width: 216px;
 }
 
 .fav-column.is-drop-active {
@@ -509,6 +509,11 @@
   min-height: 0;
 }
 
+.fav-column.is-compact .fav-column-body {
+  gap: 7px;
+  padding: 8px;
+}
+
 .fav-column-empty {
   display: flex;
   flex-direction: column;
@@ -529,10 +534,10 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  width: 230px;
-  min-width: 230px;
-  height: 148px;
-  border-radius: 10px;
+  width: 200px;
+  min-width: 200px;
+  height: 128px;
+  border-radius: 8px;
   border: 1.5px dashed var(--fav-border-strong);
   background: transparent;
   color: var(--fav-muted);
@@ -797,29 +802,58 @@
   gap: 2px;
 }
 
-/* Compact card inside vertical columns */
+/* Compact card inside vertical columns (Slender & Tall) */
 
 .fav-card.is-compact {
-  flex-direction: row;
-  align-items: flex-start;
-  padding: 7px;
-  gap: 8px;
+  flex-direction: column;
+  padding: 0;
+  gap: 0;
 }
 
 .fav-card.is-compact .fav-card-thumb {
-  width: 96px;
-  min-width: 96px;
-  border-radius: 5px;
+  width: 100%;
+  min-width: unset;
+  aspect-ratio: 16 / 9;
+  border-radius: 5px 5px 0 0;
 }
 
 .fav-card.is-compact .fav-card-content {
-  padding: 0;
+  padding: 6px 8px 7px;
   min-width: 0;
-  gap: 4px;
+  gap: 3px;
 }
 
 .fav-card.is-compact .fav-card-title-btn {
-  font-size: 12px;
+  font-size: 11.5px;
+  line-height: 1.32;
+  -webkit-line-clamp: 2;
+}
+
+.fav-card.is-compact .fav-card-meta {
+  font-size: 10.5px;
+  gap: 3px;
+}
+
+.fav-card.is-compact .fav-card-channel-btn {
+  font-size: 10.5px;
+}
+
+.fav-card.is-compact .fav-card-footer {
+  padding-top: 3px;
+  gap: 4px;
+}
+
+.fav-card.is-compact .fav-cat-select {
+  max-width: 96px;
+  height: 20px;
+  font-size: 10px;
+  padding: 0 4px;
+}
+
+.fav-card.is-compact .fav-card-tools .fav-icon-btn {
+  width: 20px;
+  height: 20px;
+  font-size: 11px;
 }
 
 /* ---- Grid & List Scroll Container ---- */
@@ -827,14 +861,14 @@
 .fav-scroll-stage {
   flex: 1;
   overflow-y: auto;
-  padding: 18px 20px 28px;
+  padding: 16px 20px 28px;
   min-height: 0;
 }
 
 .fav-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(248px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
 }
 
 .fav-grid-section {
@@ -859,20 +893,23 @@
   font-weight: 700;
 }
 
-/* List mode rows */
+/* List mode rows (Slender & Centered) */
 
 .fav-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 7px;
+  max-width: 760px;
+  margin: 0 auto;
+  width: 100%;
 }
 
 .fav-list-row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 8px 12px;
-  border-radius: 8px;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 6px;
   background: var(--fav-surface);
   border: 1px solid var(--fav-border);
 }
@@ -882,9 +919,9 @@
 }
 
 .fav-list-row .fav-card-thumb {
-  width: 136px;
-  min-width: 136px;
-  border-radius: 6px;
+  width: 112px;
+  min-width: 112px;
+  border-radius: 5px;
 }
 
 .fav-list-main {
@@ -892,7 +929,7 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
 }
 
 /* ---- Category Create / Edit Modal ---- */
