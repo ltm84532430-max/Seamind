@@ -45,6 +45,14 @@
   user-select: none;
 }
 
+.lit-sidebar.is-collapsed {
+  width: 42px;
+  min-width: 42px;
+  max-width: 42px;
+  flex: 0 0 42px;
+  overflow: hidden;
+}
+
 .app-shell[data-theme='light'] .lit-sidebar {
   background: #f7f8f9;
 }
@@ -64,6 +72,48 @@
   font-weight: 650;
   letter-spacing: -0.01em;
   color: var(--ink);
+}
+
+.lit-sidebar-toggle {
+  display: inline-flex;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.lit-sidebar-toggle svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.lit-sidebar-toggle:hover {
+  border-color: var(--line);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel) 88%, var(--ink));
+}
+
+.lit-sidebar-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.lit-sidebar.is-collapsed .lit-sidebar-head {
+  justify-content: center;
+  padding: 0 6px;
+}
+
+.lit-sidebar.is-collapsed .lit-sidebar-title,
+.lit-sidebar.is-collapsed .lit-sidebar-scroll {
+  display: none;
 }
 
 .lit-sidebar-scroll {
@@ -817,11 +867,26 @@
     max-width: none;
     height: auto;
     flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }
 
-  .lit-sidebar-head,
+  .lit-sidebar-head {
+    width: 34px;
+    height: 32px;
+    flex: 0 0 34px;
+    justify-content: center;
+    padding: 0 3px;
+    border-right: 1px solid var(--line);
+    border-bottom: 0;
+  }
+
+  .lit-sidebar-title {
+    display: none;
+  }
+
   .lit-section-label,
   .lit-nav-count,
   .lit-empty-hint {
@@ -829,12 +894,30 @@
   }
 
   .lit-sidebar-scroll {
+    min-width: 0;
     flex-direction: row;
     align-items: center;
     gap: 6px;
     overflow-x: auto;
     overflow-y: hidden;
     padding: 6px 8px;
+  }
+
+  .lit-sidebar.is-collapsed {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    height: 40px;
+    flex: 0 0 40px;
+    justify-content: flex-start;
+    padding: 0 3px;
+  }
+
+  .lit-sidebar.is-collapsed .lit-sidebar-head {
+    width: 34px;
+    height: 32px;
+    flex: 0 0 34px;
+    border-right: 0;
   }
 
   .lit-nav-section {

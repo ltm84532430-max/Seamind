@@ -18,6 +18,51 @@ import './literature-workspace.css';
 
 const PaperPdfReader = React.lazy(() => import('./PaperPdfReader'));
 const PaperPdfPreview = React.lazy(() => import('./PaperPdfPreview'));
+const LITERATURE_SIDEBAR_COLLAPSED_KEY =
+  'seamind:literature-sidebar-collapsed:v1';
+
+function readLiteratureSidebarCollapsed(): boolean {
+  try {
+    return localStorage.getItem(LITERATURE_SIDEBAR_COLLAPSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeLiteratureSidebarCollapsed(collapsed: boolean): void {
+  try {
+    localStorage.setItem(
+      LITERATURE_SIDEBAR_COLLAPSED_KEY,
+      collapsed ? '1' : '0',
+    );
+  } catch {
+    // Keep the current state for this session when storage is unavailable.
+  }
+}
+
+function LiteratureSidebarToggleIcon({ collapsed }: { collapsed: boolean }) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect
+        x="2"
+        y="2.5"
+        width="12"
+        height="11"
+        rx="1"
+        stroke="currentColor"
+        strokeWidth="1.25"
+      />
+      <path d="M6.2 2.5v11" stroke="currentColor" strokeWidth="1.25" />
+      <path
+        d={collapsed ? 'm8.8 6.2 1.8 1.8-1.8 1.8' : 'm10.6 6.2-1.8 1.8 1.8 1.8'}
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
 export interface LiteratureWorkspaceProps {
   onOpenMindmap?: (markdown: string, title: string) => void;
@@ -33,6 +78,9 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
   const [papers, setPapers] = useState<PaperItem[]>([]);
   const [selectedPaperId, setSelectedPaperId] = useState<string | null>(null);
   const [compactPane, setCompactPane] = useState<'list' | 'detail'>('list');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    readLiteratureSidebarCollapsed,
+  );
   const [readerPaper, setReaderPaper] = useState<PaperItem | null>(null);
   const [busyPdfIds, setBusyPdfIds] = useState<string[]>([]);
   const pdfRequests = useRef(new Set<string>());
@@ -358,6 +406,14 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
     if (selectedPaper) void acquireAndRead(selectedPaper);
   };
 
+  const toggleSidebarCollapsed = () => {
+    setSidebarCollapsed((current) => {
+      const next = !current;
+      writeLiteratureSidebarCollapsed(next);
+      return next;
+    });
+  };
+
   const handleReaderStarted = useCallback(
     (paperId: string) => {
       setPapers((current) =>
@@ -524,12 +580,26 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
       {/* -------------------------------------------------------------------- */}
       {/* Left Sidebar                                                         */}
       {/* -------------------------------------------------------------------- */}
-      <aside className="lit-sidebar">
+      <aside
+        className={`lit-sidebar${sidebarCollapsed ? ' is-collapsed' : ''}`}
+        id="literature-sidebar"
+      >
         <div className="lit-sidebar-head">
           <span className="lit-sidebar-title">文献管理</span>
+          <button
+            type="button"
+            className="lit-sidebar-toggle"
+            title={sidebarCollapsed ? '展开文献侧栏' : '收起文献侧栏'}
+            aria-label={sidebarCollapsed ? '展开文献侧栏' : '收起文献侧栏'}
+            aria-expanded={!sidebarCollapsed}
+            aria-controls="literature-sidebar-scroll"
+            onClick={toggleSidebarCollapsed}
+          >
+            <LiteratureSidebarToggleIcon collapsed={sidebarCollapsed} />
+          </button>
         </div>
 
-        <div className="lit-sidebar-scroll">
+        <div className="lit-sidebar-scroll" id="literature-sidebar-scroll">
           {/* Main categories */}
           <div className="lit-nav-section">
             <div className="lit-section-label">分类</div>

@@ -681,6 +681,7 @@ export default function EpubReader({
   } | null>(null);
   const agentSelectionPinnedRef = useRef(false);
   const selectionDocumentRef = useRef<Document | null>(null);
+  const annotationClickAtRef = useRef(0);
   const currentLocationRef = useRef({
     cfi: currentCfi,
     fraction,
@@ -1395,6 +1396,7 @@ export default function EpubReader({
     let wheelAccumulator = 0;
     let wheelGestureLocked = false;
     let wheelResetTimer: number | undefined;
+    let footerDismissTimer: number | undefined;
     let restoringBookLocation = true;
     let deferredRelocation: FoliateLocation | null = null;
     let hasInitialActivityBaseline = false;
@@ -1548,6 +1550,41 @@ export default function EpubReader({
         passive: false,
         signal: wheelListenerController.signal,
       });
+      doc.addEventListener(
+        'click',
+        (clickEvent) => {
+          if (clickEvent.button !== 0 || clickEvent.defaultPrevented) return;
+          const target = clickEvent.target as Node | null;
+          const clickedElement =
+            target?.nodeType === 1
+              ? (target as Element)
+              : target?.parentElement;
+          if (
+            clickedElement?.closest(
+              'a, button, input, textarea, select, [contenteditable]',
+            )
+          ) {
+            return;
+          }
+          if (footerDismissTimer !== undefined) {
+            window.clearTimeout(footerDismissTimer);
+          }
+          // Wait for double-click selection and Foliate annotation hit testing.
+          if (clickEvent.detail > 1) return;
+          footerDismissTimer = window.setTimeout(() => {
+            footerDismissTimer = undefined;
+            if (
+              doc.getSelection()?.toString().trim() ||
+              selectionDraftRef.current ||
+              performance.now() - annotationClickAtRef.current < 500
+            ) {
+              return;
+            }
+            setFooterVisible(false);
+          }, 280);
+        },
+        { signal: documentListenerController.signal },
+      );
       if (typeof sectionIndex !== 'number') return;
       const updateSelection = () => updateDocumentSelection(doc, sectionIndex);
       doc.addEventListener('selectionchange', updateSelection, {
@@ -1624,6 +1661,7 @@ export default function EpubReader({
     };
 
     const onShowAnnotation = (event: Event) => {
+      annotationClickAtRef.current = performance.now();
       const detail = (event as CustomEvent<{ value?: string; range?: Range }>)
         .detail;
       const value = detail?.value;
@@ -1916,6 +1954,9 @@ export default function EpubReader({
       if (wheelResetTimer !== undefined) {
         window.clearTimeout(wheelResetTimer);
       }
+      if (footerDismissTimer !== undefined) {
+        window.clearTimeout(footerDismissTimer);
+      }
       if (viewRef.current === view) viewRef.current = null;
     };
   }, [selection]);
@@ -2015,22 +2056,6 @@ export default function EpubReader({
           </button>
           <button
             type="button"
-            className={`epub-reader-tool epub-reader-mindmap-toggle${mindmapOpen ? ' is-active' : ''}`}
-            aria-pressed={mindmapOpen}
-            disabled={mindmapBusy}
-            title="生成或打开本书的思维导图，并排编辑"
-            onClick={onToggleMindmap}
-          >
-            {mindmapBusy
-              ? '生成中…'
-              : mindmapOpen
-                ? '收起导图'
-                : mindmapExists
-                  ? '并排导图'
-                  : '生成导图'}
-          </button>
-          <button
-            type="button"
             className="epub-reader-tool epub-reader-exam-generate"
             onClick={() => {
               setExamQuestionCount('10');
@@ -2042,14 +2067,6 @@ export default function EpubReader({
             title="根据当前阅读段落生成试卷"
           >
             {unsavedExam ? '重试保存试卷' : '生成试卷'}
-          </button>
-          <button
-            type="button"
-            className="epub-reader-tool epub-reader-ai-terminal"
-            onClick={wakeAi}
-            title="在右侧打开已接入当前章节的 CLI AI 终端"
-          >
-            唤醒 AI
           </button>
           <button
             type="button"
@@ -2074,7 +2091,7 @@ export default function EpubReader({
       </header>
 
       <div
-        className={`epub-reader-layout${sidebarOpen ? '' : ' is-sidebar-closed'}`}
+        className={`epub-reader-layout${sidebarOpen ? '' : ' is-toc-closed'}`}
       >
         {sidebarOpen && (
           <aside
@@ -2617,7 +2634,10 @@ export default function EpubReader({
           </aside>
         )}
 
-        <section className="epub-reader-main" aria-label="书籍内容">
+        <section
+          className={`epub-reader-main${footerVisible ? ' has-footer' : ''}`}
+          aria-label="书籍内容"
+        >
           <div className="epub-reader-stage" ref={stageRef} />
           {selectionDraft && !loading && (
             <div
@@ -2847,55 +2867,93 @@ export default function EpubReader({
           {chapterTitle && (
             <div className="epub-reader-chapter">{chapterTitle}</div>
           )}
+          {footerVisible ? (
+            <footer className="epub-reader-footer" aria-label="阅读进度与工具">
+              <button
+                type="button"
+                className="epub-reader-page-button"
+                onClick={() => void viewRef.current?.prev()}
+                disabled={fraction <= 0}
+                aria-label="上一页"
+                title="上一页（←）"
+              >
+                <span aria-hidden="true">‹</span>
+              </button>
+              <span className="epub-reader-location">{locationText}</span>
+              <input
+                className="epub-reader-progress"
+                type="range"
+                min="0"
+                max="1"
+                step="0.001"
+                value={fraction}
+                aria-label="阅读进度"
+                onChange={(event) =>
+                  void viewRef.current?.goToFraction(Number(event.target.value))
+                }
+              />
+              <button
+                type="button"
+                className="epub-reader-page-button"
+                onClick={() => void viewRef.current?.next()}
+                disabled={fraction >= 1}
+                aria-label="下一页"
+                title="下一页（→）"
+              >
+                <span aria-hidden="true">›</span>
+              </button>
+              <span className="epub-reader-footer-divider" aria-hidden="true" />
+              <button
+                type="button"
+                className={`epub-reader-footer-action${mindmapOpen ? ' is-active' : ''}`}
+                aria-label={mindmapOpen ? '收起并排导图' : '打开并排导图'}
+                aria-pressed={mindmapOpen}
+                disabled={mindmapBusy}
+                title="生成或打开本书的思维导图，并排编辑"
+                onClick={onToggleMindmap}
+              >
+                <ReaderIcon name="mindmap" />
+                <span>
+                  {mindmapBusy
+                    ? '生成中…'
+                    : mindmapOpen
+                      ? '收起导图'
+                      : mindmapExists
+                        ? '并排导图'
+                        : '生成导图'}
+                </span>
+              </button>
+              <button
+                type="button"
+                className="epub-reader-footer-action"
+                onClick={wakeAi}
+                aria-label="打开当前章节的 AI 终端"
+                title="打开已接入当前章节的 CLI AI 终端"
+              >
+                <ReaderIcon name="terminal" />
+                <span>终端 AI</span>
+              </button>
+            </footer>
+          ) : (
+            <div
+              className="epub-reader-footer-reveal"
+              tabIndex={0}
+              aria-label="移至底部显示阅读工具栏"
+              onPointerEnter={() => setFooterVisible(true)}
+              onFocus={() => {
+                setFooterVisible(true);
+                requestAnimationFrame(() =>
+                  stageRef.current?.parentElement
+                    ?.querySelector<HTMLButtonElement>(
+                      '.epub-reader-footer button',
+                    )
+                    ?.focus(),
+                );
+              }}
+            />
+          )}
         </section>
       </div>
-
-      <footer
-        className={`epub-reader-footer${footerVisible ? '' : ' is-hidden'}`}
-        aria-label="阅读进度与翻页控制"
-      >
-        <button
-          type="button"
-          className="epub-reader-footer-toggle"
-          aria-label={footerVisible ? '隐藏阅读控制栏' : '显示阅读控制栏'}
-          aria-expanded={footerVisible}
-          title={footerVisible ? '隐藏阅读控制栏' : '显示阅读控制栏'}
-          onClick={() => setFooterVisible((visible) => !visible)}
-        >
-          <span aria-hidden="true">{footerVisible ? '⌄' : '⌃'}</span>
-        </button>
-        <button
-          type="button"
-          className="epub-reader-page-button"
-          onClick={() => void viewRef.current?.prev()}
-          disabled={fraction <= 0}
-          title="上一页（←）"
-        >
-          上一页
-        </button>
-        <span className="epub-reader-location">{locationText}</span>
-        <input
-          className="epub-reader-progress"
-          type="range"
-          min="0"
-          max="1"
-          step="0.001"
-          value={fraction}
-          aria-label="阅读进度"
-          onChange={(event) =>
-            void viewRef.current?.goToFraction(Number(event.target.value))
-          }
-        />
-        <button
-          type="button"
-          className="epub-reader-page-button"
-          onClick={() => void viewRef.current?.next()}
-          disabled={fraction >= 1}
-          title="下一页（→）"
-        >
-          下一页
-        </button>
-      </footer>
       {examDialogOpen && (
         <div
           className="epub-exam-generate-backdrop"
@@ -3111,6 +3169,8 @@ function ReaderIcon({
     | 'book'
     | 'toc'
     | 'notes'
+    | 'mindmap'
+    | 'terminal'
     | 'current';
 }) {
   const paths: Record<NonNullable<typeof name>, ReactNode> = {
@@ -3150,6 +3210,20 @@ function ReaderIcon({
       <>
         <path d="M5 3.5h14v17H5z" />
         <path d="M8 8h8M8 12h8M8 16h5" />
+      </>
+    ),
+    mindmap: (
+      <>
+        <rect x="2.5" y="9" width="6" height="6" rx="1" />
+        <rect x="15.5" y="3" width="6" height="6" rx="1" />
+        <rect x="15.5" y="15" width="6" height="6" rx="1" />
+        <path d="M8.5 12h3.5m0 0V6h3.5m-3.5 6v6h3.5" />
+      </>
+    ),
+    terminal: (
+      <>
+        <rect x="2.5" y="4.5" width="19" height="15" rx="1.5" />
+        <path d="m6 9 3 3-3 3m5 0h5" />
       </>
     ),
     current: (
