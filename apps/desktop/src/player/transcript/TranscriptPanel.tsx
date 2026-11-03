@@ -1097,15 +1097,6 @@ export default function TranscriptPanel({
                     className="player-transcript-cue-tools"
                     onClick={(e) => e.stopPropagation()}
                   >
-                    {/* 单句复读 */}
-                    <button
-                      type="button"
-                      className={`player-cue-btn${isLooping ? ' is-on' : ''}`}
-                      onClick={() => onToggleLoopCue?.(isLooping ? null : cue)}
-                      title={isLooping ? '停止复读本句' : '循环复读本句'}
-                    >
-                      🔁
-                    </button>
                     {/* 插桩思维导图 */}
                     <button
                       type="button"

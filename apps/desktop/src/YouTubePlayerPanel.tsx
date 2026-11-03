@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import YouTubeDiagnostics from './YouTubeDiagnostics';
 import { buildYouTubeEmbedUrl } from './youtube';
 import type { NativePlayback } from './youtube-native';
@@ -59,6 +60,8 @@ export interface YouTubePlayerPanelProps {
   onEnded?: () => void;
   /** The controls, once there is a player to control; null when it goes away. */
   onHandle?: (handle: YouTubePlayerHandle | null) => void;
+  /** Optional page sidebar target for playback actions and diagnostics. */
+  controlsTarget?: HTMLElement | null;
   children?: React.ReactNode;
 }
 
@@ -95,6 +98,7 @@ export default function YouTubePlayerPanel({
   onStatusChange,
   onEnded,
   onHandle,
+  controlsTarget,
   children,
 }: YouTubePlayerPanelProps) {
   const isDialog = variant === 'dialog';
@@ -656,6 +660,99 @@ export default function YouTubePlayerPanel({
     resumeRef.current > 0 ? `&t=${resumeRef.current}s` : ''
   }`;
 
+  const controls = (
+    <>
+      {message && (
+        <div className="youtube-player-route-message" role="status">
+          {message}
+        </div>
+      )}
+      {!message && autoplayStalled && (
+        <div className="youtube-player-route-message" role="status">
+          <span>
+            视频没有自动开始。YouTube
+            可能正在要求登录或网络验证。点击“内置播放器”尝试备用播放方式。
+          </span>
+          <button
+            type="button"
+            className="youtube-player-action"
+            onClick={() => void startNative(false)}
+            disabled={resolvingNative}
+          >
+            {resolvingNative ? '正在解析…' : '立即尝试内置播放器'}
+          </button>
+        </div>
+      )}
+      <div className="youtube-player-actions">
+        <button
+          type="button"
+          className="youtube-player-action"
+          onClick={() => void startNative(false)}
+          disabled={resolvingNative}
+        >
+          {resolvingNative
+            ? '正在解析…'
+            : mode === 'native'
+              ? '重新解析'
+              : '内置播放器'}
+        </button>
+        {mode !== 'local' && (
+          <button
+            type="button"
+            className="youtube-player-action"
+            onClick={() => void resolveLocally()}
+            disabled={localBusy}
+          >
+            {localBusy ? '正在解析…' : '本地解析（yt-dlp）'}
+          </button>
+        )}
+        <button
+          type="button"
+          className="youtube-player-action"
+          onClick={() => void launchWithMpv()}
+          disabled={mpvBusy || localBusy}
+        >
+          {mpvBusy ? '正在启动 mpv…' : '用 mpv 外部播放'}
+        </button>
+        {mode !== 'embed' && (
+          <button
+            type="button"
+            className="youtube-player-action"
+            onClick={returnToEmbed}
+          >
+            返回 YouTube 内嵌播放
+          </button>
+        )}
+      </div>
+      <YouTubeDiagnostics
+        videoId={selection.id}
+        failure={failure}
+        busy={localBusy}
+        onBrowserSession={(browser) => void resolveLocally(browser)}
+      />
+      <div className="youtube-player-meta">
+        <span
+          className="youtube-player-state"
+          data-state={mpvLaunched ? 'ready' : status}
+          aria-live="polite"
+        >
+          <span className="youtube-player-state-dot" aria-hidden="true" />
+          {mpvLaunched ? 'mpv 已启动' : youtubePlaybackStateLabels[status]}
+        </span>
+        <span>
+          {mode === 'native'
+            ? '内置播放器（经本地代理）'
+            : mode === 'local'
+              ? '本地 HTML5 媒体播放'
+              : '视频由 YouTube 提供'}
+        </span>
+        <a href={watchUrl} target="_blank" rel="noopener noreferrer">
+          在 YouTube 打开
+        </a>
+      </div>
+    </>
+  );
+
   const panel = (
     <>
       <section
@@ -744,98 +841,22 @@ export default function YouTubePlayerPanel({
           )}
           {children}
         </div>
-        {message && (
-          <div className="youtube-player-route-message" role="status">
-            {message}
-          </div>
-        )}
-        {!message && autoplayStalled && (
-          <div className="youtube-player-route-message" role="status">
-            <span>
-              视频没有自动开始。YouTube
-              可能正在要求登录或网络验证。点击“内置播放器”尝试备用播放方式。
-            </span>
-            <button
-              type="button"
-              className="youtube-player-action"
-              onClick={() => void startNative(false)}
-              disabled={resolvingNative}
-            >
-              {resolvingNative ? '正在解析…' : '立即尝试内置播放器'}
-            </button>
-          </div>
-        )}
-        <div className="youtube-player-actions">
-          <button
-            type="button"
-            className="youtube-player-action"
-            onClick={() => void startNative(false)}
-            disabled={resolvingNative}
-          >
-            {resolvingNative
-              ? '正在解析…'
-              : mode === 'native'
-                ? '重新解析'
-                : '内置播放器'}
-          </button>
-          {mode !== 'local' && (
-            <button
-              type="button"
-              className="youtube-player-action"
-              onClick={() => void resolveLocally()}
-              disabled={localBusy}
-            >
-              {localBusy ? '正在解析…' : '本地解析（yt-dlp）'}
-            </button>
-          )}
-          <button
-            type="button"
-            className="youtube-player-action"
-            onClick={() => void launchWithMpv()}
-            disabled={mpvBusy || localBusy}
-          >
-            {mpvBusy ? '正在启动 mpv…' : '用 mpv 外部播放'}
-          </button>
-          {mode !== 'embed' && (
-            <button
-              type="button"
-              className="youtube-player-action"
-              onClick={returnToEmbed}
-            >
-              返回 YouTube 内嵌播放
-            </button>
-          )}
-        </div>
-        <YouTubeDiagnostics
-          videoId={selection.id}
-          failure={failure}
-          busy={localBusy}
-          onBrowserSession={(browser) => void resolveLocally(browser)}
-        />
-        <div className="youtube-player-meta">
-          <span
-            className="youtube-player-state"
-            data-state={mpvLaunched ? 'ready' : status}
-            aria-live="polite"
-          >
-            <span className="youtube-player-state-dot" aria-hidden="true" />
-            {mpvLaunched ? 'mpv 已启动' : youtubePlaybackStateLabels[status]}
-          </span>
-          <span>
-            {mode === 'native'
-              ? '内置播放器（经本地代理）'
-              : mode === 'local'
-                ? '本地 HTML5 媒体播放'
-                : '视频由 YouTube 提供'}
-          </span>
-          <a href={watchUrl} target="_blank" rel="noopener noreferrer">
-            在 YouTube 打开
-          </a>
-        </div>
+        {isDialog && controls}
       </section>
     </>
   );
-  if (!isDialog) return panel;
+  if (!isDialog) {
+    return (
+      <>
+        {panel}
+        {controlsTarget !== undefined
+          ? controlsTarget
+            ? createPortal(controls, controlsTarget)
+            : null
+          : controls}
+      </>
+    );
+  }
   return (
     <div
       className="youtube-player-backdrop"

@@ -90,6 +90,8 @@ export default function WatchView({
   const videoId = watching.item.videoId;
   const item = applyOverlay(watching.item, host.overlay);
   const [handle, setHandle] = useState<YouTubePlayerHandle | null>(null);
+  const [playbackOptionsHost, setPlaybackOptionsHost] =
+    useState<HTMLDivElement | null>(null);
   const [status, setStatus] = useState<YouTubePlaybackState>('loading');
   const [rate, setRate] = useState(readRate);
   const [assignedCategoryId, setAssignedCategoryId] = useState<string | null>(
@@ -103,10 +105,12 @@ export default function WatchView({
     }
   });
 
-  const [activeTab, setActiveTab] = useState<'queue' | 'transcript'>(() => {
+  const [activeTab, setActiveTab] = useState<
+    'queue' | 'transcript' | 'settings'
+  >(() => {
     try {
       const saved = localStorage.getItem(WATCH_TAB_KEY);
-      if (saved === 'queue' || saved === 'transcript') {
+      if (saved === 'queue' || saved === 'transcript' || saved === 'settings') {
         if (saved === 'queue' && !hasQueue) return 'transcript';
         return saved;
       }
@@ -132,7 +136,7 @@ export default function WatchView({
   );
   const lastShadowPausedCueIdRef = useRef<string | null>(null);
 
-  const switchTab = useCallback((tab: 'queue' | 'transcript') => {
+  const switchTab = useCallback((tab: 'queue' | 'transcript' | 'settings') => {
     setActiveTab(tab);
     try {
       localStorage.setItem(WATCH_TAB_KEY, tab);
@@ -394,27 +398,10 @@ export default function WatchView({
       aria-label="正在播放"
     >
       <div className="player-watch-main">
-        <div className="player-watch-bar">
-          <ResourceTaskLinks
-            kind="youtube"
-            identity={item.videoId}
-            onOpenTask={onOpenTask}
-          />
-          <button type="button" className="player-button" onClick={onBack}>
-            <BackIcon />
-            {backLabel}
-          </button>
-          <button
-            type="button"
-            className="player-button"
-            onClick={() => onCreateTask(item, currentTime)}
-          >
-            添加任务
-          </button>
-        </div>
         <YouTubePlayerPanel
           selection={selection}
           variant="page"
+          controlsTarget={playbackOptionsHost}
           onProgress={handleProgress}
           onStatusChange={setStatus}
           onEnded={handleEnded}
@@ -454,6 +441,22 @@ export default function WatchView({
             )}
           </p>
           <div className="player-watch-actions">
+            <button type="button" className="player-button" onClick={onBack}>
+              <BackIcon />
+              {backLabel}
+            </button>
+            <button
+              type="button"
+              className="player-button"
+              onClick={() => onCreateTask(item, currentTime)}
+            >
+              添加任务
+            </button>
+            <ResourceTaskLinks
+              kind="youtube"
+              identity={item.videoId}
+              onOpenTask={onOpenTask}
+            />
             <button
               type="button"
               className={`player-button${item.favorite ? ' is-on' : ''}`}
@@ -587,8 +590,8 @@ export default function WatchView({
         <header>
           {!queueCollapsed ? (
             <>
-              {hasQueue ? (
-                <div className="player-watch-tabs" role="tablist">
+              <div className="player-watch-tabs" role="tablist">
+                {hasQueue && (
                   <button
                     type="button"
                     role="tab"
@@ -598,23 +601,26 @@ export default function WatchView({
                   >
                     播放队列 ({queue.items.length})
                   </button>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={activeTab === 'transcript'}
-                    className={`player-watch-tab${activeTab === 'transcript' ? ' is-active' : ''}`}
-                    onClick={() => switchTab('transcript')}
-                  >
-                    台词 / 字幕
-                  </button>
-                </div>
-              ) : (
-                <div className="player-watch-tabs">
-                  <span className="player-watch-tab is-active is-static">
-                    视频台词 / 字幕
-                  </span>
-                </div>
-              )}
+                )}
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === 'transcript'}
+                  className={`player-watch-tab${activeTab === 'transcript' ? ' is-active' : ''}`}
+                  onClick={() => switchTab('transcript')}
+                >
+                  台词 / 字幕
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === 'settings'}
+                  className={`player-watch-tab${activeTab === 'settings' ? ' is-active' : ''}`}
+                  onClick={() => switchTab('settings')}
+                >
+                  播放设置
+                </button>
+              </div>
               <div className="player-watch-queue-controls">
                 {hasQueue && activeTab === 'queue' && (
                   <span>
@@ -684,7 +690,7 @@ export default function WatchView({
                   compact
                 />
               </div>
-            ) : (
+            ) : activeTab === 'transcript' ? (
               <TranscriptPanel
                 videoId={videoId}
                 videoTitle={item.title}
@@ -703,9 +709,17 @@ export default function WatchView({
                 onCuesLoaded={setCues}
                 onExportToKnowledge={onExportTranscriptToKnowledge}
               />
-            )}
+            ) : null}
           </>
         )}
+        <div
+          className="player-watch-settings"
+          role="tabpanel"
+          hidden={queueCollapsed || activeTab !== 'settings'}
+          aria-label="播放设置与诊断"
+        >
+          <div ref={setPlaybackOptionsHost} />
+        </div>
       </aside>
     </section>
   );

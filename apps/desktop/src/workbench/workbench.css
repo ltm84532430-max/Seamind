@@ -566,21 +566,24 @@
 }
 
 .markdown-rendered-preview ul.seamind-transcript-list {
-  margin: 10px 0 18px;
+  width: 100%;
+  margin: 10px auto 18px;
   padding-left: 0;
   list-style: none;
 }
 .markdown-rendered-preview p.seamind-transcript-paragraph,
 .markdown-rendered-preview li.seamind-transcript-paragraph {
   display: grid;
+  box-sizing: border-box;
+  width: 100%;
   grid-template-columns: auto minmax(0, 1fr);
   column-gap: 12px;
   align-items: baseline;
-  margin: 0.8em 0;
+  margin: 0.8em auto;
   padding: 2px 0;
 }
 .markdown-rendered-preview li.seamind-transcript-paragraph {
-  margin: 0.42em 0;
+  margin: 0.42em auto;
 }
 .markdown-rendered-preview .seamind-transcript-body,
 .markdown-rendered-preview .seamind-transcript-primary {

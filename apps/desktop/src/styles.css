@@ -6527,6 +6527,31 @@ button {
   outline: 2px solid #c9765e;
   outline-offset: 2px;
 }
+.player-watch-settings .youtube-player-actions,
+.player-watch-settings .youtube-player-route-message,
+.player-watch-settings .youtube-player-auth,
+.player-watch-settings .youtube-player-meta {
+  padding-right: 12px;
+  padding-left: 12px;
+}
+.player-watch-settings .youtube-player-auth-controls input[type='text'] {
+  min-width: 0;
+  flex-basis: 100%;
+}
+.player-watch-settings .youtube-diagnostics-checks li {
+  grid-template-columns: 14px minmax(0, 1fr);
+}
+.player-watch-settings
+  .youtube-diagnostics-checks
+  li
+  > span:nth-of-type(n + 2) {
+  grid-column: 2;
+}
+.player-watch-settings .youtube-player-meta {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 6px 12px;
+}
 .youtube-player-state {
   display: inline-flex;
   align-items: center;
