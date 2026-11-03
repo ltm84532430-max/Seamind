@@ -25,6 +25,7 @@ type ShelfSort = 'recent' | 'title' | 'added';
 const NEW_BOOK_CATEGORY = '__new_book_category__';
 
 export default function EbookWorkspace({
+  provider,
   snapshot,
   busy,
   onImport,
@@ -34,6 +35,7 @@ export default function EbookWorkspace({
   onCreateTask,
   onDeleteBook,
 }: {
+  provider: { baseUrl: string; model: string };
   snapshot: LibrarySnapshot | null;
   busy: boolean;
   onImport: () => void;
@@ -379,6 +381,7 @@ export default function EbookWorkspace({
   if (selectedExam) {
     return (
       <EpubExamWorkspace
+        provider={provider}
         examId={selectedExam.id}
         bookKey={selectedExam.bookKey}
         onBack={returnToExamLibrary}

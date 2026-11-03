@@ -61,9 +61,7 @@ pub async fn render_plantuml(
         )
     };
     if let Some(path) = snapshot_path.as_ref() {
-        if fs::metadata(path)
-            .is_ok_and(|metadata| metadata.len() <= MAX_SVG_BYTES as u64)
-        {
+        if fs::metadata(path).is_ok_and(|metadata| metadata.len() <= MAX_SVG_BYTES as u64) {
             if let Ok(svg) = fs::read_to_string(path) {
                 if svg.contains("<svg") {
                     return Ok(PlantUmlRenderResult {
@@ -193,11 +191,7 @@ pub async fn render_plantuml(
     Ok(PlantUmlRenderResult { svg, diagnostics })
 }
 
-pub(crate) fn retain_plantuml_snapshot_for_source(
-    app: &AppHandle,
-    cache_key: &str,
-    source: &str,
-) {
+pub(crate) fn retain_plantuml_snapshot_for_source(app: &AppHandle, cache_key: &str, source: &str) {
     let Some(directory) = snapshot_directory(app, cache_key) else {
         return;
     };
@@ -211,10 +205,7 @@ pub(crate) fn retain_plantuml_snapshot_for_source(
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or_default();
-        if path.is_file()
-            && file_name.ends_with(".svg")
-            && !file_name.starts_with(&keep_prefix)
-        {
+        if path.is_file() && file_name.ends_with(".svg") && !file_name.starts_with(&keep_prefix) {
             let _ = fs::remove_file(path);
         }
     }
@@ -227,15 +218,12 @@ pub(crate) fn delete_plantuml_snapshot_cache(app: &AppHandle, cache_key: &str) {
 }
 
 fn snapshot_directory(app: &AppHandle, cache_key: &str) -> Option<PathBuf> {
-    app.path()
-        .app_cache_dir()
-        .ok()
-        .map(|directory| {
-            directory
-                .join("plantuml-snapshots")
-                .join("v1")
-                .join(cache_hash(cache_key))
-        })
+    app.path().app_cache_dir().ok().map(|directory| {
+        directory
+            .join("plantuml-snapshots")
+            .join("v1")
+            .join(cache_hash(cache_key))
+    })
 }
 
 fn snapshot_path(
@@ -251,9 +239,8 @@ fn snapshot_path(
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default();
     let render_key = format!("{PLANTUML_JAR}\0{source}\0{dark}\0{include_path}");
-    snapshot_directory(app, owner).map(|directory| {
-        directory.join(format!("{source_hash}-{}.svg", cache_hash(&render_key)))
-    })
+    snapshot_directory(app, owner)
+        .map(|directory| directory.join(format!("{source_hash}-{}.svg", cache_hash(&render_key))))
 }
 
 fn cache_hash(value: &str) -> String {

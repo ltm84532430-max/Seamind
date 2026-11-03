@@ -24,3 +24,5 @@ Thumbs.db
 *.sqlite3
 
 .seamind/
+.playwright-cli/
+apps/desktop/output/

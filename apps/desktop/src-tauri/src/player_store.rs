@@ -476,7 +476,11 @@ pub fn channel(connection: &Connection, channel_id: &str) -> Result<Option<Chann
 }
 
 /// Follows a channel, or refreshes what is known about one that is already followed.
-pub fn subscribe(connection: &Connection, input: &ChannelInput, now: i64) -> Result<Channel, String> {
+pub fn subscribe(
+    connection: &Connection,
+    input: &ChannelInput,
+    now: i64,
+) -> Result<Channel, String> {
     if !is_channel_id(&input.channel_id) {
         return Err("频道编号无效，应为以 UC 开头的 24 个字符。".to_string());
     }
@@ -542,7 +546,10 @@ pub fn import_channels(
 
 pub fn unsubscribe(connection: &Connection, channel_id: &str, now: i64) -> Result<(), String> {
     connection
-        .execute("DELETE FROM channels WHERE channel_id = ?1", params![channel_id])
+        .execute(
+            "DELETE FROM channels WHERE channel_id = ?1",
+            params![channel_id],
+        )
         .map_err(db_error)?;
     prune(connection, now)
 }
@@ -569,7 +576,11 @@ pub fn update_channel_info(connection: &Connection, input: &ChannelInput) -> Res
     Ok(())
 }
 
-pub fn mark_channel_checked(connection: &Connection, channel_id: &str, now: i64) -> Result<(), String> {
+pub fn mark_channel_checked(
+    connection: &Connection,
+    channel_id: &str,
+    now: i64,
+) -> Result<(), String> {
     connection
         .execute(
             "UPDATE channels SET last_checked_at = ?2, last_error = NULL WHERE channel_id = ?1",
@@ -581,7 +592,11 @@ pub fn mark_channel_checked(connection: &Connection, channel_id: &str, now: i64)
 
 /// A failed check leaves `last_checked_at` alone and records why, so the channel is tried again on
 /// the next refresh.
-pub fn mark_channel_error(connection: &Connection, channel_id: &str, message: &str) -> Result<(), String> {
+pub fn mark_channel_error(
+    connection: &Connection,
+    channel_id: &str,
+    message: &str,
+) -> Result<(), String> {
     connection
         .execute(
             "UPDATE channels SET last_error = ?2 WHERE channel_id = ?1",
@@ -592,7 +607,10 @@ pub fn mark_channel_error(connection: &Connection, channel_id: &str, message: &s
 }
 
 /// Clears the recorded error for a specific channel, or for all channels if `channel_id` is None.
-pub fn clear_channel_errors(connection: &Connection, channel_id: Option<&str>) -> Result<(), String> {
+pub fn clear_channel_errors(
+    connection: &Connection,
+    channel_id: Option<&str>,
+) -> Result<(), String> {
     match channel_id {
         Some(id) => {
             connection
@@ -719,7 +737,11 @@ fn upsert_video(connection: &Connection, video: &VideoInput, now: i64) -> Result
 
 /// Saves what a listing told about its videos and returns them as list items, in the same order.
 /// Entries without a valid video id are left out.
-pub fn store_videos(connection: &Connection, videos: &[VideoInput], now: i64) -> Result<Vec<VideoItem>, String> {
+pub fn store_videos(
+    connection: &Connection,
+    videos: &[VideoInput],
+    now: i64,
+) -> Result<Vec<VideoItem>, String> {
     let transaction = connection.unchecked_transaction().map_err(db_error)?;
     let mut ids = Vec::with_capacity(videos.len());
     for video in videos {
@@ -731,7 +753,10 @@ pub fn store_videos(connection: &Connection, videos: &[VideoInput], now: i64) ->
     video_items(connection, &ids)
 }
 
-pub fn video_items(connection: &Connection, video_ids: &[String]) -> Result<Vec<VideoItem>, String> {
+pub fn video_items(
+    connection: &Connection,
+    video_ids: &[String],
+) -> Result<Vec<VideoItem>, String> {
     let mut statement = connection
         .prepare(&format!(
             "SELECT {} FROM videos v {ITEM_JOINS} WHERE v.video_id = ?1",
@@ -755,7 +780,11 @@ pub fn video_items(connection: &Connection, video_ids: &[String]) -> Result<Vec<
 /// a playlist saved as a course come without one) is not a new upload, so it stays out of the feed
 /// rather than showing up as if it had just been published.
 pub fn feed(connection: &Connection, query: &FeedQuery) -> Result<Vec<VideoItem>, String> {
-    let limit = if query.limit <= 0 { 60 } else { query.limit.min(500) };
+    let limit = if query.limit <= 0 {
+        60
+    } else {
+        query.limit.min(500)
+    };
     let mut statement = connection
         .prepare(&format!(
             "SELECT {} FROM videos v
@@ -771,7 +800,12 @@ pub fn feed(connection: &Connection, query: &FeedQuery) -> Result<Vec<VideoItem>
         .map_err(db_error)?;
     let rows = statement
         .query_map(
-            params![query.channel_id, query.hide_finished, limit, query.offset.max(0)],
+            params![
+                query.channel_id,
+                query.hide_finished,
+                limit,
+                query.offset.max(0)
+            ],
             item_from_row,
         )
         .map_err(db_error)?;
@@ -843,7 +877,8 @@ pub fn save_progress(
     let duration = duration_seconds.filter(|seconds| seconds.is_finite() && *seconds > 0.0);
     if progress_seconds.is_finite() && progress_seconds >= 0.0 {
         let progress = duration.map_or(progress_seconds, |total| progress_seconds.min(total));
-        let valid = progress > SAVE_THRESHOLD_SECONDS || duration.is_some_and(|total| progress > total / 4.0);
+        let valid = progress > SAVE_THRESHOLD_SECONDS
+            || duration.is_some_and(|total| progress > total / 4.0);
         if valid {
             connection
                 .execute(
@@ -863,7 +898,12 @@ pub fn save_progress(
 }
 
 /// Marks a video watched or not by hand.
-pub fn set_watched(connection: &Connection, video_id: &str, watched: bool, now: i64) -> Result<(), String> {
+pub fn set_watched(
+    connection: &Connection,
+    video_id: &str,
+    watched: bool,
+    now: i64,
+) -> Result<(), String> {
     if !is_video_id(video_id) {
         return Err("视频编号无效。".to_string());
     }
@@ -884,7 +924,10 @@ pub fn set_watched(connection: &Connection, video_id: &str, watched: bool, now: 
             .map_err(db_error)?;
     } else {
         connection
-            .execute("DELETE FROM watch_state WHERE video_id = ?1", params![video_id])
+            .execute(
+                "DELETE FROM watch_state WHERE video_id = ?1",
+                params![video_id],
+            )
             .map_err(db_error)?;
     }
     Ok(())
@@ -1007,7 +1050,12 @@ pub fn playlist_create(connection: &Connection, name: &str, now: i64) -> Result<
     playlist(connection, &id)?.ok_or_else(|| "创建播放列表失败。".to_string())
 }
 
-pub fn playlist_rename(connection: &Connection, playlist_id: &str, name: &str, now: i64) -> Result<(), String> {
+pub fn playlist_rename(
+    connection: &Connection,
+    playlist_id: &str,
+    name: &str,
+    now: i64,
+) -> Result<(), String> {
     let name = clean(name, 80);
     if name.is_empty() {
         return Err("播放列表名称不能为空。".to_string());
@@ -1029,7 +1077,10 @@ pub fn playlist_delete(connection: &Connection, playlist_id: &str, now: i64) -> 
         return Err("内置列表不能删除。".to_string());
     }
     connection
-        .execute("DELETE FROM playlists WHERE playlist_id = ?1", params![playlist_id])
+        .execute(
+            "DELETE FROM playlists WHERE playlist_id = ?1",
+            params![playlist_id],
+        )
         .map_err(db_error)?;
     prune(connection, now)
 }
@@ -1045,7 +1096,12 @@ fn video_is_known(connection: &Connection, video_id: &str) -> Result<bool, Strin
 }
 
 /// Appends a video to a list; one that is already in it stays where it is.
-pub fn playlist_add(connection: &Connection, playlist_id: &str, video_id: &str, now: i64) -> Result<(), String> {
+pub fn playlist_add(
+    connection: &Connection,
+    playlist_id: &str,
+    video_id: &str,
+    now: i64,
+) -> Result<(), String> {
     if !video_is_known(connection, video_id)? {
         return Err("这个视频的信息还没有保存，无法加入列表。".to_string());
     }
@@ -1078,7 +1134,12 @@ pub fn playlist_add(connection: &Connection, playlist_id: &str, video_id: &str, 
     Ok(())
 }
 
-pub fn playlist_remove(connection: &Connection, playlist_id: &str, video_id: &str, now: i64) -> Result<(), String> {
+pub fn playlist_remove(
+    connection: &Connection,
+    playlist_id: &str,
+    video_id: &str,
+    now: i64,
+) -> Result<(), String> {
     connection
         .execute(
             "DELETE FROM playlist_items WHERE playlist_id = ?1 AND video_id = ?2",
@@ -1098,7 +1159,12 @@ pub fn playlist_remove(connection: &Connection, playlist_id: &str, video_id: &st
 
 /// Adds the video to the list, or takes it out when it is there. Returns whether it is in the list
 /// afterwards.
-pub fn playlist_toggle(connection: &Connection, playlist_id: &str, video_id: &str, now: i64) -> Result<bool, String> {
+pub fn playlist_toggle(
+    connection: &Connection,
+    playlist_id: &str,
+    video_id: &str,
+    now: i64,
+) -> Result<bool, String> {
     let present: bool = connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM playlist_items WHERE playlist_id = ?1 AND video_id = ?2)",
@@ -1117,7 +1183,10 @@ pub fn playlist_toggle(connection: &Connection, playlist_id: &str, video_id: &st
 
 /// The videos of a list. The built-in lists show the newest addition first; a course and the
 /// user's own lists keep their order.
-pub fn playlist_items(connection: &Connection, playlist_id: &str) -> Result<Vec<VideoItem>, String> {
+pub fn playlist_items(
+    connection: &Connection,
+    playlist_id: &str,
+) -> Result<Vec<VideoItem>, String> {
     let order = if playlist_id == FAVORITES_ID || playlist_id == WATCH_LATER_ID {
         "i.added_at DESC, i.position DESC"
     } else {
@@ -1150,7 +1219,11 @@ pub fn course_save(
         return Err("播放列表编号无效。".to_string());
     }
     let name = clean(name, 80);
-    let name = if name.is_empty() { remote_id.to_string() } else { name };
+    let name = if name.is_empty() {
+        remote_id.to_string()
+    } else {
+        name
+    };
     let transaction = connection.unchecked_transaction().map_err(db_error)?;
     let mut ids = Vec::with_capacity(videos.len());
     for video in videos {
@@ -1189,7 +1262,10 @@ pub fn course_save(
         }
     };
     transaction
-        .execute("DELETE FROM playlist_items WHERE playlist_id = ?1", params![playlist_id])
+        .execute(
+            "DELETE FROM playlist_items WHERE playlist_id = ?1",
+            params![playlist_id],
+        )
         .map_err(db_error)?;
     for (position, id) in ids.iter().enumerate() {
         transaction
@@ -1505,10 +1581,7 @@ pub fn favorite_category_save(
             .map_err(db_error)?;
         let candidates: Vec<String> = uncategorized_stmt
             .query_map(params![FAVORITES_ID], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                ))
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
             })
             .map_err(db_error)?
             .collect::<Result<Vec<_>, _>>()
@@ -1748,7 +1821,9 @@ pub fn favorite_set_note(
     let Some(added_at) = added_at else {
         return Err("请先收藏该视频再添加收藏备注。".to_string());
     };
-    let cleaned = note.map(|raw| clean(raw, 500)).filter(|text| !text.is_empty());
+    let cleaned = note
+        .map(|raw| clean(raw, 500))
+        .filter(|text| !text.is_empty());
     connection
         .execute(
             "INSERT INTO favorite_item_meta(video_id, category_id, column_position, note, updated_at)
@@ -1768,9 +1843,9 @@ const MAX_LEARNING_PATH_NODES: usize = 200;
 
 fn is_path_or_node_id(value: &str) -> bool {
     (1..=64).contains(&value.len())
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-' || byte == b':')
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-' || byte == b':'
+        })
 }
 
 fn normalize_node_kind(kind: &str, has_video: bool) -> Result<&'static str, String> {
@@ -1796,7 +1871,9 @@ fn learning_path_summary_columns() -> String {
     )
 }
 
-fn learning_path_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LearningPathSummary> {
+fn learning_path_summary_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<LearningPathSummary> {
     Ok(LearningPathSummary {
         path_id: row.get(0)?,
         title: row.get(1)?,
@@ -1963,7 +2040,12 @@ fn validate_learning_path_nodes(
             return Err(format!("学习路径存在重复的节点编号：{node_id}"));
         }
 
-        let video_id = match raw.video_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        let video_id = match raw
+            .video_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             Some(vid) => {
                 if !is_video_id(vid) {
                     return Err(format!("节点「{}」的视频编号无效：{vid}", raw.title.trim()));
@@ -1976,7 +2058,9 @@ fn validate_learning_path_nodes(
         let kind = normalize_node_kind(&raw.kind, video_id.is_some())?;
         let title_clean = clean(&raw.title, MAX_TEXT_CHARS);
         let title = if title_clean.is_empty() {
-            video_id.clone().unwrap_or_else(|| format!("节点 {}", index + 1))
+            video_id
+                .clone()
+                .unwrap_or_else(|| format!("节点 {}", index + 1))
         } else {
             title_clean
         };
@@ -2021,10 +2105,7 @@ fn validate_learning_path_nodes(
                 return Err(format!("节点「{}」不能将自身设为父节点。", node.title));
             }
             if !seen_ids.contains(pid) {
-                return Err(format!(
-                    "节点「{}」引用了不存在的父节点：{pid}",
-                    node.title
-                ));
+                return Err(format!("节点「{}」引用了不存在的父节点：{pid}", node.title));
             }
             outgoing
                 .entry(pid.as_str())
@@ -2205,7 +2286,11 @@ pub fn learning_path_save(
     learning_path_get(connection, &path_id)?.ok_or_else(|| "保存学习路径失败。".to_string())
 }
 
-pub fn learning_path_delete(connection: &Connection, path_id: &str, now: i64) -> Result<(), String> {
+pub fn learning_path_delete(
+    connection: &Connection,
+    path_id: &str,
+    now: i64,
+) -> Result<(), String> {
     connection
         .execute(
             "DELETE FROM learning_paths WHERE path_id = ?1",
@@ -2219,7 +2304,11 @@ pub fn learning_path_delete(connection: &Connection, path_id: &str, now: i64) ->
 
 pub fn settings(connection: &Connection) -> Result<PlayerSettings, String> {
     let stored: Option<String> = connection
-        .query_row("SELECT value FROM settings WHERE key = 'player'", [], |row| row.get(0))
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'player'",
+            [],
+            |row| row.get(0),
+        )
         .optional()
         .map_err(db_error)?;
     Ok(stored
@@ -2227,10 +2316,15 @@ pub fn settings(connection: &Connection) -> Result<PlayerSettings, String> {
         .unwrap_or_default())
 }
 
-pub fn save_settings(connection: &Connection, settings: &PlayerSettings) -> Result<PlayerSettings, String> {
+pub fn save_settings(
+    connection: &Connection,
+    settings: &PlayerSettings,
+) -> Result<PlayerSettings, String> {
     let mut settings = settings.clone();
     // A day is the longest a feed is allowed to go without being checked.
-    settings.feed_update_threshold_seconds = settings.feed_update_threshold_seconds.clamp(0, 7 * 24 * 3600);
+    settings.feed_update_threshold_seconds = settings
+        .feed_update_threshold_seconds
+        .clamp(0, 7 * 24 * 3600);
     let text = serde_json::to_string(&settings).map_err(|error| error.to_string())?;
     connection
         .execute(
@@ -2540,7 +2634,11 @@ pub struct BackupSummary {
 
 /// Merges a backup into the database: channels and lists that are missing are added, items are
 /// added to lists that exist, and for watch state and history the newer record wins.
-pub fn import_backup(connection: &Connection, backup: &Backup, now: i64) -> Result<BackupSummary, String> {
+pub fn import_backup(
+    connection: &Connection,
+    backup: &Backup,
+    now: i64,
+) -> Result<BackupSummary, String> {
     if backup.format != BACKUP_FORMAT {
         return Err("这不是 Seamind 播放器的备份文件。".to_string());
     }
@@ -2591,7 +2689,11 @@ pub fn import_backup(connection: &Connection, backup: &Backup, now: i64) -> Resu
         let target = if builtin {
             Some(list.playlist_id.clone())
         } else if list.kind == "course" {
-            match list.remote_id.as_deref().filter(|id| is_remote_playlist_id(id)) {
+            match list
+                .remote_id
+                .as_deref()
+                .filter(|id| is_remote_playlist_id(id))
+            {
                 Some(remote) => transaction
                     .query_row(
                         "SELECT playlist_id FROM playlists WHERE remote_id = ?1",
@@ -2620,7 +2722,11 @@ pub fn import_backup(connection: &Connection, backup: &Backup, now: i64) -> Resu
                 } else {
                     Uuid::new_v4().to_string()
                 };
-                let kind = if list.kind == "course" { "course" } else { "local" };
+                let kind = if list.kind == "course" {
+                    "course"
+                } else {
+                    "local"
+                };
                 transaction
                     .execute(
                         "INSERT INTO playlists(playlist_id, name, kind, remote_id, channel_name, created_at, updated_at, sort_order)
@@ -2676,8 +2782,16 @@ pub fn import_backup(connection: &Connection, backup: &Backup, now: i64) -> Resu
         let channel_ids = normalize_channel_ids(Some(&cat.channel_ids));
         let channel_ids_json =
             serde_json::to_string(&channel_ids).map_err(|error| error.to_string())?;
-        let created_at = if cat.created_at > 0 { cat.created_at } else { now };
-        let updated_at = if cat.updated_at > 0 { cat.updated_at } else { created_at };
+        let created_at = if cat.created_at > 0 {
+            cat.created_at
+        } else {
+            now
+        };
+        let updated_at = if cat.updated_at > 0 {
+            cat.updated_at
+        } else {
+            created_at
+        };
         let sort_order = if existing_categories.is_empty() {
             cat.sort_order
         } else {
@@ -2740,7 +2854,11 @@ pub fn import_backup(connection: &Connection, backup: &Backup, now: i64) -> Resu
             .as_deref()
             .map(|raw| clean(raw, 500))
             .filter(|text| !text.is_empty());
-        let meta_updated_at = if meta.updated_at > 0 { meta.updated_at } else { now };
+        let meta_updated_at = if meta.updated_at > 0 {
+            meta.updated_at
+        } else {
+            now
+        };
         transaction
             .execute(
                 "INSERT INTO favorite_item_meta(video_id, category_id, column_position, note, updated_at)
@@ -2802,8 +2920,16 @@ pub fn import_backup(connection: &Connection, backup: &Backup, now: i64) -> Resu
                 }
             }
         }
-        let created_at = if path.created_at > 0 { path.created_at } else { now };
-        let updated_at = if path.updated_at > 0 { path.updated_at } else { created_at };
+        let created_at = if path.created_at > 0 {
+            path.created_at
+        } else {
+            now
+        };
+        let updated_at = if path.updated_at > 0 {
+            path.updated_at
+        } else {
+            created_at
+        };
         transaction
             .execute(
                 "INSERT INTO learning_paths(path_id, title, description, created_at, updated_at)
@@ -2882,7 +3008,12 @@ pub fn import_backup(connection: &Connection, backup: &Backup, now: i64) -> Resu
                      first_played_at = MIN(first_played_at, excluded.first_played_at),
                      last_played_at = MAX(last_played_at, excluded.last_played_at),
                      play_count = MAX(play_count, excluded.play_count)",
-                params![entry.video_id, entry.first_played_at, entry.last_played_at, entry.play_count.max(1)],
+                params![
+                    entry.video_id,
+                    entry.first_played_at,
+                    entry.last_played_at,
+                    entry.play_count.max(1)
+                ],
             )
             .map_err(db_error)?;
     }
@@ -2918,14 +3049,18 @@ fn child_text<'a>(node: roxmltree::Node<'a, 'a>, name: &str) -> Option<&'a str> 
         .and_then(|child| child.text())
 }
 
-fn find_descendant<'a>(node: roxmltree::Node<'a, 'a>, name: &str) -> Option<roxmltree::Node<'a, 'a>> {
+fn find_descendant<'a>(
+    node: roxmltree::Node<'a, 'a>,
+    name: &str,
+) -> Option<roxmltree::Node<'a, 'a>> {
     node.descendants()
         .find(|child| child.is_element() && child.tag_name().name() == name)
 }
 
 /// Reads the Atom feed YouTube serves for a channel or a playlist.
 pub fn parse_feed(xml: &str) -> Result<ParsedFeed, String> {
-    let document = roxmltree::Document::parse(xml).map_err(|_| "YouTube 返回的不是有效的订阅源。".to_string())?;
+    let document = roxmltree::Document::parse(xml)
+        .map_err(|_| "YouTube 返回的不是有效的订阅源。".to_string())?;
     let root = document.root_element();
     if root.tag_name().name() != "feed" {
         return Err("YouTube 返回的不是有效的订阅源。".to_string());
@@ -2963,7 +3098,11 @@ pub fn parse_feed(xml: &str) -> Result<ParsedFeed, String> {
         let link = entry
             .children()
             .filter(|child| child.is_element() && child.tag_name().name() == "link")
-            .find(|child| child.attribute("rel").map_or(true, |rel| rel == "alternate"))
+            .find(|child| {
+                child
+                    .attribute("rel")
+                    .map_or(true, |rel| rel == "alternate")
+            })
             .and_then(|child| child.attribute("href"))
             .unwrap_or("");
         let group = find_descendant(entry, "group");
@@ -3012,7 +3151,9 @@ pub fn parse_rfc3339(value: &str) -> Option<i64> {
     if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
         return None;
     }
-    let split = rest.find(|c| c == 'Z' || c == '+' || c == '-').unwrap_or(rest.len());
+    let split = rest
+        .find(|c| c == 'Z' || c == '+' || c == '-')
+        .unwrap_or(rest.len());
     let (clock, zone) = rest.split_at(split);
     let mut clock_parts = clock.split(':');
     let hour: i64 = clock_parts.next()?.parse().ok()?;
@@ -3026,7 +3167,9 @@ pub fn parse_rfc3339(value: &str) -> Option<i64> {
             let sign = if zone.starts_with('-') { -1 } else { 1 };
             let mut offset_parts = zone[1..].split(':');
             let offset_hours: i64 = offset_parts.next()?.parse().ok()?;
-            let offset_minutes: i64 = offset_parts.next().map_or(Some(0), |text| text.parse().ok())?;
+            let offset_minutes: i64 = offset_parts
+                .next()
+                .map_or(Some(0), |text| text.parse().ok())?;
             sign * (offset_hours * 3600 + offset_minutes * 60)
         }
     };
@@ -3034,7 +3177,11 @@ pub fn parse_rfc3339(value: &str) -> Option<i64> {
 }
 
 /// The channel's videos from a parsed feed, as the rows the cache keeps. Shorts are left out.
-pub fn feed_videos(feed: &ParsedFeed, channel_id: &str, channel_name: Option<&str>) -> Vec<VideoInput> {
+pub fn feed_videos(
+    feed: &ParsedFeed,
+    channel_id: &str,
+    channel_name: Option<&str>,
+) -> Vec<VideoInput> {
     feed.entries
         .iter()
         .filter(|entry| !entry.is_short)
@@ -3056,13 +3203,18 @@ pub fn feed_videos(feed: &ParsedFeed, channel_id: &str, channel_name: Option<&st
 }
 
 /// The ids of the videos in `videos` that the cache did not have before.
-pub fn new_video_ids(connection: &Connection, videos: &[VideoInput]) -> Result<Vec<String>, String> {
+pub fn new_video_ids(
+    connection: &Connection,
+    videos: &[VideoInput],
+) -> Result<Vec<String>, String> {
     let mut known = HashSet::new();
     let mut statement = connection
         .prepare("SELECT 1 FROM videos WHERE video_id = ?1")
         .map_err(db_error)?;
     for video in videos {
-        let exists = statement.exists(params![video.video_id]).map_err(db_error)?;
+        let exists = statement
+            .exists(params![video.video_id])
+            .map_err(db_error)?;
         if exists {
             known.insert(video.video_id.clone());
         }
@@ -3118,8 +3270,17 @@ mod tests {
         let connection = database();
         prepare(&connection).unwrap();
         let lists = playlists(&connection).unwrap();
-        let names: Vec<_> = lists.iter().map(|list| (list.playlist_id.as_str(), list.name.as_str(), list.builtin)).collect();
-        assert_eq!(names, vec![(FAVORITES_ID, "收藏", true), (WATCH_LATER_ID, "稍后看", true)]);
+        let names: Vec<_> = lists
+            .iter()
+            .map(|list| (list.playlist_id.as_str(), list.name.as_str(), list.builtin))
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                (FAVORITES_ID, "收藏", true),
+                (WATCH_LATER_ID, "稍后看", true)
+            ]
+        );
     }
 
     #[test]
@@ -3164,7 +3325,10 @@ mod tests {
         // A later call that knows nothing about the avatar does not erase it.
         let bare = subscribe(&connection, &channel_input(CHANNEL_A, ""), NOW + 200).unwrap();
         assert_eq!(bare.name, "3Blue1Brown");
-        assert_eq!(bare.avatar_url.as_deref(), Some("https://yt3.example/a.jpg"));
+        assert_eq!(
+            bare.avatar_url.as_deref(),
+            Some("https://yt3.example/a.jpg")
+        );
     }
 
     #[test]
@@ -3189,8 +3353,19 @@ mod tests {
             NOW,
         )
         .unwrap();
-        assert_eq!(summary, ImportSummary { added: 1, existing: 1, invalid: 1 });
-        let names: Vec<_> = channels(&connection).unwrap().into_iter().map(|c| c.name).collect();
+        assert_eq!(
+            summary,
+            ImportSummary {
+                added: 1,
+                existing: 1,
+                invalid: 1
+            }
+        );
+        let names: Vec<_> = channels(&connection)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
         assert_eq!(names, vec!["CS50".to_string(), "已有".to_string()]);
     }
 
@@ -3205,7 +3380,10 @@ mod tests {
         assert_eq!(failed.last_error.as_deref(), Some("网络超时"));
         mark_channel_checked(&connection, CHANNEL_A, NOW + 20).unwrap();
         let fine = channel(&connection, CHANNEL_A).unwrap().unwrap();
-        assert_eq!((fine.last_checked_at, fine.last_error), (Some(NOW + 20), None));
+        assert_eq!(
+            (fine.last_checked_at, fine.last_error),
+            (Some(NOW + 20), None)
+        );
     }
 
     #[test]
@@ -3217,11 +3395,24 @@ mod tests {
         mark_channel_error(&connection, CHANNEL_B, "error b").unwrap();
 
         clear_channel_errors(&connection, Some(CHANNEL_A)).unwrap();
-        assert_eq!(channel(&connection, CHANNEL_A).unwrap().unwrap().last_error, None);
-        assert_eq!(channel(&connection, CHANNEL_B).unwrap().unwrap().last_error.as_deref(), Some("error b"));
+        assert_eq!(
+            channel(&connection, CHANNEL_A).unwrap().unwrap().last_error,
+            None
+        );
+        assert_eq!(
+            channel(&connection, CHANNEL_B)
+                .unwrap()
+                .unwrap()
+                .last_error
+                .as_deref(),
+            Some("error b")
+        );
 
         clear_channel_errors(&connection, None).unwrap();
-        assert_eq!(channel(&connection, CHANNEL_B).unwrap().unwrap().last_error, None);
+        assert_eq!(
+            channel(&connection, CHANNEL_B).unwrap().unwrap().last_error,
+            None
+        );
     }
 
     #[test]
@@ -3270,7 +3461,10 @@ mod tests {
             NOW,
         )
         .unwrap();
-        let ids: Vec<_> = items.iter().map(|item| item.video.video_id.as_str()).collect();
+        let ids: Vec<_> = items
+            .iter()
+            .map(|item| item.video.video_id.as_str())
+            .collect();
         assert_eq!(ids, vec![V2, V1]);
     }
 
@@ -3294,20 +3488,39 @@ mod tests {
         let connection = database();
         follow_with_videos(&connection);
         // A video of a channel that is not followed stays out of the feed.
-        store_videos(&connection, &[video(V4, "UCzzzzzzzzzzzzzzzzzzzzzz", "陌生", NOW)], NOW).unwrap();
+        store_videos(
+            &connection,
+            &[video(V4, "UCzzzzzzzzzzzzzzzzzzzzzz", "陌生", NOW)],
+            NOW,
+        )
+        .unwrap();
 
         let all = feed(&connection, &FeedQuery::default()).unwrap();
-        let ids: Vec<_> = all.iter().map(|item| item.video.video_id.as_str()).collect();
+        let ids: Vec<_> = all
+            .iter()
+            .map(|item| item.video.video_id.as_str())
+            .collect();
         assert_eq!(ids, vec![V2, V3, V1]);
 
         let only_b = feed(
             &connection,
-            &FeedQuery { channel_id: Some(CHANNEL_B.to_string()), ..FeedQuery::default() },
+            &FeedQuery {
+                channel_id: Some(CHANNEL_B.to_string()),
+                ..FeedQuery::default()
+            },
         )
         .unwrap();
         assert_eq!(only_b.len(), 1);
 
-        let paged = feed(&connection, &FeedQuery { limit: 1, offset: 1, ..FeedQuery::default() }).unwrap();
+        let paged = feed(
+            &connection,
+            &FeedQuery {
+                limit: 1,
+                offset: 1,
+                ..FeedQuery::default()
+            },
+        )
+        .unwrap();
         assert_eq!(paged[0].video.video_id, V3);
     }
 
@@ -3316,7 +3529,10 @@ mod tests {
         let connection = database();
         follow_with_videos(&connection);
         // What a playlist saved as a course stores: the channel is known, the date is not.
-        let undated = VideoInput { published_at: None, ..video(V4, CHANNEL_A, "课程里的旧视频", NOW) };
+        let undated = VideoInput {
+            published_at: None,
+            ..video(V4, CHANNEL_A, "课程里的旧视频", NOW)
+        };
         store_videos(&connection, &[undated], NOW).unwrap();
 
         let ids: Vec<_> = feed(&connection, &FeedQuery::default())
@@ -3325,7 +3541,10 @@ mod tests {
             .map(|item| item.video.video_id)
             .collect();
         assert_eq!(ids, vec![V2, V3, V1]);
-        assert!(video_items(&connection, &[V4.to_string()]).unwrap().len() == 1, "it is still known to the database");
+        assert!(
+            video_items(&connection, &[V4.to_string()]).unwrap().len() == 1,
+            "it is still known to the database"
+        );
 
         // Once a listing that does give the date has seen it, it belongs in the feed in its place.
         store_videos(&connection, &[video(V4, CHANNEL_A, "", NOW - 5 * DAY)], NOW).unwrap();
@@ -3341,44 +3560,79 @@ mod tests {
     fn progress_is_remembered_by_newpipes_rules() {
         let connection = database();
         follow_with_videos(&connection);
-        store_videos(&connection, &[VideoInput { duration_seconds: Some(1000), ..video(V1, CHANNEL_A, "一", NOW) }], NOW).unwrap();
+        store_videos(
+            &connection,
+            &[VideoInput {
+                duration_seconds: Some(1000),
+                ..video(V1, CHANNEL_A, "一", NOW)
+            }],
+            NOW,
+        )
+        .unwrap();
 
         // Under five seconds nothing is saved.
-        assert_eq!(save_progress(&connection, V1, 3.0, Some(1000.0), NOW).unwrap(), None);
+        assert_eq!(
+            save_progress(&connection, V1, 3.0, Some(1000.0), NOW).unwrap(),
+            None
+        );
         // Past five seconds it is.
-        let saved = save_progress(&connection, V1, 42.0, Some(1000.0), NOW).unwrap().unwrap();
+        let saved = save_progress(&connection, V1, 42.0, Some(1000.0), NOW)
+            .unwrap()
+            .unwrap();
         assert_eq!(saved.progress_seconds, 42.0);
         assert_eq!(saved.resume_seconds, 42.0);
         assert!(!saved.finished);
         // A new visit that ends sooner leaves the earlier position alone.
-        let kept = save_progress(&connection, V1, 2.0, Some(1000.0), NOW + 5).unwrap().unwrap();
+        let kept = save_progress(&connection, V1, 2.0, Some(1000.0), NOW + 5)
+            .unwrap()
+            .unwrap();
         assert_eq!(kept.progress_seconds, 42.0);
         // Within the last minute and past three quarters: watched, and the next start is the beginning.
-        let done = save_progress(&connection, V1, 960.0, Some(1000.0), NOW + 10).unwrap().unwrap();
+        let done = save_progress(&connection, V1, 960.0, Some(1000.0), NOW + 10)
+            .unwrap()
+            .unwrap();
         assert!(done.finished);
         assert_eq!(done.resume_seconds, 0.0);
         // Inside the last minute counts only past three quarters; early in a long video it does not.
-        let near_the_end = save_progress(&connection, V2, 100.0, Some(120.0), NOW).unwrap().unwrap();
-        assert!(near_the_end.finished, "100 of 120 s is inside the last minute and past 3/4");
-        let quarter_left_but_long = save_progress(&connection, V3, 100.0, Some(400.0), NOW).unwrap().unwrap();
+        let near_the_end = save_progress(&connection, V2, 100.0, Some(120.0), NOW)
+            .unwrap()
+            .unwrap();
+        assert!(
+            near_the_end.finished,
+            "100 of 120 s is inside the last minute and past 3/4"
+        );
+        let quarter_left_but_long = save_progress(&connection, V3, 100.0, Some(400.0), NOW)
+            .unwrap()
+            .unwrap();
         assert!(!quarter_left_but_long.finished);
     }
 
     #[test]
     fn a_short_video_is_saved_after_a_quarter_even_before_five_seconds() {
         let connection = database();
-        let state = save_progress(&connection, V1, 4.0, Some(10.0), NOW).unwrap().unwrap();
+        let state = save_progress(&connection, V1, 4.0, Some(10.0), NOW)
+            .unwrap()
+            .unwrap();
         assert_eq!(state.progress_seconds, 4.0);
-        assert_eq!(save_progress(&connection, V2, 4.0, Some(100.0), NOW).unwrap(), None);
+        assert_eq!(
+            save_progress(&connection, V2, 4.0, Some(100.0), NOW).unwrap(),
+            None
+        );
     }
 
     #[test]
     fn progress_beyond_the_end_is_cut_and_nonsense_is_ignored() {
         let connection = database();
-        let state = save_progress(&connection, V1, 5000.0, Some(100.0), NOW).unwrap().unwrap();
+        let state = save_progress(&connection, V1, 5000.0, Some(100.0), NOW)
+            .unwrap()
+            .unwrap();
         assert_eq!(state.progress_seconds, 100.0);
-        assert!(save_progress(&connection, V2, f64::NAN, None, NOW).unwrap().is_none());
-        assert!(save_progress(&connection, V2, -4.0, None, NOW).unwrap().is_none());
+        assert!(save_progress(&connection, V2, f64::NAN, None, NOW)
+            .unwrap()
+            .is_none());
+        assert!(save_progress(&connection, V2, -4.0, None, NOW)
+            .unwrap()
+            .is_none());
         assert!(save_progress(&connection, "bad", 10.0, None, NOW).is_err());
     }
 
@@ -3389,10 +3643,18 @@ mod tests {
         set_watched(&connection, V1, true, NOW).unwrap();
         let item = &video_items(&connection, &[V1.to_string()]).unwrap()[0];
         assert!(item.finished);
-        assert_eq!(watch_state(&connection, V1).unwrap().unwrap().resume_seconds, 0.0);
+        assert_eq!(
+            watch_state(&connection, V1)
+                .unwrap()
+                .unwrap()
+                .resume_seconds,
+            0.0
+        );
 
         // Playing it again and getting past five seconds replaces the manual mark.
-        let state = save_progress(&connection, V1, 30.0, Some(600.0), NOW + 1).unwrap().unwrap();
+        let state = save_progress(&connection, V1, 30.0, Some(600.0), NOW + 1)
+            .unwrap()
+            .unwrap();
         assert!(!state.finished);
         assert_eq!(state.resume_seconds, 30.0);
 
@@ -3406,12 +3668,28 @@ mod tests {
         let connection = database();
         follow_with_videos(&connection);
         set_watched(&connection, V2, true, NOW).unwrap();
-        let shown = feed(&connection, &FeedQuery { hide_finished: true, ..FeedQuery::default() }).unwrap();
-        let ids: Vec<_> = shown.iter().map(|item| item.video.video_id.as_str()).collect();
+        let shown = feed(
+            &connection,
+            &FeedQuery {
+                hide_finished: true,
+                ..FeedQuery::default()
+            },
+        )
+        .unwrap();
+        let ids: Vec<_> = shown
+            .iter()
+            .map(|item| item.video.video_id.as_str())
+            .collect();
         assert_eq!(ids, vec![V3, V1]);
         let everything = feed(&connection, &FeedQuery::default()).unwrap();
         assert_eq!(everything.len(), 3);
-        assert!(everything.iter().find(|item| item.video.video_id == V2).unwrap().finished);
+        assert!(
+            everything
+                .iter()
+                .find(|item| item.video.video_id == V2)
+                .unwrap()
+                .finished
+        );
     }
 
     #[test]
@@ -3422,11 +3700,18 @@ mod tests {
         mark_played(&connection, V2, NOW + 10).unwrap();
         mark_played(&connection, V1, NOW + 20).unwrap();
         let items = history(&connection, 0, 0).unwrap();
-        let ids: Vec<_> = items.iter().map(|item| item.video.video_id.as_str()).collect();
+        let ids: Vec<_> = items
+            .iter()
+            .map(|item| item.video.video_id.as_str())
+            .collect();
         assert_eq!(ids, vec![V1, V2]);
         assert_eq!(items[0].last_played_at, Some(NOW + 20));
         let count: i64 = connection
-            .query_row("SELECT play_count FROM history WHERE video_id = ?1", params![V1], |row| row.get(0))
+            .query_row(
+                "SELECT play_count FROM history WHERE video_id = ?1",
+                params![V1],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(count, 2);
 
@@ -3447,11 +3732,18 @@ mod tests {
         playlist_add(&connection, FAVORITES_ID, V1, NOW + 7).unwrap();
 
         let favourites = playlist_items(&connection, FAVORITES_ID).unwrap();
-        let ids: Vec<_> = favourites.iter().map(|item| item.video.video_id.as_str()).collect();
+        let ids: Vec<_> = favourites
+            .iter()
+            .map(|item| item.video.video_id.as_str())
+            .collect();
         assert_eq!(ids, vec![V2, V1]);
         assert!(favourites[1].favorite && favourites[1].watch_later);
         assert!(favourites[0].favorite && !favourites[0].watch_later);
-        let counts: Vec<_> = playlists(&connection).unwrap().iter().map(|list| list.item_count).collect();
+        let counts: Vec<_> = playlists(&connection)
+            .unwrap()
+            .iter()
+            .map(|list| list.item_count)
+            .collect();
         assert_eq!(counts, vec![2, 1]);
     }
 
@@ -3461,7 +3753,9 @@ mod tests {
         follow_with_videos(&connection);
         assert!(playlist_toggle(&connection, FAVORITES_ID, V1, NOW).unwrap());
         assert!(!playlist_toggle(&connection, FAVORITES_ID, V1, NOW + 1).unwrap());
-        assert!(playlist_items(&connection, FAVORITES_ID).unwrap().is_empty());
+        assert!(playlist_items(&connection, FAVORITES_ID)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -3508,8 +3802,14 @@ mod tests {
             "线性代数的本质",
             Some("3Blue1Brown"),
             &[
-                VideoInput { duration_seconds: Some(592), ..video(V1, CHANNEL_A, "一", NOW) },
-                VideoInput { duration_seconds: Some(600), ..video(V2, CHANNEL_A, "二", NOW) },
+                VideoInput {
+                    duration_seconds: Some(592),
+                    ..video(V1, CHANNEL_A, "一", NOW)
+                },
+                VideoInput {
+                    duration_seconds: Some(600),
+                    ..video(V2, CHANNEL_A, "二", NOW)
+                },
             ],
             NOW,
         )
@@ -3561,10 +3861,15 @@ mod tests {
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();
-        assert_eq!(remaining, vec![V1.to_string(), V2.to_string(), V3.to_string()]);
+        assert_eq!(
+            remaining,
+            vec![V1.to_string(), V2.to_string(), V3.to_string()]
+        );
         // V3 belongs to the other channel, which is still followed.
         unsubscribe(&connection, CHANNEL_B, NOW).unwrap();
-        let after: i64 = connection.query_row("SELECT COUNT(*) FROM videos", [], |row| row.get(0)).unwrap();
+        let after: i64 = connection
+            .query_row("SELECT COUNT(*) FROM videos", [], |row| row.get(0))
+            .unwrap();
         assert_eq!(after, 2);
     }
 
@@ -3584,7 +3889,11 @@ mod tests {
         .unwrap();
         playlist_add(&connection, FAVORITES_ID, V3, NOW).unwrap();
         prune(&connection, NOW).unwrap();
-        let ids: Vec<_> = feed(&connection, &FeedQuery::default()).unwrap().into_iter().map(|item| item.video.video_id).collect();
+        let ids: Vec<_> = feed(&connection, &FeedQuery::default())
+            .unwrap()
+            .into_iter()
+            .map(|item| item.video.video_id)
+            .collect();
         assert_eq!(ids, vec![V2.to_string(), V3.to_string()]);
     }
 
@@ -3594,7 +3903,11 @@ mod tests {
         assert_eq!(settings(&connection).unwrap(), PlayerSettings::default());
         let saved = save_settings(
             &connection,
-            &PlayerSettings { feed_update_threshold_seconds: 10_000_000, hide_finished_in_feed: true, ..PlayerSettings::default() },
+            &PlayerSettings {
+                feed_update_threshold_seconds: 10_000_000,
+                hide_finished_in_feed: true,
+                ..PlayerSettings::default()
+            },
         )
         .unwrap();
         assert_eq!(saved.feed_update_threshold_seconds, 7 * 24 * 3600);
@@ -3610,31 +3923,59 @@ mod tests {
         playlist_add(&source, FAVORITES_ID, V1, NOW).unwrap();
         let mine = playlist_create(&source, "我的", NOW).unwrap();
         playlist_add(&source, &mine.playlist_id, V2, NOW).unwrap();
-        course_save(&source, "PLabcdefghijk", "课", Some("某人"), &[video(V3, CHANNEL_B, "三", NOW)], NOW).unwrap();
+        course_save(
+            &source,
+            "PLabcdefghijk",
+            "课",
+            Some("某人"),
+            &[video(V3, CHANNEL_B, "三", NOW)],
+            NOW,
+        )
+        .unwrap();
         save_progress(&source, V1, 50.0, Some(500.0), NOW).unwrap();
         mark_played(&source, V1, NOW + 3).unwrap();
-        save_settings(&source, &PlayerSettings { autoplay_next: false, ..PlayerSettings::default() }).unwrap();
+        save_settings(
+            &source,
+            &PlayerSettings {
+                autoplay_next: false,
+                ..PlayerSettings::default()
+            },
+        )
+        .unwrap();
 
         let backup = export_backup(&source, NOW + 10).unwrap();
         assert_eq!(backup.format, BACKUP_FORMAT);
         // The cache of the feed is not in it, only what lists, history and states refer to.
-        let backed_up: Vec<_> = backup.videos.iter().map(|video| video.video_id.as_str()).collect();
+        let backed_up: Vec<_> = backup
+            .videos
+            .iter()
+            .map(|video| video.video_id.as_str())
+            .collect();
         assert_eq!(backed_up, vec![V1, V2, V3]);
         let text = serde_json::to_string(&backup).unwrap();
 
         let target = database();
-        let summary = import_backup(&target, &serde_json::from_str(&text).unwrap(), NOW + 20).unwrap();
+        let summary =
+            import_backup(&target, &serde_json::from_str(&text).unwrap(), NOW + 20).unwrap();
         assert_eq!(summary.channels_added, 2);
         assert_eq!(summary.playlists_added, 2);
         assert_eq!(channels(&target).unwrap().len(), 2);
         assert_eq!(playlist_items(&target, FAVORITES_ID).unwrap().len(), 1);
-        assert_eq!(watch_state(&target, V1).unwrap().unwrap().progress_seconds, 50.0);
+        assert_eq!(
+            watch_state(&target, V1).unwrap().unwrap().progress_seconds,
+            50.0
+        );
         assert_eq!(history(&target, 0, 0).unwrap().len(), 1);
-        let names: Vec<_> = playlists(&target).unwrap().into_iter().map(|list| list.name).collect();
+        let names: Vec<_> = playlists(&target)
+            .unwrap()
+            .into_iter()
+            .map(|list| list.name)
+            .collect();
         assert_eq!(names, vec!["收藏", "稍后看", "我的", "课"]);
 
         // Importing the same backup again adds nothing.
-        let again = import_backup(&target, &serde_json::from_str(&text).unwrap(), NOW + 30).unwrap();
+        let again =
+            import_backup(&target, &serde_json::from_str(&text).unwrap(), NOW + 30).unwrap();
         assert_eq!((again.channels_added, again.playlists_added), (0, 0));
         assert_eq!(playlists(&target).unwrap().len(), 4);
     }
@@ -3648,17 +3989,33 @@ mod tests {
         backup.states[0].progress_seconds = 10.0;
         backup.states[0].updated_at = NOW; // older than the stored one
         import_backup(&connection, &backup, NOW + 60).unwrap();
-        assert_eq!(watch_state(&connection, V1).unwrap().unwrap().progress_seconds, 100.0);
+        assert_eq!(
+            watch_state(&connection, V1)
+                .unwrap()
+                .unwrap()
+                .progress_seconds,
+            100.0
+        );
         backup.states[0].updated_at = NOW + 500;
         import_backup(&connection, &backup, NOW + 60).unwrap();
-        assert_eq!(watch_state(&connection, V1).unwrap().unwrap().progress_seconds, 10.0);
+        assert_eq!(
+            watch_state(&connection, V1)
+                .unwrap()
+                .unwrap()
+                .progress_seconds,
+            10.0
+        );
     }
 
     #[test]
     fn a_file_that_is_not_a_backup_is_refused() {
         let connection = database();
         assert!(import_backup(&connection, &Backup::default(), NOW).is_err());
-        let too_new = Backup { format: BACKUP_FORMAT.to_string(), version: 9, ..Backup::default() };
+        let too_new = Backup {
+            format: BACKUP_FORMAT.to_string(),
+            version: 9,
+            ..Backup::default()
+        };
         assert!(import_backup(&connection, &too_new, NOW).is_err());
     }
 
@@ -3717,14 +4074,24 @@ mod tests {
         assert_eq!(parsed.channel_name.as_deref(), Some("3Blue1Brown"));
         // The feed's own <yt:channelId> lacks the UC prefix, so the id comes from the first entry.
         assert_eq!(parsed.channel_id.as_deref(), Some(CHANNEL_A));
-        assert_eq!(parsed.entries.len(), 2, "the entry with a broken id is skipped");
+        assert_eq!(
+            parsed.entries.len(),
+            2,
+            "the entry with a broken id is skipped"
+        );
 
         let first = &parsed.entries[0];
         assert_eq!(first.video_id, "LKrwhjOI8Nc");
         assert_eq!(first.title, "There's never been a better time & place");
-        assert_eq!(first.published_at, Some(parse_rfc3339("2026-10-16T16:15:20+00:00").unwrap()));
+        assert_eq!(
+            first.published_at,
+            Some(parse_rfc3339("2026-10-16T16:15:20+00:00").unwrap())
+        );
         assert_eq!(first.view_count, Some(2_375_575));
-        assert_eq!(first.thumbnail_url.as_deref(), Some("https://i2.ytimg.com/vi/LKrwhjOI8Nc/hqdefault.jpg"));
+        assert_eq!(
+            first.thumbnail_url.as_deref(),
+            Some("https://i2.ytimg.com/vi/LKrwhjOI8Nc/hqdefault.jpg")
+        );
         assert!(!first.is_short);
         assert!(parsed.entries[1].is_short);
         assert_eq!(parsed.entries[1].view_count, Some(9));
@@ -3752,11 +4119,23 @@ mod tests {
     fn dates_are_read_with_offsets_and_fractions() {
         assert_eq!(parse_rfc3339("1970-01-01T00:00:00Z"), Some(0));
         assert_eq!(parse_rfc3339("1970-01-02T00:00:00+00:00"), Some(86_400));
-        assert_eq!(parse_rfc3339("2026-10-16T16:15:20+00:00"), Some(1_792_167_320));
+        assert_eq!(
+            parse_rfc3339("2026-10-16T16:15:20+00:00"),
+            Some(1_792_167_320)
+        );
         // 08:00 at +08:00 is midnight UTC.
-        assert_eq!(parse_rfc3339("2026-10-12T08:00:00+08:00"), parse_rfc3339("2026-10-12T00:00:00Z"));
-        assert_eq!(parse_rfc3339("2026-10-12T00:00:00.123Z"), parse_rfc3339("2026-10-12T00:00:00Z"));
-        assert_eq!(parse_rfc3339("2026-10-11T19:00:00-05:00"), parse_rfc3339("2026-10-12T00:00:00Z"));
+        assert_eq!(
+            parse_rfc3339("2026-10-12T08:00:00+08:00"),
+            parse_rfc3339("2026-10-12T00:00:00Z")
+        );
+        assert_eq!(
+            parse_rfc3339("2026-10-12T00:00:00.123Z"),
+            parse_rfc3339("2026-10-12T00:00:00Z")
+        );
+        assert_eq!(
+            parse_rfc3339("2026-10-11T19:00:00-05:00"),
+            parse_rfc3339("2026-10-12T00:00:00Z")
+        );
         assert_eq!(parse_rfc3339("2024-02-29T00:00:00Z"), Some(1_709_164_800));
         assert_eq!(parse_rfc3339("yesterday"), None);
         assert_eq!(parse_rfc3339("2026-13-01T00:00:00Z"), None);
@@ -3766,8 +4145,14 @@ mod tests {
     fn new_videos_are_those_the_cache_lacked() {
         let connection = database();
         follow_with_videos(&connection);
-        let incoming = vec![video(V1, CHANNEL_A, "一", NOW), video(V4, CHANNEL_A, "四", NOW)];
-        assert_eq!(new_video_ids(&connection, &incoming).unwrap(), vec![V4.to_string()]);
+        let incoming = vec![
+            video(V1, CHANNEL_A, "一", NOW),
+            video(V4, CHANNEL_A, "四", NOW),
+        ];
+        assert_eq!(
+            new_video_ids(&connection, &incoming).unwrap(),
+            vec![V4.to_string()]
+        );
     }
 
     #[test]
@@ -3775,10 +4160,23 @@ mod tests {
         let connection = database();
         follow_with_videos(&connection);
         playlist_add(&connection, FAVORITES_ID, V1, NOW).unwrap();
-        let item = serde_json::to_value(&feed(&connection, &FeedQuery::default()).unwrap()[0]).unwrap();
+        let item =
+            serde_json::to_value(&feed(&connection, &FeedQuery::default()).unwrap()[0]).unwrap();
         for key in [
-            "videoId", "channelId", "channelName", "title", "publishedAt", "publishedApprox", "durationSeconds",
-            "viewCount", "viewText", "thumbnailUrl", "progressSeconds", "finished", "lastPlayedAt", "favorite",
+            "videoId",
+            "channelId",
+            "channelName",
+            "title",
+            "publishedAt",
+            "publishedApprox",
+            "durationSeconds",
+            "viewCount",
+            "viewText",
+            "thumbnailUrl",
+            "progressSeconds",
+            "finished",
+            "lastPlayedAt",
+            "favorite",
             "watchLater",
         ] {
             assert!(item.get(key).is_some(), "{key} is missing from {item}");
@@ -3786,14 +4184,26 @@ mod tests {
         let overview = serde_json::to_value(overview(&connection).unwrap()).unwrap();
         assert!(overview["channels"][0].get("subscribedAt").is_some());
         assert!(overview["playlists"][0].get("itemCount").is_some());
-        assert!(overview["settings"].get("feedUpdateThresholdSeconds").is_some());
-        let state = serde_json::to_value(save_progress(&connection, V1, 50.0, Some(100.0), NOW).unwrap().unwrap()).unwrap();
+        assert!(overview["settings"]
+            .get("feedUpdateThresholdSeconds")
+            .is_some());
+        let state = serde_json::to_value(
+            save_progress(&connection, V1, 50.0, Some(100.0), NOW)
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
         assert!(state.get("resumeSeconds").is_some());
 
         // And the other direction: what the front end sends.
-        let input: ChannelInput = serde_json::from_str(r#"{"channelId":"UCYO_jab_esuFRV4b17AJtAw","name":"x","avatarUrl":"u"}"#).unwrap();
+        let input: ChannelInput = serde_json::from_str(
+            r#"{"channelId":"UCYO_jab_esuFRV4b17AJtAw","name":"x","avatarUrl":"u"}"#,
+        )
+        .unwrap();
         assert_eq!(input.avatar_url.as_deref(), Some("u"));
-        let video: VideoInput = serde_json::from_str(r#"{"videoId":"aaaaaaaaaaa","title":"t","durationSeconds":5}"#).unwrap();
+        let video: VideoInput =
+            serde_json::from_str(r#"{"videoId":"aaaaaaaaaaa","title":"t","durationSeconds":5}"#)
+                .unwrap();
         assert_eq!(video.duration_seconds, Some(5));
         let query: FeedQuery = serde_json::from_str(r#"{"hideFinished":true,"limit":10}"#).unwrap();
         assert!(query.hide_finished);
@@ -3894,9 +4304,12 @@ mod tests {
         // Prune must NOT delete old videos referenced by learning_path_nodes.
         prune(&connection, NOW + 100 * DAY).unwrap();
         assert_eq!(
-            video_items(&connection, &[V1.to_string(), V2.to_string(), V3.to_string()])
-                .unwrap()
-                .len(),
+            video_items(
+                &connection,
+                &[V1.to_string(), V2.to_string(), V3.to_string()]
+            )
+            .unwrap()
+            .len(),
             3
         );
 
@@ -3906,7 +4319,9 @@ mod tests {
         let restored = database();
         let summary = import_backup(&restored, &backup, NOW + 20).unwrap();
         assert_eq!(summary.learning_paths_added, 1);
-        let loaded = learning_path_get(&restored, "rust-systems").unwrap().unwrap();
+        let loaded = learning_path_get(&restored, "rust-systems")
+            .unwrap()
+            .unwrap();
         assert_eq!(loaded.nodes.len(), 4);
         assert_eq!(loaded.nodes[1].start_seconds, 15);
         assert_eq!(loaded.nodes[3].prerequisite_ids, vec!["n-1", "n-2"]);
@@ -3914,7 +4329,9 @@ mod tests {
         // Deleting removes the path and cascades nodes.
         learning_path_delete(&connection, "rust-systems", NOW + 30).unwrap();
         assert!(learning_paths(&connection).unwrap().is_empty());
-        assert!(learning_path_get(&connection, "rust-systems").unwrap().is_none());
+        assert!(learning_path_get(&connection, "rust-systems")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -3964,7 +4381,10 @@ mod tests {
         let connection = database();
         // Zero preset categories on initialization.
         assert!(favorite_categories(&connection).unwrap().is_empty());
-        assert!(overview(&connection).unwrap().favorite_categories.is_empty());
+        assert!(overview(&connection)
+            .unwrap()
+            .favorite_categories
+            .is_empty());
 
         // Reserved and blank names are rejected.
         assert!(favorite_category_save(
@@ -4054,7 +4474,13 @@ mod tests {
             NOW + 40,
         )
         .unwrap();
-        favorite_set_note(&connection, V2, Some("重点看第 12 分钟缓存一致性"), NOW + 41).unwrap();
+        favorite_set_note(
+            &connection,
+            V2,
+            Some("重点看第 12 分钟缓存一致性"),
+            NOW + 41,
+        )
+        .unwrap();
         // Move V2 above V1 inside `cat-dev` (target_index = 0).
         favorite_assign_category(
             &connection,
@@ -4119,10 +4545,7 @@ mod tests {
             .unwrap();
         assert!(v2_entry.video.favorite);
         assert_eq!(v2_entry.category_id, None);
-        assert_eq!(
-            v2_entry.note.as_deref(),
-            Some("重点看第 12 分钟缓存一致性")
-        );
+        assert_eq!(v2_entry.note.as_deref(), Some("重点看第 12 分钟缓存一致性"));
 
         // Unfavoriting V2 cleans up `favorite_item_meta`.
         playlist_remove(&connection, FAVORITES_ID, V2, NOW + 70).unwrap();

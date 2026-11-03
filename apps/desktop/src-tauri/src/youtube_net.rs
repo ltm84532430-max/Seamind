@@ -24,9 +24,11 @@ pub fn seamind_data_dir() -> Option<PathBuf> {
     #[cfg(windows)]
     let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
     #[cfg(not(windows))]
-    let base = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).or_else(|| {
-        std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local").join("share"))
-    });
+    let base = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local").join("share"))
+        });
     base.map(|base| base.join("Seamind"))
 }
 
@@ -54,7 +56,12 @@ fn detect_windows_system_proxy() -> Option<String> {
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
     let output = std::process::Command::new("reg")
-        .args(["query", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings", "/v", "ProxyEnable"])
+        .args([
+            "query",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
+            "/v",
+            "ProxyEnable",
+        ])
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .ok()?;
@@ -64,7 +71,12 @@ fn detect_windows_system_proxy() -> Option<String> {
     }
 
     let output = std::process::Command::new("reg")
-        .args(["query", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings", "/v", "ProxyServer"])
+        .args([
+            "query",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
+            "/v",
+            "ProxyServer",
+        ])
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .ok()?;
@@ -117,8 +129,9 @@ pub fn normalize_proxy_url(value: &str) -> Result<Option<String>, String> {
     if trimmed.is_empty() {
         return Ok(None);
     }
-    let url = Url::parse(trimmed)
-        .map_err(|_| "代理地址格式无效，例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7891。".to_string())?;
+    let url = Url::parse(trimmed).map_err(|_| {
+        "代理地址格式无效，例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:7891。".to_string()
+    })?;
     if !matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h") {
         return Err("代理只支持 http、https、socks5 或 socks5h 协议。".to_string());
     }
@@ -198,7 +211,9 @@ pub enum RedirectScope {
 }
 
 fn is_github_host(host: &str) -> bool {
-    host == "github.com" || host.ends_with(".github.com") || host.ends_with(".githubusercontent.com")
+    host == "github.com"
+        || host.ends_with(".github.com")
+        || host.ends_with(".githubusercontent.com")
 }
 
 fn redirect_policy(scope: RedirectScope) -> reqwest::redirect::Policy {
@@ -225,7 +240,10 @@ fn redirect_policy(scope: RedirectScope) -> reqwest::redirect::Policy {
     }
 }
 
-pub(crate) fn build_client(proxy: Option<&str>, scope: RedirectScope) -> Result<reqwest::Client, String> {
+pub(crate) fn build_client(
+    proxy: Option<&str>,
+    scope: RedirectScope,
+) -> Result<reqwest::Client, String> {
     let mut builder = reqwest::Client::builder()
         .user_agent(DEFAULT_USER_AGENT)
         .connect_timeout(Duration::from_secs(10))
@@ -314,8 +332,7 @@ pub fn youtube_set_settings(
     };
     let updated = YouTubeSettings { proxy_url };
     save_settings(&updated)?;
-    *net
-        .settings
+    *net.settings
         .write()
         .map_err(|_| "设置状态不可用。".to_string())? = updated;
     net.clients
@@ -354,9 +371,9 @@ fn looks_like_ytdlp_version(version: &str) -> bool {
     let year = parts.next().unwrap_or_default();
     year.len() == 4
         && year.bytes().all(|byte| byte.is_ascii_digit())
-        && parts
-            .next()
-            .is_some_and(|month| month.len() == 2 && month.bytes().all(|byte| byte.is_ascii_digit()))
+        && parts.next().is_some_and(|month| {
+            month.len() == 2 && month.bytes().all(|byte| byte.is_ascii_digit())
+        })
 }
 
 async fn read_limited_text(response: reqwest::Response, limit: u64) -> Result<String, String> {
@@ -411,7 +428,10 @@ async fn install_ytdlp_from(
         .await
         .map_err(|error| format!("无法下载 yt-dlp 校验文件：{error}"))?;
     if !sums_response.status().is_success() {
-        return Err(format!("下载 yt-dlp 校验文件失败：HTTP {}", sums_response.status()));
+        return Err(format!(
+            "下载 yt-dlp 校验文件失败：HTTP {}",
+            sums_response.status()
+        ));
     }
     let sums = read_limited_text(sums_response, YT_DLP_SUMS_MAX_BYTES).await?;
     let expected = expected_sha256(&sums, "yt-dlp.exe")
@@ -434,7 +454,10 @@ async fn install_ytdlp_from(
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let staged = tools.join(format!("yt-dlp.exe.{}-{nonce}.download", std::process::id()));
+    let staged = tools.join(format!(
+        "yt-dlp.exe.{}-{nonce}.download",
+        std::process::id()
+    ));
     let result = download_and_install(
         &mut response,
         total,
@@ -511,9 +534,8 @@ async fn download_and_install(
     }
 
     let target = tools.join("yt-dlp.exe");
-    std::fs::rename(staged, &target).map_err(|error| {
-        format!("无法替换 yt-dlp（可能正在使用，请稍后重试）：{error}")
-    })?;
+    std::fs::rename(staged, &target)
+        .map_err(|error| format!("无法替换 yt-dlp（可能正在使用，请稍后重试）：{error}"))?;
     Ok(YtDlpInstall {
         path: target.display().to_string(),
         version: version.trim().to_string(),
@@ -529,11 +551,15 @@ mod tests {
     fn normalizes_supported_proxy_urls() {
         assert_eq!(normalize_proxy_url("  ").unwrap(), None);
         assert_eq!(
-            normalize_proxy_url("http://127.0.0.1:7890/").unwrap().as_deref(),
+            normalize_proxy_url("http://127.0.0.1:7890/")
+                .unwrap()
+                .as_deref(),
             Some("http://127.0.0.1:7890")
         );
         assert_eq!(
-            normalize_proxy_url("socks5://localhost:7891").unwrap().as_deref(),
+            normalize_proxy_url("socks5://localhost:7891")
+                .unwrap()
+                .as_deref(),
             Some("socks5://localhost:7891")
         );
     }
@@ -548,7 +574,10 @@ mod tests {
             "http://127.0.0.1:7890?x=1",
             "http://",
         ] {
-            assert!(normalize_proxy_url(value).is_err(), "{value} should be rejected");
+            assert!(
+                normalize_proxy_url(value).is_err(),
+                "{value} should be rejected"
+            );
         }
     }
 
@@ -592,7 +621,9 @@ cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc *yt-dlp_x86.exe
         let router = Router::new()
             .route("/SHA2-256SUMS", get(move || async move { sums.clone() }))
             .route("/yt-dlp.exe", get(move || async move { binary.clone() }));
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
             axum::serve(listener, router).await.unwrap();
@@ -605,7 +636,8 @@ cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc *yt-dlp_x86.exe
     }
 
     fn scratch_dir(label: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("seamind-install-{label}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("seamind-install-{label}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -622,9 +654,14 @@ cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc *yt-dlp_x86.exe
         .await;
         let client = build_client(None, RedirectScope::GitHub).unwrap();
 
-        let error = install_ytdlp_from(&base, &client, &tools, |_| {}).await.unwrap_err();
+        let error = install_ytdlp_from(&base, &client, &tools, |_| {})
+            .await
+            .unwrap_err();
         assert!(error.contains("校验失败"), "{error}");
-        assert_eq!(std::fs::read(tools.join("yt-dlp.exe")).unwrap(), b"previous");
+        assert_eq!(
+            std::fs::read(tools.join("yt-dlp.exe")).unwrap(),
+            b"previous"
+        );
         let leftovers = std::fs::read_dir(&tools)
             .unwrap()
             .filter_map(Result::ok)
@@ -642,9 +679,17 @@ cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc *yt-dlp_x86.exe
         let base = release_server(format!("{}  yt-dlp.exe\n", sha256_hex(&binary)), binary).await;
         let client = build_client(None, RedirectScope::GitHub).unwrap();
 
-        let error = install_ytdlp_from(&base, &client, &tools, |_| {}).await.unwrap_err();
-        assert!(error.contains("无法运行") || error.contains("不是有效"), "{error}");
-        assert_eq!(std::fs::read(tools.join("yt-dlp.exe")).unwrap(), b"previous");
+        let error = install_ytdlp_from(&base, &client, &tools, |_| {})
+            .await
+            .unwrap_err();
+        assert!(
+            error.contains("无法运行") || error.contains("不是有效"),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::read(tools.join("yt-dlp.exe")).unwrap(),
+            b"previous"
+        );
         let _ = std::fs::remove_dir_all(&tools);
     }
 
@@ -653,7 +698,9 @@ cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc *yt-dlp_x86.exe
         let tools = scratch_dir("no-entry");
         let base = release_server("abc  something-else.exe\n".to_string(), b"x".to_vec()).await;
         let client = build_client(None, RedirectScope::GitHub).unwrap();
-        let error = install_ytdlp_from(&base, &client, &tools, |_| {}).await.unwrap_err();
+        let error = install_ytdlp_from(&base, &client, &tools, |_| {})
+            .await
+            .unwrap_err();
         assert!(error.contains("没有 yt-dlp.exe"), "{error}");
         let _ = std::fs::remove_dir_all(&tools);
     }

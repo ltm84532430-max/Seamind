@@ -171,4 +171,99 @@ describe('EpubExamWorkspace SSR Render', () => {
     );
     expect(html).toContain('epub-exam-workspace-shell');
   });
+
+  it('renders v2 exam with C programming codeSpec and rubric in spread and workspace modes', () => {
+    const v2Exam: any = {
+      schemaVersion: 2,
+      id: 'exam-v2',
+      bookKey: 'book-c',
+      bookTitle: 'C Primer Plus',
+      sourceFileFingerprint: 'fp-c',
+      sourceSectionIndex: 5,
+      sourceSectionHref: 'ch6.html',
+      sourceSectionLabel: '第6章 C控制语句：循环',
+      scope: { kind: 'chapter', label: '第6章', href: 'ch6.html' },
+      createdAt: 1700000000000,
+      questionCount: 2,
+      difficulty: 'medium',
+      status: 'submitted',
+      submittedAt: 1700000005000,
+      questions: [
+        {
+          id: 'q-c1',
+          type: 'cProgramming',
+          prompt: '编写一个函数计算累加和',
+          answer: '#include <stdio.h>\nint main(void){return 0;}',
+          explanation: '使用 while 循环累计',
+          points: 12,
+          rubric: [
+            { criterion: '正确读取输入', points: 4 },
+            { criterion: '正确循环求和', points: 8 },
+          ],
+          codeSpec: {
+            starterCode: '#include <stdio.h>\nint main(void){\n  return 0;\n}',
+            cases: [
+              { stdin: '5\n', expectedStdout: '15\n', hidden: false },
+              { stdin: '10\n', expectedStdout: '55\n', hidden: true },
+            ],
+          },
+        },
+        {
+          id: 'q-comp1',
+          type: 'comprehensive',
+          prompt: '请分析 while 与 for 循环的汇编结构差异与适用场景',
+          answer: '分析要点：入口检测、迭代步长、寄存器复用',
+          explanation: '教材第 6 章核心要点',
+          points: 8,
+          rubric: [
+            { criterion: '汇编结构说明', points: 4 },
+            { criterion: '适用场景对比', points: 4 },
+          ],
+        },
+      ],
+      answers: {
+        'q-c1':
+          '#include <stdio.h>\nint main(void){\n  int n; scanf("%d",&n); ...\n}',
+        'q-comp1': '我的详细分析答案',
+      },
+      selfReviews: {
+        'q-c1': 'mastered',
+        'q-comp1': 'partial',
+      },
+      grades: {
+        'q-c1': {
+          earned: 12,
+          maximum: 12,
+          feedback: '通过 2/2 个测试。',
+          passedCases: 2,
+          totalCases: 2,
+        },
+        'q-comp1': {
+          earned: 7,
+          maximum: 8,
+          feedback: '分析到位，汇编指令解释准确。',
+          provisional: true,
+        },
+      },
+      attempts: [],
+    };
+
+    const html = renderToString(
+      React.createElement(EpubExamWorkspace, {
+        examId: 'exam-v2',
+        bookKey: 'book-c',
+        onBack: () => {},
+        initialExam: v2Exam,
+      }),
+    );
+
+    // Verify layout buttons and mode controls
+    expect(html).toContain('左右翻页');
+    expect(html).toContain('题目 / 工作区');
+    expect(html).toContain('第6章 C控制语句：循环');
+    expect(html).toContain('C 编程题');
+    expect(html).toContain('编写一个函数计算累加和');
+    expect(html).toContain('公开样例');
+    expect(html).toContain('评分细则');
+  });
 });

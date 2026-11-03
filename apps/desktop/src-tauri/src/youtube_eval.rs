@@ -77,7 +77,12 @@ fn prune_cache(dir: &std::path::Path) {
     };
     let mut files: Vec<(SystemTime, PathBuf)> = entries
         .filter_map(Result::ok)
-        .filter(|entry| entry.path().extension().is_some_and(|extension| extension == "cache"))
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "cache")
+        })
         .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
         .collect();
     files.sort_by(|left, right| right.0.cmp(&left.0));
@@ -142,17 +147,21 @@ return process("abcdef", "", "");
 
     #[test]
     fn evaluates_a_player_style_script() {
-        let result =
-            eval_player_script(SYNTHETIC_PLAYER_SCRIPT, Duration::from_secs(5)).expect("script runs");
+        let result = eval_player_script(SYNTHETIC_PLAYER_SCRIPT, Duration::from_secs(5))
+            .expect("script runs");
         assert_eq!(result, r#"{"n":"fedcba"}"#);
     }
 
     #[test]
     fn reports_script_errors() {
-        let error = eval_player_script("throw new Error('no decipher function');", Duration::from_secs(5))
-            .expect_err("must fail");
+        let error = eval_player_script(
+            "throw new Error('no decipher function');",
+            Duration::from_secs(5),
+        )
+        .expect_err("must fail");
         assert!(error.contains("no decipher function"), "{error}");
-        let syntax = eval_player_script("return (;", Duration::from_secs(5)).expect_err("must fail");
+        let syntax =
+            eval_player_script("return (;", Duration::from_secs(5)).expect_err("must fail");
         assert!(!syntax.is_empty());
     }
 
@@ -167,8 +176,13 @@ return process("abcdef", "", "");
     #[test]
     fn interrupts_runaway_scripts() {
         let started = Instant::now();
-        let error = eval_player_script("while (true) {}", Duration::from_millis(300)).expect_err("must stop");
-        assert!(started.elapsed() < Duration::from_secs(3), "took {:?}", started.elapsed());
+        let error = eval_player_script("while (true) {}", Duration::from_millis(300))
+            .expect_err("must stop");
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "took {:?}",
+            started.elapsed()
+        );
         assert!(!error.is_empty());
     }
 
@@ -184,17 +198,22 @@ return process("abcdef", "", "");
 
     #[test]
     fn rejects_oversized_scripts_and_results() {
-        assert!(eval_player_script(&"a".repeat(MAX_SCRIPT_BYTES + 1), Duration::from_secs(1)).is_err());
-        let result = eval_player_script(
-            "return 'y'.repeat(70000);",
-            Duration::from_secs(5),
+        assert!(
+            eval_player_script(&"a".repeat(MAX_SCRIPT_BYTES + 1), Duration::from_secs(1)).is_err()
         );
+        let result = eval_player_script("return 'y'.repeat(70000);", Duration::from_secs(5));
         assert!(result.expect_err("too large").contains("过大"));
     }
 
     #[test]
     fn has_no_ambient_io() {
-        for probe in ["return typeof std;", "return typeof os;", "return typeof require;", "return typeof process;", "return typeof fetch;"] {
+        for probe in [
+            "return typeof std;",
+            "return typeof os;",
+            "return typeof require;",
+            "return typeof process;",
+            "return typeof fetch;",
+        ] {
             assert_eq!(
                 eval_player_script(probe, Duration::from_secs(5)).unwrap(),
                 r#""undefined""#,

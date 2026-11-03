@@ -25,7 +25,8 @@ fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
     if let Some(path) = std::env::var_os("SEAMIND_PLAYER_DB") {
         let path = PathBuf::from(path);
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| format!("无法创建播放器数据目录：{error}"))?;
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("无法创建播放器数据目录：{error}"))?;
         }
         return Ok(path);
     }
@@ -33,7 +34,8 @@ fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
         .path()
         .app_local_data_dir()
         .map_err(|error| format!("无法定位播放器数据目录：{error}"))?;
-    std::fs::create_dir_all(&directory).map_err(|error| format!("无法创建播放器数据目录：{error}"))?;
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("无法创建播放器数据目录：{error}"))?;
     Ok(directory.join(DATABASE_FILE))
 }
 
@@ -56,12 +58,18 @@ pub fn player_overview(app: AppHandle) -> Result<store::Overview, String> {
 }
 
 #[tauri::command(async)]
-pub fn player_settings_save(app: AppHandle, settings: store::PlayerSettings) -> Result<store::PlayerSettings, String> {
+pub fn player_settings_save(
+    app: AppHandle,
+    settings: store::PlayerSettings,
+) -> Result<store::PlayerSettings, String> {
     store::save_settings(&open(&app)?, &settings)
 }
 
 #[tauri::command(async)]
-pub fn player_subscribe(app: AppHandle, channel: store::ChannelInput) -> Result<store::Channel, String> {
+pub fn player_subscribe(
+    app: AppHandle,
+    channel: store::ChannelInput,
+) -> Result<store::Channel, String> {
     store::subscribe(&open(&app)?, &channel, now())
 }
 
@@ -84,22 +92,35 @@ pub fn player_import_channels(
 }
 
 #[tauri::command(async)]
-pub fn player_store_videos(app: AppHandle, videos: Vec<store::VideoInput>) -> Result<Vec<store::VideoItem>, String> {
+pub fn player_store_videos(
+    app: AppHandle,
+    videos: Vec<store::VideoInput>,
+) -> Result<Vec<store::VideoItem>, String> {
     store::store_videos(&open(&app)?, &videos, now())
 }
 
 #[tauri::command(async)]
-pub fn player_video_items(app: AppHandle, video_ids: Vec<String>) -> Result<Vec<store::VideoItem>, String> {
+pub fn player_video_items(
+    app: AppHandle,
+    video_ids: Vec<String>,
+) -> Result<Vec<store::VideoItem>, String> {
     store::video_items(&open(&app)?, &video_ids)
 }
 
 #[tauri::command(async)]
-pub fn player_feed(app: AppHandle, query: store::FeedQuery) -> Result<Vec<store::VideoItem>, String> {
+pub fn player_feed(
+    app: AppHandle,
+    query: store::FeedQuery,
+) -> Result<Vec<store::VideoItem>, String> {
     store::feed(&open(&app)?, &query)
 }
 
 #[tauri::command(async)]
-pub fn player_history(app: AppHandle, limit: i64, offset: i64) -> Result<Vec<store::VideoItem>, String> {
+pub fn player_history(
+    app: AppHandle,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<store::VideoItem>, String> {
     store::history(&open(&app)?, limit, offset)
 }
 
@@ -125,11 +146,20 @@ pub fn player_save_progress(
     progress_seconds: f64,
     duration_seconds: Option<f64>,
 ) -> Result<Option<store::WatchState>, String> {
-    store::save_progress(&open(&app)?, &video_id, progress_seconds, duration_seconds, now())
+    store::save_progress(
+        &open(&app)?,
+        &video_id,
+        progress_seconds,
+        duration_seconds,
+        now(),
+    )
 }
 
 #[tauri::command(async)]
-pub fn player_watch_state(app: AppHandle, video_id: String) -> Result<Option<store::WatchState>, String> {
+pub fn player_watch_state(
+    app: AppHandle,
+    video_id: String,
+) -> Result<Option<store::WatchState>, String> {
     store::watch_state(&open(&app)?, &video_id)
 }
 
@@ -144,7 +174,11 @@ pub fn player_playlist_create(app: AppHandle, name: String) -> Result<store::Pla
 }
 
 #[tauri::command(async)]
-pub fn player_playlist_rename(app: AppHandle, playlist_id: String, name: String) -> Result<(), String> {
+pub fn player_playlist_rename(
+    app: AppHandle,
+    playlist_id: String,
+    name: String,
+) -> Result<(), String> {
     store::playlist_rename(&open(&app)?, &playlist_id, &name, now())
 }
 
@@ -154,22 +188,37 @@ pub fn player_playlist_delete(app: AppHandle, playlist_id: String) -> Result<(),
 }
 
 #[tauri::command(async)]
-pub fn player_playlist_add(app: AppHandle, playlist_id: String, video_id: String) -> Result<(), String> {
+pub fn player_playlist_add(
+    app: AppHandle,
+    playlist_id: String,
+    video_id: String,
+) -> Result<(), String> {
     store::playlist_add(&open(&app)?, &playlist_id, &video_id, now())
 }
 
 #[tauri::command(async)]
-pub fn player_playlist_remove(app: AppHandle, playlist_id: String, video_id: String) -> Result<(), String> {
+pub fn player_playlist_remove(
+    app: AppHandle,
+    playlist_id: String,
+    video_id: String,
+) -> Result<(), String> {
     store::playlist_remove(&open(&app)?, &playlist_id, &video_id, now())
 }
 
 #[tauri::command(async)]
-pub fn player_playlist_toggle(app: AppHandle, playlist_id: String, video_id: String) -> Result<bool, String> {
+pub fn player_playlist_toggle(
+    app: AppHandle,
+    playlist_id: String,
+    video_id: String,
+) -> Result<bool, String> {
     store::playlist_toggle(&open(&app)?, &playlist_id, &video_id, now())
 }
 
 #[tauri::command(async)]
-pub fn player_playlist_items(app: AppHandle, playlist_id: String) -> Result<Vec<store::VideoItem>, String> {
+pub fn player_playlist_items(
+    app: AppHandle,
+    playlist_id: String,
+) -> Result<Vec<store::VideoItem>, String> {
     store::playlist_items(&open(&app)?, &playlist_id)
 }
 
@@ -181,7 +230,14 @@ pub fn player_course_save(
     channel_name: Option<String>,
     videos: Vec<store::VideoInput>,
 ) -> Result<store::Playlist, String> {
-    store::course_save(&open(&app)?, &remote_id, &name, channel_name.as_deref(), &videos, now())
+    store::course_save(
+        &open(&app)?,
+        &remote_id,
+        &name,
+        channel_name.as_deref(),
+        &videos,
+        now(),
+    )
 }
 
 #[tauri::command(async)]
@@ -294,12 +350,18 @@ struct Failure {
 
 impl Failure {
     fn permanent(message: impl Into<String>) -> Self {
-        Failure { message: message.into(), transient: false }
+        Failure {
+            message: message.into(),
+            transient: false,
+        }
     }
 
     /// A refused or dropped connection is worth asking again; a timeout already cost its whole wait.
     fn from_network(error: &reqwest::Error) -> Self {
-        Failure { message: network_error(error), transient: !error.is_timeout() }
+        Failure {
+            message: network_error(error),
+            transient: !error.is_timeout(),
+        }
     }
 }
 
@@ -321,7 +383,11 @@ where
     }
 }
 
-async fn get_text_once(client: &reqwest::Client, url: &str, accept: &str) -> Result<(StatusCode, String), Failure> {
+async fn get_text_once(
+    client: &reqwest::Client,
+    url: &str,
+    accept: &str,
+) -> Result<(StatusCode, String), Failure> {
     let response = tokio::time::timeout(
         REQUEST_TIMEOUT,
         client
@@ -344,7 +410,11 @@ async fn get_text_once(client: &reqwest::Client, url: &str, accept: &str) -> Res
     Ok((status, String::from_utf8_lossy(&bytes).into_owned()))
 }
 
-async fn get_text(client: &reqwest::Client, url: &str, accept: &str) -> Result<(StatusCode, String), String> {
+async fn get_text(
+    client: &reqwest::Client,
+    url: &str,
+    accept: &str,
+) -> Result<(StatusCode, String), String> {
     with_retries(&RETRY_DELAYS, || get_text_once(client, url, accept))
         .await
         .map_err(|failure| failure.message)
@@ -378,8 +448,12 @@ fn read_feed(status: StatusCode, body: &str, channel_id: &str) -> Result<Fetched
 /// The channel's latest long videos. YouTube keeps an uploads playlist without Shorts and live
 /// streams for every channel (its id is the channel's with `UULF` for `UC`); the channel's own feed
 /// mixes the Shorts in, so it is only the fallback for a channel without that playlist.
-async fn fetch_channel_feed(client: &reqwest::Client, channel_id: &str) -> Result<FetchedFeed, String> {
-    let long_form = store::long_form_playlist_id(channel_id).ok_or_else(|| "频道编号无效。".to_string())?;
+async fn fetch_channel_feed(
+    client: &reqwest::Client,
+    channel_id: &str,
+) -> Result<FetchedFeed, String> {
+    let long_form =
+        store::long_form_playlist_id(channel_id).ok_or_else(|| "频道编号无效。".to_string())?;
     let url = format!("https://www.youtube.com/feeds/videos.xml?playlist_id={long_form}");
     let (status, body) = get_text(client, &url, ATOM_ACCEPT).await?;
     if status != StatusCode::NOT_FOUND && status != StatusCode::FORBIDDEN {
@@ -430,7 +504,8 @@ pub async fn player_fetch_feed(
                 .videos
                 .into_iter()
                 .map(|mut video| {
-                    video.channel_name = video.channel_name.or_else(|| fetched.channel_name.clone());
+                    video.channel_name =
+                        video.channel_name.or_else(|| fetched.channel_name.clone());
                     video
                 })
                 .collect();
@@ -482,14 +557,21 @@ fn parse_oembed(video_id: &str, text: &str) -> Result<VideoBasics, String> {
 /// A video's title and channel name, for a link the user pasted. YouTube's oEmbed answer is tiny and
 /// does not go through the bot check that stream addresses do.
 #[tauri::command]
-pub async fn player_fetch_video_info(net: State<'_, YouTubeNet>, video_id: String) -> Result<VideoBasics, String> {
+pub async fn player_fetch_video_info(
+    net: State<'_, YouTubeNet>,
+    video_id: String,
+) -> Result<VideoBasics, String> {
     if !store::is_video_id(&video_id) {
         return Err("视频编号无效。".to_string());
     }
     let client = net.client(RedirectScope::YouTube)?;
-    let mut url = url::Url::parse("https://www.youtube.com/oembed").map_err(|error| error.to_string())?;
+    let mut url =
+        url::Url::parse("https://www.youtube.com/oembed").map_err(|error| error.to_string())?;
     url.query_pairs_mut()
-        .append_pair("url", &format!("https://www.youtube.com/watch?v={video_id}"))
+        .append_pair(
+            "url",
+            &format!("https://www.youtube.com/watch?v={video_id}"),
+        )
         .append_pair("format", "json");
     let (status, body) = get_text(&client, url.as_str(), "application/json").await?;
     match status.as_u16() {
@@ -507,14 +589,27 @@ mod tests {
 
     #[test]
     fn a_feed_that_answers_404_names_the_cause() {
-        let error = read_feed(StatusCode::NOT_FOUND, "<html></html>", "UCYO_jab_esuFRV4b17AJtAw").unwrap_err();
+        let error = read_feed(
+            StatusCode::NOT_FOUND,
+            "<html></html>",
+            "UCYO_jab_esuFRV4b17AJtAw",
+        )
+        .unwrap_err();
         assert!(error.contains("找不到"));
-        assert!(read_feed(StatusCode::TOO_MANY_REQUESTS, "", "UCYO_jab_esuFRV4b17AJtAw")
-            .unwrap_err()
-            .contains("限制"));
-        assert!(read_feed(StatusCode::INTERNAL_SERVER_ERROR, "", "UCYO_jab_esuFRV4b17AJtAw")
-            .unwrap_err()
-            .contains("500"));
+        assert!(read_feed(
+            StatusCode::TOO_MANY_REQUESTS,
+            "",
+            "UCYO_jab_esuFRV4b17AJtAw"
+        )
+        .unwrap_err()
+        .contains("限制"));
+        assert!(read_feed(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "",
+            "UCYO_jab_esuFRV4b17AJtAw"
+        )
+        .unwrap_err()
+        .contains("500"));
     }
 
     #[test]
@@ -528,7 +623,10 @@ mod tests {
         assert_eq!(fetched.channel_name.as_deref(), Some("频道甲"));
         assert_eq!(fetched.videos.len(), 1);
         assert_eq!(fetched.videos[0].video_id, "aaaaaaaaaaa");
-        assert_eq!(fetched.videos[0].channel_id.as_deref(), Some("UCYO_jab_esuFRV4b17AJtAw"));
+        assert_eq!(
+            fetched.videos[0].channel_id.as_deref(),
+            Some("UCYO_jab_esuFRV4b17AJtAw")
+        );
     }
 
     #[test]
@@ -551,7 +649,10 @@ mod tests {
     }
 
     fn dropped() -> Failure {
-        Failure { message: "连接被中断".to_string(), transient: true }
+        Failure {
+            message: "连接被中断".to_string(),
+            transient: true,
+        }
     }
 
     #[tokio::test]
@@ -560,7 +661,13 @@ mod tests {
         let outcome = with_retries(&[Duration::ZERO, Duration::ZERO], || {
             calls.set(calls.get() + 1);
             let attempt = calls.get();
-            async move { if attempt < 3 { Err(dropped()) } else { Ok("answer") } }
+            async move {
+                if attempt < 3 {
+                    Err(dropped())
+                } else {
+                    Ok("answer")
+                }
+            }
         })
         .await;
         assert_eq!(outcome.unwrap(), "answer");
@@ -611,10 +718,15 @@ mod tests {
             .user_agent("Mozilla/5.0")
             .build()
             .unwrap();
-        let fetched = fetch_channel_feed(&client, "UCYO_jab_esuFRV4b17AJtAw").await.unwrap();
+        let fetched = fetch_channel_feed(&client, "UCYO_jab_esuFRV4b17AJtAw")
+            .await
+            .unwrap();
         assert_eq!(fetched.channel_name.as_deref(), Some("3Blue1Brown"));
         assert!(fetched.videos.len() >= 5, "{} videos", fetched.videos.len());
-        assert!(fetched.videos.iter().all(|video| video.published_at.is_some()));
+        assert!(fetched
+            .videos
+            .iter()
+            .all(|video| video.published_at.is_some()));
     }
 
     /// Asks YouTube for a real video's oEmbed answer; needs network access.

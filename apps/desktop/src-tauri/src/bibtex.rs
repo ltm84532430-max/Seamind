@@ -44,7 +44,9 @@ pub fn generate_cite_key(authors: &[String], year: Option<i32>, title: &str) -> 
         .unwrap_or_else(|| "nd".to_string());
 
     // First significant word in title (ignoring articles/prepositions)
-    let stop_words = ["a", "an", "the", "on", "in", "of", "for", "with", "at", "by", "from", "to"];
+    let stop_words = [
+        "a", "an", "the", "on", "in", "of", "for", "with", "at", "by", "from", "to",
+    ];
     let title_word = title
         .split_whitespace()
         .map(|w| {
@@ -221,9 +223,7 @@ pub fn parse_bibtex(content: &str) -> Vec<ParsedBibEntry> {
             .get("eprint")
             .or_else(|| fields.get("arxivid"))
             .map(|s| strip_latex_curlies(s));
-        let abstract_text = fields
-            .get("abstract")
-            .map(|s| strip_latex_curlies(s));
+        let abstract_text = fields.get("abstract").map(|s| strip_latex_curlies(s));
         let keywords = fields
             .get("keywords")
             .map(|kw| {
@@ -357,7 +357,10 @@ pub fn serialize_bibtex(entry: &ParsedBibEntry) -> String {
         out.push_str(&format!("  title = {{{}}},\n", entry.title));
     }
     if !entry.authors.is_empty() {
-        out.push_str(&format!("  author = {{{}}},\n", entry.authors.join(" and ")));
+        out.push_str(&format!(
+            "  author = {{{}}},\n",
+            entry.authors.join(" and ")
+        ));
     }
     if let Some(ref venue) = entry.venue {
         if entry_type == "inproceedings" || entry_type == "incollection" {
@@ -391,7 +394,10 @@ pub fn serialize_bibtex(entry: &ParsedBibEntry) -> String {
         out.push_str(&format!("  eprint = {{{}}},\n", eprint));
     }
     if !entry.keywords.is_empty() {
-        out.push_str(&format!("  keywords = {{{}}},\n", entry.keywords.join(", ")));
+        out.push_str(&format!(
+            "  keywords = {{{}}},\n",
+            entry.keywords.join(", ")
+        ));
     }
     if let Some(ref abs) = entry.abstract_text {
         if !abs.is_empty() {
@@ -426,7 +432,10 @@ pub fn format_apa(entry: &ParsedBibEntry) -> String {
         .map(|y| format!("({y})"))
         .unwrap_or_else(|| "(n.d.)".to_string());
 
-    let mut result = format!("{author_str} {year_str}. {}.", entry.title.trim_end_matches('.'));
+    let mut result = format!(
+        "{author_str} {year_str}. {}.",
+        entry.title.trim_end_matches('.')
+    );
 
     if let Some(ref venue) = entry.venue {
         result.push_str(&format!(" {venue}"));

@@ -119,7 +119,11 @@ struct HttpText {
 
 fn network_failure(stage: &'static str, error: reqwest::Error) -> TranscriptFailure {
     if error.is_timeout() {
-        TranscriptFailure::new("timeout", stage, "YouTube 请求超时；请检查网络或代理线路后重试。")
+        TranscriptFailure::new(
+            "timeout",
+            stage,
+            "YouTube 请求超时；请检查网络或代理线路后重试。",
+        )
     } else {
         TranscriptFailure::new(
             "network",
@@ -839,7 +843,8 @@ mod tests {
         let response = HttpText {
             status: 200,
             content_type: "text/xml".into(),
-            body: "<transcript><text start=\"1\" dur=\"2\">I am not a bot</text></transcript>".into(),
+            body: "<transcript><text start=\"1\" dur=\"2\">I am not a bot</text></transcript>"
+                .into(),
         };
         assert!(classify_caption_body(&response).is_ok());
     }

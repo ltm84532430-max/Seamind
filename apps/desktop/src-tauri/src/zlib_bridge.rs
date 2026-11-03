@@ -1,9 +1,9 @@
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
-use crate::library::{safe_file_stem, require_root, path_to_relative_string, EpubBookDocument};
+use crate::library::{path_to_relative_string, require_root, safe_file_stem, EpubBookDocument};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ZlibBook {
@@ -119,9 +119,7 @@ fn run_zlib_json(binary: &Path, args: &[&str]) -> Result<serde_json::Value, Stri
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
-    let output = cmd
-        .output()
-        .map_err(|e| format!("执行 zlib 失败：{e}"))?;
+    let output = cmd.output().map_err(|e| format!("执行 zlib 失败：{e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -129,8 +127,7 @@ fn run_zlib_json(binary: &Path, args: &[&str]) -> Result<serde_json::Value, Stri
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str(stdout.trim())
-        .map_err(|e| format!("无法解析 zlib 返回的 JSON 数据：{e}"))
+    serde_json::from_str(stdout.trim()).map_err(|e| format!("无法解析 zlib 返回的 JSON 数据：{e}"))
 }
 
 #[tauri::command]
@@ -177,7 +174,10 @@ pub fn zlib_get_profile(custom_path: Option<String>) -> Result<ZlibProfile, Stri
 
     let val = run_zlib_json(&binary, &["profile", "--json"])?;
 
-    let email = val.get("email").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let email = val
+        .get("email")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     let downloads_today = val
         .get("downloads_today")
         .or_else(|| val.get("downloadsToday"))
@@ -244,21 +244,53 @@ pub async fn zlib_search(
         };
 
         for item in items {
-            let id = item.get("id").map(|v| v.to_string().trim_matches('"').to_string()).unwrap_or_default();
-            let hash = item.get("hash").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-            let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("未知书名").to_string();
-            let author = item.get("author").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let publisher = item.get("publisher").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let year = item.get("year").map(|v| v.to_string().trim_matches('"').to_string());
-            let language = item.get("language").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let item_ext = item.get("extension").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let id = item
+                .get("id")
+                .map(|v| v.to_string().trim_matches('"').to_string())
+                .unwrap_or_default();
+            let hash = item
+                .get("hash")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let title = item
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("未知书名")
+                .to_string();
+            let author = item
+                .get("author")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let publisher = item
+                .get("publisher")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let year = item
+                .get("year")
+                .map(|v| v.to_string().trim_matches('"').to_string());
+            let language = item
+                .get("language")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let item_ext = item
+                .get("extension")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             let filesize = item
                 .get("filesizeString")
                 .or_else(|| item.get("filesize"))
                 .map(|v| v.to_string().trim_matches('"').to_string());
-            let cover = item.get("cover").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let rating = item.get("rating").map(|v| v.to_string().trim_matches('"').to_string());
-            let pages = item.get("pages").map(|v| v.to_string().trim_matches('"').to_string());
+            let cover = item
+                .get("cover")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let rating = item
+                .get("rating")
+                .map(|v| v.to_string().trim_matches('"').to_string());
+            let pages = item
+                .get("pages")
+                .map(|v| v.to_string().trim_matches('"').to_string());
 
             if !id.is_empty() && !hash.is_empty() {
                 books.push(ZlibBook {
@@ -305,9 +337,13 @@ pub async fn zlib_search(
             "limit": count.unwrap_or(20)
         });
 
-        match client.post(&endpoint)
+        match client
+            .post(&endpoint)
             .json(&payload)
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            )
             .send()
             .await
         {
@@ -316,18 +352,53 @@ pub async fn zlib_search(
                     let mut books = Vec::new();
                     if let Some(arr) = val.get("books").and_then(|b| b.as_array()) {
                         for item in arr {
-                            let id = item.get("id").map(|v| v.to_string().trim_matches('"').to_string()).unwrap_or_default();
-                            let hash = item.get("hash").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-                            let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("未知书名").to_string();
-                            let author = item.get("author").and_then(|v| v.as_str()).map(|s| s.to_string());
-                            let publisher = item.get("publisher").and_then(|v| v.as_str()).map(|s| s.to_string());
-                            let year = item.get("year").map(|v| v.to_string().trim_matches('"').to_string());
-                            let language = item.get("language").and_then(|v| v.as_str()).map(|s| s.to_string());
-                            let item_ext = item.get("extension").and_then(|v| v.as_str()).map(|s| s.to_string());
-                            let filesize = item.get("filesizeString").or_else(|| item.get("filesize")).map(|v| v.to_string().trim_matches('"').to_string());
-                            let cover = item.get("cover").and_then(|v| v.as_str()).map(|s| s.to_string());
-                            let rating = item.get("rating").map(|v| v.to_string().trim_matches('"').to_string());
-                            let pages = item.get("pages").map(|v| v.to_string().trim_matches('"').to_string());
+                            let id = item
+                                .get("id")
+                                .map(|v| v.to_string().trim_matches('"').to_string())
+                                .unwrap_or_default();
+                            let hash = item
+                                .get("hash")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default()
+                                .to_string();
+                            let title = item
+                                .get("title")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("未知书名")
+                                .to_string();
+                            let author = item
+                                .get("author")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                            let publisher = item
+                                .get("publisher")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                            let year = item
+                                .get("year")
+                                .map(|v| v.to_string().trim_matches('"').to_string());
+                            let language = item
+                                .get("language")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                            let item_ext = item
+                                .get("extension")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                            let filesize = item
+                                .get("filesizeString")
+                                .or_else(|| item.get("filesize"))
+                                .map(|v| v.to_string().trim_matches('"').to_string());
+                            let cover = item
+                                .get("cover")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+                            let rating = item
+                                .get("rating")
+                                .map(|v| v.to_string().trim_matches('"').to_string());
+                            let pages = item
+                                .get("pages")
+                                .map(|v| v.to_string().trim_matches('"').to_string());
 
                             if !id.is_empty() && !hash.is_empty() {
                                 books.push(ZlibBook {
@@ -377,24 +448,24 @@ pub async fn zlib_download_book(
 ) -> Result<EpubBookDocument, String> {
     let root = require_root(&app)?;
     let books_dir = root.join("books");
-    std::fs::create_dir_all(&books_dir)
-        .map_err(|e| format!("无法创建电子书书架目录：{e}"))?;
+    std::fs::create_dir_all(&books_dir).map_err(|e| format!("无法创建电子书书架目录：{e}"))?;
 
     let binary = find_zlib_binary(custom_path.as_deref())
         .ok_or_else(|| "下载功能需要使用 zlib 命令行程序。请先在电脑上安装 heartleo/zlib（如使用 winget install --id heartleo.zlib）。".to_string())?;
 
     // Record files in books_dir before download
     let existing_files: std::collections::HashSet<PathBuf> = std::fs::read_dir(&books_dir)
-        .map(|iter| {
-            iter.filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .collect()
-        })
+        .map(|iter| iter.filter_map(|e| e.ok()).map(|e| e.path()).collect())
         .unwrap_or_default();
 
     let clean_id_hash = id_hash.trim();
     let mut cmd = Command::new(&binary);
-    cmd.args(["download", clean_id_hash, "--dir", &books_dir.to_string_lossy()]);
+    cmd.args([
+        "download",
+        clean_id_hash,
+        "--dir",
+        &books_dir.to_string_lossy(),
+    ]);
 
     #[cfg(windows)]
     {
@@ -403,11 +474,17 @@ pub async fn zlib_download_book(
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
-    let output = cmd.output().map_err(|e| format!("启动 zlib 下载失败：{e}"))?;
+    let output = cmd
+        .output()
+        .map_err(|e| format!("启动 zlib 下载失败：{e}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let combined = if stderr.trim().is_empty() { stdout } else { stderr };
+        let combined = if stderr.trim().is_empty() {
+            stdout
+        } else {
+            stderr
+        };
         return Err(format!("下载失败：{}", combined.trim()));
     }
 
@@ -438,7 +515,9 @@ pub async fn zlib_download_book(
             if candidate.is_file() {
                 candidate
             } else {
-                return Err("下载成功，但在书架目录中未检测到新的 .epub 文件。请刷新书架。".to_string());
+                return Err(
+                    "下载成功，但在书架目录中未检测到新的 .epub 文件。请刷新书架。".to_string(),
+                );
             }
         } else {
             return Err("下载完成，但未能定位新下载的电子书文件，请在书架点击“刷新”。".to_string());
@@ -449,8 +528,8 @@ pub async fn zlib_download_book(
         .strip_prefix(&root)
         .map_err(|_| "电子书保存位置超出了文件库。".to_string())?;
     let relative_path = path_to_relative_string(relative);
-    let metadata = std::fs::metadata(&target_file)
-        .map_err(|e| format!("无法读取已下载电子书信息：{e}"))?;
+    let metadata =
+        std::fs::metadata(&target_file).map_err(|e| format!("无法读取已下载电子书信息：{e}"))?;
 
     let file_stem = target_file
         .file_stem()

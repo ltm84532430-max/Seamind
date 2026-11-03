@@ -59,10 +59,7 @@ pub fn normalize_windows_path(path: &Path) -> PathBuf {
 pub fn find_c_compiler() -> Option<PathBuf> {
     // 1. Try PATH first
     let probe_cmd = if cfg!(windows) { "where" } else { "which" };
-    if let Ok(output) = std::process::Command::new(probe_cmd)
-        .arg("gcc")
-        .output()
-    {
+    if let Ok(output) = std::process::Command::new(probe_cmd).arg("gcc").output() {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             if let Some(first_line) = stdout.lines().next() {
@@ -147,7 +144,10 @@ pub async fn c_check_environment() -> Result<CEnvironmentInfo, String> {
             compiler_path: String::new(),
             compiler_name: String::new(),
             version: String::new(),
-            error: Some("未检测到本地 C 语言编译器（gcc / clang）。建议安装 MSYS2 或添加 gcc 至系统 PATH。".to_string()),
+            error: Some(
+                "未检测到本地 C 语言编译器（gcc / clang）。建议安装 MSYS2 或添加 gcc 至系统 PATH。"
+                    .to_string(),
+            ),
         }),
     }
 }
@@ -162,9 +162,8 @@ pub async fn c_run_code(
         return Err("C 源码大小不能超过 120 KB。".to_string());
     }
 
-    let compiler_path = find_c_compiler().ok_or_else(|| {
-        "未找到 C 编译器 (gcc)。请确认本地已安装 MSYS2 或 GCC。".to_string()
-    })?;
+    let compiler_path = find_c_compiler()
+        .ok_or_else(|| "未找到 C 编译器 (gcc)。请确认本地已安装 MSYS2 或 GCC。".to_string())?;
 
     // If it's C++ and we found gcc, try to use g++ from the same directory
     let effective_compiler = if is_cpp.unwrap_or(false) {
@@ -192,8 +191,7 @@ pub async fn c_run_code(
     let start_time = Instant::now();
     let session_id = Uuid::new_v4().to_string();
     let temp_dir = std::env::temp_dir().join(format!("seamind-c-build-{session_id}"));
-    std::fs::create_dir_all(&temp_dir)
-        .map_err(|e| format!("无法创建临时构建目录：{e}"))?;
+    std::fs::create_dir_all(&temp_dir).map_err(|e| format!("无法创建临时构建目录：{e}"))?;
 
     let file_ext = if is_cpp.unwrap_or(false) { "cpp" } else { "c" };
     let source_file = temp_dir.join(format!("main.{file_ext}"));
@@ -211,7 +209,10 @@ pub async fn c_run_code(
     if let Some(parent) = effective_compiler.parent() {
         if let Ok(current_path) = std::env::var("PATH") {
             let parent_norm = normalize_windows_path(parent);
-            compile_cmd.env("PATH", format!("{};{}", parent_norm.display(), current_path));
+            compile_cmd.env(
+                "PATH",
+                format!("{};{}", parent_norm.display(), current_path),
+            );
         }
     }
     // Explicit UTF-8 charset flags prevent Chinese mojibake on Windows console
@@ -276,7 +277,10 @@ pub async fn c_run_code(
     if let Some(parent) = effective_compiler.parent() {
         if let Ok(current_path) = std::env::var("PATH") {
             let parent_norm = normalize_windows_path(parent);
-            run_cmd.env("PATH", format!("{};{}", parent_norm.display(), current_path));
+            run_cmd.env(
+                "PATH",
+                format!("{};{}", parent_norm.display(), current_path),
+            );
         }
     }
     run_cmd.stdout(std::process::Stdio::piped());
@@ -414,15 +418,18 @@ pub fn c_stage_source_file(
     let base_dir = normalize_windows_path(&raw_base_dir);
 
     let file_path = base_dir.join(&file_name);
-    std::fs::write(&file_path, source.as_bytes())
-        .map_err(|e| format!("无法写入代码文件：{e}"))?;
+    std::fs::write(&file_path, source.as_bytes()).map_err(|e| format!("无法写入代码文件：{e}"))?;
 
     let exe_name = if cfg!(windows) {
         format!("{safe_stem}.exe")
     } else {
         safe_stem.clone()
     };
-    let compiler = if is_cpp.unwrap_or(false) { "g++" } else { "gcc" };
+    let compiler = if is_cpp.unwrap_or(false) {
+        "g++"
+    } else {
+        "gcc"
+    };
 
     let bin_path_injection = if let Some(compiler_path) = find_c_compiler() {
         if let Some(parent) = compiler_path.parent() {

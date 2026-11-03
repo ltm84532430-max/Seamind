@@ -5964,6 +5964,7 @@ export default function App() {
           />
         ) : (
           <EbookWorkspace
+            provider={providerSettings}
             snapshot={librarySnapshot}
             busy={libraryBusy}
             onImport={() => void importEpubBook()}

@@ -592,12 +592,11 @@ fn write_new_library_file(
         return Err("标题不能为空，且最多 120 个字符。".to_string());
     }
     let category = normalize_category(category)?;
-    let requested = category_path(&category)?.join(format!("{}.{extension}", safe_file_stem(title)?));
+    let requested =
+        category_path(&category)?.join(format!("{}.{extension}", safe_file_stem(title)?));
     let relative = unique_path(root, requested)?;
-    let parent = create_directory_inside_root(
-        root,
-        relative.parent().unwrap_or_else(|| Path::new("")),
-    )?;
+    let parent =
+        create_directory_inside_root(root, relative.parent().unwrap_or_else(|| Path::new("")))?;
     let file_name = relative
         .file_name()
         .ok_or_else(|| "文件名无效。".to_string())?;
@@ -2735,9 +2734,14 @@ mod tests {
     fn diagram_files_are_created_opened_saved_and_deleted() {
         let scratch = Scratch::new();
         let root = &scratch.0;
-        let created =
-            create_text_document_in(root, "mermaid", "图表/订单流", "订单流", "flowchart LR\n  A --> B")
-                .unwrap();
+        let created = create_text_document_in(
+            root,
+            "mermaid",
+            "图表/订单流",
+            "订单流",
+            "flowchart LR\n  A --> B",
+        )
+        .unwrap();
         assert_eq!(created.document.relative_path, "图表/订单流/订单流.mmd");
         assert_eq!(created.document.title, "订单流");
         assert_eq!(created.document.category, "图表/订单流");
@@ -2745,7 +2749,8 @@ mod tests {
         assert_eq!(created.source, "flowchart LR\n  A --> B\n");
 
         let second =
-            create_text_document_in(root, "mermaid", "图表/订单流", "订单流", "flowchart LR").unwrap();
+            create_text_document_in(root, "mermaid", "图表/订单流", "订单流", "flowchart LR")
+                .unwrap();
         assert_eq!(second.document.relative_path, "图表/订单流/订单流 (2).mmd");
         assert_ne!(second.document.id, created.document.id);
 
@@ -2810,9 +2815,13 @@ mod tests {
         assert_eq!(reopened.source, "flowchart TD\n  X --> Y\n");
         assert_eq!(reopened.document.title, "新名");
 
-        let again =
-            save_text_document_in(&scratch.0, &renamed.relative_path, "flowchart TD", Some("新名"))
-                .unwrap();
+        let again = save_text_document_in(
+            &scratch.0,
+            &renamed.relative_path,
+            "flowchart TD",
+            Some("新名"),
+        )
+        .unwrap();
         assert_eq!(again.relative_path, "图表/新名.mmd");
     }
 
@@ -2890,10 +2899,10 @@ mod tests {
         assert!(create_text_document_in(&scratch.0, "mermaid", "x", "  ", "s").is_err());
         let big = "a".repeat(MAX_DIAGRAM_SOURCE_BYTES as usize + 1);
         assert!(create_text_document_in(&scratch.0, "mermaid", "x", "t", &big).is_err());
-        let created = create_text_document_in(&scratch.0, "mermaid", "x", "t", "flowchart LR").unwrap();
+        let created =
+            create_text_document_in(&scratch.0, "mermaid", "x", "t", "flowchart LR").unwrap();
         assert!(
-            save_text_document_in(&scratch.0, &created.document.relative_path, &big, None)
-                .is_err()
+            save_text_document_in(&scratch.0, &created.document.relative_path, &big, None).is_err()
         );
     }
 
@@ -2951,7 +2960,15 @@ mod tests {
             categories: Vec::new(),
         })
         .unwrap();
-        for key in ["id", "relativePath", "title", "category", "kind", "fileSize", "updatedAt"] {
+        for key in [
+            "id",
+            "relativePath",
+            "title",
+            "category",
+            "kind",
+            "fileSize",
+            "updatedAt",
+        ] {
             assert!(snapshot["textDocuments"][0].get(key).is_some(), "{key}");
         }
         let opened = serde_json::to_value(OpenedTextDocument {
@@ -2983,11 +3000,17 @@ mod tests {
             metadata_from_markdown(&format!("<!-- markmap-desktop: {json} -->\n\n# T\n"))
         };
         assert_eq!(document_kind(None), "doc");
-        let plain = parse(r#"{"id":"1","title":"t","mapType":"通用","tags":[],"createdAt":1,"updatedAt":2}"#);
+        let plain = parse(
+            r#"{"id":"1","title":"t","mapType":"通用","tags":[],"createdAt":1,"updatedAt":2}"#,
+        );
         assert_eq!(document_kind(plain.as_ref()), "mindmap");
-        let doc = parse(r#"{"id":"1","title":"t","mapType":"文档","tags":[],"createdAt":1,"updatedAt":2,"kind":"doc"}"#);
+        let doc = parse(
+            r#"{"id":"1","title":"t","mapType":"文档","tags":[],"createdAt":1,"updatedAt":2,"kind":"doc"}"#,
+        );
         assert_eq!(document_kind(doc.as_ref()), "doc");
-        let other = parse(r#"{"id":"1","title":"t","mapType":"通用","tags":[],"createdAt":1,"updatedAt":2,"kind":"whatever"}"#);
+        let other = parse(
+            r#"{"id":"1","title":"t","mapType":"通用","tags":[],"createdAt":1,"updatedAt":2,"kind":"whatever"}"#,
+        );
         assert_eq!(document_kind(other.as_ref()), "mindmap");
     }
 
@@ -3004,7 +3027,9 @@ mod tests {
         };
         assert!(!serde_json::to_string(&metadata).unwrap().contains("kind"));
         metadata.kind = Some(KIND_DOC.into());
-        assert!(serde_json::to_string(&metadata).unwrap().contains(r#""kind":"doc""#));
+        assert!(serde_json::to_string(&metadata)
+            .unwrap()
+            .contains(r#""kind":"doc""#));
     }
 
     #[test]
@@ -3038,7 +3063,9 @@ mod tests {
         let mut titles: Vec<_> = text_documents.iter().map(|d| d.title.clone()).collect();
         titles.sort();
         assert_eq!(titles, vec!["手写".to_string(), "流程".to_string()]);
-        assert!(text_documents.iter().all(|document| document.kind == "mermaid"));
+        assert!(text_documents
+            .iter()
+            .all(|document| document.kind == "mermaid"));
         for category in ["导图", "文档", "图表", "书"] {
             assert!(categories.contains(&category.to_string()), "{category}");
         }

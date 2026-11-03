@@ -50,22 +50,44 @@ fn public_ipv6(ip: Ipv6Addr) -> bool {
 // Resolve those hostnames independently over TLS, then pin only public answers.
 async fn public_dns(host: &str) -> Result<Vec<SocketAddr>, String> {
     let address: SocketAddr = "1.1.1.1:443".parse().unwrap();
-    let client = Client::builder().no_proxy().redirect(Policy::none())
-        .resolve("cloudflare-dns.com", address).connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(8)).build().map_err(|_| "无法创建 DNS 连接")?;
+    let client = Client::builder()
+        .no_proxy()
+        .redirect(Policy::none())
+        .resolve("cloudflare-dns.com", address)
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|_| "无法创建 DNS 连接")?;
     for record_type in ["A", "AAAA"] {
-        let response = client.get("https://cloudflare-dns.com/dns-query")
+        let response = client
+            .get("https://cloudflare-dns.com/dns-query")
             .header("accept", "application/dns-json")
             .query(&[("name", host), ("type", record_type)])
-            .send().await.map_err(|_| "无法安全解析全文地址")?;
+            .send()
+            .await
+            .map_err(|_| "无法安全解析全文地址")?;
         let bytes = read_small(response).await?;
         let json: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| "DNS 响应无效")?;
-        if json.get("Status").and_then(|v| v.as_i64()) != Some(0) { return Err("无法安全解析全文地址".into()); }
-        let ips: Vec<IpAddr> = json.get("Answer").and_then(|v| v.as_array()).into_iter().flatten()
-            .filter_map(|item| item.get("data").and_then(|v| v.as_str()).and_then(|v| v.parse::<IpAddr>().ok()))
+        if json.get("Status").and_then(|v| v.as_i64()) != Some(0) {
+            return Err("无法安全解析全文地址".into());
+        }
+        let ips: Vec<IpAddr> = json
+            .get("Answer")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|item| {
+                item.get("data")
+                    .and_then(|v| v.as_str())
+                    .and_then(|v| v.parse::<IpAddr>().ok())
+            })
             .collect();
-        if ips.iter().any(|ip| !public_ip(*ip)) { return Err("全文地址包含不可访问的网络地址".into()); }
-        if !ips.is_empty() { return Ok(ips.into_iter().map(|ip| SocketAddr::new(ip, 443)).collect()); }
+        if ips.iter().any(|ip| !public_ip(*ip)) {
+            return Err("全文地址包含不可访问的网络地址".into());
+        }
+        if !ips.is_empty() {
+            return Ok(ips.into_iter().map(|ip| SocketAddr::new(ip, 443)).collect());
+        }
     }
     Err("无法安全解析全文地址".into())
 }
@@ -134,9 +156,12 @@ pub async fn request(raw: &str) -> Result<(Response, Url), String> {
         .map_err(|_| "解析全文地址超时".to_string())?
         .map_err(|_| "无法解析全文地址，请检查网络".to_string())?
         .collect();
-        let addresses = if addresses.is_empty() || addresses.iter().any(|addr| !public_ip(addr.ip())) {
-            public_dns(&host).await?
-        } else { addresses };
+        let addresses =
+            if addresses.is_empty() || addresses.iter().any(|addr| !public_ip(addr.ip())) {
+                public_dns(&host).await?
+            } else {
+                addresses
+            };
         let client = Client::builder()
             .no_proxy()
             .redirect(Policy::none())
@@ -277,7 +302,9 @@ pub fn arxiv_id(value: &str) -> Option<String> {
     }
     id = id.trim_end_matches(".pdf");
     static ARXIV_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let re = ARXIV_RE.get_or_init(|| Regex::new(r"(?i)^(?:\d{4}\.\d{4,5}|[a-z][a-z.\-]+/\d{7})(?:v\d+)?$").unwrap());
+    let re = ARXIV_RE.get_or_init(|| {
+        Regex::new(r"(?i)^(?:\d{4}\.\d{4,5}|[a-z][a-z.\-]+/\d{7})(?:v\d+)?$").unwrap()
+    });
     re.is_match(id).then(|| id.to_string())
 }
 

@@ -6,7 +6,10 @@ export type EpubExamQuestionType =
   | 'singleChoice'
   | 'multipleChoice'
   | 'trueFalse'
-  | 'shortAnswer';
+  | 'shortAnswer'
+  | 'comprehensive'
+  | 'engineering'
+  | 'cProgramming';
 export type EpubExamAnswer = string | string[];
 export type EpubExamSelfReview = 'mastered' | 'partial' | 'review';
 
@@ -17,12 +20,29 @@ export interface EpubExamQuestion {
   options?: string[];
   answer: EpubExamAnswer;
   explanation: string;
+  sourceRefs?: Array<{ href: string; label: string }>;
+  points?: number;
+  rubric?: Array<{ criterion: string; points: number }>;
+  codeSpec?: {
+    starterCode: string;
+    cases: Array<{ stdin: string; expectedStdout: string; hidden: boolean }>;
+  } | null;
+}
+
+export interface EpubExamGrade {
+  earned: number;
+  maximum: number;
+  feedback: string;
+  passedCases?: number | null;
+  totalCases?: number | null;
+  provisional?: boolean;
 }
 
 export interface EpubExamAttempt {
   completedAt: number;
   answers: Record<string, EpubExamAnswer>;
   selfReviews: Record<string, EpubExamSelfReview>;
+  grades?: Record<string, EpubExamGrade>;
 }
 
 export interface EpubExam {
@@ -34,6 +54,7 @@ export interface EpubExam {
   sourceSectionIndex: number;
   sourceSectionHref: string;
   sourceSectionLabel: string;
+  scope?: { kind: 'section' | 'chapter'; label: string; href: string };
   createdAt: number;
   questionCount: number;
   difficulty: EpubExamDifficulty;
@@ -42,6 +63,7 @@ export interface EpubExam {
   questions: EpubExamQuestion[];
   answers: Record<string, EpubExamAnswer>;
   selfReviews: Record<string, EpubExamSelfReview>;
+  grades?: Record<string, EpubExamGrade>;
   attempts: EpubExamAttempt[];
 }
 

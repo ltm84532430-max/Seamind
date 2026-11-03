@@ -1,6 +1,8 @@
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, USER_AGENT};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{
     fs,
@@ -9,14 +11,12 @@ use std::{
 };
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
-use uuid::Uuid;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock, Weak};
 use tokio::sync::{watch, Mutex as AsyncMutex};
+use uuid::Uuid;
 
 use crate::bibtex::{clean_doi, generate_cite_key, parse_bibtex, serialize_bibtex, ParsedBibEntry};
-use crate::literature_store as store;
 use crate::literature_resolver as resolver;
+use crate::literature_store as store;
 
 const DATABASE_FILE: &str = "literature.sqlite3";
 const PDF_DIRECTORY: &str = "paper-pdfs";
@@ -44,7 +44,9 @@ fn literature_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     if let Some(path) = std::env::var_os("SEAMIND_TEST_LITERATURE_DIR") {
         return Ok(PathBuf::from(path));
     }
-    app.path().app_local_data_dir().map_err(|e| format!("无法定位文献数据目录：{e}"))
+    app.path()
+        .app_local_data_dir()
+        .map_err(|e| format!("无法定位文献数据目录：{e}"))
 }
 
 fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -110,24 +112,37 @@ pub fn literature_save(
     paper: store::PaperInput,
 ) -> Result<store::PaperItem, String> {
     let conn = open_db(&app)?;
-    conn.execute_batch("BEGIN IMMEDIATE").map_err(|e| format!("保存文献失败：{e}"))?;
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| format!("保存文献失败：{e}"))?;
     let saved = (|| {
         if paper.id.is_none() {
-            if let Some(existing) = store::find_existing_paper_id(&conn, paper.doi.as_deref(), paper.arxiv_id.as_deref())? {
+            if let Some(existing) = store::find_existing_paper_id(
+                &conn,
+                paper.doi.as_deref(),
+                paper.arxiv_id.as_deref(),
+            )? {
                 if let Some(collections) = &paper.collection_ids {
                     for collection in collections {
                         conn.execute("INSERT OR IGNORE INTO paper_collection_items (paper_id,collection_id,added_at) VALUES (?1,?2,?3)", rusqlite::params![existing, collection, now()])
                             .map_err(|e| format!("添加文献集失败：{e}"))?;
                     }
                 }
-                return store::get_paper(&conn, &existing)?.ok_or_else(|| "找不到已保存的文献".to_string());
+                return store::get_paper(&conn, &existing)?
+                    .ok_or_else(|| "找不到已保存的文献".to_string());
             }
         }
         store::upsert_paper(&conn, &paper, now())
     })();
     match saved {
-        Ok(item) => { conn.execute_batch("COMMIT").map_err(|e| format!("保存文献失败：{e}"))?; Ok(item) }
-        Err(error) => { let _ = conn.execute_batch("ROLLBACK"); Err(error) }
+        Ok(item) => {
+            conn.execute_batch("COMMIT")
+                .map_err(|e| format!("保存文献失败：{e}"))?;
+            Ok(item)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
     }
 }
 
@@ -240,9 +255,20 @@ pub fn literature_attach_pdf(
         .join(&filename)
         .to_string_lossy()
         .replace('\\', "/");
-    conn.execute_batch("BEGIN IMMEDIATE").map_err(|e| format!("无法保存附件：{e}"))?;
-    let source = store::PaperPdfSource { source_type: "本地文件".into(), source_url: None, version: None, license: None, acquired_at: now() };
-    if let Err(error) = store::update_paper_pdf(&conn, &id, &relative_path, &sha256, now()).and_then(|_| store::set_pdf_source(&conn, &id, &source)).and_then(|_| store::set_pdf_attempt(&conn, &id, "available", None, now())).and_then(|_| conn.execute_batch("COMMIT").map_err(|e| e.to_string())) {
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| format!("无法保存附件：{e}"))?;
+    let source = store::PaperPdfSource {
+        source_type: "本地文件".into(),
+        source_url: None,
+        version: None,
+        license: None,
+        acquired_at: now(),
+    };
+    if let Err(error) = store::update_paper_pdf(&conn, &id, &relative_path, &sha256, now())
+        .and_then(|_| store::set_pdf_source(&conn, &id, &source))
+        .and_then(|_| store::set_pdf_attempt(&conn, &id, "available", None, now()))
+        .and_then(|_| conn.execute_batch("COMMIT").map_err(|e| e.to_string()))
+    {
         let _ = conn.execute_batch("ROLLBACK");
         let _ = fs::remove_file(&destination);
         return Err(error);
@@ -263,7 +289,10 @@ static PDF_CANCEL: OnceLock<Mutex<HashMap<String, watch::Sender<bool>>>> = OnceL
 static ARXIV_API_SLOT: OnceLock<AsyncMutex<Option<tokio::time::Instant>>> = OnceLock::new();
 
 async fn arxiv_api_slot() -> tokio::sync::MutexGuard<'static, Option<tokio::time::Instant>> {
-    let mut slot = ARXIV_API_SLOT.get_or_init(|| AsyncMutex::new(None)).lock().await;
+    let mut slot = ARXIV_API_SLOT
+        .get_or_init(|| AsyncMutex::new(None))
+        .lock()
+        .await;
     if let Some(previous) = *slot {
         tokio::time::sleep_until(previous + Duration::from_secs(3)).await;
     }
@@ -272,79 +301,158 @@ async fn arxiv_api_slot() -> tokio::sync::MutexGuard<'static, Option<tokio::time
 }
 
 struct TemporaryPdf(PathBuf);
-impl Drop for TemporaryPdf { fn drop(&mut self) { let _ = fs::remove_file(&self.0); } }
+impl Drop for TemporaryPdf {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
 
 #[tauri::command(async)]
 pub fn literature_cancel_pdf(id: String) {
-    if let Some(sender) = PDF_CANCEL.get_or_init(Default::default).lock().unwrap().get(&id) {
+    if let Some(sender) = PDF_CANCEL
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .get(&id)
+    {
         let _ = sender.send(true);
     }
 }
 
 #[tauri::command(async)]
-pub fn literature_pdf_source(app: AppHandle, id: String) -> Result<Option<store::PaperPdfSource>, String> {
+pub fn literature_pdf_source(
+    app: AppHandle,
+    id: String,
+) -> Result<Option<store::PaperPdfSource>, String> {
     store::pdf_source(&open_db(&app)?, &id)
 }
 
 #[tauri::command(async)]
-pub fn literature_pdf_attempt(app: AppHandle, id: String) -> Result<Option<store::PaperPdfAttempt>, String> {
+pub fn literature_pdf_attempt(
+    app: AppHandle,
+    id: String,
+) -> Result<Option<store::PaperPdfAttempt>, String> {
     store::pdf_attempt(&open_db(&app)?, &id)
 }
 
 #[tauri::command(async)]
-pub async fn literature_acquire_pdf(app: AppHandle, id: String, email: Option<String>) -> Result<store::PaperItem, String> {
+pub async fn literature_acquire_pdf(
+    app: AppHandle,
+    id: String,
+    email: Option<String>,
+) -> Result<store::PaperItem, String> {
     let lock = {
         let mut locks = PDF_LOCKS.get_or_init(Default::default).lock().unwrap();
         locks.retain(|_, lock| lock.strong_count() > 0);
         match locks.get(&id).and_then(Weak::upgrade) {
             Some(lock) => lock,
-            None => { let lock = Arc::new(AsyncMutex::new(())); locks.insert(id.clone(), Arc::downgrade(&lock)); lock }
+            None => {
+                let lock = Arc::new(AsyncMutex::new(()));
+                locks.insert(id.clone(), Arc::downgrade(&lock));
+                lock
+            }
         }
     };
     let _guard = lock.lock().await;
     let paper = store::get_paper(&open_db(&app)?, &id)?.ok_or("找不到这篇文献")?;
-    if paper.pdf_path.as_deref().is_some_and(|path| resolve_managed_pdf(&app, path).is_ok()) { return Ok(paper); }
+    if paper
+        .pdf_path
+        .as_deref()
+        .is_some_and(|path| resolve_managed_pdf(&app, path).is_ok())
+    {
+        return Ok(paper);
+    }
     store::set_pdf_attempt(&open_db(&app)?, &id, "searching", None, now())?;
     let (sender, mut receiver) = watch::channel(false);
-    PDF_CANCEL.get_or_init(Default::default).lock().unwrap().insert(id.clone(), sender);
+    PDF_CANCEL
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .insert(id.clone(), sender);
     let result = tokio::select! {
         value = acquire_pdf_inner(&app, &paper, email.as_deref()) => value,
         _ = receiver.changed() => Err("已取消获取原文".to_string()),
     };
-    PDF_CANCEL.get_or_init(Default::default).lock().unwrap().remove(&id);
+    PDF_CANCEL
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap()
+        .remove(&id);
     if let Err(error) = &result {
-        let state = if error.contains("已取消") { "cancelled" } else { "failed" };
-        if let Ok(conn) = open_db(&app) { let _ = store::set_pdf_attempt(&conn, &id, state, Some(error), now()); }
+        let state = if error.contains("已取消") {
+            "cancelled"
+        } else {
+            "failed"
+        };
+        if let Ok(conn) = open_db(&app) {
+            let _ = store::set_pdf_attempt(&conn, &id, state, Some(error), now());
+        }
     }
     result
 }
 
-async fn acquire_pdf_inner(app: &AppHandle, paper: &store::PaperItem, email: Option<&str>) -> Result<store::PaperItem, String> {
+async fn acquire_pdf_inner(
+    app: &AppHandle,
+    paper: &store::PaperItem,
+    email: Option<&str>,
+) -> Result<store::PaperItem, String> {
     let mut candidates = Vec::new();
-    let arxiv = paper.arxiv_id.as_deref().and_then(resolver::arxiv_id)
+    let arxiv = paper
+        .arxiv_id
+        .as_deref()
+        .and_then(resolver::arxiv_id)
         .or_else(|| paper.doi.as_deref().and_then(resolver::arxiv_id))
         .or_else(|| paper.url.as_deref().and_then(resolver::arxiv_id));
     if let Some(id) = arxiv {
         if let Ok(url) = resolver::safe_url(&format!("https://arxiv.org/pdf/{id}")) {
-            candidates.push(resolver::Candidate { url, source: "arXiv", version: Some(id), license: None });
+            candidates.push(resolver::Candidate {
+                url,
+                source: "arXiv",
+                version: Some(id),
+                license: None,
+            });
         }
     }
     // Try arXiv immediately so a slow DOI resolver does not delay reading.
     let mut last_error = None;
     for candidate in candidates {
-        match download_candidate(app, paper, &candidate).await { Ok(item) => return Ok(item), Err(error) => last_error = Some(error) }
+        match download_candidate(app, paper, &candidate).await {
+            Ok(item) => return Ok(item),
+            Err(error) => last_error = Some(error),
+        }
     }
     for candidate in resolver::candidates(paper.doi.as_deref(), None, None, email).await {
-        if candidate.source == "arXiv" { continue; }
-        match download_candidate(app, paper, &candidate).await { Ok(item) => return Ok(item), Err(error) => last_error = Some(error) }
+        if candidate.source == "arXiv" {
+            continue;
+        }
+        match download_candidate(app, paper, &candidate).await {
+            Ok(item) => return Ok(item),
+            Err(error) => last_error = Some(error),
+        }
     }
-    Err(last_error.unwrap_or_else(|| "没有找到可直接阅读的开放 PDF，请手动添加文件或打开出版社页面".into()))
+    Err(last_error
+        .unwrap_or_else(|| "没有找到可直接阅读的开放 PDF，请手动添加文件或打开出版社页面".into()))
 }
 
-async fn download_candidate(app: &AppHandle, paper: &store::PaperItem, candidate: &resolver::Candidate) -> Result<store::PaperItem, String> {
+async fn download_candidate(
+    app: &AppHandle,
+    paper: &store::PaperItem,
+    candidate: &resolver::Candidate,
+) -> Result<store::PaperItem, String> {
     let (mut response, final_url) = resolver::request(candidate.url.as_str()).await?;
-    if !response.status().is_success() { return Err(format!("{} 返回 HTTP {}", candidate.source, response.status().as_u16())); }
-    if response.content_length().is_some_and(|n| n > MAX_DOWNLOADED_PDF_BYTES) { return Err("PDF 超过 100 MB".into()); }
+    if !response.status().is_success() {
+        return Err(format!(
+            "{} 返回 HTTP {}",
+            candidate.source,
+            response.status().as_u16()
+        ));
+    }
+    if response
+        .content_length()
+        .is_some_and(|n| n > MAX_DOWNLOADED_PDF_BYTES)
+    {
+        return Err("PDF 超过 100 MB".into());
+    }
     let directory = literature_data_dir(app)?.join(PDF_DIRECTORY);
     fs::create_dir_all(&directory).map_err(|e| format!("无法创建附件目录：{e}"))?;
     let filename = format!("{}.pdf", Uuid::new_v4());
@@ -355,22 +463,37 @@ async fn download_candidate(app: &AppHandle, paper: &store::PaperItem, candidate
     let mut head = Vec::new();
     let mut tail = Vec::new();
     let mut hash = Sha256::new();
-    while let Some(chunk) = response.chunk().await.map_err(|e| format!("下载中断：{}", e.without_url()))? {
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| format!("下载中断：{}", e.without_url()))?
+    {
         size += chunk.len() as u64;
-        if size > MAX_DOWNLOADED_PDF_BYTES { return Err("PDF 超过 100 MB".into()); }
-        if head.len() < 1024 { head.extend_from_slice(&chunk[..chunk.len().min(1024 - head.len())]); }
+        if size > MAX_DOWNLOADED_PDF_BYTES {
+            return Err("PDF 超过 100 MB".into());
+        }
+        if head.len() < 1024 {
+            head.extend_from_slice(&chunk[..chunk.len().min(1024 - head.len())]);
+        }
         tail.extend_from_slice(&chunk);
-        if tail.len() > 2048 { tail.drain(..tail.len()-2048); }
+        if tail.len() > 2048 {
+            tail.drain(..tail.len() - 2048);
+        }
         hash.update(&chunk);
-        file.write_all(&chunk).map_err(|e| format!("保存 PDF 失败：{e}"))?;
+        file.write_all(&chunk)
+            .map_err(|e| format!("保存 PDF 失败：{e}"))?;
     }
-    if size < 100 || !head.windows(5).any(|s| s == b"%PDF-") || !tail.windows(5).any(|s| s == b"%%EOF") {
+    if size < 100
+        || !head.windows(5).any(|s| s == b"%PDF-")
+        || !tail.windows(5).any(|s| s == b"%%EOF")
+    {
         return Err("来源返回的内容不是完整 PDF，请尝试其他来源".into());
     }
     file.sync_all().map_err(|e| format!("保存 PDF 失败：{e}"))?;
     drop(file);
     let conn = open_db(app)?;
-    conn.execute_batch("BEGIN IMMEDIATE").map_err(|e| format!("无法保存附件：{e}"))?;
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| format!("无法保存附件：{e}"))?;
     let current = store::get_paper(&conn, &paper.id)?.ok_or("文献已被删除")?;
     if current.pdf_path != paper.pdf_path {
         let _ = conn.execute_batch("ROLLBACK");
@@ -382,17 +505,36 @@ async fn download_candidate(app: &AppHandle, paper: &store::PaperItem, candidate
     let mut public_url = final_url;
     // Query parameters may contain expiring access tokens; keep provenance without credentials.
     public_url.set_query(None);
-    let source = store::PaperPdfSource { source_type: candidate.source.into(), source_url: Some(public_url.to_string()), version: candidate.version.clone(), license: candidate.license.clone(), acquired_at: now() };
-    let save = store::update_paper_pdf(&conn, &paper.id, &path, &format!("{:x}", hash.finalize()), now())
-        .and_then(|_| store::set_pdf_source(&conn, &paper.id, &source))
-        .and_then(|_| store::set_pdf_attempt(&conn, &paper.id, "available", None, now()))
-        .and_then(|_| conn.execute_batch("COMMIT").map_err(|e| e.to_string()));
-    if let Err(error) = save { let _ = conn.execute_batch("ROLLBACK"); let _ = fs::remove_file(&target); return Err(error); }
+    let source = store::PaperPdfSource {
+        source_type: candidate.source.into(),
+        source_url: Some(public_url.to_string()),
+        version: candidate.version.clone(),
+        license: candidate.license.clone(),
+        acquired_at: now(),
+    };
+    let save = store::update_paper_pdf(
+        &conn,
+        &paper.id,
+        &path,
+        &format!("{:x}", hash.finalize()),
+        now(),
+    )
+    .and_then(|_| store::set_pdf_source(&conn, &paper.id, &source))
+    .and_then(|_| store::set_pdf_attempt(&conn, &paper.id, "available", None, now()))
+    .and_then(|_| conn.execute_batch("COMMIT").map_err(|e| e.to_string()));
+    if let Err(error) = save {
+        let _ = conn.execute_batch("ROLLBACK");
+        let _ = fs::remove_file(&target);
+        return Err(error);
+    }
     store::get_paper(&conn, &paper.id)?.ok_or_else(|| "保存后找不到文献".into())
 }
 
 #[tauri::command(async)]
-pub async fn literature_download_arxiv_pdf(app: AppHandle, id: String) -> Result<store::PaperItem, String> {
+pub async fn literature_download_arxiv_pdf(
+    app: AppHandle,
+    id: String,
+) -> Result<store::PaperItem, String> {
     literature_acquire_pdf(app, id, None).await
 }
 
@@ -1155,7 +1297,9 @@ pub fn literature_import_bibtex_text(
     let mut count = 0;
 
     for entry in entries {
-        if let Some(existing) = store::find_existing_paper_id(&conn, entry.doi.as_deref(), entry.eprint.as_deref())? {
+        if let Some(existing) =
+            store::find_existing_paper_id(&conn, entry.doi.as_deref(), entry.eprint.as_deref())?
+        {
             if let Some(collection) = &collection_id {
                 conn.execute("INSERT OR IGNORE INTO paper_collection_items (paper_id,collection_id,added_at) VALUES (?1,?2,?3)", rusqlite::params![existing, collection, current_time])
                     .map_err(|e| format!("添加文献集失败：{e}"))?;

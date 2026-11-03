@@ -225,8 +225,7 @@ pub struct CliMcpSession {
 fn write_agy_plugin_bundle(root: &PathBuf, endpoint: &str, token: &str) -> Result<(), String> {
     let plugin_dir = root.join(".agents").join("plugins").join("seamind");
     let rules_dir = plugin_dir.join("rules");
-    std::fs::create_dir_all(&rules_dir)
-        .map_err(|_| "无法创建 AGY 临时插件目录。".to_string())?;
+    std::fs::create_dir_all(&rules_dir).map_err(|_| "无法创建 AGY 临时插件目录。".to_string())?;
 
     let manifest = json!({
         "name": "seamind-bridge",
@@ -262,7 +261,6 @@ fn write_agy_plugin_bundle(root: &PathBuf, endpoint: &str, token: &str) -> Resul
 }
 
 impl AgentBridgeState {
-
     async fn request_tool(
         &self,
         app: &AppHandle,

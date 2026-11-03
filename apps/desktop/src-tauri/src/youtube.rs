@@ -88,12 +88,19 @@ fn is_valid_request_id(request_id: &str) -> bool {
 
 impl YouTubeJobs {
     fn begin(&self, request_id: Option<String>) -> Result<JobGuard, String> {
-        if request_id.as_deref().is_some_and(|id| !is_valid_request_id(id)) {
+        if request_id
+            .as_deref()
+            .is_some_and(|id| !is_valid_request_id(id))
+        {
             return Err("无效的请求编号。".to_string());
         }
         let control = Arc::new(JobControl::default());
         if let Some(request_id) = &request_id {
-            let mut active = self.0.active.lock().map_err(|_| "任务状态不可用。".to_string())?;
+            let mut active = self
+                .0
+                .active
+                .lock()
+                .map_err(|_| "任务状态不可用。".to_string())?;
             if let Some(previous) = active.insert(request_id.clone(), control.clone()) {
                 previous.cancel();
             }
@@ -234,7 +241,9 @@ mod process_job {
                     (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast::<c_void>(),
                     std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
                 );
-                if configured == 0 || AssignProcessToJobObject(job, child.as_raw_handle() as HANDLE) == 0 {
+                if configured == 0
+                    || AssignProcessToJobObject(job, child.as_raw_handle() as HANDLE) == 0
+                {
                     CloseHandle(job);
                     return None;
                 }
@@ -416,7 +425,10 @@ fn run_hidden(mut command: Command, timeout: Duration) -> Result<String, HiddenR
         }
     })?;
     if !output.status.success() {
-        return Err(HiddenRunError::Failed(format!("外部程序退出码：{}", output.status)));
+        return Err(HiddenRunError::Failed(format!(
+            "外部程序退出码：{}",
+            output.status
+        )));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
@@ -425,7 +437,9 @@ fn run_hidden(mut command: Command, timeout: Duration) -> Result<String, HiddenR
 /// that does not finish in time is killed together with its children.
 pub fn run_hidden_with_timeout(command: Command, timeout: Duration) -> Result<String, String> {
     run_hidden(command, timeout).map_err(|error| match error {
-        HiddenRunError::TimedOut => format!("外部程序超过 {} 秒仍未结束，已终止。", timeout.as_secs()),
+        HiddenRunError::TimedOut => {
+            format!("外部程序超过 {} 秒仍未结束，已终止。", timeout.as_secs())
+        }
         HiddenRunError::Failed(message) => message,
     })
 }
@@ -615,12 +629,21 @@ fn launch_resolved_media_with_mpv(
         return Err("解析器返回的媒体地址不在允许的 YouTube 视频域名内。".to_string());
     }
 
-    launch_mpv_media(&media_url, audio_url.as_deref(), user_agent.as_deref(), referer.as_deref(), start_seconds, proxy)
+    launch_mpv_media(
+        &media_url,
+        audio_url.as_deref(),
+        user_agent.as_deref(),
+        referer.as_deref(),
+        start_seconds,
+        proxy,
+    )
 }
 
 /// mpv and FFmpeg read their HTTP proxy from the environment, and neither can use a SOCKS proxy.
 fn apply_player_proxy_env(command: &mut Command, proxy: Option<&str>) {
-    if let Some(proxy) = proxy.filter(|proxy| proxy.starts_with("http://") || proxy.starts_with("https://")) {
+    if let Some(proxy) =
+        proxy.filter(|proxy| proxy.starts_with("http://") || proxy.starts_with("https://"))
+    {
         command.env("http_proxy", proxy).env("https_proxy", proxy);
     }
 }
@@ -635,17 +658,27 @@ fn launch_mpv_media(
 ) -> Result<(), String> {
     validate_playback_headers(user_agent, referer)?;
     let player = std::env::var_os("SEAMIND_MPV_PATH").unwrap_or_else(|| "mpv".into());
-    match spawn_mpv_media(&player, media_url, audio_url, user_agent, referer, start_seconds, proxy) {
+    match spawn_mpv_media(
+        &player,
+        media_url,
+        audio_url,
+        user_agent,
+        referer,
+        start_seconds,
+        proxy,
+    ) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound && audio_url.is_none() => {
-            launch_ffplay_media(media_url, user_agent, referer, start_seconds, proxy).map_err(|ffplay_error| {
-                if ffplay_error.kind() == std::io::ErrorKind::NotFound {
-                    "未找到 mpv 或 ffplay。请安装其中一个播放器，或设置 SEAMIND_MPV_PATH。"
-                        .to_string()
-                } else {
-                    format!("无法启动 mpv 或 ffplay：{ffplay_error}")
-                }
-            })
+            launch_ffplay_media(media_url, user_agent, referer, start_seconds, proxy).map_err(
+                |ffplay_error| {
+                    if ffplay_error.kind() == std::io::ErrorKind::NotFound {
+                        "未找到 mpv 或 ffplay。请安装其中一个播放器，或设置 SEAMIND_MPV_PATH。"
+                            .to_string()
+                    } else {
+                        format!("无法启动 mpv 或 ffplay：{ffplay_error}")
+                    }
+                },
+            )
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             launch_split_media_with_ffmpeg(
@@ -763,7 +796,9 @@ fn launch_split_media_with_ffmpeg(
         ffmpeg.arg("-i").arg(url);
     }
     ffmpeg
-        .args(["-map", "0:v:0", "-map", "1:a:0", "-c", "copy", "-f", "matroska", "pipe:1"])
+        .args([
+            "-map", "0:v:0", "-map", "1:a:0", "-c", "copy", "-f", "matroska", "pipe:1",
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -777,7 +812,14 @@ fn launch_split_media_with_ffmpeg(
     let mut ffplay = Command::new("ffplay");
     apply_player_proxy_env(&mut ffplay, proxy);
     ffplay
-        .args(["-hide_banner", "-loglevel", "error", "-autoexit", "-i", "pipe:0"])
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-autoexit",
+            "-i",
+            "pipe:0",
+        ])
         .stdin(Stdio::from(stream))
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -826,12 +868,14 @@ fn resolve_youtube_playback(
         return match resolve_with_newpipe_bridge(&program, video_id, control) {
             Ok(resolution) => Ok(resolution),
             Err(_) if control.is_cancelled() => Err(CANCELLED_MESSAGE.to_string()),
-            Err(bridge_error) => resolve_youtube_playback_with_yt_dlp(video_id, None, control, proxy)
-                .map_err(|fallback_error| {
-                    format!(
-                        "NewPipe 辅助进程失败：{bridge_error}；yt-dlp 后备解析也失败：{fallback_error}"
-                    )
-                }),
+            Err(bridge_error) => resolve_youtube_playback_with_yt_dlp(
+                video_id, None, control, proxy,
+            )
+            .map_err(|fallback_error| {
+                format!(
+                    "NewPipe 辅助进程失败：{bridge_error}；yt-dlp 后备解析也失败：{fallback_error}"
+                )
+            }),
         };
     }
 
@@ -890,16 +934,17 @@ fn resolve_with_newpipe_bridge(
     command.stdin(Stdio::null());
     hide_command_window(&mut command);
 
-    let output = run_command_bounded(command, NEWPIPE_TIMEOUT, Some(control)).map_err(|error| {
-        match error.kind() {
-            std::io::ErrorKind::TimedOut => format!(
-                "NewPipe 解析超过 {} 秒，已终止辅助进程及其子进程。",
-                NEWPIPE_TIMEOUT.as_secs()
-            ),
-            std::io::ErrorKind::Interrupted => CANCELLED_MESSAGE.to_string(),
-            _ => format!("无法运行 NewPipe 辅助进程：{error}"),
-        }
-    })?;
+    let output =
+        run_command_bounded(command, NEWPIPE_TIMEOUT, Some(control)).map_err(
+            |error| match error.kind() {
+                std::io::ErrorKind::TimedOut => format!(
+                    "NewPipe 解析超过 {} 秒，已终止辅助进程及其子进程。",
+                    NEWPIPE_TIMEOUT.as_secs()
+                ),
+                std::io::ErrorKind::Interrupted => CANCELLED_MESSAGE.to_string(),
+                _ => format!("无法运行 NewPipe 辅助进程：{error}"),
+            },
+        )?;
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -979,14 +1024,20 @@ fn run_command_bounded(
     let status = loop {
         if control.is_some_and(JobControl::is_cancelled) {
             kill_process_tree(&mut child, job.as_ref());
-            return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "cancelled"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "cancelled",
+            ));
         }
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(100)),
             Ok(None) => {
                 kill_process_tree(&mut child, job.as_ref());
-                return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out"));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "timed out",
+                ));
             }
             Err(error) => {
                 kill_process_tree(&mut child, job.as_ref());
@@ -1101,10 +1152,19 @@ fn resolve_youtube_playback_with_yt_dlp(
                 return Err("yt-dlp 没有找到可播放的媒体格式。".to_string());
             }
             if browser.is_some() {
-                if detail.contains("Could not copy") || detail.contains("Failed to decrypt") || detail.contains("failed to decrypt") {
-                    return Err("无法读取所选浏览器的本机会话；请关闭浏览器后重试，或改用其他浏览器。".to_string());
+                if detail.contains("Could not copy")
+                    || detail.contains("Failed to decrypt")
+                    || detail.contains("failed to decrypt")
+                {
+                    return Err(
+                        "无法读取所选浏览器的本机会话；请关闭浏览器后重试，或改用其他浏览器。"
+                            .to_string(),
+                    );
                 }
-                return Err("所选浏览器会话仍无法解析此视频；请在浏览器中确认登录与真人验证状态。".to_string());
+                return Err(
+                    "所选浏览器会话仍无法解析此视频；请在浏览器中确认登录与真人验证状态。"
+                        .to_string(),
+                );
             }
             return Err(format!(
                 "yt-dlp 无法解析该视频：{}",
@@ -1398,12 +1458,17 @@ fn playback_resolution_from_info(info: YtDlpInfo) -> Result<PlaybackResolution, 
 }
 
 fn format_header(format: &YtDlpFormat, name: &str) -> Option<String> {
-    format.http_headers.as_ref()?.iter().find_map(|(key, value)| {
-        key.eq_ignore_ascii_case(name).then(|| value.clone())
-    })
+    format
+        .http_headers
+        .as_ref()?
+        .iter()
+        .find_map(|(key, value)| key.eq_ignore_ascii_case(name).then(|| value.clone()))
 }
 
-fn validate_playback_headers(user_agent: Option<&str>, referer: Option<&str>) -> Result<(), String> {
+fn validate_playback_headers(
+    user_agent: Option<&str>,
+    referer: Option<&str>,
+) -> Result<(), String> {
     for value in [user_agent, referer].into_iter().flatten() {
         if value.len() > 512 || value.chars().any(char::is_control) {
             return Err("媒体请求头包含不安全的字符。".to_string());
@@ -1420,8 +1485,16 @@ fn validate_playback_headers(user_agent: Option<&str>, referer: Option<&str>) ->
 }
 
 fn playable_format_url(format: &YtDlpFormat) -> Result<String, String> {
-    let protocol = format.protocol.as_deref().unwrap_or_default().to_ascii_lowercase();
-    let candidate = if protocol.contains("m3u8") || protocol.contains("hls") || protocol.contains("dash") || protocol.contains("mpd") {
+    let protocol = format
+        .protocol
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let candidate = if protocol.contains("m3u8")
+        || protocol.contains("hls")
+        || protocol.contains("dash")
+        || protocol.contains("mpd")
+    {
         format.manifest_url.as_deref().or(format.url.as_deref())
     } else {
         format.url.as_deref()
@@ -1441,7 +1514,10 @@ fn extractor_candidates() -> Vec<(std::ffi::OsString, Vec<std::ffi::OsString>)> 
     let mut candidates = Vec::new();
     if let Ok(executable) = std::env::current_exe() {
         if let Some(directory) = executable.parent() {
-            for path in [directory.join("tools").join("yt-dlp.exe"), directory.join("yt-dlp.exe")] {
+            for path in [
+                directory.join("tools").join("yt-dlp.exe"),
+                directory.join("yt-dlp.exe"),
+            ] {
                 if path.is_file() {
                     candidates.push((path.into_os_string(), Vec::new()));
                 }
@@ -1641,7 +1717,9 @@ mod tests {
     #[test]
     fn reads_media_expiry_from_query_and_manifest_paths() {
         assert_eq!(
-            media_expiry_unix("https://rr1---sn-a.googlevideo.com/videoplayback?expire=1792611561&ei=x"),
+            media_expiry_unix(
+                "https://rr1---sn-a.googlevideo.com/videoplayback?expire=1792611561&ei=x"
+            ),
             Some(1_792_611_561)
         );
         assert_eq!(
@@ -1650,24 +1728,45 @@ mod tests {
             ),
             Some(1_792_611_561)
         );
-        assert_eq!(media_expiry_unix("https://rr1---sn-a.googlevideo.com/videoplayback"), None);
+        assert_eq!(
+            media_expiry_unix("https://rr1---sn-a.googlevideo.com/videoplayback"),
+            None
+        );
         assert_eq!(media_expiry_unix("not a url"), None);
     }
 
     #[test]
     fn caches_resolutions_until_shortly_before_they_expire() {
         let now = 1_000_000;
-        let soon = html5_resolution(&format!("https://rr1---sn-a.googlevideo.com/videoplayback?expire={}", now + 60));
+        let soon = html5_resolution(&format!(
+            "https://rr1---sn-a.googlevideo.com/videoplayback?expire={}",
+            now + 60
+        ));
         assert_eq!(resolution_ttl(&soon, now), None, "inside the safety margin");
 
-        let later = html5_resolution(&format!("https://rr1---sn-a.googlevideo.com/videoplayback?expire={}", now + 3_600));
-        assert_eq!(resolution_ttl(&later, now), Some(Duration::from_secs(3_600 - 300)));
+        let later = html5_resolution(&format!(
+            "https://rr1---sn-a.googlevideo.com/videoplayback?expire={}",
+            now + 3_600
+        ));
+        assert_eq!(
+            resolution_ttl(&later, now),
+            Some(Duration::from_secs(3_600 - 300))
+        );
 
-        let far = html5_resolution(&format!("https://rr1---sn-a.googlevideo.com/videoplayback?expire={}", now + 86_400));
-        assert_eq!(resolution_ttl(&far, now), Some(Duration::from_secs(2 * 60 * 60)));
+        let far = html5_resolution(&format!(
+            "https://rr1---sn-a.googlevideo.com/videoplayback?expire={}",
+            now + 86_400
+        ));
+        assert_eq!(
+            resolution_ttl(&far, now),
+            Some(Duration::from_secs(2 * 60 * 60))
+        );
 
         let undated = html5_resolution("https://rr1---sn-a.googlevideo.com/videoplayback");
-        assert_eq!(resolution_ttl(&undated, now), Some(Duration::from_secs(10 * 60)));
+        assert_eq!(
+            resolution_ttl(&undated, now),
+            Some(Duration::from_secs(10 * 60))
+        );
 
         let empty = PlaybackResolution::Mpv {
             provider: "yt-dlp".to_string(),
@@ -1685,7 +1784,9 @@ mod tests {
     fn serves_a_cached_resolution_only_while_it_is_valid() {
         let jobs = YouTubeJobs::default();
         let future = super::unix_now() + 3_600;
-        let fresh = html5_resolution(&format!("https://rr1---sn-a.googlevideo.com/videoplayback?expire={future}"));
+        let fresh = html5_resolution(&format!(
+            "https://rr1---sn-a.googlevideo.com/videoplayback?expire={future}"
+        ));
         jobs.store_resolution("aqz-KE-bpKQ", &fresh);
         assert!(jobs.cached_resolution("aqz-KE-bpKQ").is_some());
         assert!(jobs.cached_resolution("other-video").is_none());
@@ -1722,7 +1823,9 @@ mod tests {
         for id in ["", "has space", "../x", &"a".repeat(65)] {
             assert!(!is_valid_request_id(id), "{id:?}");
         }
-        assert!(YouTubeJobs::default().begin(Some("bad id".to_string())).is_err());
+        assert!(YouTubeJobs::default()
+            .begin(Some("bad id".to_string()))
+            .is_err());
     }
 
     #[cfg(windows)]
@@ -1759,7 +1862,10 @@ mod tests {
                     return pid;
                 }
             }
-            assert!(started.elapsed() < Duration::from_secs(20), "grandchild pid was never written");
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "grandchild pid was never written"
+            );
             std::thread::sleep(Duration::from_millis(100));
         }
     }
@@ -1767,22 +1873,28 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn a_timeout_ends_the_whole_process_tree() {
-        let pid_file = std::env::temp_dir().join(format!("seamind-tree-timeout-{}.pid", std::process::id()));
+        let pid_file =
+            std::env::temp_dir().join(format!("seamind-tree-timeout-{}.pid", std::process::id()));
         let _ = std::fs::remove_file(&pid_file);
         let command = powershell(&sleeping_grandchild_script(&pid_file));
-        let error = run_command_bounded(command, Duration::from_secs(8), None).expect_err("must time out");
+        let error =
+            run_command_bounded(command, Duration::from_secs(8), None).expect_err("must time out");
         assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
 
         let grandchild = read_pid_when_written(&pid_file);
         std::thread::sleep(Duration::from_millis(500));
-        assert!(!process_is_running(grandchild), "the grandchild survived the timeout");
+        assert!(
+            !process_is_running(grandchild),
+            "the grandchild survived the timeout"
+        );
         let _ = std::fs::remove_file(&pid_file);
     }
 
     #[cfg(windows)]
     #[test]
     fn cancelling_a_job_stops_it_promptly() {
-        let pid_file = std::env::temp_dir().join(format!("seamind-tree-cancel-{}.pid", std::process::id()));
+        let pid_file =
+            std::env::temp_dir().join(format!("seamind-tree-cancel-{}.pid", std::process::id()));
         let _ = std::fs::remove_file(&pid_file);
         let control = Arc::new(JobControl::default());
         let canceller = {
@@ -1796,30 +1908,43 @@ mod tests {
         };
         let started = Instant::now();
         let command = powershell(&sleeping_grandchild_script(&pid_file));
-        let error = run_command_bounded(command, Duration::from_secs(60), Some(&control)).expect_err("must be cancelled");
+        let error = run_command_bounded(command, Duration::from_secs(60), Some(&control))
+            .expect_err("must be cancelled");
         assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
-        assert!(started.elapsed() < Duration::from_secs(30), "took {:?}", started.elapsed());
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "took {:?}",
+            started.elapsed()
+        );
 
         let grandchild = canceller.join().unwrap();
         std::thread::sleep(Duration::from_millis(500));
-        assert!(!process_is_running(grandchild), "the grandchild survived cancellation");
+        assert!(
+            !process_is_running(grandchild),
+            "the grandchild survived cancellation"
+        );
         let _ = std::fs::remove_file(&pid_file);
     }
 
     #[cfg(windows)]
     #[test]
     fn leftover_helpers_are_closed_when_the_main_process_exits() {
-        let pid_file = std::env::temp_dir().join(format!("seamind-tree-exit-{}.pid", std::process::id()));
+        let pid_file =
+            std::env::temp_dir().join(format!("seamind-tree-exit-{}.pid", std::process::id()));
         let _ = std::fs::remove_file(&pid_file);
         let script = format!(
             "$p = Start-Process -FilePath ping -ArgumentList '-n','120','127.0.0.1' -WindowStyle Hidden -PassThru; Set-Content -Path '{}' -Value $p.Id",
             pid_file.display()
         );
-        let output = run_command_bounded(powershell(&script), Duration::from_secs(30), None).expect("script exits");
+        let output = run_command_bounded(powershell(&script), Duration::from_secs(30), None)
+            .expect("script exits");
         assert!(output.status.success());
         let grandchild = read_pid_when_written(&pid_file);
         std::thread::sleep(Duration::from_millis(500));
-        assert!(!process_is_running(grandchild), "a helper outlived its parent");
+        assert!(
+            !process_is_running(grandchild),
+            "a helper outlived its parent"
+        );
         let _ = std::fs::remove_file(&pid_file);
     }
 }

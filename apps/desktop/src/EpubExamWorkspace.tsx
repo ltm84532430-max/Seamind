@@ -12,12 +12,17 @@ import type {
   EpubExam,
   EpubExamAttempt,
   EpubExamAnswer,
+  EpubExamGrade,
   EpubExamSelfReview,
   EpubExamSummary,
 } from './epub-exams';
 import { formatEpubExamDate, listEpubExams } from './epub-exams';
+import EpubExamQuestion from './EpubExamQuestion';
+import type { ExamCodeResult } from './EpubExamQuestion';
+import './epub-exam-v2.css';
 
 export interface EpubExamWorkspaceProps {
+  provider?: { baseUrl: string; model: string };
   examId: string;
   bookKey: string;
   onBack: () => void;
@@ -117,6 +122,7 @@ export function normalizeExam(raw?: EpubExam | null): EpubExam | null {
       raw.selfReviews && typeof raw.selfReviews === 'object'
         ? raw.selfReviews
         : {},
+    grades: raw.grades && typeof raw.grades === 'object' ? raw.grades : {},
     sourceSectionLabel: raw.sourceSectionLabel || '',
     bookTitle: raw.bookTitle || '',
     questionCount:
@@ -146,6 +152,7 @@ function getDifficultyLabel(difficulty?: string): string {
 }
 
 function EpubExamWorkspaceInner({
+  provider,
   examId: initialExamId,
   bookKey,
   onBack,
@@ -162,6 +169,27 @@ function EpubExamWorkspaceInner({
   const [selfReviews, setSelfReviews] = useState<
     Record<string, EpubExamSelfReview>
   >(initialExam?.selfReviews ?? {});
+  const [grades, setGrades] = useState<Record<string, EpubExamGrade>>(
+    initialExam?.grades ?? {},
+  );
+  const [codeResults, setCodeResults] = useState<
+    Record<string, ExamCodeResult>
+  >({});
+  const [codeBusyId, setCodeBusyId] = useState('');
+  const [gradingBusy, setGradingBusy] = useState(false);
+  const [displayMode, setDisplayMode] = useState<'spread' | 'workspace'>(
+    'spread',
+  );
+  const [pageIndex, setPageIndex] = useState(0);
+  const [compactPages, setCompactPages] = useState(false);
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 2184px)');
+    const update = () => setCompactPages(query.matches);
+    update();
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+  const pageStep = displayMode === 'spread' && !compactPages ? 2 : 1;
   const [loading, setLoading] = useState(!initialExam);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -205,6 +233,9 @@ function EpubExamWorkspaceInner({
         setExam(normalized);
         setAnswers(normalized?.answers ?? {});
         setSelfReviews(normalized?.selfReviews ?? {});
+        setGrades(normalized?.grades ?? {});
+        setCodeResults({});
+        setPageIndex(0);
         dirtyRef.current = false;
         revisionRef.current = 0;
       })
@@ -240,9 +271,9 @@ function EpubExamWorkspaceInner({
             answers: nextAnswers,
             selfReviews: nextReviews,
             submitted,
-          }).then(() => undefined),
+          }),
         );
-      saveQueueRef.current = operation;
+      saveQueueRef.current = operation.then(() => undefined);
       return operation;
     },
     [bookKey, activeExamId],
@@ -294,6 +325,77 @@ function EpubExamWorkspaceInner({
     setSelfReviews((current) => ({ ...current, [questionId]: value }));
   };
 
+  const runCode = async (questionId: string, submittedOverride?: boolean) => {
+    if (!exam || codeBusyId) return;
+    const question = exam.questions.find((item) => item.id === questionId);
+    if (!question || question.type !== 'cProgramming') return;
+    const source =
+      typeof answers[questionId] === 'string'
+        ? (answers[questionId] as string)
+        : submittedOverride
+          ? ''
+          : (question.codeSpec?.starterCode ?? '');
+    setCodeBusyId(questionId);
+    try {
+      const result = await invoke<ExamCodeResult>('run_epub_exam_code', {
+        bookKey,
+        examId: activeExamId,
+        questionId,
+        source,
+      });
+      setCodeResults((current) => ({ ...current, [questionId]: result }));
+      if (submittedOverride || exam.status === 'submitted') {
+        setGrades((current) => ({ ...current, [questionId]: result.grade }));
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setCodeBusyId('');
+    }
+  };
+
+  const gradeSubjective = async () => {
+    if (!exam || !provider?.model || !provider.baseUrl) {
+      setError('请先在模型设置中配置 AI 服务，再评阅主观题。');
+      return;
+    }
+    setGradingBusy(true);
+    try {
+      const result = await invoke<Record<string, EpubExamGrade>>(
+        'grade_epub_exam_subjective',
+        {
+          bookKey,
+          examId: activeExamId,
+          baseUrl: provider.baseUrl,
+          model: provider.model,
+        },
+      );
+      setGrades((current) => ({ ...current, ...result }));
+      setError('');
+    } catch (cause) {
+      setError(
+        `AI 评阅暂未完成：${cause instanceof Error ? cause.message : String(cause)}。已交卷答案保存在本机，可重试。`,
+      );
+    } finally {
+      setGradingBusy(false);
+    }
+  };
+
+  const overrideGrade = async (questionId: string, earned: number) => {
+    if (!Number.isFinite(earned)) return;
+    try {
+      const grade = await invoke<EpubExamGrade>('override_epub_exam_grade', {
+        bookKey,
+        examId: activeExamId,
+        questionId,
+        earned,
+      });
+      setGrades((current) => ({ ...current, [questionId]: grade }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
   // Submit exam
   const submitExam = async () => {
     if (!exam || exam.status === 'submitted' || busy) return;
@@ -306,19 +408,21 @@ function EpubExamWorkspaceInner({
     revisionRef.current += 1;
     dirtyRef.current = true;
     try {
-      await enqueueSave(answers, selfReviews, true);
+      const submittedExam = await enqueueSave(answers, selfReviews, true);
       dirtyRef.current = false;
       setSaveState('saved');
-      setExam((prev) =>
-        prev
-          ? normalizeExam({
-              ...prev,
-              status: 'submitted',
-              submittedAt: Date.now(),
-            })
-          : null,
-      );
+      setExam(normalizeExam(submittedExam));
+      setGrades(submittedExam.grades ?? {});
       void refreshBookExams();
+      for (const question of exam.questions) {
+        if (
+          question.type === 'cProgramming' &&
+          typeof answers[question.id] === 'string'
+        ) {
+          await runCode(question.id, true);
+        }
+      }
+      await gradeSubjective();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -356,6 +460,9 @@ function EpubExamWorkspaceInner({
       setExam(normalized);
       setAnswers(normalized?.answers ?? {});
       setSelfReviews(normalized?.selfReviews ?? {});
+      setGrades(normalized?.grades ?? {});
+      setCodeResults({});
+      setPageIndex(0);
       setSaveState('saved');
       void refreshBookExams();
     } catch (cause) {
@@ -441,14 +548,13 @@ function EpubExamWorkspaceInner({
 
   // Scroll to question helper
   const scrollToQuestion = (questionId: string) => {
-    const el = document.getElementById(`exam-question-${questionId}`);
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      el.classList.add('is-target-highlight');
-      window.setTimeout(() => {
-        el.classList.remove('is-target-highlight');
-      }, 1400);
-    }
+    const index =
+      exam?.questions.findIndex((item) => item.id === questionId) ?? -1;
+    if (index < 0) return;
+    setPageIndex(pageStep === 2 ? Math.floor(index / 2) * 2 : index);
+    document
+      .querySelector('.epub-exam-stage')
+      ?.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   // Sort exams by chapter sequential order
@@ -807,156 +913,137 @@ function EpubExamWorkspaceInner({
               </details>
             )}
 
-            {/* Questions list */}
-            <div className="epub-exam-questions-list">
-              {questionsList.map((question, index) => {
-                const answer = answers[question.id];
-                const selected = Array.isArray(answer) ? answer : [];
-                const options =
-                  question.type === 'trueFalse'
-                    ? (question.options ?? ['正确', '错误'])
-                    : (question.options ?? []);
-                const submitted = exam.status === 'submitted';
-                const currentReview = selfReviews[question.id];
-
+            <div className="epub-exam-view-toolbar">
+              <div
+                className="epub-exam-view-modes"
+                role="group"
+                aria-label="试卷布局"
+              >
+                <button
+                  type="button"
+                  className={displayMode === 'spread' ? 'is-active' : ''}
+                  onClick={() => setDisplayMode('spread')}
+                >
+                  左右翻页
+                </button>
+                <button
+                  type="button"
+                  className={displayMode === 'workspace' ? 'is-active' : ''}
+                  onClick={() => setDisplayMode('workspace')}
+                >
+                  题目 / 工作区
+                </button>
+              </div>
+              <nav className="epub-exam-page-nav" aria-label="试卷翻页">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPageIndex((index) => Math.max(0, index - pageStep))
+                  }
+                  disabled={pageIndex === 0}
+                >
+                  上一页
+                </button>
+                <span>
+                  {Math.min(pageIndex + 1, questionsList.length)}
+                  {pageStep === 2 && pageIndex + 1 < questionsList.length
+                    ? `–${pageIndex + 2}`
+                    : ''}{' '}
+                  / {questionsList.length}
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPageIndex((index) =>
+                      Math.min(questionsList.length - 1, index + pageStep),
+                    )
+                  }
+                  disabled={pageIndex + pageStep >= questionsList.length}
+                >
+                  下一页
+                </button>
+              </nav>
+            </div>
+            <div className={`epub-exam-book-spread is-${displayMode}`}>
+              {(displayMode === 'spread' && !compactPages
+                ? [pageIndex, pageIndex + 1]
+                : [pageIndex]
+              ).map((index) => {
+                const question = questionsList[index];
+                if (!question)
+                  return (
+                    <div
+                      className="epub-exam-leaf is-blank"
+                      key={`blank-${index}`}
+                      aria-hidden="true"
+                    />
+                  );
                 return (
-                  <article
-                    className="epub-exam-question-card"
-                    id={`exam-question-${question.id}`}
+                  <EpubExamQuestion
                     key={question.id}
-                  >
-                    <header className="epub-exam-question-card-header">
-                      <div className="epub-exam-question-num-row">
-                        <span className="epub-exam-question-num">
-                          第 {index + 1} 题
-                        </span>
-                        <span className="epub-exam-question-type">
-                          {question.type === 'shortAnswer'
-                            ? '简答题'
-                            : question.type === 'multipleChoice'
-                              ? '多选题'
-                              : question.type === 'trueFalse'
-                                ? '判断题'
-                                : '单选题'}
-                        </span>
-                      </div>
-
-                      {submitted && (
-                        <div className="epub-exam-review-segmented">
-                          <span className="epub-exam-review-label">自评:</span>
-                          <button
-                            type="button"
-                            className={`epub-exam-seg-btn is-mastered${currentReview === 'mastered' ? ' is-active' : ''}`}
-                            onClick={() => editReview(question.id, 'mastered')}
-                            disabled={busy}
-                            title="掌握：理解透彻且能举一反三"
-                          >
-                            ✓ 掌握
-                          </button>
-                          <button
-                            type="button"
-                            className={`epub-exam-seg-btn is-partial${currentReview === 'partial' ? ' is-active' : ''}`}
-                            onClick={() => editReview(question.id, 'partial')}
-                            disabled={busy}
-                            title="部分掌握：概念大致了解但细节易错"
-                          >
-                            ◐ 部分
-                          </button>
-                          <button
-                            type="button"
-                            className={`epub-exam-seg-btn is-review${currentReview === 'review' ? ' is-active' : ''}`}
-                            onClick={() => editReview(question.id, 'review')}
-                            disabled={busy}
-                            title="需复习：存在遗漏或理解有误"
-                          >
-                            ✗ 需复习
-                          </button>
-                        </div>
-                      )}
-                    </header>
-
-                    <h2 className="epub-exam-question-prompt">
-                      {question.prompt}
-                    </h2>
-
-                    {question.type === 'shortAnswer' ? (
-                      <div className="epub-exam-textarea-wrap">
-                        <textarea
-                          value={typeof answer === 'string' ? answer : ''}
-                          onChange={(e) =>
-                            editAnswer(question.id, e.target.value)
-                          }
-                          placeholder="在此写下你的作答思路或核心代码…"
-                          disabled={submitted || busy}
-                          rows={4}
-                        />
-                      </div>
-                    ) : (
-                      <div className="epub-exam-options-grid">
-                        {options.map((option) => {
-                          const checked =
-                            question.type === 'multipleChoice'
-                              ? selected.includes(option)
-                              : answer === option;
-
-                          return (
-                            <label
-                              className={`epub-exam-option-item${checked ? ' is-selected' : ''}`}
-                              key={option}
-                            >
-                              <input
-                                type={
-                                  question.type === 'multipleChoice'
-                                    ? 'checkbox'
-                                    : 'radio'
-                                }
-                                name={`exam-${exam.id}-${question.id}`}
-                                value={option}
-                                checked={checked}
-                                disabled={submitted || busy}
-                                onChange={() => {
-                                  if (question.type === 'multipleChoice') {
-                                    const next = checked
-                                      ? selected.filter((v) => v !== option)
-                                      : [...selected, option];
-                                    editAnswer(question.id, next);
-                                  } else {
-                                    editAnswer(question.id, option);
-                                  }
-                                }}
-                              />
-                              <span className="epub-exam-option-text">
-                                {option}
-                              </span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    )}
-
-                    {submitted && (
-                      <div className="epub-exam-ai-solution">
-                        <div className="epub-exam-ai-ref-header">
-                          <span className="epub-exam-ai-badge">
-                            AI 参考答案
-                          </span>
-                          <span className="epub-exam-ai-answer-val">
-                            {Array.isArray(question.answer)
-                              ? question.answer.join('、')
-                              : question.answer}
-                          </span>
-                        </div>
-                        <div className="epub-exam-ai-explanation">
-                          <strong>深度解析</strong>
-                          <p>{question.explanation}</p>
-                        </div>
-                      </div>
-                    )}
-                  </article>
+                    question={question}
+                    index={index}
+                    answer={answers[question.id]}
+                    submitted={exam.status === 'submitted'}
+                    busy={busy}
+                    review={selfReviews[question.id]}
+                    grade={grades[question.id]}
+                    codeResult={codeResults[question.id]}
+                    codeBusy={codeBusyId === question.id}
+                    showPrompt
+                    showAnswer={displayMode === 'spread'}
+                    onAnswer={(value) => editAnswer(question.id, value)}
+                    onReview={(value) => editReview(question.id, value)}
+                    onRunCode={() => void runCode(question.id)}
+                    onOverride={(earned) =>
+                      void overrideGrade(question.id, earned)
+                    }
+                  />
                 );
               })}
+              {displayMode === 'workspace' && questionsList[pageIndex] && (
+                <EpubExamQuestion
+                  key={`work-${questionsList[pageIndex].id}`}
+                  question={questionsList[pageIndex]}
+                  index={pageIndex}
+                  answer={answers[questionsList[pageIndex].id]}
+                  submitted={exam.status === 'submitted'}
+                  busy={busy}
+                  review={selfReviews[questionsList[pageIndex].id]}
+                  grade={grades[questionsList[pageIndex].id]}
+                  codeResult={codeResults[questionsList[pageIndex].id]}
+                  codeBusy={codeBusyId === questionsList[pageIndex].id}
+                  showPrompt={false}
+                  showAnswer
+                  onAnswer={(value) =>
+                    editAnswer(questionsList[pageIndex].id, value)
+                  }
+                  onReview={(value) =>
+                    editReview(questionsList[pageIndex].id, value)
+                  }
+                  onRunCode={() => void runCode(questionsList[pageIndex].id)}
+                  onOverride={(earned) =>
+                    void overrideGrade(questionsList[pageIndex].id, earned)
+                  }
+                />
+              )}
             </div>
-
+            {exam.status === 'submitted' &&
+              questionsList.some(
+                (question) =>
+                  ['comprehensive', 'engineering', 'shortAnswer'].includes(
+                    question.type,
+                  ) && !grades[question.id],
+              ) && (
+                <button
+                  type="button"
+                  className="epub-exam-grade-retry"
+                  onClick={() => void gradeSubjective()}
+                  disabled={gradingBusy}
+                >
+                  {gradingBusy ? '正在 AI 评阅…' : '评阅待完成的主观题'}
+                </button>
+              )}
             <footer className="epub-exam-page-footer">
               <div className="epub-exam-save-status">
                 <span className={`epub-exam-save-indicator is-${saveState}`} />

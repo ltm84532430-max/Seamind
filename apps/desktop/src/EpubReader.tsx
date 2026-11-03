@@ -25,12 +25,22 @@ import type {
 import type {
   EpubExam,
   EpubExamDifficulty,
-  EpubExamGenerationResult,
+  EpubExamQuestion,
 } from './epub-exams';
+import { extractEpubSectionPlainText } from './epub-exams';
 import {
-  extractEpubSectionPlainText,
-  extractEpubSectionText,
-} from './epub-exams';
+  defaultExamMix,
+  examMixTotal,
+  makeExamBatches,
+  validateGeneratedExam,
+} from './epub-exam-generation';
+import type { ExamBatch, ExamMix } from './epub-exam-generation';
+import {
+  loadExamSourceSegments,
+  resolveExamSourcePlan,
+} from './epub-exam-source';
+import type { ExamSourceSegment } from './epub-exam-source';
+import './epub-exam-v2.css';
 // @ts-expect-error Foliate ships as an untyped JavaScript submodule.
 import { Overlayer } from '../../../packages/foliate-js/overlayer.js';
 
@@ -137,6 +147,7 @@ type FoliateViewElement = HTMLElement & {
     sections?: Array<{
       loadText?: () => Promise<string | null | undefined>;
     }>;
+    resolveHref?: (href: string) => { index: number } | null;
     getCover?: () => Promise<Blob | null>;
   };
 };
@@ -657,6 +668,21 @@ export default function EpubReader({
   const [aiAnalysisError, setAiAnalysisError] = useState('');
   const [examDialogOpen, setExamDialogOpen] = useState(false);
   const [examQuestionCount, setExamQuestionCount] = useState('10');
+  const [examScope, setExamScope] = useState<'section' | 'chapter'>('section');
+  const [examMix, setExamMix] = useState<ExamMix>(() =>
+    defaultExamMix(10, /\bC\b|C语言|C Primer/iu.test(selection.title)),
+  );
+  const [examDraft, setExamDraft] = useState<{
+    scope: 'section' | 'chapter';
+    label: string;
+    href: string;
+    mix: ExamMix;
+    segments: ExamSourceSegment[];
+    batches: ExamBatch[];
+    questions: EpubExamQuestion[];
+    nextIndex: number;
+  } | null>(null);
+  const [examProgress, setExamProgress] = useState('');
   const [examDifficulty, setExamDifficulty] =
     useState<EpubExamDifficulty>('medium');
   const [examGenerating, setExamGenerating] = useState(false);
@@ -1249,45 +1275,85 @@ export default function EpubReader({
     }
   };
 
-  const createExamFromCurrentSection = async () => {
-    if (examGenerating) return;
-    const location = currentLocationRef.current;
-    const section = viewRef.current?.book?.sections?.[location.sectionIndex];
-    if (!section?.loadText) {
-      setExamError('无法读取当前阅读段落，请翻到正文页面后重试。');
-      return;
-    }
+  const runExamDraft = async (draft: NonNullable<typeof examDraft>) => {
     setExamGenerating(true);
     setExamError('');
-    setUnsavedExam(null);
+    let working = draft;
     try {
-      const source = await section.loadText();
-      if (!source) throw new Error('当前阅读段落没有可用于出题的正文。');
-      const sectionText = extractEpubSectionText(source);
-      const result = await invoke<EpubExamGenerationResult>(
-        'generate_epub_exam',
-        {
-          bookKey: selection.relativePath,
-          bookTitle: title,
-          sourceFileFingerprint: selection.progressKey,
-          sourceSectionIndex: location.sectionIndex,
-          sourceSectionHref: location.sectionHref,
-          sourceSectionLabel:
-            location.chapterTitle || `第 ${location.sectionIndex + 1} 节`,
-          sectionText,
-          questionCount: Number(examQuestionCount),
-          difficulty: examDifficulty,
-          baseUrl: provider.baseUrl,
-          model: provider.model,
-        },
-      );
-      if (!result.saved) {
-        setUnsavedExam(result.exam);
-        setExamError(
-          `试卷已生成，但保存失败：${result.saveError || '本地存储不可用。'} 可以重试保存，不会再次调用 AI。`,
+      for (let index = draft.nextIndex; index < draft.batches.length; index++) {
+        const batch = draft.batches[index];
+        setExamProgress(
+          `正在生成第 ${index + 1} / ${draft.batches.length} 批…`,
         );
-        return;
+        const questions = await invoke<EpubExamQuestion[]>(
+          'generate_epub_exam_batch',
+          {
+            bookTitle: title,
+            scopeLabel: draft.label,
+            sources: batch.sources,
+            mix: batch.mix,
+            avoidPrompts: working.questions.map((question) => question.prompt),
+            difficulty: examDifficulty,
+            baseUrl: provider.baseUrl,
+            model: provider.model,
+          },
+        );
+        const existing = new Set(
+          working.questions.map((q) =>
+            q.prompt.normalize('NFKC').replace(/\s+/g, ''),
+          ),
+        );
+        if (
+          questions.some((q) =>
+            existing.has(q.prompt.normalize('NFKC').replace(/\s+/g, '')),
+          )
+        ) {
+          throw new Error(`第 ${index + 1} 批出现重复题目，请重试该批。`);
+        }
+        working = {
+          ...working,
+          questions: [...working.questions, ...questions],
+          nextIndex: index + 1,
+        };
+        setExamDraft(working);
       }
+      validateGeneratedExam(working.questions, working.mix, working.segments);
+      const location = currentLocationRef.current;
+      const exam: EpubExam = {
+        schemaVersion: 2,
+        id: crypto.randomUUID(),
+        bookKey: selection.relativePath,
+        bookTitle: title,
+        sourceFileFingerprint: selection.progressKey,
+        sourceSectionIndex: location.sectionIndex,
+        sourceSectionHref: working.href,
+        sourceSectionLabel: working.label,
+        scope: {
+          kind: working.scope,
+          label: working.label,
+          href: working.href,
+        },
+        createdAt: Date.now(),
+        questionCount: working.questions.length,
+        difficulty: examDifficulty,
+        status: 'inProgress',
+        submittedAt: null,
+        questions: working.questions,
+        answers: {},
+        selfReviews: {},
+        grades: {},
+        attempts: [],
+      };
+      setExamProgress('正在保存试卷…');
+      try {
+        await invoke('save_epub_exam', { exam });
+      } catch (cause) {
+        setUnsavedExam(exam);
+        throw new Error(
+          `试卷已生成，保存失败：${String(cause)}。可直接重试保存。`,
+        );
+      }
+      setExamDraft(null);
       setExamDialogOpen(false);
       setNavigationNotice({
         message: '试卷已生成并保存，返回书架后可继续作答。',
@@ -1296,6 +1362,86 @@ export default function EpubReader({
     } catch (cause) {
       setExamError(cause instanceof Error ? cause.message : String(cause));
     } finally {
+      setExamGenerating(false);
+      setExamProgress('');
+    }
+  };
+
+  const createExamFromCurrentSection = async () => {
+    if (examGenerating) return;
+    if (examDraft) {
+      await runExamDraft(examDraft);
+      return;
+    }
+    if (examMixTotal(examMix) !== Number(examQuestionCount)) {
+      setExamError('题型数量必须等于试卷总题数。');
+      return;
+    }
+    setExamGenerating(true);
+    setExamError('');
+    setUnsavedExam(null);
+    try {
+      const book = viewRef.current?.book;
+      const location = currentLocationRef.current;
+      const sections = book?.sections ?? [];
+      const resolve = (href: string) => book?.resolveHref?.(href) ?? null;
+      const plan = resolveExamSourcePlan(
+        tocRef.current,
+        activeTocHref || location.sectionHref,
+        activeTocId,
+        location.sectionIndex,
+        resolve,
+        examScope,
+      );
+      if (examScope === 'chapter' && !plan)
+        throw new Error('目录无法可靠定位整章起止，请使用当前小节出题。');
+      let segments: ExamSourceSegment[];
+      if (plan)
+        segments = await loadExamSourceSegments(
+          plan,
+          tocRef.current,
+          sections,
+          resolve,
+        );
+      else {
+        const source = await sections[location.sectionIndex]?.loadText?.();
+        if (!source) throw new Error('当前阅读段落没有可用于出题的正文。');
+        segments = [
+          {
+            href: location.sectionHref,
+            label:
+              location.chapterTitle || `第 ${location.sectionIndex + 1} 节`,
+            text: extractEpubSectionPlainText(source),
+            sectionIndex: location.sectionIndex,
+          },
+        ];
+      }
+      if (examMix.cProgramming > 0) {
+        const environment = await invoke<{
+          available: boolean;
+          error?: string;
+        }>('c_check_environment');
+        if (!environment.available)
+          throw new Error(
+            environment.error || '未检测到本地 C 编译器，请将编程题数设为 0。',
+          );
+      }
+      const batches = makeExamBatches(segments, examMix);
+      const draft = {
+        scope: examScope,
+        label: plan?.label || segments[0].label,
+        href: plan?.href || segments[0].href,
+        mix: { ...examMix },
+        segments,
+        batches,
+        questions: [] as EpubExamQuestion[],
+        nextIndex: 0,
+      };
+      setExamDraft(draft);
+      setExamGenerating(false);
+      await runExamDraft(draft);
+    } catch (cause) {
+      setExamError(cause instanceof Error ? cause.message : String(cause));
       setExamGenerating(false);
     }
   };
@@ -2017,6 +2163,15 @@ export default function EpubReader({
     (bookmark) => bookmark.cfi === currentCfi,
   );
 
+  const chapterExamPlan = resolveExamSourcePlan(
+    toc,
+    activeTocHref || sectionHref,
+    activeTocId,
+    sectionIndex,
+    (href) => viewRef.current?.book?.resolveHref?.(href) ?? null,
+    'chapter',
+  );
+
   return (
     <div
       className={`epub-reader${embedded ? ' is-workspace' : ''}`}
@@ -2066,9 +2221,15 @@ export default function EpubReader({
             type="button"
             className="epub-reader-tool epub-reader-exam-generate"
             onClick={() => {
-              setExamQuestionCount('10');
-              setExamDifficulty('medium');
-              setExamError('');
+              if (!examDraft && !unsavedExam) {
+                setExamQuestionCount('10');
+                setExamScope('section');
+                setExamMix(
+                  defaultExamMix(10, /\bC\b|C语言|C Primer/iu.test(title)),
+                );
+                setExamDifficulty('medium');
+                setExamError('');
+              }
               setExamDialogOpen(true);
             }}
             disabled={loading || examGenerating}
@@ -3000,10 +3161,8 @@ export default function EpubReader({
           >
             <header>
               <div>
-                <span className="ebook-shelf-kicker">
-                  GENERATE FROM CURRENT SECTION
-                </span>
-                <h2 id="epub-exam-generate-title">生成本段试卷</h2>
+                <span className="ebook-shelf-kicker">GENERATE EPUB EXAM</span>
+                <h2 id="epub-exam-generate-title">生成阅读试卷</h2>
               </div>
               <button
                 type="button"
@@ -3025,23 +3184,71 @@ export default function EpubReader({
               </div>
               <div>
                 <dt>内容范围</dt>
-                <dd>仅使用当前 spine section 的正文</dd>
+                <dd>
+                  {examScope === 'chapter'
+                    ? chapterExamPlan?.label || '目录未能定位整章'
+                    : '当前小节及其子目录正文'}
+                </dd>
               </div>
             </dl>
+            <fieldset
+              className="epub-exam-scope-options"
+              disabled={examGenerating || Boolean(examDraft)}
+            >
+              <legend>组卷范围</legend>
+              <label>
+                <input
+                  type="radio"
+                  checked={examScope === 'section'}
+                  onChange={() => setExamScope('section')}
+                />{' '}
+                当前小节
+              </label>
+              <label title={chapterExamPlan ? '' : '目录无法可靠定位整章起止'}>
+                <input
+                  type="radio"
+                  checked={examScope === 'chapter'}
+                  disabled={!chapterExamPlan}
+                  onChange={() => setExamScope('chapter')}
+                />{' '}
+                所在整章
+              </label>
+            </fieldset>
+            {examScope === 'chapter' && chapterExamPlan && (
+              <div className="epub-exam-scope-preview">
+                <strong>
+                  将纳入 {chapterExamPlan.items.length} 个目录节点
+                </strong>
+                <div>
+                  {chapterExamPlan.items.map((item) => item.label).join(' · ')}
+                </div>
+              </div>
+            )}
             <p className="epub-exam-generation-privacy">
-              提交后，该段正文会发送给当前配置的 AI 服务生成题目、答案和解析。
+              所选范围的教材正文会分批发送给当前配置的 AI
+              服务，用于生成题目、评分点、答案和解析。
             </p>
             <label>
               <span>题数</span>
               <select
                 value={examQuestionCount}
-                onChange={(event) => setExamQuestionCount(event.target.value)}
-                disabled={examGenerating || Boolean(unsavedExam)}
+                onChange={(event) => {
+                  const count = Number(event.target.value);
+                  setExamQuestionCount(event.target.value);
+                  setExamMix(
+                    defaultExamMix(count, /\bC\b|C语言|C Primer/iu.test(title)),
+                  );
+                }}
+                disabled={
+                  examGenerating || Boolean(unsavedExam) || Boolean(examDraft)
+                }
               >
                 <option value="5">5 题</option>
                 <option value="10">10 题</option>
                 <option value="15">15 题</option>
                 <option value="20">20 题</option>
+                <option value="30">30 题</option>
+                <option value="50">50 题</option>
               </select>
             </label>
             <label>
@@ -3051,19 +3258,81 @@ export default function EpubReader({
                 onChange={(event) =>
                   setExamDifficulty(event.target.value as EpubExamDifficulty)
                 }
-                disabled={examGenerating || Boolean(unsavedExam)}
+                disabled={
+                  examGenerating || Boolean(unsavedExam) || Boolean(examDraft)
+                }
               >
                 <option value="easy">简单</option>
                 <option value="medium">中等</option>
                 <option value="hard">困难</option>
               </select>
             </label>
+            <div className="epub-exam-mix-grid">
+              {(
+                [
+                  ['objective', '客观题'],
+                  ['comprehensive', '综合题'],
+                  ['engineering', '工程应用题'],
+                  ['cProgramming', 'C 编程题'],
+                ] as const
+              ).map(([key, label]) => (
+                <label key={key}>
+                  <span>{label}</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max={examQuestionCount}
+                    step="1"
+                    value={examMix[key]}
+                    disabled={
+                      examGenerating ||
+                      Boolean(unsavedExam) ||
+                      Boolean(examDraft)
+                    }
+                    onChange={(event) =>
+                      setExamMix((current) => ({
+                        ...current,
+                        [key]: Math.max(
+                          0,
+                          Math.floor(Number(event.target.value) || 0),
+                        ),
+                      }))
+                    }
+                  />
+                </label>
+              ))}
+            </div>
+            <p
+              className={`epub-exam-mix-total${examMixTotal(examMix) === Number(examQuestionCount) ? '' : ' is-invalid'}`}
+            >
+              已分配 {examMixTotal(examMix)} / {examQuestionCount} 题
+              {examMixTotal(examMix) === Number(examQuestionCount)
+                ? ''
+                : '；请调整到总题数'}
+            </p>
+            {(examProgress || examDraft) && (
+              <p className="epub-exam-generation-progress" role="status">
+                {examProgress ||
+                  `已完成 ${examDraft?.nextIndex ?? 0} / ${examDraft?.batches.length ?? 0} 批，可重试当前批。`}
+              </p>
+            )}
             {examError && (
               <p className="epub-exam-generation-error" role="alert">
                 {examError}
               </p>
             )}
             <footer>
+              {examDraft && !examGenerating && !unsavedExam && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setExamDraft(null);
+                    setExamError('');
+                  }}
+                >
+                  放弃草稿
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setExamDialogOpen(false)}
@@ -3085,9 +3354,17 @@ export default function EpubReader({
                   type="button"
                   className="is-primary"
                   onClick={() => void createExamFromCurrentSection()}
-                  disabled={examGenerating}
+                  disabled={
+                    examGenerating ||
+                    (!examDraft &&
+                      examMixTotal(examMix) !== Number(examQuestionCount))
+                  }
                 >
-                  {examGenerating ? '正在生成…' : '生成并保存'}
+                  {examGenerating
+                    ? '正在生成…'
+                    : examDraft
+                      ? '重试当前批'
+                      : '生成并保存'}
                 </button>
               )}
             </footer>

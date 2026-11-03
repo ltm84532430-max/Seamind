@@ -157,10 +157,7 @@ async fn get_or_create_window(
         .incognito(true)
         .user_agent(user_agent)
         .initialization_script(BOTGUARD_RUNTIME)
-        .on_navigation(|url| {
-            url.scheme() == "https"
-                && url.host_str().is_some_and(is_youtube_host)
-        })
+        .on_navigation(|url| url.scheme() == "https" && url.host_str().is_some_and(is_youtube_host))
         .on_page_load(move |_, payload| {
             if payload.event() == PageLoadEvent::Finished
                 && payload.url().scheme() == "https"

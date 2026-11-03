@@ -529,21 +529,42 @@ pub fn find_existing_paper_id(
 ) -> Result<Option<String>, String> {
     let normalize_doi = |value: &str| crate::bibtex::clean_doi(value).trim().to_ascii_lowercase();
     let version_re = regex::Regex::new(r"(?i)v\d+$").unwrap();
-    let normalize_arxiv = |value: &str| crate::literature_resolver::arxiv_id(value).map(|id| {
-        version_re.replace(&id, "").to_ascii_lowercase()
-    });
+    let normalize_arxiv = |value: &str| {
+        crate::literature_resolver::arxiv_id(value)
+            .map(|id| version_re.replace(&id, "").to_ascii_lowercase())
+    };
     let wanted_doi = doi.map(normalize_doi).filter(|v| !v.is_empty());
-    let wanted_arxiv = arxiv_id.and_then(normalize_arxiv).or_else(|| doi.and_then(normalize_arxiv));
-    if wanted_doi.is_none() && wanted_arxiv.is_none() { return Ok(None); }
-    let mut statement = conn.prepare("SELECT id,doi,arxiv_id FROM papers WHERE doi IS NOT NULL OR arxiv_id IS NOT NULL")
+    let wanted_arxiv = arxiv_id
+        .and_then(normalize_arxiv)
+        .or_else(|| doi.and_then(normalize_arxiv));
+    if wanted_doi.is_none() && wanted_arxiv.is_none() {
+        return Ok(None);
+    }
+    let mut statement = conn
+        .prepare("SELECT id,doi,arxiv_id FROM papers WHERE doi IS NOT NULL OR arxiv_id IS NOT NULL")
         .map_err(|e| format!("Query paper identifiers failed: {e}"))?;
-    let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, Option<String>>(2)?)))
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })
         .map_err(|e| format!("Query paper identifiers failed: {e}"))?;
     for row in rows {
-        let (id, old_doi, old_arxiv) = row.map_err(|e| format!("Read paper identifiers failed: {e}"))?;
-        let doi_match = wanted_doi.as_ref().is_some_and(|d| old_doi.as_deref().is_some_and(|v| normalize_doi(v) == *d));
-        let old_arxiv = old_arxiv.as_deref().and_then(normalize_arxiv).or_else(|| old_doi.as_deref().and_then(normalize_arxiv));
-        if doi_match || (wanted_arxiv.is_some() && wanted_arxiv == old_arxiv) { return Ok(Some(id)); }
+        let (id, old_doi, old_arxiv) =
+            row.map_err(|e| format!("Read paper identifiers failed: {e}"))?;
+        let doi_match = wanted_doi
+            .as_ref()
+            .is_some_and(|d| old_doi.as_deref().is_some_and(|v| normalize_doi(v) == *d));
+        let old_arxiv = old_arxiv
+            .as_deref()
+            .and_then(normalize_arxiv)
+            .or_else(|| old_doi.as_deref().and_then(normalize_arxiv));
+        if doi_match || (wanted_arxiv.is_some() && wanted_arxiv == old_arxiv) {
+            return Ok(Some(id));
+        }
     }
     Ok(None)
 }
@@ -759,12 +780,28 @@ pub struct PaperPdfAttempt {
 }
 
 pub fn pdf_attempt(conn: &Connection, id: &str) -> Result<Option<PaperPdfAttempt>, String> {
-    conn.query_row("SELECT status,message,attempted_at FROM paper_pdf_attempts WHERE paper_id=?1", params![id],
-        |row| Ok(PaperPdfAttempt { status: row.get(0)?, message: row.get(1)?, attempted_at: row.get(2)? }))
-        .optional().map_err(|e| format!("读取原文状态失败：{e}"))
+    conn.query_row(
+        "SELECT status,message,attempted_at FROM paper_pdf_attempts WHERE paper_id=?1",
+        params![id],
+        |row| {
+            Ok(PaperPdfAttempt {
+                status: row.get(0)?,
+                message: row.get(1)?,
+                attempted_at: row.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| format!("读取原文状态失败：{e}"))
 }
 
-pub fn set_pdf_attempt(conn: &Connection, id: &str, status: &str, message: Option<&str>, now: i64) -> Result<(), String> {
+pub fn set_pdf_attempt(
+    conn: &Connection,
+    id: &str,
+    status: &str,
+    message: Option<&str>,
+    now: i64,
+) -> Result<(), String> {
     conn.execute("INSERT INTO paper_pdf_attempts(paper_id,status,message,attempted_at) VALUES (?1,?2,?3,?4) ON CONFLICT(paper_id) DO UPDATE SET status=excluded.status,message=excluded.message,attempted_at=excluded.attempted_at", params![id,status,message,now])
         .map_err(|e| format!("记录原文状态失败：{e}"))?;
     Ok(())
@@ -793,10 +830,35 @@ mod pdf_source_tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(SCHEMA).unwrap();
         conn.execute("INSERT INTO papers(id,cite_key,title,doi,arxiv_id,notes,read_status,created_at,updated_at) VALUES ('p1','one','Paper','10.48550/arXiv.1706.03762','1706.03762v7','keep notes','reading',1,1)", []).unwrap();
-        assert_eq!(find_existing_paper_id(&conn, Some("https://doi.org/10.48550/arxiv.1706.03762"), None).unwrap().as_deref(), Some("p1"));
-        assert_eq!(find_existing_paper_id(&conn, None, Some("arXiv:1706.03762v2")).unwrap().as_deref(), Some("p1"));
-        assert!(find_existing_paper_id(&conn, Some("10.1234/unrelated"), None).unwrap().is_none());
-        assert_eq!(conn.query_row("SELECT notes FROM papers WHERE id='p1'", [], |row| row.get::<_, String>(0)).unwrap(), "keep notes");
+        assert_eq!(
+            find_existing_paper_id(
+                &conn,
+                Some("https://doi.org/10.48550/arxiv.1706.03762"),
+                None
+            )
+            .unwrap()
+            .as_deref(),
+            Some("p1")
+        );
+        assert_eq!(
+            find_existing_paper_id(&conn, None, Some("arXiv:1706.03762v2"))
+                .unwrap()
+                .as_deref(),
+            Some("p1")
+        );
+        assert!(
+            find_existing_paper_id(&conn, Some("10.1234/unrelated"), None)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            conn.query_row("SELECT notes FROM papers WHERE id='p1'", [], |row| row
+                .get::<_, String>(
+                0
+            ))
+            .unwrap(),
+            "keep notes"
+        );
     }
 
     #[test]
@@ -805,16 +867,29 @@ mod pdf_source_tests {
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
         conn.execute_batch(SCHEMA).unwrap();
         conn.execute("INSERT INTO papers(id,cite_key,title,created_at,updated_at) VALUES ('p1','one','Paper',1,1)", []).unwrap();
-        let source = PaperPdfSource { source_type: "arXiv".into(), source_url: Some("https://arxiv.org/pdf/1706.03762".into()), version: None, license: None, acquired_at: 2 };
-        set_pdf_source(&conn,"p1",&source).unwrap();
-        assert_eq!(pdf_source(&conn,"p1").unwrap().unwrap().source_type,"arXiv");
-        set_pdf_attempt(&conn,"p1","failed",Some("network unavailable"),3).unwrap();
-        assert_eq!(pdf_attempt(&conn,"p1").unwrap().unwrap().status,"failed");
-        set_pdf_attempt(&conn,"p1","available",None,4).unwrap();
-        assert_eq!(pdf_attempt(&conn,"p1").unwrap().unwrap().status,"available");
-        conn.execute("DELETE FROM papers WHERE id='p1'", []).unwrap();
-        assert!(pdf_source(&conn,"p1").unwrap().is_none());
-        assert!(pdf_attempt(&conn,"p1").unwrap().is_none());
+        let source = PaperPdfSource {
+            source_type: "arXiv".into(),
+            source_url: Some("https://arxiv.org/pdf/1706.03762".into()),
+            version: None,
+            license: None,
+            acquired_at: 2,
+        };
+        set_pdf_source(&conn, "p1", &source).unwrap();
+        assert_eq!(
+            pdf_source(&conn, "p1").unwrap().unwrap().source_type,
+            "arXiv"
+        );
+        set_pdf_attempt(&conn, "p1", "failed", Some("network unavailable"), 3).unwrap();
+        assert_eq!(pdf_attempt(&conn, "p1").unwrap().unwrap().status, "failed");
+        set_pdf_attempt(&conn, "p1", "available", None, 4).unwrap();
+        assert_eq!(
+            pdf_attempt(&conn, "p1").unwrap().unwrap().status,
+            "available"
+        );
+        conn.execute("DELETE FROM papers WHERE id='p1'", [])
+            .unwrap();
+        assert!(pdf_source(&conn, "p1").unwrap().is_none());
+        assert!(pdf_attempt(&conn, "p1").unwrap().is_none());
     }
 }
 

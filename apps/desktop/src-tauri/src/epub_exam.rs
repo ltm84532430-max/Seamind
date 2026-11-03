@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
-const STORE_SCHEMA_VERSION: u32 = 1;
+pub(crate) const STORE_SCHEMA_VERSION: u32 = 2;
 const MAX_SOURCE_CHARS: usize = 50_000;
 const MAX_PROMPT_CHARS: usize = 60_000;
 const STORE_DIRECTORY: &str = "epub-exams";
@@ -43,6 +43,61 @@ pub enum EpubExamQuestionType {
     MultipleChoice,
     TrueFalse,
     ShortAnswer,
+    Comprehensive,
+    Engineering,
+    CProgramming,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamScope {
+    pub kind: String,
+    pub label: String,
+    pub href: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamSourceRef {
+    pub href: String,
+    pub label: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamRubricItem {
+    pub criterion: String,
+    pub points: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamCodeCase {
+    pub stdin: String,
+    pub expected_stdout: String,
+    #[serde(default)]
+    pub hidden: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamCodeSpec {
+    pub starter_code: String,
+    pub cases: Vec<ExamCodeCase>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamGrade {
+    pub earned: f32,
+    pub maximum: u32,
+    pub feedback: String,
+    #[serde(default)]
+    pub passed_cases: Option<usize>,
+    #[serde(default)]
+    pub total_cases: Option<usize>,
+    #[serde(default)]
+    pub provisional: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -64,6 +119,14 @@ pub struct EpubExamQuestion {
     pub options: Option<Vec<String>>,
     pub answer: EpubExamAnswer,
     pub explanation: String,
+    #[serde(default)]
+    pub source_refs: Vec<ExamSourceRef>,
+    #[serde(default)]
+    pub points: u32,
+    #[serde(default)]
+    pub rubric: Vec<ExamRubricItem>,
+    #[serde(default)]
+    pub code_spec: Option<ExamCodeSpec>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -72,6 +135,8 @@ pub struct EpubExamAttempt {
     pub completed_at: u64,
     pub answers: HashMap<String, EpubExamAnswer>,
     pub self_reviews: HashMap<String, EpubExamSelfReview>,
+    #[serde(default)]
+    pub grades: HashMap<String, ExamGrade>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -85,6 +150,8 @@ pub struct EpubExam {
     pub source_section_index: usize,
     pub source_section_href: String,
     pub source_section_label: String,
+    #[serde(default)]
+    pub scope: ExamScope,
     pub created_at: u64,
     pub question_count: usize,
     pub difficulty: EpubExamDifficulty,
@@ -93,6 +160,8 @@ pub struct EpubExam {
     pub questions: Vec<EpubExamQuestion>,
     pub answers: HashMap<String, EpubExamAnswer>,
     pub self_reviews: HashMap<String, EpubExamSelfReview>,
+    #[serde(default)]
+    pub grades: HashMap<String, ExamGrade>,
     #[serde(default)]
     pub attempts: Vec<EpubExamAttempt>,
 }
@@ -149,10 +218,10 @@ struct GeneratedQuestion {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct BookExamStore {
-    schema_version: u32,
-    book_key: String,
-    exams: Vec<EpubExam>,
+pub(crate) struct BookExamStore {
+    pub(crate) schema_version: u32,
+    pub(crate) book_key: String,
+    pub(crate) exams: Vec<EpubExam>,
 }
 
 #[tauri::command]
@@ -235,8 +304,20 @@ pub async fn generate_epub_exam(
             options: question.options,
             answer: question.answer,
             explanation: question.explanation.trim().to_string(),
+            source_refs: vec![ExamSourceRef {
+                href: source_section_href.clone(),
+                label: source_section_label.clone(),
+            }],
+            points: 2,
+            rubric: Vec::new(),
+            code_spec: None,
         })
         .collect::<Vec<_>>();
+    let scope = ExamScope {
+        kind: "section".into(),
+        label: source_section_label.clone(),
+        href: source_section_href.clone(),
+    };
     let exam = EpubExam {
         schema_version: STORE_SCHEMA_VERSION,
         id: Uuid::new_v4().to_string(),
@@ -246,6 +327,7 @@ pub async fn generate_epub_exam(
         source_section_index,
         source_section_href,
         source_section_label,
+        scope,
         created_at: now_millis(),
         question_count,
         difficulty,
@@ -254,6 +336,7 @@ pub async fn generate_epub_exam(
         questions,
         answers: HashMap::new(),
         self_reviews: HashMap::new(),
+        grades: HashMap::new(),
         attempts: Vec::new(),
     };
     validate_exam(&exam)?;
@@ -349,6 +432,54 @@ pub fn save_epub_exam_progress(
     if submitted {
         exam.status = EpubExamStatus::Submitted;
         exam.submitted_at.get_or_insert_with(now_millis);
+        for question in &exam.questions {
+            if matches!(question.question_type, EpubExamQuestionType::CProgramming)
+                && !matches!(exam.answers.get(&question.id), Some(EpubExamAnswer::Text(value)) if !value.trim().is_empty())
+            {
+                exam.grades.insert(
+                    question.id.clone(),
+                    ExamGrade {
+                        earned: 0.0,
+                        maximum: question.points.max(12),
+                        feedback: "未提交 C 源码。".into(),
+                        passed_cases: Some(0),
+                        total_cases: question.code_spec.as_ref().map(|spec| spec.cases.len()),
+                        provisional: false,
+                    },
+                );
+            }
+            if !matches!(
+                question.question_type,
+                EpubExamQuestionType::SingleChoice
+                    | EpubExamQuestionType::MultipleChoice
+                    | EpubExamQuestionType::TrueFalse
+            ) {
+                continue;
+            }
+            let correct = match (exam.answers.get(&question.id), &question.answer) {
+                (Some(EpubExamAnswer::Choices(left)), EpubExamAnswer::Choices(right)) => {
+                    left.iter().collect::<HashSet<_>>() == right.iter().collect::<HashSet<_>>()
+                }
+                (Some(answer), expected) => answer == expected,
+                _ => false,
+            };
+            let maximum = question.points.max(2);
+            exam.grades.insert(
+                question.id.clone(),
+                ExamGrade {
+                    earned: if correct { maximum as f32 } else { 0.0 },
+                    maximum,
+                    feedback: if correct {
+                        "答案正确".into()
+                    } else {
+                        "答案与参考答案不符".into()
+                    },
+                    passed_cases: None,
+                    total_cases: None,
+                    provisional: false,
+                },
+            );
+        }
     }
     let saved = exam.clone();
     write_book_store(&app, &store)?;
@@ -376,11 +507,13 @@ pub fn restart_epub_exam(
         completed_at: exam.submitted_at.unwrap_or_else(now_millis),
         answers: exam.answers.clone(),
         self_reviews: exam.self_reviews.clone(),
+        grades: exam.grades.clone(),
     });
     exam.status = EpubExamStatus::InProgress;
     exam.submitted_at = None;
     exam.answers.clear();
     exam.self_reviews.clear();
+    exam.grades.clear();
 
     let restarted = exam.clone();
     write_book_store(&app, &store)?;
@@ -465,7 +598,7 @@ fn parse_generated_questions(
     Ok(response.questions)
 }
 
-fn validate_question_content(
+pub(crate) fn validate_question_content(
     question_type: &EpubExamQuestionType,
     prompt: &str,
     options: Option<&[String]>,
@@ -523,10 +656,23 @@ fn validate_question_content(
                 );
             }
         }
-        (EpubExamQuestionType::ShortAnswer, EpubExamAnswer::Text(value)) => {
+        (
+            EpubExamQuestionType::ShortAnswer
+            | EpubExamQuestionType::Comprehensive
+            | EpubExamQuestionType::Engineering,
+            EpubExamAnswer::Text(value),
+        ) => {
             if value.trim().is_empty() || value.chars().count() > 4_000 || !option_values.is_empty()
             {
                 return Err("简答题需要非空答案，且不能包含选项。".to_string());
+            }
+        }
+        (EpubExamQuestionType::CProgramming, EpubExamAnswer::Text(value)) => {
+            if value.trim().is_empty()
+                || value.as_bytes().len() > 20_000
+                || !option_values.is_empty()
+            {
+                return Err("编程题需要 20 KB 以内的 C 参考源码，且不能包含选项。".into());
             }
         }
         _ => return Err("答案类型与题型不匹配。".to_string()),
@@ -535,12 +681,12 @@ fn validate_question_content(
 }
 
 fn validate_exam(exam: &EpubExam) -> Result<(), String> {
-    if exam.schema_version != STORE_SCHEMA_VERSION
+    if ![1, STORE_SCHEMA_VERSION].contains(&exam.schema_version)
         || exam.id.trim().is_empty()
         || exam.book_key.trim().is_empty()
         || exam.book_key.chars().count() > 2_000
         || exam.question_count != exam.questions.len()
-        || ![5, 10, 15, 20].contains(&exam.question_count)
+        || ![5, 10, 15, 20, 30, 50].contains(&exam.question_count)
     {
         return Err("试卷数据不完整或版本不受支持。".to_string());
     }
@@ -556,8 +702,32 @@ fn validate_exam(exam: &EpubExam) -> Result<(), String> {
             &question.answer,
             &question.explanation,
         )?;
+        if exam.schema_version == 2 {
+            if question.points == 0 || question.points > 100 || question.source_refs.is_empty() {
+                return Err("新版试题缺少分值或正文来源。".into());
+            }
+            if matches!(question.question_type, EpubExamQuestionType::CProgramming) {
+                let spec = question.code_spec.as_ref().ok_or("编程题缺少测试用例。")?;
+                if spec.cases.len() < 4
+                    || spec.cases.len() > 10
+                    || spec.cases.iter().filter(|case| !case.hidden).count() < 2
+                    || spec.cases.iter().filter(|case| case.hidden).count() < 2
+                {
+                    return Err("编程题必须包含公开样例和隐藏用例。".into());
+                }
+            }
+        }
     }
     validate_progress(exam, &exam.answers, &exam.self_reviews)?;
+    if exam.grades.iter().any(|(id, grade)| {
+        !ids.contains(id.as_str())
+            || !grade.earned.is_finite()
+            || grade.maximum == 0
+            || grade.earned < 0.0
+            || grade.earned > grade.maximum as f32
+    }) {
+        return Err("试卷评分数据无效。".into());
+    }
     for attempt in &exam.attempts {
         validate_progress(exam, &attempt.answers, &attempt.self_reviews)?;
     }
@@ -601,9 +771,13 @@ fn validate_progress(
             (EpubExamQuestionType::TrueFalse, EpubExamAnswer::Text(value)) => {
                 ["正确", "错误"].contains(&value.as_str())
             }
-            (EpubExamQuestionType::ShortAnswer, EpubExamAnswer::Text(value)) => {
-                value.chars().count() <= 8_000
-            }
+            (
+                EpubExamQuestionType::ShortAnswer
+                | EpubExamQuestionType::Comprehensive
+                | EpubExamQuestionType::Engineering
+                | EpubExamQuestionType::CProgramming,
+                EpubExamAnswer::Text(value),
+            ) => value.chars().count() <= 120_000,
             _ => false,
         };
         if !valid {
@@ -634,13 +808,15 @@ fn store_path(app: &AppHandle, book_key: &str) -> Result<PathBuf, String> {
     Ok(root.join(STORE_DIRECTORY).join(format!("{store_id}.json")))
 }
 
-fn read_book_store(app: &AppHandle, book_key: &str) -> Result<BookExamStore, String> {
+pub(crate) fn read_book_store(app: &AppHandle, book_key: &str) -> Result<BookExamStore, String> {
     let path = store_path(app, book_key)?;
     match fs::read(&path) {
         Ok(bytes) => {
             let store: BookExamStore = serde_json::from_slice(&bytes)
                 .map_err(|_| "本地试卷文件损坏，未覆盖现有数据。".to_string())?;
-            if store.schema_version != STORE_SCHEMA_VERSION || store.book_key != book_key {
+            if ![1, STORE_SCHEMA_VERSION].contains(&store.schema_version)
+                || store.book_key != book_key
+            {
                 return Err("本地试卷文件版本或书籍标识不匹配。".to_string());
             }
             for exam in &store.exams {
@@ -681,7 +857,7 @@ fn read_all_stores(app: &AppHandle) -> Result<Vec<BookExamStore>, String> {
         let bytes = fs::read(entry.path()).map_err(|error| format!("无法读取试卷文件：{error}"))?;
         let store: BookExamStore = serde_json::from_slice(&bytes)
             .map_err(|_| "本地试卷文件损坏，无法加载试卷库。".to_string())?;
-        if store.schema_version != STORE_SCHEMA_VERSION {
+        if ![1, STORE_SCHEMA_VERSION].contains(&store.schema_version) {
             return Err("本地试卷文件版本不受支持。".to_string());
         }
         for exam in &store.exams {
@@ -695,10 +871,12 @@ fn read_all_stores(app: &AppHandle) -> Result<Vec<BookExamStore>, String> {
     Ok(stores)
 }
 
-fn write_book_store(app: &AppHandle, store: &BookExamStore) -> Result<(), String> {
+pub(crate) fn write_book_store(app: &AppHandle, store: &BookExamStore) -> Result<(), String> {
     let path = store_path(app, &store.book_key)?;
+    let mut upgraded = store.clone();
+    upgraded.schema_version = STORE_SCHEMA_VERSION;
     let payload =
-        serde_json::to_vec_pretty(store).map_err(|_| "无法序列化试卷数据。".to_string())?;
+        serde_json::to_vec_pretty(&upgraded).map_err(|_| "无法序列化试卷数据。".to_string())?;
     write_atomically(&path, &payload)
 }
 
@@ -766,7 +944,7 @@ fn persist_new_exam(app: &AppHandle, exam: &EpubExam) -> Result<(), String> {
     write_book_store(app, &store)
 }
 
-fn store_lock() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+pub(crate) fn store_lock() -> Result<std::sync::MutexGuard<'static, ()>, String> {
     STORE_LOCK
         .lock()
         .map_err(|_| "试卷存储暂时不可用，请重启应用后重试。".to_string())
@@ -847,5 +1025,26 @@ mod tests {
         remove_store_file(&path).unwrap();
         assert!(!path.exists());
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn reads_v1_exam_without_losing_answers_or_attempts() {
+        let json = serde_json::json!({
+            "schemaVersion": 1, "id": "old", "bookKey": "book.epub", "bookTitle": "Book",
+            "sourceFileFingerprint": "fp", "sourceSectionIndex": 0, "sourceSectionHref": "a.html",
+            "sourceSectionLabel": "1.1", "createdAt": 1, "questionCount": 5,
+            "difficulty": "medium", "status": "submitted", "submittedAt": 2,
+            "questions": (0..5).map(|index| serde_json::json!({"id":format!("q{index}"),"type":"singleChoice","prompt":"问题","options":["甲","乙"],"answer":"甲","explanation":"解析"})).collect::<Vec<_>>(),
+            "answers": {"q0":"乙"}, "selfReviews": {"q0":"review"},
+            "attempts": [{"completedAt":2,"answers":{"q0":"甲"},"selfReviews":{"q0":"mastered"}}]
+        });
+        let exam: EpubExam = serde_json::from_value(json).unwrap();
+        validate_exam(&exam).unwrap();
+        assert_eq!(
+            exam.answers.get("q0"),
+            Some(&EpubExamAnswer::Text("乙".into()))
+        );
+        assert_eq!(exam.attempts.len(), 1);
+        assert!(exam.grades.is_empty());
     }
 }

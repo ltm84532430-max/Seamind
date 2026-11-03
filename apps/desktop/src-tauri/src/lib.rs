@@ -1,8 +1,12 @@
+mod bibtex;
+mod c_exam_runner;
+mod c_runner;
 mod epub;
 mod epub_exam;
-mod bibtex;
-mod library;
+mod epub_exam_generation;
+mod epub_exam_grading;
 mod learning_tasks;
+mod library;
 mod literature;
 mod literature_resolver;
 mod literature_store;
@@ -12,7 +16,6 @@ mod player;
 mod player_store;
 mod prompts;
 mod terminal;
-mod c_runner;
 mod youtube;
 mod youtube_botguard;
 mod youtube_eval;
@@ -53,12 +56,16 @@ pub fn run() {
             summarize_epub_chapters,
             analyze_epub_highlight,
             epub_exam::generate_epub_exam,
+            epub_exam_generation::generate_epub_exam_batch,
             epub_exam::save_epub_exam,
             epub_exam::list_epub_exams,
             epub_exam::get_epub_exam,
             epub_exam::save_epub_exam_progress,
             epub_exam::restart_epub_exam,
             epub_exam::delete_epub_exam,
+            epub_exam_grading::run_epub_exam_code,
+            epub_exam_grading::grade_epub_exam_subjective,
+            epub_exam_grading::override_epub_exam_grade,
             agent_completion,
             agent_bridge::agent_bridge_set_tools,
             agent_bridge::agent_bridge_resolve,
