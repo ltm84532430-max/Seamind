@@ -515,6 +515,51 @@ export class ActiveDocumentController {
     this.set({ ...current, relativePath, category });
   }
 
+  /**
+   * Syncs an externally saved Markdown update (e.g. progressive AI stage refinement) into the
+   * open clean document without overwriting unsaved user edits.
+   */
+  syncSavedMarkdown(
+    relativePath: string,
+    markdown: string,
+    statusMessage?: string,
+  ): boolean {
+    const current = this.state;
+    if (
+      !current ||
+      current.kind !== 'doc' ||
+      current.relativePath !== relativePath
+    ) {
+      return false;
+    }
+    if (current.revision !== current.savedRevision || this.saving) {
+      return false;
+    }
+    const nextRevision = current.revision + 1;
+    this.set({
+      ...current,
+      source: markdown,
+      revision: nextRevision,
+      savedRevision: nextRevision,
+    });
+    if (statusMessage) {
+      this.environment.setStatus(statusMessage);
+    }
+    return true;
+  }
+
+  canSyncSavedMarkdown(relativePath: string): boolean {
+    const current = this.state;
+    if (
+      !current ||
+      current.kind !== 'doc' ||
+      current.relativePath !== relativePath
+    ) {
+      return true;
+    }
+    return current.revision === current.savedRevision && !this.saving;
+  }
+
   /** Saves, then closes. False when it could not be saved and the user did not give it up. */
   async leave(): Promise<boolean> {
     if (!(await this.flush())) return false;

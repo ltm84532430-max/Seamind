@@ -285,9 +285,196 @@ function enhanceTextNodes(
   }
 }
 
+const YOUTUBE_HREF_PATTERN =
+  /^https?:\/\/(?:www\.|m\.)?(?:youtube\.com|youtu\.be|youtube-nocookie\.com)\//i;
+const TIMESTAMP_LABEL_PATTERN = /^(?:▶\s*)?(\d{1,2}):(\d{2})(?::(\d{2}))?$/;
+
+function formatNormalizedTimestampLabel(
+  first: string,
+  second: string,
+  third?: string,
+): string {
+  if (third !== undefined) {
+    return `${first.padStart(2, '0')}:${second.padStart(2, '0')}:${third.padStart(2, '0')}`;
+  }
+  return `${first.padStart(2, '0')}:${second.padStart(2, '0')}`;
+}
+
+function isLeadingTimestampAnchor(
+  container: HTMLElement,
+  anchor: HTMLAnchorElement,
+): boolean {
+  const childNodes = Array.from(container.childNodes);
+  const anchorIndex = childNodes.indexOf(anchor);
+  if (anchorIndex < 0) return false;
+  const onlyWhitespaceBefore = childNodes
+    .slice(0, anchorIndex)
+    .every(
+      (node) =>
+        node.nodeType === Node.TEXT_NODE && !(node.textContent ?? '').trim(),
+    );
+  if (!onlyWhitespaceBefore) return false;
+
+  const trailingNodes = childNodes.slice(anchorIndex + 1);
+  return trailingNodes.some(
+    (node) =>
+      node.nodeType !== Node.TEXT_NODE ||
+      Boolean((node.textContent ?? '').trim()),
+  );
+}
+
+function wrapLeadingTimestampRow(
+  container: HTMLElement,
+  anchor: HTMLAnchorElement,
+  doc: Document,
+): void {
+  const childNodes = Array.from(container.childNodes);
+  const anchorIndex = childNodes.indexOf(anchor);
+  if (anchorIndex < 0) return;
+
+  for (let i = 0; i < anchorIndex; i += 1) {
+    childNodes[i].remove();
+  }
+
+  const trailingNodes = childNodes.slice(anchorIndex + 1);
+  if (trailingNodes.length === 0) return;
+
+  const firstTrailing = trailingNodes[0];
+  if (firstTrailing.nodeType === Node.TEXT_NODE) {
+    firstTrailing.nodeValue = (firstTrailing.nodeValue ?? '').replace(
+      /^\s+/,
+      '',
+    );
+  }
+
+  const bodySpan = doc.createElement('span');
+  bodySpan.className = 'seamind-transcript-body';
+
+  const brIndex = trailingNodes.findIndex(
+    (node) =>
+      node.nodeType === Node.ELEMENT_NODE &&
+      (node as Element).tagName.toLowerCase() === 'br',
+  );
+
+  if (brIndex >= 0) {
+    const primarySpan = doc.createElement('span');
+    primarySpan.className = 'seamind-transcript-primary';
+    for (const node of trailingNodes.slice(0, brIndex)) {
+      primarySpan.appendChild(node);
+    }
+    trailingNodes[brIndex].remove();
+
+    const restNodes = trailingNodes.slice(brIndex + 1);
+    if (restNodes[0]?.nodeType === Node.TEXT_NODE) {
+      restNodes[0].nodeValue = (restNodes[0].nodeValue ?? '').replace(
+        /^\s+/,
+        '',
+      );
+    }
+    bodySpan.appendChild(primarySpan);
+    if (
+      restNodes.some(
+        (node) =>
+          node.nodeType !== Node.TEXT_NODE ||
+          Boolean((node.textContent ?? '').trim()),
+      )
+    ) {
+      const translationSpan = doc.createElement('span');
+      translationSpan.className = 'seamind-transcript-translation';
+      for (const node of restNodes) {
+        translationSpan.appendChild(node);
+      }
+      bodySpan.appendChild(translationSpan);
+    }
+  } else {
+    for (const node of trailingNodes) {
+      bodySpan.appendChild(node);
+    }
+  }
+
+  container.appendChild(bodySpan);
+  container.classList.add('seamind-transcript-paragraph');
+}
+
+function upgradeTimestampLinks(root: HTMLElement, doc: Document): void {
+  const anchors = Array.from(
+    root.querySelectorAll<HTMLAnchorElement>('a[href]'),
+  );
+  const candidateLists = new Set<HTMLUListElement>();
+
+  for (const anchor of anchors) {
+    if (anchor.closest('pre, code')) continue;
+    const href = anchor.getAttribute('href')?.trim() ?? '';
+    if (!YOUTUBE_HREF_PATTERN.test(href)) continue;
+
+    const rawText = (anchor.textContent ?? '').trim();
+    const match = rawText.match(TIMESTAMP_LABEL_PATTERN);
+    if (!match) continue;
+
+    const normalized = formatNormalizedTimestampLabel(
+      match[1],
+      match[2],
+      match[3],
+    );
+    anchor.textContent = normalized;
+    anchor.classList.add('seamind-timestamp-chip');
+    anchor.setAttribute('data-seamind-timestamp', normalized);
+    if (!anchor.getAttribute('title')) {
+      anchor.setAttribute('title', `跳转至视频 ${normalized} 处播放`);
+    }
+
+    const strongParent = anchor.parentElement;
+    if (
+      strongParent &&
+      strongParent.tagName.toLowerCase() === 'strong' &&
+      Array.from(strongParent.childNodes).every(
+        (node) =>
+          node === anchor ||
+          (node.nodeType === Node.TEXT_NODE &&
+            !(node.textContent ?? '').trim()),
+      )
+    ) {
+      strongParent.replaceWith(anchor);
+    }
+
+    const blockParent = anchor.parentElement;
+    if (!blockParent) continue;
+    const blockTag = blockParent.tagName.toLowerCase();
+    if (blockTag === 'p' && isLeadingTimestampAnchor(blockParent, anchor)) {
+      wrapLeadingTimestampRow(blockParent, anchor, doc);
+    } else if (
+      blockTag === 'li' &&
+      blockParent.parentElement?.tagName.toLowerCase() === 'ul'
+    ) {
+      candidateLists.add(blockParent.parentElement as HTMLUListElement);
+    }
+  }
+
+  for (const list of candidateLists) {
+    const items = Array.from(list.children).filter(
+      (child): child is HTMLLIElement => child.tagName.toLowerCase() === 'li',
+    );
+    if (items.length === 0) continue;
+    const pairs = items.map((item) => {
+      const chip = item.querySelector<HTMLAnchorElement>(
+        ':scope > a.seamind-timestamp-chip',
+      );
+      return chip && isLeadingTimestampAnchor(item, chip)
+        ? { item, chip }
+        : null;
+    });
+    if (pairs.every((pair) => pair !== null)) {
+      list.classList.add('seamind-transcript-list');
+      for (const pair of pairs) {
+        if (pair) wrapLeadingTimestampRow(pair.item, pair.chip, doc);
+      }
+    }
+  }
+}
+
 /**
  * Post-processes sanitized Markdown preview HTML to render GitHub-style callouts (`> [!NOTE]`),
- * clickable `[[wikilinks]]`, and subtle inline `#tags`.
+ * clickable `[[wikilinks]]`, subtle inline `#tags`, and enterprise YouTube timestamp chips.
  */
 export function enhanceKnowledgePreviewHtml(
   sanitizedHtml: string,
@@ -297,10 +484,17 @@ export function enhanceKnowledgePreviewHtml(
   const hasCallout = sanitizedHtml.includes('[!');
   const hasWikilink = sanitizedHtml.includes('[[');
   const hasHash = sanitizedHtml.includes('#');
-  if (!hasCallout && !hasWikilink && !hasHash) return sanitizedHtml;
+  const hasYouTube =
+    sanitizedHtml.includes('youtube.com/') ||
+    sanitizedHtml.includes('youtu.be/') ||
+    sanitizedHtml.includes('youtube-nocookie.com/');
+  if (!hasCallout && !hasWikilink && !hasHash && !hasYouTube) {
+    return sanitizedHtml;
+  }
 
   const parsed = new DOMParser().parseFromString(sanitizedHtml, 'text/html');
   if (hasCallout) upgradeCallouts(parsed.body, parsed);
+  if (hasYouTube) upgradeTimestampLinks(parsed.body, parsed);
   if (hasWikilink || hasHash) {
     enhanceTextNodes(parsed.body, parsed, documents);
   }

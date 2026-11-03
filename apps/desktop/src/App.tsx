@@ -3132,6 +3132,29 @@ export default function App() {
     if (!librarySnapshotRef.current?.rootPath) {
       throw new Error('请先在顶部或知识库中选择文件库目录，再导出字幕文档。');
     }
+
+    const upsertSavedInLibrary = (doc: MapDocument) => {
+      const latestSnapshot = librarySnapshotRef.current;
+      if (!latestSnapshot) return;
+      const categories = new Set(latestSnapshot.categories);
+      const parts = doc.category.split('/').filter(Boolean);
+      for (let idx = 1; idx <= parts.length; idx += 1) {
+        categories.add(parts.slice(0, idx).join('/'));
+      }
+      installLibrarySnapshot({
+        ...latestSnapshot,
+        categories: [...categories].sort(),
+        documents: [
+          doc,
+          ...latestSnapshot.documents.filter(
+            (candidate) =>
+              candidate.relativePath !== doc.relativePath &&
+              candidate.id !== doc.id,
+          ),
+        ],
+      });
+    };
+
     const input: SaveDocumentInput = {
       id: null,
       relativePath: null,
@@ -3143,38 +3166,57 @@ export default function App() {
       historySource: 'manual',
       kind: 'doc',
     };
-    const saved = await invoke<MapDocument>('save_document', { input });
-    const latestSnapshot = librarySnapshotRef.current;
-    if (latestSnapshot) {
-      const categories = new Set(latestSnapshot.categories);
-      const parts = saved.category.split('/').filter(Boolean);
-      for (let idx = 1; idx <= parts.length; idx += 1) {
-        categories.add(parts.slice(0, idx).join('/'));
-      }
-      installLibrarySnapshot({
-        ...latestSnapshot,
-        categories: [...categories].sort(),
-        documents: [
-          saved,
-          ...latestSnapshot.documents.filter(
-            (doc) =>
-              doc.relativePath !== saved.relativePath && doc.id !== saved.id,
-          ),
-        ],
-      });
-    }
+    let currentDoc = await invoke<MapDocument>('save_document', { input });
+    upsertSavedInLibrary(currentDoc);
     void searchLibrary().catch(() => undefined);
     setLibraryError('');
-    setSaveMessage(`已导出视频字幕至知识库「${saved.title}」`);
+    setSaveMessage(`已导出视频字幕至知识库「${currentDoc.title}」`);
+
     return {
-      title: saved.title,
-      category: saved.category || payload.category,
-      relativePath: saved.relativePath,
+      id: currentDoc.id,
+      title: currentDoc.title,
+      category: currentDoc.category || payload.category,
+      relativePath: currentDoc.relativePath,
       open: () => {
         void (async () => {
-          await openKnowledgeNote(saved);
+          await openKnowledgeNote(currentDoc);
           setActiveWorkspace('knowledge');
         })();
+      },
+      updateMarkdown: async (nextMarkdown: string, statusLabel?: string) => {
+        if (
+          !workbench.controller.canSyncSavedMarkdown(currentDoc.relativePath)
+        ) {
+          throw new Error(
+            '知识库文档有未保存的编辑，已停止后续阶段精修以保护你的修改。',
+          );
+        }
+        const transcriptTags = Array.from(
+          new Set([...currentDoc.tags, 'AI精修']),
+        );
+        const updateInput: SaveDocumentInput = {
+          id: currentDoc.id,
+          relativePath: currentDoc.relativePath,
+          title: currentDoc.title,
+          category: currentDoc.category || payload.category,
+          mapType: '视频字幕',
+          tags: transcriptTags.length > 0 ? transcriptTags : payload.tags,
+          markdown: nextMarkdown,
+          historySource: 'ai',
+          kind: 'doc',
+        };
+        currentDoc = await invoke<MapDocument>('save_document', {
+          input: updateInput,
+        });
+        upsertSavedInLibrary(currentDoc);
+        workbench.controller.syncSavedMarkdown(
+          currentDoc.relativePath,
+          nextMarkdown,
+          statusLabel,
+        );
+        if (statusLabel) {
+          setSaveMessage(statusLabel);
+        }
       },
     };
   };

@@ -128,6 +128,7 @@ export function formatHistoryTimestamp(timestamp: number): string {
 export function historySourceLabel(source: DocumentVersion['source']): string {
   if (source === 'baseline') return '初始快照';
   if (source === 'manual') return '手动保存';
+  if (source === 'ai') return 'AI 精修';
   if (source === 'restore') return '恢复记录';
   return '自动保存';
 }

@@ -520,6 +520,96 @@
   font-weight: 500;
 }
 
+.markdown-rendered-preview a.seamind-timestamp-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  min-width: 46px;
+  padding: 0 6px;
+  border: 1px solid #d5dce3;
+  border-radius: 4px;
+  background: #f3f5f8;
+  color: #52606d;
+  font: 500 11px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+.markdown-rendered-preview a.seamind-timestamp-chip:hover {
+  border-color: #9fb3c8;
+  background: #e6ecf2;
+  color: #1f2933;
+  text-decoration: none;
+}
+.app-shell[data-theme='dark']
+  .markdown-rendered-preview
+  a.seamind-timestamp-chip {
+  border-color: rgba(148, 163, 184, 0.22);
+  background: rgba(148, 163, 184, 0.09);
+  color: #94a3b8;
+  text-decoration: none;
+}
+.app-shell[data-theme='dark']
+  .markdown-rendered-preview
+  a.seamind-timestamp-chip:hover {
+  border-color: rgba(148, 163, 184, 0.45);
+  background: rgba(148, 163, 184, 0.18);
+  color: #e2e8f0;
+  text-decoration: none;
+}
+
+.markdown-rendered-preview ul.seamind-transcript-list {
+  margin: 10px 0 18px;
+  padding-left: 0;
+  list-style: none;
+}
+.markdown-rendered-preview p.seamind-transcript-paragraph,
+.markdown-rendered-preview li.seamind-transcript-paragraph {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 12px;
+  align-items: baseline;
+  margin: 0.8em 0;
+  padding: 2px 0;
+}
+.markdown-rendered-preview li.seamind-transcript-paragraph {
+  margin: 0.42em 0;
+}
+.markdown-rendered-preview .seamind-transcript-body,
+.markdown-rendered-preview .seamind-transcript-primary {
+  display: block;
+  min-width: 0;
+  line-height: 1.74;
+  color: var(--ink);
+}
+.markdown-rendered-preview .seamind-transcript-translation {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.93em;
+  line-height: 1.66;
+}
+.app-shell[data-theme='dark']
+  .markdown-rendered-preview
+  .seamind-transcript-body,
+.app-shell[data-theme='dark']
+  .markdown-rendered-preview
+  .seamind-transcript-primary {
+  color: #dde5ea;
+}
+.app-shell[data-theme='dark']
+  .markdown-rendered-preview
+  .seamind-transcript-translation {
+  color: #93a1ab;
+}
+
 .markdown-rendered-preview .seamind-callout {
   margin: 14px auto;
   padding: 12px 16px;

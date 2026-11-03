@@ -19,6 +19,7 @@ mod player;
 mod player_store;
 mod prompts;
 mod terminal;
+mod transcript_refiner;
 mod youtube;
 mod youtube_botguard;
 mod youtube_embed_transcript;
@@ -76,6 +77,7 @@ pub fn run() {
             epub_translation::get_epub_chapter_translation,
             epub_translation::delete_epub_chapter_translation,
             epub_translation::list_epub_book_translations,
+            transcript_refiner::refine_transcript_stage,
             agent_completion,
             agent_bridge::agent_bridge_set_tools,
             agent_bridge::agent_bridge_resolve,

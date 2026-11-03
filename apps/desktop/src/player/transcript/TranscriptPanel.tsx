@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
+import type { AgentProviderSettings } from '../../agent/runtime';
 import {
   clearTranscriptCache,
   fetchBrowserTranscript,
@@ -10,9 +11,16 @@ import {
 import {
   buildTranscriptKnowledgeExport,
   formatCueTime,
+  formatPaddedCueTime,
+  renderTranscriptStagesMarkdown,
   type TranscriptKnowledgeExportPayload,
   type TranscriptKnowledgeExportResult,
+  type TranscriptRefinementStatus,
 } from './export';
+import {
+  refineTranscriptStagesProgressively,
+  type TranscriptStageProgress,
+} from './refiner';
 import { parseVttOrSrt } from './parser';
 import type {
   TranscriptCue,
@@ -25,6 +33,7 @@ export interface TranscriptPanelProps {
   videoId: string;
   videoTitle?: string | null;
   channelName?: string | null;
+  provider?: AgentProviderSettings;
   currentTime: number;
   onSeek(seconds: number): void;
   onToggleLoopCue?(cue: TranscriptCue | null): void;
@@ -78,6 +87,7 @@ export default function TranscriptPanel({
   videoId,
   videoTitle,
   channelName,
+  provider,
   currentTime,
   onSeek,
   onToggleLoopCue,
@@ -101,6 +111,9 @@ export default function TranscriptPanel({
   } | null>(null);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
+  const [refinementProgress, setRefinementProgress] =
+    useState<TranscriptStageProgress | null>(null);
+  const [cancelRequested, setCancelRequested] = useState(false);
   const [error, setError] = useState<TranscriptFetchError | null>(null);
   const [retryCount, setRetryCount] = useState(0);
   const [browser, setBrowser] = useState<'firefox' | 'edge' | 'chrome'>(
@@ -112,6 +125,7 @@ export default function TranscriptPanel({
   const listRef = useRef<HTMLDivElement | null>(null);
   const activeElementRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const cancelRefinementRef = useRef(false);
   const lastVideoIdRef = useRef(videoId);
   const forceRefreshNextRef = useRef(false);
   const browserResultVideoRef = useRef<string | null>(null);
@@ -306,9 +320,9 @@ export default function TranscriptPanel({
   const copyCueToMindmap = useCallback(
     (cue: TranscriptCue) => {
       const startSec = Math.floor(cue.start);
-      const timeLabel = formatCueTime(cue.start);
+      const timeLabel = formatPaddedCueTime(cue.start);
       const url = `https://www.youtube.com/watch?v=${videoId}&t=${startSec}s`;
-      let snippet = `> [▶ ${timeLabel}](${url}) ${cue.text}`;
+      let snippet = `> [${timeLabel}](${url}) ${cue.text}`;
       if (cue.translation) {
         snippet += `\n> *${cue.translation}*`;
       }
@@ -316,7 +330,7 @@ export default function TranscriptPanel({
       navigator.clipboard
         .writeText(snippet)
         .then(() => {
-          onShowNotice?.(`已复制导图引用卡片 [▶ ${timeLabel}]`);
+          onShowNotice?.(`已复制导图引用卡片 [${timeLabel}]`);
         })
         .catch(() => {
           onShowNotice?.('复制失败，请重试', 'error');
@@ -336,10 +350,15 @@ export default function TranscriptPanel({
   const handleExportToKnowledge = useCallback(async () => {
     if (!onExportToKnowledge || exporting || filteredCues.length === 0) return;
     setExporting(true);
+    setRefinementProgress(null);
+    setCancelRequested(false);
+    cancelRefinementRef.current = false;
+    let savedResult: TranscriptKnowledgeExportResult | void = undefined;
     try {
       const trackLabel = activeTrack
         ? `${activeTrack.name} · ${activeTrack.languageCode}${activeTrack.isGenerated ? ' · 自动生成' : ''}`
         : undefined;
+      const exportedAt = new Date();
       const payload = buildTranscriptKnowledgeExport({
         videoId,
         videoTitle,
@@ -348,19 +367,252 @@ export default function TranscriptPanel({
         viewMode,
         trackLabel,
         searchQuery: search,
+        exportedAt,
       });
       const result = await onExportToKnowledge(payload);
+      savedResult = result;
+
+      const model = provider?.model.trim() ?? '';
+      const baseUrl = provider?.baseUrl.trim() ?? '';
+      if (
+        result?.updateMarkdown &&
+        model &&
+        baseUrl &&
+        payload.stageCount > 0 &&
+        !search.trim()
+      ) {
+        const saveProgress = result.updateMarkdown;
+        const hasTranslation = filteredCues.some((cue) =>
+          Boolean(cue.translation?.trim()),
+        );
+        const renderMarkdown = (
+          stages: TranscriptKnowledgeExportPayload['stages'],
+          refinement: TranscriptRefinementStatus,
+        ) =>
+          renderTranscriptStagesMarkdown({
+            videoId,
+            videoTitle,
+            channelName,
+            trackLabel,
+            searchQuery: search,
+            viewMode,
+            hasTranslation,
+            exportedAt,
+            stages,
+            rawCueCount: payload.cueCount,
+            refinement,
+          });
+        const totalStages = payload.stageCount;
+        const initialProgress: TranscriptStageProgress = {
+          phase: 'running',
+          currentStageIndex: 0,
+          completedStages: 0,
+          totalStages,
+          stageTimeRange: payload.stages[0]?.heading ?? '',
+          refinedStages: 0,
+          fallbackStages: 0,
+        };
+        setRefinementProgress(initialProgress);
+
+        await saveProgress(
+          renderMarkdown(payload.stages, {
+            kind: 'in-progress',
+            completedStages: 0,
+            totalStages,
+            model,
+          }).markdown,
+          `AI 精修准备中：0 / ${totalStages} 阶段`,
+        );
+
+        const outcome = await refineTranscriptStagesProgressively({
+          provider: { baseUrl, model },
+          videoTitle,
+          channelName,
+          viewMode,
+          stages: payload.stages,
+          isCancelled: () => cancelRefinementRef.current,
+          onProgress: setRefinementProgress,
+          onStageUpdated: async ({
+            stages,
+            completedStages,
+            totalStages: updatedTotal,
+          }) => {
+            const rendered = renderMarkdown(stages, {
+              kind: 'in-progress',
+              completedStages,
+              totalStages: updatedTotal,
+              model,
+            });
+            await saveProgress(
+              rendered.markdown,
+              `AI 精修进行中：${completedStages} / ${updatedTotal} 阶段`,
+            );
+          },
+        });
+
+        const finalStageHeading =
+          outcome.stages[outcome.stages.length - 1]?.heading ?? '';
+        if (outcome.status === 'completed') {
+          const finalStatus: TranscriptRefinementStatus = {
+            kind: 'completed',
+            refinedStages: outcome.refinedStages,
+            totalStages: outcome.stages.length,
+            fallbackStages: outcome.fallbackStages,
+            model,
+          };
+          const rendered = renderMarkdown(outcome.stages, finalStatus);
+          await saveProgress(
+            rendered.markdown,
+            `AI 精修完成：${outcome.refinedStages} 阶段已精修`,
+          );
+          setRefinementProgress({
+            phase: 'completed',
+            currentStageIndex: Math.max(0, outcome.stages.length - 1),
+            completedStages: outcome.completedStages,
+            totalStages: outcome.stages.length,
+            stageTimeRange: finalStageHeading,
+            refinedStages: outcome.refinedStages,
+            fallbackStages: outcome.fallbackStages,
+          });
+          setCancelRequested(false);
+          const finalSummary =
+            payload.cueCount > rendered.paragraphCount
+              ? `已整理 ${payload.cueCount} 条字幕为 ${rendered.paragraphCount} 段 AI 精修文稿`
+              : `已导出 ${rendered.paragraphCount} 段 AI 精修文稿`;
+          const fallbackSummary =
+            outcome.fallbackStages > 0
+              ? `，${outcome.fallbackStages} 个阶段保留智能分段`
+              : '';
+          onShowNotice?.(
+            `${finalSummary}${fallbackSummary}，已存入知识库「${result.category} / ${result.title}」`,
+            'info',
+            { label: '打开文档', onClick: result.open },
+          );
+        } else if (outcome.status === 'cancelled') {
+          const finalStatus: TranscriptRefinementStatus = {
+            kind: 'cancelled',
+            completedStages: outcome.completedStages,
+            totalStages: outcome.stages.length,
+            model,
+          };
+          const rendered = renderMarkdown(outcome.stages, finalStatus);
+          await saveProgress(
+            rendered.markdown,
+            `AI 精修已停止：${outcome.completedStages} / ${outcome.stages.length} 阶段已完成`,
+          );
+          setRefinementProgress({
+            phase: 'cancelled',
+            currentStageIndex: Math.max(0, outcome.completedStages - 1),
+            completedStages: outcome.completedStages,
+            totalStages: outcome.stages.length,
+            stageTimeRange: finalStageHeading,
+            refinedStages: outcome.refinedStages,
+            fallbackStages: outcome.fallbackStages,
+          });
+          setCancelRequested(false);
+          onShowNotice?.(
+            `AI 精修已停止；已完成的 ${outcome.completedStages} 个阶段已实时写回知识库「${result.category} / ${result.title}」`,
+            'info',
+            { label: '打开文档', onClick: result.open },
+          );
+        } else {
+          if (outcome.completedStages > 0) {
+            const finalStatus: TranscriptRefinementStatus = {
+              kind: 'partial',
+              completedStages: outcome.completedStages,
+              totalStages: outcome.stages.length,
+              refinedStages: outcome.refinedStages,
+              fallbackStages: outcome.fallbackStages,
+              model,
+              ...(outcome.errorMessage ? { reason: outcome.errorMessage } : {}),
+            };
+            await saveProgress(
+              renderMarkdown(outcome.stages, finalStatus).markdown,
+              `AI 精修部分完成：${outcome.completedStages} / ${outcome.stages.length} 阶段`,
+            );
+          } else {
+            const finalStatus: TranscriptRefinementStatus = {
+              kind: 'failed',
+              totalStages: outcome.stages.length,
+              model,
+              ...(outcome.errorMessage ? { reason: outcome.errorMessage } : {}),
+            };
+            await saveProgress(
+              renderMarkdown(outcome.stages, finalStatus).markdown,
+              'AI 精修未能开始，已保留智能整理文稿',
+            );
+          }
+          setRefinementProgress({
+            phase: 'fallback',
+            currentStageIndex: Math.min(
+              outcome.completedStages,
+              Math.max(0, outcome.stages.length - 1),
+            ),
+            completedStages: outcome.completedStages,
+            totalStages: outcome.stages.length,
+            stageTimeRange: finalStageHeading,
+            refinedStages: outcome.refinedStages,
+            fallbackStages: outcome.fallbackStages,
+            errorMessage: outcome.errorMessage,
+          });
+          setCancelRequested(false);
+          const message =
+            outcome.completedStages > 0
+              ? `AI 精修中断，已完成阶段已写回，其余内容保留智能分段：${outcome.errorMessage ?? '服务调用失败'}`
+              : `AI 精修未能开始，已保留智能整理文稿：${outcome.errorMessage ?? '服务调用失败'}`;
+          onShowNotice?.(message, 'error', {
+            label: '打开文档',
+            onClick: result.open,
+          });
+        }
+        return;
+      }
+
+      const summaryText =
+        payload.cueCount > payload.paragraphCount
+          ? `已整理 ${payload.cueCount} 条字幕为 ${payload.paragraphCount} 段带时间戳文稿`
+          : `已导出 ${payload.paragraphCount} 段带时间戳文稿`;
+      const skippedReason = search.trim()
+        ? '搜索结果摘录不进行 AI 分阶段精修'
+        : !model || !baseUrl
+          ? '当前未配置可用模型，保留智能整理结果'
+          : !result?.updateMarkdown
+            ? '当前导出入口不支持阶段写回，保留智能整理结果'
+            : payload.stageCount === 0
+              ? '没有可精修的文稿阶段'
+              : '';
+      const action = result
+        ? { label: '打开文档', onClick: result.open }
+        : undefined;
       if (result) {
         onShowNotice?.(
-          `已导出 ${payload.cueCount} 条带时间戳字幕至知识库「${result.category} / ${result.title}」`,
+          `${summaryText}${skippedReason ? `；${skippedReason}` : ''}，已存入知识库「${result.category} / ${result.title}」`,
           'info',
-          { label: '打开文档', onClick: result.open },
+          action,
         );
       } else {
-        onShowNotice?.(`已导出 ${payload.cueCount} 条带时间戳字幕至知识库`);
+        onShowNotice?.(
+          `${summaryText}至知识库${skippedReason ? `；${skippedReason}` : ''}`,
+        );
       }
     } catch (reason) {
-      onShowNotice?.(transcriptErrorMessage(reason), 'error');
+      setCancelRequested(false);
+      setRefinementProgress((current) =>
+        current
+          ? {
+              ...current,
+              phase: 'fallback',
+              errorMessage: transcriptErrorMessage(reason),
+            }
+          : current,
+      );
+      onShowNotice?.(
+        transcriptErrorMessage(reason),
+        'error',
+        savedResult
+          ? { label: '打开文档', onClick: savedResult.open }
+          : undefined,
+      );
     } finally {
       setExporting(false);
     }
@@ -374,8 +626,14 @@ export default function TranscriptPanel({
     channelName,
     viewMode,
     search,
+    provider,
     onShowNotice,
   ]);
+
+  const requestRefinementCancel = useCallback(() => {
+    cancelRefinementRef.current = true;
+    setCancelRequested(true);
+  }, []);
 
   return (
     <div
@@ -651,11 +909,54 @@ export default function TranscriptPanel({
                   strokeLinejoin="round"
                 />
               </svg>
-              <span>{exporting ? '导出中…' : '导出'}</span>
+              <span>
+                {exporting
+                  ? refinementProgress?.phase === 'running'
+                    ? 'AI 精修中…'
+                    : '导出中…'
+                  : '导出'}
+              </span>
             </button>
           )}
         </div>
       </div>
+
+      {refinementProgress && (
+        <div
+          className={`player-transcript-refinement is-${refinementProgress.phase}`}
+          role="status"
+          aria-live="polite"
+        >
+          <span className="player-transcript-refinement-label">
+            {refinementProgress.phase === 'running'
+              ? `${cancelRequested ? '当前阶段完成后停止' : 'AI 分阶段精修'} · ${refinementProgress.completedStages} / ${refinementProgress.totalStages}${refinementProgress.stageTimeRange ? ` · ${refinementProgress.stageTimeRange}` : ''}`
+              : refinementProgress.phase === 'completed'
+                ? `AI 精修完成 · ${refinementProgress.refinedStages} 个阶段${refinementProgress.fallbackStages > 0 ? ` · ${refinementProgress.fallbackStages} 个阶段保留智能分段` : ''}`
+                : refinementProgress.phase === 'cancelled'
+                  ? `AI 精修已停止 · ${refinementProgress.completedStages} / ${refinementProgress.totalStages} 阶段已写回`
+                  : `AI 精修中断 · ${refinementProgress.completedStages} / ${refinementProgress.totalStages} 阶段${refinementProgress.errorMessage ? ` · ${refinementProgress.errorMessage}` : ''}`}
+          </span>
+          {refinementProgress.phase === 'running' ? (
+            <button
+              type="button"
+              className="player-transcript-refinement-action"
+              onClick={requestRefinementCancel}
+              disabled={cancelRequested}
+            >
+              {cancelRequested ? '停止中…' : '停止'}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="player-transcript-refinement-action"
+              onClick={() => setRefinementProgress(null)}
+              aria-label="关闭精修状态"
+            >
+              ×
+            </button>
+          )}
+        </div>
+      )}
 
       {/* 台词内容列表 */}
       <div ref={listRef} className="player-transcript-list">

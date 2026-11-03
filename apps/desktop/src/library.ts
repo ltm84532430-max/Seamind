@@ -69,7 +69,7 @@ export interface SaveDocumentInput {
   mapType: string;
   tags: string[];
   markdown: string;
-  historySource?: 'autosave' | 'manual' | 'restore';
+  historySource?: 'autosave' | 'manual' | 'restore' | 'ai';
   /** Left out, an existing file keeps its kind and a new one is a mind map. */
   kind?: DocumentKind;
 }
@@ -78,6 +78,7 @@ export type DocumentVersionSource =
   | 'baseline'
   | 'autosave'
   | 'manual'
+  | 'ai'
   | 'restore';
 
 export interface DocumentVersion {

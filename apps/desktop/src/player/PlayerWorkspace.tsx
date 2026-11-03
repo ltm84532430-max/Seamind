@@ -742,6 +742,7 @@ export default function PlayerWorkspace({
               key={watching.token}
               watching={watching}
               active={active}
+              provider={provider}
               backLabel={`返回${viewLabel(view, overview)}`}
               onBack={() => setWatching(null)}
               onSaved={onProgressSaved}

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { AgentProviderSettings } from '../agent/runtime';
 import YouTubePlayerPanel from '../YouTubePlayerPanel';
 import type {
   PlayerProgress,
@@ -62,6 +63,7 @@ function rememberRate(rate: number) {
 export default function WatchView({
   watching,
   active,
+  provider,
   backLabel,
   onBack,
   onSaved,
@@ -72,6 +74,7 @@ export default function WatchView({
   watching: Watching;
   /** Whether the player page is the workspace in front. */
   active: boolean;
+  provider?: AgentProviderSettings;
   backLabel: string;
   onBack(): void;
   onSaved(videoId: string, state: WatchState): void;
@@ -686,6 +689,7 @@ export default function WatchView({
                 videoId={videoId}
                 videoTitle={item.title}
                 channelName={item.channelName}
+                provider={provider}
                 currentTime={currentTime}
                 onSeek={(sec) => {
                   handle?.seekTo(sec);
