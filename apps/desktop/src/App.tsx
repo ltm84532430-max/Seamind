@@ -119,6 +119,7 @@ import type { TaskResource } from './tasks/types';
 const LiteratureWorkspace = lazy(
   () => import('./literature/LiteratureWorkspace'),
 );
+const FeedWorkspace = lazy(() => import('./feed/FeedWorkspace'));
 import type {
   DocumentVersion,
   DocumentVersionSnapshot,
@@ -4934,6 +4935,14 @@ export default function App() {
           >
             论文
           </button>
+          <button
+            type="button"
+            className={activeWorkspace === 'feed' ? 'is-active' : ''}
+            aria-pressed={activeWorkspace === 'feed'}
+            onClick={() => setActiveWorkspace('feed')}
+          >
+            订阅
+          </button>
         </nav>
         <div className="topbar-actions">
           <span className="sync-state">
@@ -6174,6 +6183,55 @@ export default function App() {
                     }),
                   );
                   setSaveMessage('已从文献解构为思维导图草稿');
+                  setActiveWorkspace('mindmap');
+                })();
+              }}
+            />
+          </Suspense>
+        </section>
+      )}
+
+      {activeWorkspace === 'feed' && (
+        <section
+          className="feed-workspace-stage"
+          aria-label="博客与 RSS 订阅工作区"
+        >
+          <Suspense
+            fallback={
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  height: '100%',
+                  color: 'var(--muted)',
+                  fontSize: '14px',
+                }}
+              >
+                正在载入订阅工作区…
+              </div>
+            }
+          >
+            <FeedWorkspace
+              onOpenMindmap={(md, title) => {
+                void (async () => {
+                  if (!leavePlantUmlSession()) return;
+                  if (!(await workbench.controller.leave())) return;
+                  if (draftRef.current.dirty && !(await saveDraft())) return;
+                  const revision = draftRef.current.revision + 1;
+                  const category = categoryFilter || '未分类';
+                  installDraft(
+                    createDraft({
+                      title: title.trim() || '博客导图',
+                      category,
+                      mapType: '博客导图',
+                      tags: 'RSS, 博客, 导图',
+                      markdown: md,
+                      dirty: true,
+                      revision,
+                    }),
+                  );
+                  setSaveMessage('已从博客文章生成思维导图草稿');
                   setActiveWorkspace('mindmap');
                 })();
               }}

@@ -6,6 +6,8 @@ mod epub_exam;
 mod epub_exam_generation;
 mod epub_exam_grading;
 mod epub_translation;
+mod feed;
+mod feed_store;
 mod learning_tasks;
 mod library;
 mod literature;
@@ -213,6 +215,21 @@ pub fn run() {
             literature::literature_import_bibtex_text,
             literature::literature_export_bibtex_text,
             literature::literature_generate_mindmap,
+            feed::feed_get_overview,
+            feed::feed_list_channels,
+            feed::feed_add_channel,
+            feed::feed_update_channel,
+            feed::feed_delete_channel,
+            feed::feed_refresh_channel,
+            feed::feed_refresh_all_channels,
+            feed::feed_list_articles,
+            feed::feed_get_article,
+            feed::feed_set_article_read,
+            feed::feed_set_article_starred,
+            feed::feed_mark_all_read,
+            feed::feed_article_to_mindmap,
+            feed::feed_import_opml,
+            feed::feed_export_opml,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Markmap Desktop");

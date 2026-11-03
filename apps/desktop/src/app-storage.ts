@@ -10,7 +10,8 @@ export type ActiveWorkspace =
   | 'player'
   | 'knowledge'
   | 'literature'
-  | 'tasks';
+  | 'tasks'
+  | 'feed';
 export type MindmapStyle =
   | 'gray'
   | 'roots'
