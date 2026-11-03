@@ -81,6 +81,14 @@ export const feedApi = {
     return invoke<string>('feed_article_to_mindmap', { id });
   },
 
+  async parseOpml(
+    opmlXml: string,
+  ): Promise<import('./types').OpmlOutlineItem[]> {
+    return invoke<import('./types').OpmlOutlineItem[]>('feed_parse_opml', {
+      opmlXml,
+    });
+  },
+
   async importOpml(opmlXml: string): Promise<number> {
     return invoke<number>('feed_import_opml', { opmlXml });
   },

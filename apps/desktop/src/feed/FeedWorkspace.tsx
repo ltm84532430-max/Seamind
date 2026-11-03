@@ -228,15 +228,6 @@ export const FeedWorkspace: React.FC<FeedWorkspaceProps> = ({
     }
   }, []);
 
-  const handleImportOpml = useCallback(
-    async (xml: string) => {
-      const count = await feedApi.importOpml(xml);
-      await Promise.all([reloadOverview(), reloadArticles()]);
-      return count;
-    },
-    [reloadOverview, reloadArticles],
-  );
-
   // ---------------------------------------------------------------------------
   // Keyboard Shortcuts (J/K navigation, S star, M read)
   // ---------------------------------------------------------------------------
@@ -362,8 +353,11 @@ export const FeedWorkspace: React.FC<FeedWorkspaceProps> = ({
         isOpen={isOpmlOpen}
         mode={opmlMode}
         exportData={exportData}
+        existingUrls={(overview?.channels || []).map((c) => c.url)}
         onClose={() => setIsOpmlOpen(false)}
-        onImport={handleImportOpml}
+        onFeedAdded={async () => {
+          await Promise.all([reloadOverview(), reloadArticles()]);
+        }}
       />
     </div>
   );

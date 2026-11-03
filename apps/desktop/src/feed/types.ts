@@ -67,3 +67,10 @@ export interface ChannelInput {
   siteUrl?: string;
   category?: string;
 }
+
+export interface OpmlOutlineItem {
+  title: string;
+  xmlUrl: string;
+  htmlUrl?: string;
+  category: string;
+}

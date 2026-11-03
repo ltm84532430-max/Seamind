@@ -554,7 +554,7 @@
 }
 
 .feed-dialog-box {
-  width: 480px;
+  width: 520px;
   max-width: 90vw;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -563,6 +563,75 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.feed-dialog-box.is-opml-wide {
+  width: 680px;
+  max-height: 85vh;
+}
+
+.feed-opml-upload-card {
+  padding: 24px;
+  border: 2px dashed var(--line);
+  border-radius: 6px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  background: rgba(0, 0, 0, 0.01);
+}
+
+.feed-opml-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.feed-opml-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  gap: 12px;
+}
+
+.feed-opml-item-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.feed-opml-item-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.feed-opml-item-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.feed-opml-item-url {
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--mono);
 }
 
 .feed-dialog-header {

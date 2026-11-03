@@ -98,7 +98,21 @@ describe('Feed Workspace API & Flow', () => {
     });
   });
 
-  it('handles OPML import and export', async () => {
+  it('handles OPML parse, import and export', async () => {
+    const mockParsedItems = [
+      {
+        title: 'Rust Blog',
+        xmlUrl: 'https://blog.rust-lang.org/feed.xml',
+        category: '技术',
+      },
+    ];
+    mockInvoke.mockResolvedValueOnce(mockParsedItems);
+    const parsed = await feedApi.parseOpml('<opml>...</opml>');
+    expect(parsed).toEqual(mockParsedItems);
+    expect(mockInvoke).toHaveBeenCalledWith('feed_parse_opml', {
+      opmlXml: '<opml>...</opml>',
+    });
+
     mockInvoke.mockResolvedValueOnce(4);
     const count = await feedApi.importOpml('<opml>...</opml>');
     expect(count).toBe(4);

@@ -990,6 +990,11 @@ pub async fn feed_import_opml(app: AppHandle, opml_xml: String) -> Result<usize,
 }
 
 #[tauri::command]
+pub fn feed_parse_opml(opml_xml: String) -> Result<Vec<OpmlOutlineItem>, String> {
+    parse_opml(&opml_xml)
+}
+
+#[tauri::command]
 pub async fn feed_export_opml(app: AppHandle) -> Result<String, String> {
     let channels = feed_list_channels(app).await?;
     Ok(generate_opml(&channels))

@@ -228,6 +228,7 @@ pub fn run() {
             feed::feed_set_article_starred,
             feed::feed_mark_all_read,
             feed::feed_article_to_mindmap,
+            feed::feed_parse_opml,
             feed::feed_import_opml,
             feed::feed_export_opml,
         ])
