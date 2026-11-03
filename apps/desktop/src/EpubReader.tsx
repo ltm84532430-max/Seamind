@@ -25,7 +25,10 @@ import type {
   EpubExamDifficulty,
   EpubExamGenerationResult,
 } from './epub-exams';
-import { extractEpubSectionText } from './epub-exams';
+import {
+  extractEpubSectionPlainText,
+  extractEpubSectionText,
+} from './epub-exams';
 // @ts-expect-error Foliate ships as an untyped JavaScript submodule.
 import { Overlayer } from '../../../packages/foliate-js/overlayer.js';
 
@@ -41,6 +44,22 @@ export interface EpubChapterNavigationRequest {
   progressKey: string;
   href?: string;
   label: string;
+}
+
+export interface EpubReaderAgentBridge {
+  readCurrentChapter(): Promise<{
+    bookKey: string;
+    bookTitle: string;
+    sectionIndex: number;
+    sectionHref: string;
+    sectionLabel: string;
+    text: string;
+    selection: { cfi: string; text: string } | null;
+  }>;
+  proposeFootnote(input: {
+    selectionCfi: string;
+    text: string;
+  }): Promise<{ annotationId: string }>;
 }
 
 type FoliateTocItem = {
@@ -146,6 +165,7 @@ type AiAnalysisPreview = {
   text: string;
   left: number;
   top: number;
+  source?: 'cli';
 };
 
 type AiFootnoteAnchor = {
@@ -282,14 +302,26 @@ function extractSelectionContext(
   return context.slice(0, contextLimit);
 }
 
-const DEFAULT_ANNOTATION_COLOR = '#f2d675';
+const DEFAULT_ANNOTATION_COLOR = '#8d969b';
 const ANNOTATION_COLORS = [
-  { value: '#ed7771', label: '红色' },
-  { value: DEFAULT_ANNOTATION_COLOR, label: '黄色' },
-  { value: '#55c68a', label: '绿色' },
-  { value: '#55a9e8', label: '蓝色' },
-  { value: '#a78bfa', label: '紫色' },
+  { value: DEFAULT_ANNOTATION_COLOR, label: '石墨灰' },
+  { value: '#c4a27d', label: '浅赭色' },
+  { value: '#87a799', label: '鼠尾草绿' },
+  { value: '#8aa9bc', label: '灰蓝色' },
+  { value: '#a49bb7', label: '灰紫色' },
 ] as const;
+
+const LEGACY_ANNOTATION_COLORS: Record<string, string> = {
+  '#ed7771': '#ba9b96',
+  '#f2d675': '#c4a27d',
+  '#55c68a': '#87a799',
+  '#55a9e8': '#8aa9bc',
+  '#a78bfa': '#a49bb7',
+};
+
+function annotationDisplayColor(color: string) {
+  return LEGACY_ANNOTATION_COLORS[color.toLowerCase()] ?? color;
+}
 
 const ANNOTATION_STYLES: {
   value: EpubAnnotationStyle;
@@ -499,6 +531,7 @@ function applyReaderSettings(
       line-height: ${settings.lineHeight} !important;
     }
     a, a:visited { color: ${palette.link} !important; }
+    ::selection { background: rgb(141 150 155 / 35%) !important; color: inherit !important; }
   `);
 }
 
@@ -514,6 +547,8 @@ export default function EpubReader({
   onCreateTask,
   onOpenTask,
   onToggleMindmap,
+  onWakeAi,
+  onAgentBridgeChange,
   onClose,
 }: {
   selection: EpubReaderSelection;
@@ -527,6 +562,8 @@ export default function EpubReader({
   onCreateTask: (chapter: { href: string; label: string }) => void;
   onOpenTask: (id: string) => void;
   onToggleMindmap: () => void;
+  onWakeAi: () => void;
+  onAgentBridgeChange: (bridge: EpubReaderAgentBridge | null) => void;
   onClose: () => void;
 }) {
   const stageRef = useRef<HTMLDivElement>(null);
@@ -598,6 +635,12 @@ export default function EpubReader({
   const bookmarksRef = useRef(bookmarks);
   const annotationsRef = useRef(annotations);
   const selectionDraftRef = useRef(selectionDraft);
+  const pendingCliFootnoteRef = useRef<{
+    cfi: string;
+    resolve: (value: { annotationId: string }) => void;
+    reject: (reason: Error) => void;
+  } | null>(null);
+  const agentSelectionPinnedRef = useRef(false);
   const selectionDocumentRef = useRef<Document | null>(null);
   const currentLocationRef = useRef({
     cfi: currentCfi,
@@ -617,6 +660,8 @@ export default function EpubReader({
   const handledChapterNavigationIdRef = useRef(0);
   const chapterNavigationQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [isFixedLayout, setIsFixedLayout] = useState(false);
+  const bridgeChangeRef = useRef(onAgentBridgeChange);
+  bridgeChangeRef.current = onAgentBridgeChange;
 
   bookmarksRef.current = bookmarks;
   annotationsRef.current = annotations;
@@ -629,6 +674,73 @@ export default function EpubReader({
     sectionIndex,
     sectionHref,
   };
+
+  useEffect(() => {
+    const bridge: EpubReaderAgentBridge = {
+      async readCurrentChapter() {
+        const location = currentLocationRef.current;
+        const section =
+          viewRef.current?.book?.sections?.[location.sectionIndex];
+        if (!section?.loadText) throw new Error('当前章节尚未载入。');
+        const source = await section.loadText();
+        if (!source) throw new Error('当前章节没有可读取的正文。');
+        if (currentLocationRef.current.sectionIndex !== location.sectionIndex) {
+          throw new Error('阅读位置已切换，请重新读取当前章节。');
+        }
+        const selected = selectionDraftRef.current;
+        return {
+          bookKey: selection.progressKey,
+          bookTitle: metadataRef.current.title,
+          sectionIndex: location.sectionIndex,
+          sectionHref: location.sectionHref,
+          sectionLabel:
+            location.chapterTitle || `第 ${location.sectionIndex + 1} 节`,
+          text: extractEpubSectionPlainText(source),
+          selection:
+            selected?.sectionIndex === location.sectionIndex
+              ? { cfi: selected.cfi, text: selected.text }
+              : null,
+        };
+      },
+      proposeFootnote({ selectionCfi, text }) {
+        const selected = selectionDraftRef.current;
+        if (
+          !selected ||
+          selected.cfi !== selectionCfi ||
+          selected.sectionIndex !== currentLocationRef.current.sectionIndex
+        ) {
+          return Promise.reject(
+            new Error('选区已改变；请重新选中文字并读取当前章节。'),
+          );
+        }
+        if (pendingCliFootnoteRef.current) {
+          return Promise.reject(new Error('已有一条脚注等待确认。'));
+        }
+        return new Promise<{ annotationId: string }>((resolve, reject) => {
+          pendingCliFootnoteRef.current = {
+            cfi: selectionCfi,
+            resolve,
+            reject,
+          };
+          setAiAnalysisPreview({
+            cfi: selectionCfi,
+            text,
+            left: selected.anchorLeft,
+            top: selected.anchorTop,
+            source: 'cli',
+          });
+        });
+      },
+    };
+    bridgeChangeRef.current(bridge);
+    return () => {
+      bridgeChangeRef.current(null);
+      pendingCliFootnoteRef.current?.reject(
+        new Error('阅读器已关闭，脚注未保存。'),
+      );
+      pendingCliFootnoteRef.current = null;
+    };
+  }, [selection.progressKey]);
 
   const readerPositionForRange = (range: Range) => {
     const main = stageRef.current?.parentElement;
@@ -933,6 +1045,11 @@ export default function EpubReader({
   };
 
   const clearSelectionDraft = () => {
+    agentSelectionPinnedRef.current = false;
+    pendingCliFootnoteRef.current?.reject(
+      new Error('选区已取消，脚注未保存。'),
+    );
+    pendingCliFootnoteRef.current = null;
     aiAnalysisRequestRef.current += 1;
     setAiAnalysisBusy(false);
     setAiAnalysisError('');
@@ -942,6 +1059,11 @@ export default function EpubReader({
     setSelectionDraft(null);
     setNoteComposerOpen(false);
     setNoteDraft('');
+  };
+
+  const wakeAi = () => {
+    agentSelectionPinnedRef.current = Boolean(selectionDraftRef.current);
+    onWakeAi();
   };
 
   const updateAnnotations = (
@@ -1005,7 +1127,7 @@ export default function EpubReader({
 
   const analyzeSelectedText = async () => {
     const selected = selectionDraft;
-    if (!selected || aiAnalysisBusy) return;
+    if (!selected || aiAnalysisBusy || pendingCliFootnoteRef.current) return;
     const requestId = ++aiAnalysisRequestRef.current;
     setAiAnalysisBusy(true);
     setAiAnalysisError('');
@@ -1122,12 +1244,18 @@ export default function EpubReader({
     const preview = aiAnalysisPreview;
     const selected = selectionDraft;
     if (!preview || !selected || preview.cfi !== selected.cfi) return;
+    const pending = pendingCliFootnoteRef.current;
+    pendingCliFootnoteRef.current = null;
     const annotation = saveSelectedAnnotation(
       selectedAnnotationStyle,
       undefined,
       preview.text,
     );
-    if (!annotation) return;
+    if (!annotation) {
+      pending?.reject(new Error('脚注未能保存。'));
+      return;
+    }
+    pending?.resolve({ annotationId: annotation.id });
     const position = notePositionForPoint(
       selected.anchorLeft,
       selected.anchorTop,
@@ -1139,6 +1267,12 @@ export default function EpubReader({
       sectionIndex: annotation.sectionIndex,
       ...position,
     });
+    setAiAnalysisPreview(null);
+  };
+
+  const dismissAiAnalysisPreview = () => {
+    pendingCliFootnoteRef.current?.reject(new Error('用户取消了脚注提案。'));
+    pendingCliFootnoteRef.current = null;
     setAiAnalysisPreview(null);
   };
 
@@ -1254,6 +1388,7 @@ export default function EpubReader({
     const updateDocumentSelection = (doc: Document, sectionIndex: number) => {
       const selected = doc.getSelection();
       if (!selected || selected.isCollapsed || selected.rangeCount === 0) {
+        if (agentSelectionPinnedRef.current) return;
         aiAnalysisRequestRef.current += 1;
         setAiAnalysisBusy(false);
         setAiAnalysisError('');
@@ -1272,6 +1407,11 @@ export default function EpubReader({
         return;
       }
       if (!cfi) return;
+      if (
+        agentSelectionPinnedRef.current &&
+        selectionDraftRef.current?.cfi === cfi
+      )
+        return;
 
       const rangeRect = range.getBoundingClientRect();
       const mainRect = stageRef.current?.parentElement?.getBoundingClientRect();
@@ -1292,6 +1432,16 @@ export default function EpubReader({
         : rangeRect.top;
 
       selectionDocumentRef.current = doc;
+      if (
+        pendingCliFootnoteRef.current &&
+        pendingCliFootnoteRef.current.cfi !== cfi
+      ) {
+        pendingCliFootnoteRef.current.reject(
+          new Error('选区已改变，脚注未保存。'),
+        );
+        pendingCliFootnoteRef.current = null;
+      }
+      agentSelectionPinnedRef.current = false;
       aiAnalysisRequestRef.current += 1;
       setAiAnalysisBusy(false);
       setAiAnalysisError('');
@@ -1397,7 +1547,9 @@ export default function EpubReader({
             ? Overlayer.squiggly
             : Overlayer.highlight;
       detail.draw(drawFunction, {
-        color: detail.annotation?.color ?? DEFAULT_ANNOTATION_COLOR,
+        color: annotationDisplayColor(
+          detail.annotation?.color ?? DEFAULT_ANNOTATION_COLOR,
+        ),
       });
     };
 
@@ -1431,7 +1583,13 @@ export default function EpubReader({
         deferredRelocation = detail;
         return;
       }
-      clearSelectionDraft();
+      if (
+        !agentSelectionPinnedRef.current ||
+        (typeof detail.section?.current === 'number' &&
+          detail.section.current !== selectionDraftRef.current?.sectionIndex)
+      ) {
+        clearSelectionDraft();
+      }
       setActiveAiFootnote(null);
       const currentToc = viewRef.current?.book?.toc ?? tocRef.current;
       const flatToc = flattenTocItems(currentToc);
@@ -1724,6 +1882,7 @@ export default function EpubReader({
     <div
       className={`epub-reader${embedded ? ' is-workspace' : ''}`}
       data-theme={theme}
+      data-palette={readerSettings.palette}
       role={embedded ? 'region' : 'dialog'}
       aria-modal={embedded ? undefined : 'true'}
       aria-label={`EPUB 阅读器：${title}`}
@@ -1790,6 +1949,14 @@ export default function EpubReader({
             title="根据当前阅读段落生成试卷"
           >
             {unsavedExam ? '重试保存试卷' : '生成试卷'}
+          </button>
+          <button
+            type="button"
+            className="epub-reader-tool epub-reader-ai-terminal"
+            onClick={wakeAi}
+            title="在右侧打开已接入当前章节的 CLI AI 终端"
+          >
+            唤醒 AI
           </button>
           <button
             type="button"
@@ -2181,7 +2348,11 @@ export default function EpubReader({
                           <div className="epub-reader-annotation-meta">
                             <i
                               className="epub-reader-annotation-color"
-                              style={{ backgroundColor: annotation.color }}
+                              style={{
+                                backgroundColor: annotationDisplayColor(
+                                  annotation.color,
+                                ),
+                              }}
                               title={annotation.color}
                             />
                             <small>
@@ -2349,6 +2520,14 @@ export default function EpubReader({
                 </button>
                 <button
                   type="button"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={wakeAi}
+                  title="在右侧终端中向 AI 提问，并可为此选区提议脚注"
+                >
+                  问终端 AI
+                </button>
+                <button
+                  type="button"
                   className="epub-reader-selection-dismiss"
                   aria-label="关闭标注工具"
                   onMouseDown={(event) => event.preventDefault()}
@@ -2414,13 +2593,17 @@ export default function EpubReader({
                     type="button"
                     aria-label="关闭 AI 分析预览"
                     onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => setAiAnalysisPreview(null)}
+                    onClick={dismissAiAnalysisPreview}
                   >
                     ×
                   </button>
                 </div>
                 <p>{aiAnalysisPreview.text}</p>
-                <small>选区与附近上下文将发送至当前 AI 服务。</small>
+                <small>
+                  {aiAnalysisPreview.source === 'cli'
+                    ? '来自终端 AI 的脚注提案；确认后写入本书标注。'
+                    : '选区与附近上下文已发送至当前 AI 服务。'}
+                </small>
                 <div className="epub-reader-ai-footnote-actions">
                   <button
                     type="button"
@@ -2433,7 +2616,7 @@ export default function EpubReader({
                   <button
                     type="button"
                     onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => setAiAnalysisPreview(null)}
+                    onClick={dismissAiAnalysisPreview}
                   >
                     取消
                   </button>

@@ -83,6 +83,19 @@ export interface ProposeFavoritesCategorizationInput {
 }
 
 export interface AgentCapabilities {
+  readCurrentEpubChapter?(): Promise<{
+    bookKey: string;
+    bookTitle: string;
+    sectionIndex: number;
+    sectionHref: string;
+    sectionLabel: string;
+    text: string;
+    selection: { cfi: string; text: string } | null;
+  }>;
+  proposeEpubFootnote?(input: {
+    selectionCfi: string;
+    text: string;
+  }): Promise<{ annotationId: string }>;
   getCurrentMindmap(): ActiveMindmapSnapshot;
   searchLibrary(query: string, category?: string): Promise<MapDocument[]>;
   readDocument(relativePath: string): Promise<OpenedDocument>;
@@ -123,6 +136,28 @@ const schema = (
 });
 
 export const agentToolCatalog: AgentToolDescriptor[] = [
+  {
+    version: 1,
+    name: 'epub_get_current_chapter',
+    description:
+      '读取电子书阅读器当前章节的完整正文，可用 offset 分段读取直到 nextOffset 为 null；每次调用都从当前阅读位置重新读取。返回当前选区的 CFI 和文字，添加脚注时使用该 CFI。',
+    permission: 'read',
+    inputSchema: schema({ offset: { type: 'integer', minimum: 0 } }),
+  },
+  {
+    version: 1,
+    name: 'epub_propose_footnote',
+    description:
+      '针对阅读器当前选区提交 AI 脚注预览。selectionCfi 必须来自 epub_get_current_chapter 返回的当前选区。用户在阅读器中确认后才会保存；取消或选区变化时失败。',
+    permission: 'user_approval',
+    inputSchema: schema(
+      {
+        selectionCfi: { type: 'string', minLength: 1, maxLength: 1000 },
+        text: { type: 'string', minLength: 1, maxLength: 800 },
+      },
+      ['selectionCfi', 'text'],
+    ),
+  },
   {
     version: 1,
     name: 'mindmap_get_current',
@@ -556,6 +591,57 @@ export async function executeAgentTool(
   capabilities: AgentCapabilities,
 ): Promise<AgentToolResult> {
   const input = parseObject(rawArguments);
+
+  if (name === 'epub_get_current_chapter') {
+    assertOnlyKeys(input, ['offset']);
+    if (!capabilities.readCurrentEpubChapter)
+      throw new Error('当前环境无法读取电子书。');
+    const offset =
+      input.offset === undefined ? 0 : requireInteger(input, 'offset');
+    const chapter = await capabilities.readCurrentEpubChapter();
+    const start = Math.min(offset, chapter.text.length);
+    const content = chapter.text.slice(start, start + MAX_TOOL_READ_CHARS);
+    const nextOffset = start + content.length;
+    return {
+      version: 1,
+      permission: 'read',
+      name,
+      label: '当前电子书章节',
+      summary: `${chapter.bookTitle} · ${chapter.sectionLabel}`,
+      result: {
+        bookKey: chapter.bookKey,
+        bookTitle: chapter.bookTitle,
+        sectionIndex: chapter.sectionIndex,
+        sectionHref: chapter.sectionHref,
+        sectionLabel: chapter.sectionLabel,
+        totalChars: chapter.text.length,
+        offset: start,
+        content,
+        nextOffset: nextOffset < chapter.text.length ? nextOffset : null,
+        selection: chapter.selection,
+      },
+    };
+  }
+
+  if (name === 'epub_propose_footnote') {
+    assertOnlyKeys(input, ['selectionCfi', 'text']);
+    if (!capabilities.proposeEpubFootnote)
+      throw new Error('当前环境无法添加电子书脚注。');
+    const selectionCfi = requireString(input, 'selectionCfi', 1000);
+    const footnoteText = requireText(input, 'text', 800, 1).trim();
+    const saved = await capabilities.proposeEpubFootnote({
+      selectionCfi,
+      text: footnoteText,
+    });
+    return {
+      version: 1,
+      permission: 'user_approval',
+      name,
+      label: '电子书脚注',
+      summary: '用户已确认并保存脚注。',
+      result: { annotationId: saved.annotationId, saved: true },
+    };
+  }
 
   if (name === 'mindmap_get_current') {
     assertOnlyKeys(input, []);

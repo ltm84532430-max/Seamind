@@ -60,6 +60,7 @@ import './player/learning-path.css';
 import type { PendingTerminalRawInput } from './TerminalPanel';
 import type {
   EpubChapterNavigationRequest,
+  EpubReaderAgentBridge,
   EpubReaderSelection,
 } from './EpubReader';
 import { epubProgressKey } from './ebook-storage';
@@ -322,6 +323,39 @@ export default function App() {
   const [libraryCollapsed, setLibraryCollapsed] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState(readTerminalHeight);
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  const [terminalDock, setTerminalDock] = useState<'bottom' | 'right'>(() => {
+    try {
+      return localStorage.getItem('seamind:terminal-dock:v1') === 'right'
+        ? 'right'
+        : 'bottom';
+    } catch {
+      return 'bottom';
+    }
+  });
+  const [terminalWidth, setTerminalWidth] = useState(() => {
+    try {
+      return Math.max(
+        320,
+        Math.min(
+          720,
+          Number(localStorage.getItem('seamind:terminal-width:v1')) || 440,
+        ),
+      );
+    } catch {
+      return 440;
+    }
+  });
+  const terminalWidthDragRef = useRef<{
+    pointerId: number;
+    x: number;
+    width: number;
+  } | null>(null);
   const [terminalCommandConfirmation, setTerminalCommandConfirmation] =
     useState<TerminalCommandRequest | null>(null);
   const [pendingTerminalCommand, setPendingTerminalCommand] =
@@ -348,6 +382,7 @@ export default function App() {
   const [epubReader, setEpubReader] = useState<EpubReaderSelection | null>(
     null,
   );
+  const readerAgentBridgeRef = useRef<EpubReaderAgentBridge | null>(null);
   const [readerSplitOpen, setReaderSplitOpen] = useState(false);
   const [readerSplitLayout, setReaderSplitLayout] = useState<ReaderSplitLayout>(
     DEFAULT_READER_SPLIT_LAYOUT,
@@ -367,6 +402,10 @@ export default function App() {
   const [bookMindmapBusy, setBookMindmapBusy] = useState(false);
   const readerSplitActive =
     activeWorkspace === 'reader' && readerSplitOpen && Boolean(epubReader);
+  const canDockTerminalRight =
+    activeWorkspace === 'reader' && !readerSplitActive && viewportWidth >= 1250;
+  const terminalRightActive =
+    terminalOpen && terminalDock === 'right' && canDockTerminalRight;
   const readerSplitActiveRef = useRef(readerSplitActive);
   readerSplitActiveRef.current = readerSplitActive;
   const epubReaderRef = useRef(epubReader);
@@ -1310,6 +1349,18 @@ export default function App() {
   };
 
   const agentCapabilities: AgentCapabilities = {
+    readCurrentEpubChapter: () => {
+      if (activeWorkspace !== 'reader' || !readerAgentBridgeRef.current) {
+        throw new Error('请先在电子书阅读器中打开一本书。');
+      }
+      return readerAgentBridgeRef.current.readCurrentChapter();
+    },
+    proposeEpubFootnote: (input) => {
+      if (activeWorkspace !== 'reader' || !readerAgentBridgeRef.current) {
+        throw new Error('请先在电子书阅读器中打开一本书。');
+      }
+      return readerAgentBridgeRef.current.proposeFootnote(input);
+    },
     getCurrentMindmap: getAgentMindmap,
     searchLibrary: (query, category) =>
       invoke<MapDocument[]>('search_library', {
@@ -4285,6 +4336,64 @@ export default function App() {
       }
     }
   };
+  const setTerminalDockAndStore = (dock: 'bottom' | 'right') => {
+    setTerminalDock(dock);
+    try {
+      localStorage.setItem('seamind:terminal-dock:v1', dock);
+    } catch {
+      /* Keep the preference in memory. */
+    }
+  };
+  const clampTerminalWidth = (width: number) =>
+    Math.round(Math.max(320, Math.min(window.innerWidth * 0.62, width)));
+  const onTerminalWidthPointerDown = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    terminalWidthDragRef.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      width: terminalWidth,
+    };
+  };
+  const onTerminalWidthPointerMove = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    const drag = terminalWidthDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    setTerminalWidth(clampTerminalWidth(drag.width + drag.x - event.clientX));
+  };
+  const onTerminalWidthPointerUp = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    if (terminalWidthDragRef.current?.pointerId !== event.pointerId) return;
+    terminalWidthDragRef.current = null;
+    try {
+      localStorage.setItem('seamind:terminal-width:v1', String(terminalWidth));
+    } catch {
+      /* Keep the width in memory. */
+    }
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+  const onTerminalWidthKeyDown = (
+    event: ReactKeyboardEvent<HTMLDivElement>,
+  ) => {
+    const delta =
+      event.key === 'ArrowLeft' ? 24 : event.key === 'ArrowRight' ? -24 : 0;
+    if (event.key !== 'Home' && !delta) return;
+    event.preventDefault();
+    const width = clampTerminalWidth(
+      event.key === 'Home' ? 440 : terminalWidth + delta,
+    );
+    setTerminalWidth(width);
+    try {
+      localStorage.setItem('seamind:terminal-width:v1', String(width));
+    } catch {
+      /* Keep the width in memory. */
+    }
+  };
   const focusedMindmapPath = focusedMapPath
     ? findNavigationPath(mindmapNavigationTree, focusedMapPath)
     : [];
@@ -4292,13 +4401,14 @@ export default function App() {
   return (
     <main
       ref={appShellRef}
-      className={`app-shell${readerSplitActive ? ' is-reader-split' : ''}${terminalOpen ? ' is-terminal-open' : ''}`}
+      className={`app-shell${readerSplitActive ? ' is-reader-split' : ''}${terminalOpen ? ' is-terminal-open' : ''}${terminalRightActive ? ' is-terminal-right' : ''}`}
       data-theme={theme}
       data-map-style={mindmapStyle}
       style={
         {
           ...readerSplitStyle,
           '--terminal-height': `${terminalHeight}px`,
+          '--terminal-width': `${terminalWidth}px`,
         } as CSSProperties
       }
     >
@@ -5494,6 +5604,14 @@ export default function App() {
               else setLibraryError('找不到当前电子书，请刷新文件库。');
             }}
             onToggleMindmap={() => void toggleBookMindmap()}
+            onWakeAi={() => {
+              setReaderSplitOpen(false);
+              setTerminalDockAndStore('right');
+              setTerminalOpen(true);
+            }}
+            onAgentBridgeChange={(bridge) => {
+              readerAgentBridgeRef.current = bridge;
+            }}
             onClose={() => {
               setReaderSplitOpen(false);
               setEpubChapterNavigation(null);
@@ -5719,23 +5837,54 @@ export default function App() {
       )}
 
       {terminalOpen && (
-        <section className="seamind-terminal-drawer" aria-label="全局终端抽屉">
+        <section
+          className={`seamind-terminal-drawer${terminalRightActive ? ' is-right' : ''}`}
+          aria-label="全局终端抽屉"
+        >
           <div
             className="terminal-drawer-resize-handle"
             role="separator"
-            aria-label="调整终端高度"
-            aria-orientation="horizontal"
-            aria-valuemin={160}
-            aria-valuemax={Math.round(window.innerHeight * 0.72)}
-            aria-valuenow={terminalHeight}
+            aria-label={terminalRightActive ? '调整终端宽度' : '调整终端高度'}
+            aria-orientation={terminalRightActive ? 'vertical' : 'horizontal'}
+            aria-valuemin={terminalRightActive ? 320 : 160}
+            aria-valuemax={
+              terminalRightActive
+                ? Math.round(window.innerWidth * 0.62)
+                : Math.round(window.innerHeight * 0.72)
+            }
+            aria-valuenow={terminalRightActive ? terminalWidth : terminalHeight}
             aria-controls="seamind-terminal-panel"
             tabIndex={0}
-            onPointerDown={onTerminalResizePointerDown}
-            onPointerMove={onTerminalResizePointerMove}
-            onPointerUp={onTerminalResizePointerUp}
-            onPointerCancel={onTerminalResizePointerUp}
-            onKeyDown={onTerminalResizeKeyDown}
-            title="拖动调整高度；方向键微调；Home 恢复默认高度"
+            onPointerDown={
+              terminalRightActive
+                ? onTerminalWidthPointerDown
+                : onTerminalResizePointerDown
+            }
+            onPointerMove={
+              terminalRightActive
+                ? onTerminalWidthPointerMove
+                : onTerminalResizePointerMove
+            }
+            onPointerUp={
+              terminalRightActive
+                ? onTerminalWidthPointerUp
+                : onTerminalResizePointerUp
+            }
+            onPointerCancel={
+              terminalRightActive
+                ? onTerminalWidthPointerUp
+                : onTerminalResizePointerUp
+            }
+            onKeyDown={
+              terminalRightActive
+                ? onTerminalWidthKeyDown
+                : onTerminalResizeKeyDown
+            }
+            title={
+              terminalRightActive
+                ? '拖动调整宽度；方向键微调；Home 恢复默认宽度'
+                : '拖动调整高度；方向键微调；Home 恢复默认高度'
+            }
           />
           <div id="seamind-terminal-panel" className="terminal-global-panel">
             <Suspense
@@ -5747,6 +5896,13 @@ export default function App() {
                 key={librarySnapshot?.rootPath ?? 'default-terminal-directory'}
                 cwd={librarySnapshot?.rootPath ?? ''}
                 theme={theme}
+                dock={terminalRightActive ? 'right' : 'bottom'}
+                canDockRight={canDockTerminalRight}
+                onToggleDock={() =>
+                  setTerminalDockAndStore(
+                    terminalRightActive ? 'bottom' : 'right',
+                  )
+                }
                 pendingCommand={pendingTerminalCommand}
                 pendingRawInput={pendingTerminalRawInput}
                 onCommandSubmitted={(id) =>

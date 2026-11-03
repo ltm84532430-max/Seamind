@@ -31,6 +31,9 @@ export interface PendingTerminalRawInput {
 interface TerminalPanelProps {
   cwd: string;
   theme: AppTheme;
+  dock: 'bottom' | 'right';
+  canDockRight: boolean;
+  onToggleDock: () => void;
   pendingCommand: PendingTerminalCommand | null;
   pendingRawInput?: PendingTerminalRawInput | null;
   onCommandSubmitted: (id: string) => void;
@@ -80,6 +83,9 @@ function stripAnsi(value: string): string {
 export default function TerminalPanel({
   cwd,
   theme,
+  dock,
+  canDockRight,
+  onToggleDock,
   pendingCommand,
   pendingRawInput = null,
   onCommandSubmitted,
@@ -453,6 +459,20 @@ export default function TerminalPanel({
         <div className="seamind-terminal-actions">
           <button
             type="button"
+            onClick={onToggleDock}
+            disabled={dock === 'bottom' && !canDockRight}
+            title={
+              dock === 'right'
+                ? '将终端移到底部'
+                : canDockRight
+                  ? '将终端移到阅读器右侧'
+                  : '在宽窗口中打开电子书后可移到右侧'
+            }
+          >
+            {dock === 'right' ? '移到底部' : '移到右侧'}
+          </button>
+          <button
+            type="button"
             onClick={() => sendQuickCli('agy')}
             title="在当前终端启动已接入 Seamind MCP 的 Google AGY CLI"
           >
@@ -492,8 +512,8 @@ export default function TerminalPanel({
       </header>
       <div className="seamind-terminal-host" ref={terminalHostRef} />
       <div className="seamind-terminal-note">
-        已自动注入 Seamind MCP 工具（导图 · 知识库 ·
-        播放器学习路径）。可直接输入 <code>agy</code>、<code>claude</code> 或{' '}
+        已自动注入 Seamind MCP 工具（导图 · 知识库 · 播放器学习路径 · 当前 EPUB
+        章节）。可直接输入 <code>agy</code>、<code>claude</code> 或{' '}
         <code>codex</code> 调用。
       </div>
     </section>

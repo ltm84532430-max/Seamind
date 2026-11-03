@@ -63,22 +63,70 @@ export interface EpubExamGenerationResult {
 
 export const MAX_EPUB_EXAM_SOURCE_CHARS = 50_000;
 
-export function extractEpubSectionText(source: string): string {
+export function extractEpubSectionPlainText(source: string): string {
   const document = new DOMParser().parseFromString(source, 'text/html');
   document
     .querySelectorAll(
       'script, style, noscript, svg, nav, [hidden], [aria-hidden="true"]',
     )
     .forEach((element) => element.remove());
-  const text = (
-    document.body?.textContent ??
-    document.documentElement?.textContent ??
-    ''
-  )
-    .replace(/\u00a0/g, ' ')
-    .replace(/\s+/g, ' ')
+  const blocks = new Set([
+    'ADDRESS',
+    'ARTICLE',
+    'BLOCKQUOTE',
+    'DIV',
+    'H1',
+    'H2',
+    'H3',
+    'H4',
+    'H5',
+    'H6',
+    'LI',
+    'OL',
+    'P',
+    'PRE',
+    'SECTION',
+    'TABLE',
+    'TD',
+    'TH',
+    'TR',
+    'UL',
+  ]);
+  const chunks: string[] = [];
+  const walk = (node: Node, preformatted = false) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      chunks.push(
+        (node.textContent ?? '')
+          .replace(/\u00a0/g, ' ')
+          .replace(preformatted ? /\r\n?/g : /\s+/g, preformatted ? '\n' : ' '),
+      );
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const element = node as Element;
+    if (element.tagName === 'BR') {
+      chunks.push('\n');
+      return;
+    }
+    const block = blocks.has(element.tagName);
+    if (block) chunks.push('\n');
+    for (const child of element.childNodes)
+      walk(child, preformatted || element.tagName === 'PRE');
+    if (block) chunks.push('\n');
+  };
+  walk(document.body ?? document.documentElement);
+  const text = chunks
+    .join('')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
   if (!text) throw new Error('当前阅读段落没有可用于出题的正文。');
+  return text;
+}
+
+export function extractEpubSectionText(source: string): string {
+  const text = extractEpubSectionPlainText(source).replace(/\s+/g, ' ').trim();
   if (Array.from(text).length > MAX_EPUB_EXAM_SOURCE_CHARS) {
     throw new Error('当前阅读段落超过 50,000 字，请换到较短的段落后生成。');
   }
