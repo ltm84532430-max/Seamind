@@ -1508,6 +1508,13 @@
   word-break: break-word;
 }
 
+.player-transcript-error-detail {
+  margin: 0;
+  color: var(--player-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .player-transcript-state-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1515,6 +1522,22 @@
   justify-content: center;
   gap: 8px;
   margin-top: 4px;
+}
+
+.player-transcript-state-actions select {
+  min-height: 28px;
+  padding: 3px 6px;
+  border: 1px solid var(--player-line-strong);
+  background: var(--player-panel);
+  color: var(--player-ink);
+  font: inherit;
+}
+
+.player-transcript-state-actions span {
+  flex-basis: 100%;
+  color: var(--player-muted);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .player-transcript-spinner {

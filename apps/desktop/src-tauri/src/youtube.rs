@@ -1130,6 +1130,153 @@ fn resolve_youtube_playback_with_yt_dlp(
     )
 }
 
+/// Explicit user action only: yt-dlp reads one selected browser's local session
+/// and downloads subtitle files into an isolated temporary directory. No cookies
+/// or signed URLs are returned to the webview or persisted by Seamind.
+pub(crate) fn fetch_youtube_caption_with_browser(
+    video_id: &str,
+    browser: &str,
+    proxy: Option<&str>,
+) -> Result<(String, String), (&'static str, String)> {
+    if !is_valid_video_id(video_id) || !matches!(browser, "firefox" | "edge" | "chrome") {
+        return Err(("videoUnavailable", "无效的视频或浏览器选择。".into()));
+    }
+    struct SubtitleDirectory(std::path::PathBuf);
+    impl Drop for SubtitleDirectory {
+        fn drop(&mut self) {
+            if let Ok(entries) = std::fs::read_dir(&self.0) {
+                for entry in entries.flatten() {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+            let _ = std::fs::remove_dir(&self.0);
+        }
+    }
+    let directory = std::env::temp_dir().join(format!(
+        "seamind-caption-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir(&directory).map_err(|_| ("unknown", "无法创建临时字幕目录。".into()))?;
+    let directory = SubtitleDirectory(directory);
+    let video_url = format!("https://www.youtube.com/watch?v={video_id}");
+    for (program, prefix_args) in extractor_candidates() {
+        let mut command = Command::new(&program);
+        command
+            .args(prefix_args)
+            .args([
+                "--ignore-config",
+                "--no-playlist",
+                "--quiet",
+                "--no-progress",
+                "--socket-timeout",
+                EXTRACTOR_TIMEOUT_SECONDS,
+                "--retries",
+                "0",
+                "--extractor-retries",
+                "0",
+                "--ignore-no-formats-error",
+                "--js-runtimes",
+                "node",
+                "--skip-download",
+                "--write-subs",
+                "--write-auto-subs",
+                "--sub-langs",
+                "zh.*,en.*",
+                "--sub-format",
+                "vtt",
+                "--output",
+                "%(id)s.%(ext)s",
+                "--cookies-from-browser",
+                browser,
+            ])
+            .current_dir(&directory.0);
+        if let Some(proxy) = proxy {
+            command.arg("--proxy").arg(proxy);
+        }
+        command.arg(&video_url).stdin(Stdio::null());
+        hide_command_window(&mut command);
+        let output = match run_command_bounded(command, YT_DLP_TIMEOUT, None) {
+            Ok(output) => output,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
+                return Err(("timeout", "浏览器会话字幕请求超时。".into()));
+            }
+            Err(_) => return Err(("network", "无法运行本地字幕提取器。".into())),
+        };
+        let mut files = std::fs::read_dir(&directory.0)
+            .map_err(|_| ("unknown", "无法读取临时字幕目录。".into()))?
+            .flatten()
+            .filter(|entry| {
+                let name = entry.file_name().to_string_lossy().to_string();
+                name.starts_with(video_id) && name.ends_with(".vtt")
+            })
+            .collect::<Vec<_>>();
+        files.sort_by_key(|entry| {
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            if name.contains(".zh-hans.") || name.contains(".zh-cn.") {
+                0
+            } else if name.contains(".zh.") {
+                1
+            } else if name.contains(".en.") {
+                2
+            } else {
+                3
+            }
+        });
+        if let Some(entry) = files.first() {
+            let path = entry.path();
+            let metadata = std::fs::metadata(&path)
+                .map_err(|_| ("unexpectedResponse", "无法读取下载的字幕。".into()))?;
+            if metadata.len() > 5 * 1024 * 1024 {
+                return Err(("unexpectedResponse", "下载的字幕文件过大。".into()));
+            }
+            let body = std::fs::read_to_string(&path)
+                .map_err(|_| ("unexpectedResponse", "下载的字幕编码无效。".into()))?;
+            let filename = entry.file_name().to_string_lossy().to_string();
+            let language = filename
+                .strip_prefix(&format!("{video_id}."))
+                .and_then(|name| name.strip_suffix(".vtt"))
+                .unwrap_or("unknown")
+                .to_string();
+            if !body.trim_start().starts_with("WEBVTT") {
+                return Err(("unexpectedResponse", "下载的文件不是 VTT 字幕。".into()));
+            }
+            return Ok((language, body));
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("Could not copy")
+            || stderr.contains("Failed to decrypt")
+            || stderr.contains("failed to decrypt")
+        {
+            return Err((
+                "requestBlocked",
+                "无法读取所选浏览器的会话；可关闭浏览器后重试，或换用 Firefox。".into(),
+            ));
+        }
+        if stderr.contains("Sign in to confirm") || stderr.contains("not a bot") {
+            return Err((
+                "requestBlocked",
+                "所选浏览器会话仍需在 YouTube 完成真人验证。".into(),
+            ));
+        }
+        if !output.status.success() {
+            return Err((
+                "network",
+                "浏览器会话字幕提取失败，请检查网络与 yt-dlp。".into(),
+            ));
+        }
+        return Err((
+            "transcriptsDisabled",
+            "浏览器会话没有找到可用的中英文字幕轨道。".into(),
+        ));
+    }
+    Err((
+        "unexpectedResponse",
+        "未找到 yt-dlp，请先在播放器设置中安装。".into(),
+    ))
+}
+
 fn playback_resolution_from_info(info: YtDlpInfo) -> Result<PlaybackResolution, String> {
     let requested_formats = info.requested_formats.as_deref().unwrap_or_default();
     if requested_formats.len() > 1 {

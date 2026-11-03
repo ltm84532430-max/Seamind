@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import {
   clearTranscriptCache,
+  fetchBrowserTranscript,
   fetchVideoTranscript,
   transcriptErrorMessage,
   TranscriptFetchError,
@@ -60,6 +61,10 @@ function transcriptErrorTitle(code: TranscriptFetchError['code']): string {
       return '字幕网络请求失败';
     case 'http':
       return '字幕服务返回错误';
+    case 'emptyResponse':
+      return '字幕响应为空';
+    case 'unexpectedResponse':
+      return '字幕服务返回异常内容';
     case 'parse':
       return '字幕格式无法解析';
     default:
@@ -93,6 +98,9 @@ export default function TranscriptPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<TranscriptFetchError | null>(null);
   const [retryCount, setRetryCount] = useState(0);
+  const [browser, setBrowser] = useState<'firefox' | 'edge' | 'chrome'>(
+    'firefox',
+  );
   const [search, setSearch] = useState('');
   const [viewMode, setViewMode] = useState<TranscriptViewMode>('bilingual');
   const [autoScroll, setAutoScroll] = useState(true);
@@ -100,6 +108,8 @@ export default function TranscriptPanel({
   const activeElementRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const lastVideoIdRef = useRef(videoId);
+  const forceRefreshNextRef = useRef(false);
+  const browserResultVideoRef = useRef<string | null>(null);
   const requestedTrackId =
     trackSelection?.videoId === videoId ? trackSelection.trackId : undefined;
   const translationTrackId = requestedTrackId ?? activeTrackId;
@@ -119,12 +129,41 @@ export default function TranscriptPanel({
     translationLang;
 
   const handleRetry = useCallback(() => {
+    browserResultVideoRef.current = null;
     clearTranscriptCache(videoId);
+    forceRefreshNextRef.current = true;
     setRetryCount((c) => c + 1);
   }, [videoId]);
 
+  const handleBrowserRetry = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await fetchBrowserTranscript(videoId, browser);
+      if (lastVideoIdRef.current !== videoId) return;
+      browserResultVideoRef.current = videoId;
+      setTracks(result.tracks);
+      setTranslationLanguages([]);
+      setActiveTrackId(result.activeTrackId);
+      setCues(result.cues);
+      onCuesLoaded?.(result.cues);
+    } catch (reason) {
+      if (lastVideoIdRef.current !== videoId) return;
+      setError(
+        reason instanceof TranscriptFetchError
+          ? reason
+          : new TranscriptFetchError('unknown', transcriptErrorMessage(reason)),
+      );
+    } finally {
+      if (lastVideoIdRef.current === videoId) setLoading(false);
+    }
+  };
+
   // Load the selected track. Cleanup aborts the network request, not only the UI update.
   useEffect(() => {
+    if (lastVideoIdRef.current !== videoId)
+      browserResultVideoRef.current = null;
+    if (browserResultVideoRef.current === videoId) return;
     let cancelled = false;
     const controller = new AbortController();
     if (lastVideoIdRef.current !== videoId) {
@@ -138,11 +177,14 @@ export default function TranscriptPanel({
     setError(null);
     setCues([]);
     onCuesLoaded?.([]);
+    const forceRefresh = forceRefreshNextRef.current;
+    forceRefreshNextRef.current = false;
 
     fetchVideoTranscript(videoId, 'zh-Hans', {
       signal: controller.signal,
       trackId: requestedTrackId,
       translationLang: effectiveTranslationLang,
+      forceRefresh,
     })
       .then((res) => {
         if (cancelled) return;
@@ -163,6 +205,11 @@ export default function TranscriptPanel({
           err instanceof TranscriptFetchError
             ? err
             : new TranscriptFetchError('unknown', transcriptErrorMessage(err));
+        if (normalized.tracks) setTracks(normalized.tracks);
+        if (normalized.translationLanguages)
+          setTranslationLanguages(normalized.translationLanguages);
+        if (normalized.activeTrackId !== undefined)
+          setActiveTrackId(normalized.activeTrackId);
         setError(normalized);
         setCues([]);
         onCuesLoaded?.([]);
@@ -315,7 +362,7 @@ export default function TranscriptPanel({
           )}
         </div>
 
-        {tracks.length > 0 && (
+        {tracks.length > 0 && !activeTrackId?.startsWith('browser:') && (
           <label className="player-transcript-track-picker">
             <span>字幕</span>
             <select
@@ -521,6 +568,29 @@ export default function TranscriptPanel({
               ⚠️ {transcriptErrorTitle(error.code)}
             </span>
             <p className="player-transcript-error-msg">{error.message}</p>
+            {(error.stage || error.status || error.traceId) && (
+              <p className="player-transcript-error-detail">
+                {error.stage &&
+                  `环节：${
+                    (
+                      {
+                        watch: '视频页面',
+                        player: '字幕轨道发现',
+                        catalog: '轨道选择',
+                        caption: '字幕正文',
+                        parse: '字幕解析',
+                        network: '网络请求',
+                        ipc: '桌面服务',
+                        browser: '浏览器会话',
+                      } as Record<string, string>
+                    )[error.stage] ?? error.stage
+                  }`}
+                {error.status ? ` · HTTP ${error.status}` : ''}
+                {error.traceId
+                  ? ` · 诊断编号 ${error.traceId.slice(0, 8)}`
+                  : ''}
+              </p>
+            )}
             <div className="player-transcript-state-actions">
               <button
                 type="button"
@@ -537,6 +607,35 @@ export default function TranscriptPanel({
                 导入本地字幕 (.vtt / .srt)
               </button>
             </div>
+            {(error.code === 'requestBlocked' ||
+              error.code === 'ageRestricted' ||
+              error.code === 'poTokenRequired' ||
+              (error.code === 'http' &&
+                [400, 401, 403].includes(error.status ?? 0))) && (
+              <div className="player-transcript-state-actions">
+                <select
+                  aria-label="用于读取字幕的浏览器会话"
+                  value={browser}
+                  onChange={(event) =>
+                    setBrowser(
+                      event.target.value as 'firefox' | 'edge' | 'chrome',
+                    )
+                  }
+                >
+                  <option value="firefox">Firefox</option>
+                  <option value="edge">Edge</option>
+                  <option value="chrome">Chrome</option>
+                </select>
+                <button
+                  type="button"
+                  className="player-btn"
+                  onClick={handleBrowserRetry}
+                >
+                  使用浏览器会话重试
+                </button>
+                <span>点击后仅在本机读取所选会话；Seamind 不保存 Cookie。</span>
+              </div>
+            )}
           </div>
         )}
 

@@ -17,6 +17,7 @@ mod youtube_botguard;
 mod youtube_eval;
 mod youtube_net;
 mod youtube_proxy;
+mod youtube_transcript;
 mod zlib_bridge;
 
 use serde::{Deserialize, Serialize};
@@ -33,6 +34,7 @@ pub fn run() {
         .manage(youtube::YouTubeJobs::default())
         .manage(youtube_botguard::YouTubeBotGuardState::default())
         .manage(youtube_net::YouTubeNet::default())
+        .manage(youtube_transcript::TranscriptState::default())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             app.state::<agent_bridge::AgentBridgeState>()
@@ -106,6 +108,9 @@ pub fn run() {
             youtube_net::youtube_set_settings,
             youtube_net::youtube_install_ytdlp,
             youtube_proxy::youtube_proxy_info,
+            youtube_transcript::youtube_transcript_list,
+            youtube_transcript::youtube_transcript_fetch,
+            youtube_transcript::youtube_transcript_browser_fetch,
             youtube_eval::youtube_eval_script,
             youtube_eval::youtube_player_cache_get,
             youtube_eval::youtube_player_cache_set,
