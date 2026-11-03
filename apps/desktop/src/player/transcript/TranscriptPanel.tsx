@@ -121,6 +121,7 @@ export default function TranscriptPanel({
   );
   const [search, setSearch] = useState('');
   const [viewMode, setViewMode] = useState<TranscriptViewMode>('bilingual');
+  const [toolbarCollapsed, setToolbarCollapsed] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
   const listRef = useRef<HTMLDivElement | null>(null);
   const activeElementRef = useRef<HTMLDivElement | null>(null);
@@ -642,322 +643,6 @@ export default function TranscriptPanel({
         videoTitle ? `《${videoTitle}》视频台词与字幕` : '视频台词与字幕'
       }
     >
-      {/* 顶部工具栏 */}
-      <div className="player-transcript-toolbar">
-        <div className="player-transcript-search">
-          <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-            <circle
-              cx="7"
-              cy="7"
-              r="4.5"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.6"
-            />
-            <path
-              d="M10.5 10.5L14 14"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.6"
-              strokeLinecap="round"
-            />
-          </svg>
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="搜索台词或中英文关键词…"
-            aria-label="搜索台词"
-          />
-          {search && (
-            <button
-              type="button"
-              className="player-transcript-search-clear"
-              onClick={() => setSearch('')}
-              title="清除搜索"
-            >
-              ×
-            </button>
-          )}
-        </div>
-
-        {tracks.length > 0 &&
-          !activeTrackId?.startsWith('browser:') &&
-          !activeTrackId?.startsWith('ytdlp:') && (
-            <label className="player-transcript-track-picker">
-              <span>字幕</span>
-              <select
-                aria-label="字幕轨道"
-                value={requestedTrackId ?? ''}
-                disabled={loading}
-                onChange={(event) => {
-                  const trackId = event.target.value;
-                  setTrackSelection(trackId ? { videoId, trackId } : null);
-                }}
-              >
-                <option value="">
-                  {`自动选择 · ${tracks.find((track) => track.id === activeTrackId)?.name ?? '首选语言'}`}
-                </option>
-                {tracks.map((track) => (
-                  <option key={track.id} value={track.id}>
-                    {`${track.name} · ${track.languageCode}${track.isGenerated ? ' · 自动生成' : ' · 人工字幕'}`}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-
-        {translationTrack?.isTranslatable &&
-          translationLanguages.length > 0 && (
-            <label className="player-transcript-track-picker">
-              <span>译文</span>
-              <select
-                aria-label="字幕翻译语言"
-                value={effectiveTranslationLang}
-                disabled={loading}
-                onChange={(event) => setTranslationLang(event.target.value)}
-              >
-                {translationLanguages.map((language) => (
-                  <option
-                    key={language.languageCode}
-                    value={language.languageCode}
-                  >
-                    {language.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-
-        <div className="player-transcript-modes">
-          <button
-            type="button"
-            className={`player-transcript-btn${viewMode === 'bilingual' ? ' is-active' : ''}`}
-            onClick={() => setViewMode('bilingual')}
-            title="双语对照模式"
-          >
-            双语
-          </button>
-          <button
-            type="button"
-            className={`player-transcript-btn${viewMode === 'original' ? ' is-active' : ''}`}
-            onClick={() => setViewMode('original')}
-            title="仅显示原文"
-          >
-            原文
-          </button>
-          {cues.some((c) => Boolean(c.translation)) && (
-            <button
-              type="button"
-              className={`player-transcript-btn${viewMode === 'translation' ? ' is-active' : ''}`}
-              onClick={() => setViewMode('translation')}
-              title="仅显示译文"
-            >
-              译文
-            </button>
-          )}
-        </div>
-
-        <div className="player-transcript-actions-bar">
-          {/* 单句循环切换 */}
-          <button
-            type="button"
-            className={`player-transcript-tool-icon${loopingCueId ? ' is-active' : ''}`}
-            onClick={() => onToggleLoopCue?.(loopingCueId ? null : activeCue)}
-            title={
-              loopingCueId
-                ? '正在单句循环 (快捷键 R 关闭)'
-                : '单句 A-B 循环 (快捷键 R)'
-            }
-          >
-            <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-              <path
-                d="M13 5H3.5a2.5 2.5 0 0 0 0 5H4M10 2l3 3-3 3M3 11h9.5a2.5 2.5 0 0 0 0-5H12M6 14l-3-3 3-3"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.6"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-            <span>{loopingCueId ? '循环中' : '循环'}</span>
-          </button>
-
-          {/* 跟读暂停模式 */}
-          <button
-            type="button"
-            className={`player-transcript-tool-icon${shadowMode ? ' is-active' : ''}`}
-            onClick={() => onToggleShadowMode?.(!shadowMode)}
-            title={
-              shadowMode
-                ? '影子跟读模式已开启 (每句结束自动暂停)'
-                : '开启影子跟读模式'
-            }
-          >
-            <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-              <circle
-                cx="8"
-                cy="8"
-                r="6"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.6"
-              />
-              <rect
-                x="6"
-                y="5.5"
-                width="1.5"
-                height="5"
-                rx="0.5"
-                fill="currentColor"
-              />
-              <rect
-                x="8.5"
-                y="5.5"
-                width="1.5"
-                height="5"
-                rx="0.5"
-                fill="currentColor"
-              />
-            </svg>
-            <span>{shadowMode ? '跟读中' : '跟读'}</span>
-          </button>
-
-          {/* 自动滚动锁定 */}
-          <button
-            type="button"
-            className={`player-transcript-tool-icon${autoScroll ? ' is-active' : ''}`}
-            onClick={() => setAutoScroll((prev) => !prev)}
-            title={
-              autoScroll ? '跟随播放自动滚动已开启' : '点击开启跟随自动滚动'
-            }
-          >
-            <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-              <path
-                d="M8 2v12M4 10l4 4 4-4"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.6"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-            <span>{autoScroll ? '跟随' : '锁定'}</span>
-          </button>
-
-          {/* 导入外部字幕 */}
-          <button
-            type="button"
-            className="player-transcript-tool-icon"
-            onClick={() => fileInputRef.current?.click()}
-            title="导入本地 .vtt 或 .srt 字幕文件"
-          >
-            <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-              <path
-                d="M3 13h10M8 3v7M5 7l3 3 3-3"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.6"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-            <span>导入</span>
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".vtt,.srt"
-            style={{ display: 'none' }}
-            onChange={handleImportFile}
-          />
-
-          {/* 一键导出至知识库文档 */}
-          {onExportToKnowledge && (
-            <button
-              type="button"
-              className="player-transcript-tool-icon is-export"
-              disabled={loading || exporting || filteredCues.length === 0}
-              onClick={() => void handleExportToKnowledge()}
-              title={
-                filteredCues.length === 0
-                  ? '暂无可导出的字幕'
-                  : search.trim()
-                    ? `导出当前筛选的 ${filteredCues.length} 条带时间戳字幕到知识库`
-                    : `一键导出全部 ${cues.length} 条带时间戳字幕到知识库文档`
-              }
-            >
-              <svg
-                viewBox="0 0 16 16"
-                width="13"
-                height="13"
-                aria-hidden="true"
-              >
-                <path
-                  d="M4 2.5h5.5L13 6v7.5H4V2.5Z"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinejoin="round"
-                />
-                <path
-                  d="M9.2 2.5V6H13M6.5 9.5h4M8.5 7.8l1.8 1.7-1.8 1.7"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.4"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-              <span>
-                {exporting
-                  ? refinementProgress?.phase === 'running'
-                    ? 'AI 精修中…'
-                    : '导出中…'
-                  : '导出'}
-              </span>
-            </button>
-          )}
-        </div>
-      </div>
-
-      {refinementProgress && (
-        <div
-          className={`player-transcript-refinement is-${refinementProgress.phase}`}
-          role="status"
-          aria-live="polite"
-        >
-          <span className="player-transcript-refinement-label">
-            {refinementProgress.phase === 'running'
-              ? `${cancelRequested ? '当前阶段完成后停止' : 'AI 分阶段精修'} · ${refinementProgress.completedStages} / ${refinementProgress.totalStages}${refinementProgress.stageTimeRange ? ` · ${refinementProgress.stageTimeRange}` : ''}`
-              : refinementProgress.phase === 'completed'
-                ? `AI 精修完成 · ${refinementProgress.refinedStages} 个阶段${refinementProgress.fallbackStages > 0 ? ` · ${refinementProgress.fallbackStages} 个阶段保留智能分段` : ''}`
-                : refinementProgress.phase === 'cancelled'
-                  ? `AI 精修已停止 · ${refinementProgress.completedStages} / ${refinementProgress.totalStages} 阶段已写回`
-                  : `AI 精修中断 · ${refinementProgress.completedStages} / ${refinementProgress.totalStages} 阶段${refinementProgress.errorMessage ? ` · ${refinementProgress.errorMessage}` : ''}`}
-          </span>
-          {refinementProgress.phase === 'running' ? (
-            <button
-              type="button"
-              className="player-transcript-refinement-action"
-              onClick={requestRefinementCancel}
-              disabled={cancelRequested}
-            >
-              {cancelRequested ? '停止中…' : '停止'}
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="player-transcript-refinement-action"
-              onClick={() => setRefinementProgress(null)}
-              aria-label="关闭精修状态"
-            >
-              ×
-            </button>
-          )}
-        </div>
-      )}
-
       {/* 台词内容列表 */}
       <div ref={listRef} className="player-transcript-list">
         {loading && (
@@ -1120,6 +805,368 @@ export default function TranscriptPanel({
               </div>
             );
           })}
+      </div>
+      <div
+        className={`player-transcript-dock${toolbarCollapsed ? ' is-collapsed' : ''}`}
+      >
+        <button
+          type="button"
+          className="player-transcript-dock-toggle"
+          aria-expanded={!toolbarCollapsed}
+          aria-controls="player-transcript-controls"
+          aria-label={toolbarCollapsed ? '展开字幕设置' : '收起字幕设置'}
+          title={toolbarCollapsed ? '展开字幕设置' : '收起字幕设置'}
+          onClick={() => setToolbarCollapsed((collapsed) => !collapsed)}
+        >
+          <span>字幕设置</span>
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path
+              d="m4 6 4 4 4-4"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+        <div
+          id="player-transcript-controls"
+          className="player-transcript-toolbar"
+          hidden={toolbarCollapsed}
+        >
+          <div className="player-transcript-search">
+            <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+              <circle
+                cx="7"
+                cy="7"
+                r="4.5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+              />
+              <path
+                d="M10.5 10.5L14 14"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+              />
+            </svg>
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="搜索台词或中英文关键词…"
+              aria-label="搜索台词"
+            />
+            {search && (
+              <button
+                type="button"
+                className="player-transcript-search-clear"
+                onClick={() => setSearch('')}
+                title="清除搜索"
+              >
+                ×
+              </button>
+            )}
+          </div>
+
+          {tracks.length > 0 &&
+            !activeTrackId?.startsWith('browser:') &&
+            !activeTrackId?.startsWith('ytdlp:') && (
+              <label className="player-transcript-track-picker">
+                <span>字幕</span>
+                <select
+                  aria-label="字幕轨道"
+                  value={requestedTrackId ?? ''}
+                  disabled={loading}
+                  onChange={(event) => {
+                    const trackId = event.target.value;
+                    setTrackSelection(trackId ? { videoId, trackId } : null);
+                  }}
+                >
+                  <option value="">
+                    {`自动选择 · ${tracks.find((track) => track.id === activeTrackId)?.name ?? '首选语言'}`}
+                  </option>
+                  {tracks.map((track) => (
+                    <option key={track.id} value={track.id}>
+                      {`${track.name} · ${track.languageCode}${track.isGenerated ? ' · 自动生成' : ' · 人工字幕'}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+
+          {translationTrack?.isTranslatable &&
+            translationLanguages.length > 0 && (
+              <label className="player-transcript-track-picker">
+                <span>译文</span>
+                <select
+                  aria-label="字幕翻译语言"
+                  value={effectiveTranslationLang}
+                  disabled={loading}
+                  onChange={(event) => setTranslationLang(event.target.value)}
+                >
+                  {translationLanguages.map((language) => (
+                    <option
+                      key={language.languageCode}
+                      value={language.languageCode}
+                    >
+                      {language.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+
+          <div className="player-transcript-modes">
+            <button
+              type="button"
+              className={`player-transcript-btn${viewMode === 'bilingual' ? ' is-active' : ''}`}
+              onClick={() => setViewMode('bilingual')}
+              title="双语对照模式"
+            >
+              双语
+            </button>
+            <button
+              type="button"
+              className={`player-transcript-btn${viewMode === 'original' ? ' is-active' : ''}`}
+              onClick={() => setViewMode('original')}
+              title="仅显示原文"
+            >
+              原文
+            </button>
+            {cues.some((c) => Boolean(c.translation)) && (
+              <button
+                type="button"
+                className={`player-transcript-btn${viewMode === 'translation' ? ' is-active' : ''}`}
+                onClick={() => setViewMode('translation')}
+                title="仅显示译文"
+              >
+                译文
+              </button>
+            )}
+          </div>
+
+          <div className="player-transcript-actions-bar">
+            {/* 单句循环切换 */}
+            <button
+              type="button"
+              className={`player-transcript-tool-icon${loopingCueId ? ' is-active' : ''}`}
+              onClick={() => onToggleLoopCue?.(loopingCueId ? null : activeCue)}
+              title={
+                loopingCueId
+                  ? '正在单句循环 (快捷键 R 关闭)'
+                  : '单句 A-B 循环 (快捷键 R)'
+              }
+            >
+              <svg
+                viewBox="0 0 16 16"
+                width="13"
+                height="13"
+                aria-hidden="true"
+              >
+                <path
+                  d="M13 5H3.5a2.5 2.5 0 0 0 0 5H4M10 2l3 3-3 3M3 11h9.5a2.5 2.5 0 0 0 0-5H12M6 14l-3-3 3-3"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              <span>{loopingCueId ? '循环中' : '循环'}</span>
+            </button>
+
+            {/* 跟读暂停模式 */}
+            <button
+              type="button"
+              className={`player-transcript-tool-icon${shadowMode ? ' is-active' : ''}`}
+              onClick={() => onToggleShadowMode?.(!shadowMode)}
+              title={
+                shadowMode
+                  ? '影子跟读模式已开启 (每句结束自动暂停)'
+                  : '开启影子跟读模式'
+              }
+            >
+              <svg
+                viewBox="0 0 16 16"
+                width="13"
+                height="13"
+                aria-hidden="true"
+              >
+                <circle
+                  cx="8"
+                  cy="8"
+                  r="6"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                />
+                <rect
+                  x="6"
+                  y="5.5"
+                  width="1.5"
+                  height="5"
+                  rx="0.5"
+                  fill="currentColor"
+                />
+                <rect
+                  x="8.5"
+                  y="5.5"
+                  width="1.5"
+                  height="5"
+                  rx="0.5"
+                  fill="currentColor"
+                />
+              </svg>
+              <span>{shadowMode ? '跟读中' : '跟读'}</span>
+            </button>
+
+            {/* 自动滚动锁定 */}
+            <button
+              type="button"
+              className={`player-transcript-tool-icon${autoScroll ? ' is-active' : ''}`}
+              onClick={() => setAutoScroll((prev) => !prev)}
+              title={
+                autoScroll ? '跟随播放自动滚动已开启' : '点击开启跟随自动滚动'
+              }
+            >
+              <svg
+                viewBox="0 0 16 16"
+                width="13"
+                height="13"
+                aria-hidden="true"
+              >
+                <path
+                  d="M8 2v12M4 10l4 4 4-4"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              <span>{autoScroll ? '跟随' : '锁定'}</span>
+            </button>
+
+            {/* 导入外部字幕 */}
+            <button
+              type="button"
+              className="player-transcript-tool-icon"
+              onClick={() => fileInputRef.current?.click()}
+              title="导入本地 .vtt 或 .srt 字幕文件"
+            >
+              <svg
+                viewBox="0 0 16 16"
+                width="13"
+                height="13"
+                aria-hidden="true"
+              >
+                <path
+                  d="M3 13h10M8 3v7M5 7l3 3 3-3"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              <span>导入</span>
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".vtt,.srt"
+              style={{ display: 'none' }}
+              onChange={handleImportFile}
+            />
+
+            {/* 一键导出至知识库文档 */}
+            {onExportToKnowledge && (
+              <button
+                type="button"
+                className="player-transcript-tool-icon is-export"
+                disabled={loading || exporting || filteredCues.length === 0}
+                onClick={() => void handleExportToKnowledge()}
+                title={
+                  filteredCues.length === 0
+                    ? '暂无可导出的字幕'
+                    : search.trim()
+                      ? `导出当前筛选的 ${filteredCues.length} 条带时间戳字幕到知识库`
+                      : `一键导出全部 ${cues.length} 条带时间戳字幕到知识库文档`
+                }
+              >
+                <svg
+                  viewBox="0 0 16 16"
+                  width="13"
+                  height="13"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M4 2.5h5.5L13 6v7.5H4V2.5Z"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinejoin="round"
+                  />
+                  <path
+                    d="M9.2 2.5V6H13M6.5 9.5h4M8.5 7.8l1.8 1.7-1.8 1.7"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                <span>
+                  {exporting
+                    ? refinementProgress?.phase === 'running'
+                      ? 'AI 精修中…'
+                      : '导出中…'
+                    : '导出'}
+                </span>
+              </button>
+            )}
+          </div>
+        </div>
+        {refinementProgress && (
+          <div
+            className={`player-transcript-refinement is-${refinementProgress.phase}`}
+            role="status"
+            aria-live="polite"
+          >
+            <span className="player-transcript-refinement-label">
+              {refinementProgress.phase === 'running'
+                ? `${cancelRequested ? '当前阶段完成后停止' : 'AI 分阶段精修'} · ${refinementProgress.completedStages} / ${refinementProgress.totalStages}${refinementProgress.stageTimeRange ? ` · ${refinementProgress.stageTimeRange}` : ''}`
+                : refinementProgress.phase === 'completed'
+                  ? `AI 精修完成 · ${refinementProgress.refinedStages} 个阶段${refinementProgress.fallbackStages > 0 ? ` · ${refinementProgress.fallbackStages} 个阶段保留智能分段` : ''}`
+                  : refinementProgress.phase === 'cancelled'
+                    ? `AI 精修已停止 · ${refinementProgress.completedStages} / ${refinementProgress.totalStages} 阶段已写回`
+                    : `AI 精修中断 · ${refinementProgress.completedStages} / ${refinementProgress.totalStages} 阶段${refinementProgress.errorMessage ? ` · ${refinementProgress.errorMessage}` : ''}`}
+            </span>
+            {refinementProgress.phase === 'running' ? (
+              <button
+                type="button"
+                className="player-transcript-refinement-action"
+                onClick={requestRefinementCancel}
+                disabled={cancelRequested}
+              >
+                {cancelRequested ? '停止中…' : '停止'}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="player-transcript-refinement-action"
+                onClick={() => setRefinementProgress(null)}
+                aria-label="关闭精修状态"
+              >
+                ×
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
