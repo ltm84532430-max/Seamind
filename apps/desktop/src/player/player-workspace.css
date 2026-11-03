@@ -1103,6 +1103,112 @@
   color: var(--player-muted);
   font-size: 12.5px;
 }
+.player-watch-history {
+  box-sizing: border-box;
+  height: 160px;
+  min-height: 160px;
+  overflow: hidden;
+  padding: 7px 12px 8px;
+  border-top: 1px solid var(--player-line);
+}
+.player-watch-history > header {
+  display: flex;
+  height: 18px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+.player-watch-history > header h3 {
+  margin: 0;
+  color: var(--player-ink);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+}
+.player-watch-history > header span {
+  margin-left: auto;
+  color: var(--player-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.player-watch-history-list {
+  display: grid;
+  height: calc(100% - 23px);
+  grid-template-columns: repeat(7, minmax(120px, 1fr));
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+.player-watch-history-item {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  padding: 0;
+  border: 0;
+  color: var(--player-ink);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+.player-watch-history-item:hover strong {
+  color: var(--player-accent);
+}
+.player-watch-history-item:focus-visible {
+  outline: 1px solid var(--player-accent);
+  outline-offset: 2px;
+}
+.player-watch-history-thumb {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  background: var(--player-panel-alt);
+}
+.player-watch-history-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.player-watch-history-thumb > span {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  padding: 0 4px;
+  color: #fff;
+  background: #000c;
+  font-size: 10px;
+  line-height: 15px;
+  font-variant-numeric: tabular-nums;
+}
+.player-watch-history-item > strong {
+  overflow: hidden;
+  font-size: 11.5px;
+  font-weight: 550;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.player-watch-history-item > small {
+  overflow: hidden;
+  color: var(--player-muted);
+  font-size: 10px;
+  line-height: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.player-watch-history-empty {
+  height: calc(100% - 23px);
+  margin: 0;
+  color: var(--player-muted);
+  font-size: 12px;
+  line-height: 121px;
+  text-align: center;
+}
 .player-watch-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1206,6 +1312,13 @@
 }
 .player-watch-settings[hidden] {
   display: none;
+}
+.player-watch-settings-speed {
+  display: flex;
+  height: 38px;
+  align-items: center;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--player-line);
 }
 .player-watch-settings > div {
   min-height: 100%;

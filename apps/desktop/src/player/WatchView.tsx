@@ -6,11 +6,12 @@ import type {
   YouTubePlayerHandle,
 } from '../YouTubePlayerPanel';
 import type { YouTubePlaybackState } from '../youtube-player';
-import { formatAgo, formatDate, formatViews } from './format';
+import { formatAgo, formatDate, formatDuration, formatViews } from './format';
 import { usePlayerHost } from './host';
 import { BackIcon, CheckIcon, ClockIcon, StarIcon } from './icons';
 import { playerApi } from './player-api';
 import { applyOverlay, nextVideo } from './queue';
+import { thumbnailUrl } from './video-links';
 import type { QueueSource } from './queue';
 import type { VideoItem, WatchState } from './types';
 import { isWorthSaving } from './watch-state';
@@ -94,6 +95,8 @@ export default function WatchView({
     useState<HTMLDivElement | null>(null);
   const [status, setStatus] = useState<YouTubePlaybackState>('loading');
   const [rate, setRate] = useState(readRate);
+  const [recentHistory, setRecentHistory] = useState<VideoItem[]>([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const [assignedCategoryId, setAssignedCategoryId] = useState<string | null>(
     null,
   );
@@ -135,6 +138,34 @@ export default function WatchView({
     watching.startSeconds || 0,
   );
   const lastShadowPausedCueIdRef = useRef<string | null>(null);
+  const recentItems = useMemo(
+    () =>
+      recentHistory
+        .filter((entry) => entry.videoId !== videoId)
+        .slice(0, 7)
+        .map((entry) => applyOverlay(entry, host.overlay)),
+    [host.overlay, recentHistory, videoId],
+  );
+
+  useEffect(() => {
+    let current = true;
+    setHistoryLoaded(false);
+    void playerApi.history(24, 0).then(
+      (items) => {
+        if (!current) return;
+        setRecentHistory(items);
+        setHistoryLoaded(true);
+      },
+      () => {
+        if (!current) return;
+        setRecentHistory([]);
+        setHistoryLoaded(true);
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [videoId]);
 
   const switchTab = useCallback((tab: 'queue' | 'transcript' | 'settings') => {
     setActiveTab(tab);
@@ -562,26 +593,55 @@ export default function WatchView({
                 🗣️ 跟读中
               </button>
             )}
-
-            <label className="player-rate">
-              倍速
-              <select
-                value={rate}
-                onChange={(event) => {
-                  const next = Number(event.target.value);
-                  setRate(next);
-                  rememberRate(next);
-                }}
-              >
-                {RATES.map((value) => (
-                  <option key={value} value={value}>
-                    {value}×
-                  </option>
-                ))}
-              </select>
-            </label>
           </div>
         </div>
+        <section className="player-watch-history" aria-label="最近观看">
+          <header>
+            <h3>最近观看</h3>
+            {recentItems.length > 0 && <span>{recentItems.length} 条</span>}
+          </header>
+          {recentItems.length > 0 ? (
+            <div className="player-watch-history-list">
+              {recentItems.map((recent) => {
+                const duration = formatDuration(recent.durationSeconds);
+                const playedAt = formatAgo(recent.lastPlayedAt, host.now);
+                return (
+                  <button
+                    key={recent.videoId}
+                    type="button"
+                    className="player-watch-history-item"
+                    title={recent.title}
+                    aria-label={`播放最近观看：${recent.title}`}
+                    onClick={() =>
+                      host.openVideo(recent, {
+                        title: '最近观看',
+                        items: recentItems,
+                      })
+                    }
+                  >
+                    <span className="player-watch-history-thumb">
+                      <img
+                        src={
+                          recent.thumbnailUrl || thumbnailUrl(recent.videoId)
+                        }
+                        alt=""
+                        loading="lazy"
+                        referrerPolicy="no-referrer"
+                      />
+                      {duration && <span>{duration}</span>}
+                    </span>
+                    <strong>{recent.title}</strong>
+                    {playedAt && <small>{playedAt}</small>}
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="player-watch-history-empty">
+              {historyLoaded ? '还没有其他观看记录' : '读取观看记录…'}
+            </p>
+          )}
+        </section>
       </div>
       <aside
         className={`player-watch-queue${queueCollapsed ? ' is-collapsed' : ''}`}
@@ -718,6 +778,25 @@ export default function WatchView({
           hidden={queueCollapsed || activeTab !== 'settings'}
           aria-label="播放设置与诊断"
         >
+          <div className="player-watch-settings-speed">
+            <label className="player-rate">
+              倍速
+              <select
+                value={rate}
+                onChange={(event) => {
+                  const next = Number(event.target.value);
+                  setRate(next);
+                  rememberRate(next);
+                }}
+              >
+                {RATES.map((value) => (
+                  <option key={value} value={value}>
+                    {value}×
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
           <div ref={setPlaybackOptionsHost} />
         </div>
       </aside>
