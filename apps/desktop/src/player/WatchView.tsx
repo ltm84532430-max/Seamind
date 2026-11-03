@@ -6,7 +6,7 @@ import type {
   YouTubePlayerHandle,
 } from '../YouTubePlayerPanel';
 import type { YouTubePlaybackState } from '../youtube-player';
-import { formatAgo, formatDate, formatDuration, formatViews } from './format';
+import { formatAgo, formatDuration } from './format';
 import { usePlayerHost } from './host';
 import { BackIcon, CheckIcon, ClockIcon, StarIcon } from './icons';
 import { playerApi } from './player-api';
@@ -418,10 +418,6 @@ export default function WatchView({
   };
 
   const position = queue.items.findIndex((entry) => entry.videoId === videoId);
-  const meta = [
-    formatViews(item.viewCount, item.viewText),
-    formatAgo(item.publishedAt, host.now, item.publishedApprox),
-  ].filter(Boolean);
 
   return (
     <section
@@ -459,17 +455,6 @@ export default function WatchView({
               ) : (
                 <span>{item.channelName}</span>
               ))}
-            {meta.length > 0 && (
-              <span
-                title={
-                  item.publishedAt && !item.publishedApprox
-                    ? formatDate(item.publishedAt)
-                    : undefined
-                }
-              >
-                {meta.join(' · ')}
-              </span>
-            )}
           </p>
           <div className="player-watch-actions">
             <button type="button" className="player-button" onClick={onBack}>
