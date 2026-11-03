@@ -104,6 +104,9 @@ import {
 } from './mindmap/commands';
 const TerminalPanel = lazy(() => import('./TerminalPanel'));
 const PlayerWorkspace = lazy(() => import('./player/PlayerWorkspace'));
+const LiteratureWorkspace = lazy(
+  () => import('./literature/LiteratureWorkspace'),
+);
 import type {
   DocumentVersion,
   DocumentVersionSnapshot,
@@ -4307,10 +4310,12 @@ export default function App() {
                     ? (epubReader?.title ?? '电子书书架')
                     : activeWorkspace === 'knowledge'
                       ? (activeDocument?.title ?? '知识库')
-                      : (activeDocument?.relativePath ??
-                        plantUmlSession?.request.documentTitle ??
-                        editorDraft.relativePath ??
-                        '')
+                      : activeWorkspace === 'literature'
+                        ? '论文工作台'
+                        : (activeDocument?.relativePath ??
+                          plantUmlSession?.request.documentTitle ??
+                          editorDraft.relativePath ??
+                          '')
               }
             >
               <span>
@@ -4320,10 +4325,12 @@ export default function App() {
                     ? (epubReader?.title ?? '电子书书架')
                     : activeWorkspace === 'knowledge'
                       ? (activeDocument?.title ?? '知识库')
-                      : (activeDocument?.title ??
-                          plantUmlSession?.request.documentTitle ??
-                          editorDraft.title) ||
-                        '未命名思维导图'}
+                      : activeWorkspace === 'literature'
+                        ? '论文工作台'
+                        : (activeDocument?.title ??
+                            plantUmlSession?.request.documentTitle ??
+                            editorDraft.title) ||
+                          '未命名思维导图'}
               </span>
               {activeWorkspace === 'mindmap' && !plantUmlSession && (
                 <i
@@ -4369,6 +4376,14 @@ export default function App() {
             onClick={() => setActiveWorkspace('knowledge')}
           >
             知识库
+          </button>
+          <button
+            type="button"
+            className={activeWorkspace === 'literature' ? 'is-active' : ''}
+            aria-pressed={activeWorkspace === 'literature'}
+            onClick={() => setActiveWorkspace('literature')}
+          >
+            论文
           </button>
         </nav>
         <div className="topbar-actions">
@@ -5486,6 +5501,61 @@ export default function App() {
               onConvertToMindmap: () => void convertActiveDocumentToMindmap(),
             }}
           />
+        </section>
+      )}
+
+      {activeWorkspace === 'literature' && (
+        <section
+          className="literature-workspace-stage"
+          aria-label="论文工作区"
+          style={{
+            flex: 1,
+            height: '100%',
+            overflow: 'hidden',
+            display: 'flex',
+          }}
+        >
+          <Suspense
+            fallback={
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  height: '100%',
+                  width: '100%',
+                  color: '#94a3b8',
+                }}
+              >
+                正在载入论文工作台…
+              </div>
+            }
+          >
+            <LiteratureWorkspace
+              onOpenMindmap={(md, title) => {
+                void (async () => {
+                  if (!leavePlantUmlSession()) return;
+                  if (!(await workbench.controller.leave())) return;
+                  if (draftRef.current.dirty && !(await saveDraft())) return;
+                  const revision = draftRef.current.revision + 1;
+                  const category = categoryFilter || '未分类';
+                  installDraft(
+                    createDraft({
+                      title: title.trim() || '文献思维导图',
+                      category,
+                      mapType: '文献导图',
+                      tags: '论文, 导图',
+                      markdown: md,
+                      dirty: true,
+                      revision,
+                    }),
+                  );
+                  setSaveMessage('已从文献解构为思维导图草稿');
+                  setActiveWorkspace('mindmap');
+                })();
+              }}
+            />
+          </Suspense>
         </section>
       )}
 

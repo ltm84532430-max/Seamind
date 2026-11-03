@@ -3,7 +3,12 @@ import { resolveBookMindmapTarget as resolveBookMindmapTargetFromLibrary } from 
 
 export type ProviderSettings = { baseUrl: string; model: string };
 export type Theme = 'light' | 'dark';
-export type ActiveWorkspace = 'mindmap' | 'reader' | 'player' | 'knowledge';
+export type ActiveWorkspace =
+  | 'mindmap'
+  | 'reader'
+  | 'player'
+  | 'knowledge'
+  | 'literature';
 export type MindmapStyle =
   | 'gray'
   | 'roots'

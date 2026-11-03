@@ -1,6 +1,9 @@
 mod epub;
 mod epub_exam;
+mod bibtex;
 mod library;
+mod literature;
+mod literature_store;
 mod media_resolver;
 mod plantuml;
 mod player;
@@ -145,6 +148,24 @@ pub fn run() {
             zlib_bridge::zlib_get_profile,
             zlib_bridge::zlib_search,
             zlib_bridge::zlib_download_book,
+            literature::literature_overview,
+            literature::literature_list,
+            literature::literature_get,
+            literature::literature_save,
+            literature::literature_delete,
+            literature::literature_batch_delete,
+            literature::literature_update_read_status,
+            literature::literature_update_rating,
+            literature::literature_update_notes,
+            literature::literature_list_collections,
+            literature::literature_save_collection,
+            literature::literature_delete_collection,
+            literature::literature_fetch_doi,
+            literature::literature_fetch_arxiv,
+            literature::literature_parse_bibtex_text,
+            literature::literature_import_bibtex_text,
+            literature::literature_export_bibtex_text,
+            literature::literature_generate_mindmap,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Markmap Desktop");
