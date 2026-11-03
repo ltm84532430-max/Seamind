@@ -72,7 +72,12 @@ import type {
   EpubReaderAgentBridge,
   EpubReaderSelection,
 } from './EpubReader';
-import { epubBookIdentity, epubProgressKey } from './ebook-storage';
+import {
+  epubBookIdentity,
+  epubProgressKey,
+  findStoredCoverByBookKey,
+  loadEpubBookMetadata,
+} from './ebook-storage';
 import AgentPanel from './AgentPanel';
 import {
   agentToolCatalog,
@@ -420,6 +425,10 @@ export default function App() {
   const [currentEpubChapter, setCurrentEpubChapter] =
     useState<EpubChapterChangeInfo | null>(null);
   const [galaxyViewActive, setGalaxyViewActive] = useState(false);
+  const [galaxyDensity, setGalaxyDensity] = useState<'spacious' | 'compact'>(
+    'spacious',
+  );
+  const [readerKnowledgeWide, setReaderKnowledgeWide] = useState(false);
   const [focusedMapPath, setFocusedMapPath] = useState<string | null>(null);
   const [canvasNodeContextMenu, setCanvasNodeContextMenu] = useState<{
     path: string;
@@ -1652,12 +1661,18 @@ export default function App() {
       if (!snapshot?.rootPath) {
         throw new Error('文件库尚未就绪。');
       }
+      const coverDataUrl =
+        loadEpubBookMetadata(epubReader.progressKey)?.coverDataUrl ||
+        findStoredCoverByBookKey(epubReader.progressKey) ||
+        undefined;
       const graph = buildBookGalaxyGraph(
         epubReader.title,
         epubReader.progressKey,
         currentEpubChapter?.toc ?? [],
         snapshot,
         currentEpubChapter?.chapterHref,
+        coverDataUrl,
+        galaxyDensity,
       );
       return {
         bookTitle: graph.bookTitle,
@@ -5035,7 +5050,7 @@ export default function App() {
   return (
     <main
       ref={appShellRef}
-      className={`app-shell${readerSplitActive ? ' is-reader-split' : ''}${readerKnowledgeActive ? ' is-reader-knowledge' : ''}${isTerminalDrawerOpen ? ' is-terminal-open' : ''}${terminalRightActive ? ' is-terminal-right' : ''}`}
+      className={`app-shell${readerSplitActive ? ' is-reader-split' : ''}${readerKnowledgeActive ? ' is-reader-knowledge' : ''}${readerKnowledgeActive && readerKnowledgeWide ? ' is-reader-knowledge-wide' : ''}${isTerminalDrawerOpen ? ' is-terminal-open' : ''}${terminalRightActive ? ' is-terminal-right' : ''}`}
       data-theme={theme}
       data-map-style={mindmapStyle}
       style={
@@ -6818,6 +6833,18 @@ export default function App() {
               <div className="reader-chapter-actions">
                 <button
                   type="button"
+                  className={`reader-chapter-btn ${readerKnowledgeWide ? 'is-active' : ''}`}
+                  onClick={() => setReaderKnowledgeWide((v) => !v)}
+                  title={
+                    readerKnowledgeWide
+                      ? '恢复默认分栏比例'
+                      : '加宽右侧星系与笔记视图'
+                  }
+                >
+                  {readerKnowledgeWide ? '标准分栏' : '加宽星系'}
+                </button>
+                <button
+                  type="button"
                   className={`reader-chapter-btn ${galaxyViewActive ? 'is-active' : ''}`}
                   onClick={() => setGalaxyViewActive((v) => !v)}
                   title="切换拓扑星系图与章节笔记"
@@ -6836,9 +6863,15 @@ export default function App() {
                 currentEpubChapter?.toc ?? [],
                 librarySnapshot,
                 currentEpubChapter?.chapterHref,
+                loadEpubBookMetadata(epubReader.progressKey)?.coverDataUrl ||
+                  findStoredCoverByBookKey(epubReader.progressKey) ||
+                  undefined,
+                galaxyDensity,
               )}
               currentChapterHref={currentEpubChapter?.chapterHref}
               theme={theme}
+              density={galaxyDensity}
+              onToggleDensity={setGalaxyDensity}
               onSelectNode={(node) => {
                 void handleGalaxySelectNode(node);
               }}

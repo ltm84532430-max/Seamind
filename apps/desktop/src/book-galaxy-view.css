@@ -47,8 +47,7 @@
 .book-galaxy-badge {
   font-size: 11px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.02em;
   padding: 2px 8px;
   border-radius: 999px;
   background: rgba(217, 87, 59, 0.15);
@@ -151,11 +150,12 @@
 .galaxy-orbit-ring {
   fill: none;
   stroke: rgba(255, 255, 255, 0.05);
-  stroke-dasharray: 4 4;
+  stroke-dasharray: 4 6;
+  pointer-events: none;
 }
 
 .app-shell[data-theme='light'] .galaxy-orbit-ring {
-  stroke: rgba(0, 0, 0, 0.06);
+  stroke: rgba(0, 0, 0, 0.07);
 }
 
 .galaxy-link-orbit {
@@ -165,12 +165,16 @@
 }
 
 .app-shell[data-theme='light'] .galaxy-link-orbit {
-  stroke: rgba(0, 0, 0, 0.08);
+  stroke: rgba(0, 0, 0, 0.09);
+}
+
+.galaxy-link-orbit.is-intra {
+  stroke-width: 1.2;
 }
 
 .galaxy-link-sequence {
   fill: none;
-  stroke: rgba(217, 87, 59, 0.25);
+  stroke: rgba(217, 87, 59, 0.35);
   stroke-width: 1.5;
   stroke-dasharray: 5 3;
 }
@@ -189,10 +193,70 @@
   filter: drop-shadow(0 0 10px var(--node-color, #d9573b));
 }
 
+/* Central Book Sun Node Styling */
+.galaxy-node-group.is-sun:hover .galaxy-sun-cover-image,
+.galaxy-node-group.is-sun:hover .galaxy-node-circle {
+  filter: drop-shadow(0 0 14px rgba(224, 86, 56, 0.6));
+}
+
+.galaxy-sun-halo {
+  fill: none;
+  stroke: rgba(224, 86, 56, 0.45);
+  stroke-width: 2;
+  stroke-dasharray: 3 3;
+  animation: galaxySunSpin 30s linear infinite;
+}
+
+@keyframes galaxySunSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.galaxy-sun-rim {
+  pointer-events: none;
+  filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.4));
+}
+
+.galaxy-sun-cover-image {
+  pointer-events: none;
+  user-select: none;
+}
+
+.galaxy-sun-monogram {
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  fill: #ffffff;
+  text-anchor: middle;
+  pointer-events: none;
+  letter-spacing: 0.05em;
+}
+
+.galaxy-sun-title {
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 650;
+  fill: #f1f5f9;
+  text-anchor: middle;
+  pointer-events: none;
+  user-select: none;
+  letter-spacing: -0.01em;
+}
+
+.app-shell[data-theme='light'] .galaxy-sun-title {
+  fill: #0f172a;
+  font-weight: 700;
+}
+
+/* Node Text Labels */
 .galaxy-node-label {
   font-family: inherit;
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 550;
   fill: #cbd5e1;
   text-anchor: middle;
   pointer-events: none;
@@ -201,12 +265,12 @@
 
 .app-shell[data-theme='light'] .galaxy-node-label {
   fill: #334155;
-  font-weight: 550;
+  font-weight: 600;
 }
 
 .galaxy-node-sublabel {
-  font-family: var(--mono, monospace);
-  font-size: 9px;
+  font-family: inherit;
+  font-size: 9.5px;
   fill: #94a3b8;
   text-anchor: middle;
   pointer-events: none;
@@ -216,13 +280,26 @@
   fill: #64748b;
 }
 
+.galaxy-planet-badge {
+  font-family: var(--mono, monospace);
+  font-size: 10px;
+  font-weight: 600;
+  fill: #94a3b8;
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+.app-shell[data-theme='light'] .galaxy-planet-badge {
+  fill: #475569;
+}
+
 /* Note indicator halo */
 .galaxy-note-halo {
   fill: none;
   stroke: #10b981;
   stroke-width: 2;
   stroke-dasharray: 2 2;
-  opacity: 0.8;
+  opacity: 0.85;
 }
 
 /* Pulse animation for active reading chapter */
@@ -232,11 +309,11 @@
     opacity: 0.9;
   }
   50% {
-    r: 28px;
+    r: 30px;
     opacity: 0.3;
   }
   100% {
-    r: 34px;
+    r: 38px;
     opacity: 0;
   }
 }
@@ -254,13 +331,13 @@
   position: absolute;
   z-index: 50;
   pointer-events: none;
-  background: rgba(15, 23, 42, 0.92);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(15, 23, 42, 0.94);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 6px;
   padding: 10px 14px;
-  min-width: 200px;
-  max-width: 280px;
+  min-width: 210px;
+  max-width: 290px;
   box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
   font-size: 12px;
   line-height: 1.45;
@@ -268,7 +345,7 @@
   transform: translate(12px, 12px);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
 }
 
 .app-shell[data-theme='light'] .book-galaxy-tooltip {
@@ -286,7 +363,7 @@
   font-weight: 650;
   font-size: 12.5px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  padding-bottom: 4px;
+  padding-bottom: 5px;
   margin-bottom: 2px;
 }
 

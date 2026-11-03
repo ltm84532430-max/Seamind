@@ -11323,6 +11323,10 @@ button {
   grid-row: 3;
 }
 
+.app-shell.is-reader-knowledge.is-reader-knowledge-wide {
+  grid-template-columns: minmax(0, 0.32fr) 3px minmax(0, 0.68fr);
+}
+
 .app-shell.is-reader-knowledge.is-reader-split {
   grid-template-columns:
     minmax(0, 0.4fr)
