@@ -151,6 +151,8 @@ pub fn run() {
             learning_tasks::learning_tasks_save_task,
             learning_tasks::learning_tasks_delete_task,
             learning_tasks::learning_tasks_import_plan,
+            learning_tasks::learning_tasks_archive_done,
+            learning_tasks::learning_tasks_unarchive_task,
             zlib_bridge::zlib_check_environment,
             zlib_bridge::zlib_get_profile,
             zlib_bridge::zlib_search,

@@ -41,6 +41,8 @@ export interface LearningTask {
   revision: number;
   createdAt: number;
   updatedAt: number;
+  completedAt: number | null;
+  archivedAt: number | null;
 }
 
 export interface TaskInput {
@@ -58,6 +60,8 @@ export interface TaskInput {
   prerequisiteIds: string[];
   originKey?: string | null;
   expectedRevision?: number | null;
+  completedAt?: number | null;
+  archivedAt?: number | null;
 }
 
 export interface PlanInput {
@@ -99,5 +103,7 @@ export function editTask(task: LearningTask): TaskInput {
     prerequisiteIds: task.prerequisiteIds,
     originKey: task.originKey,
     expectedRevision: task.revision,
+    completedAt: task.completedAt,
+    archivedAt: task.archivedAt,
   };
 }

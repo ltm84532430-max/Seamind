@@ -32,10 +32,13 @@ CREATE TABLE IF NOT EXISTS tasks (
     origin_key TEXT UNIQUE,
     revision INTEGER NOT NULL DEFAULT 1,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    completed_at INTEGER,
+    archived_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_plan ON tasks(plan_id, position);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, due_date);
+CREATE INDEX IF NOT EXISTS idx_tasks_archived ON tasks(archived_at);
 CREATE TABLE IF NOT EXISTS task_dependencies (
     task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
     prerequisite_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -99,6 +102,8 @@ pub struct TaskInput {
     pub prerequisite_ids: Vec<String>,
     pub origin_key: Option<String>,
     pub expected_revision: Option<i64>,
+    pub completed_at: Option<i64>,
+    pub archived_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,6 +125,8 @@ pub struct Task {
     pub revision: i64,
     pub created_at: i64,
     pub updated_at: i64,
+    pub completed_at: Option<i64>,
+    pub archived_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,6 +169,8 @@ fn open_path(path: &Path) -> Result<Connection, String> {
     conn.pragma_update(None, "foreign_keys", "ON")
         .map_err(db_error)?;
     conn.execute_batch(SCHEMA).map_err(db_error)?;
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN completed_at INTEGER", []);
+    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN archived_at INTEGER", []);
     Ok(conn)
 }
 
@@ -350,14 +359,22 @@ fn write_task(conn: &Connection, input: &TaskInput, timestamp: i64) -> Result<St
             return Err("任务已在其他位置更新，请刷新后重试。".to_string());
         }
     }
+    let completed_at = if input.status == "done" {
+        input.completed_at.or(Some(timestamp))
+    } else {
+        None
+    };
+    let archived_at = input.archived_at;
     conn.execute(
-        "INSERT INTO tasks(id,plan_id,parent_id,title,note,status,priority,due_date,position,optional,resources_json,origin_key,revision,created_at,updated_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,1,?13,?13)
+        "INSERT INTO tasks(id,plan_id,parent_id,title,note,status,priority,due_date,position,optional,resources_json,origin_key,revision,created_at,updated_at,completed_at,archived_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,1,?13,?13,?14,?15)
          ON CONFLICT(id) DO UPDATE SET plan_id=excluded.plan_id,parent_id=excluded.parent_id,title=excluded.title,
            note=excluded.note,status=excluded.status,priority=excluded.priority,due_date=excluded.due_date,
            position=excluded.position,optional=excluded.optional,resources_json=excluded.resources_json,
-           revision=tasks.revision+1,updated_at=excluded.updated_at",
-        params![id,input.plan_id,input.parent_id,title,note,input.status,input.priority,due_date,input.position,i64::from(input.optional),resources,origin,timestamp],
+           revision=tasks.revision+1,updated_at=excluded.updated_at,
+           completed_at=excluded.completed_at,
+           archived_at=excluded.archived_at",
+        params![id,input.plan_id,input.parent_id,title,note,input.status,input.priority,due_date,input.position,i64::from(input.optional),resources,origin,timestamp,completed_at,archived_at],
     ).map_err(db_error)?;
     conn.execute(
         "DELETE FROM task_dependencies WHERE task_id=?1",
@@ -455,7 +472,7 @@ fn snapshot(conn: &Connection) -> Result<TaskSnapshot, String> {
         .map_err(db_error)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(db_error)?;
-    let mut stmt = conn.prepare("SELECT id,plan_id,parent_id,title,note,status,priority,due_date,position,optional,resources_json,origin_key,revision,created_at,updated_at FROM tasks ORDER BY position,created_at,id").map_err(db_error)?;
+    let mut stmt = conn.prepare("SELECT id,plan_id,parent_id,title,note,status,priority,due_date,position,optional,resources_json,origin_key,revision,created_at,updated_at,completed_at,archived_at FROM tasks ORDER BY position,created_at,id").map_err(db_error)?;
     let mut tasks = stmt
         .query_map([], |row| {
             let resources: String = row.get(10)?;
@@ -482,6 +499,8 @@ fn snapshot(conn: &Connection) -> Result<TaskSnapshot, String> {
                 revision: row.get(12)?,
                 created_at: row.get(13)?,
                 updated_at: row.get(14)?,
+                completed_at: row.get(15)?,
+                archived_at: row.get(16)?,
             })
         })
         .map_err(db_error)?
@@ -653,6 +672,39 @@ pub fn learning_tasks_import_plan(
     import_plan(&open(&app)?, &draft, now())
 }
 
+#[tauri::command(async)]
+pub fn learning_tasks_archive_done(app: AppHandle, plan_id: Option<String>) -> Result<usize, String> {
+    let conn = open(&app)?;
+    let timestamp = now();
+    let count = match plan_id.as_deref() {
+        Some(plan) => conn.execute(
+            "UPDATE tasks SET archived_at=?1, updated_at=?1 WHERE status='done' AND archived_at IS NULL AND plan_id=?2",
+            params![timestamp, plan],
+        ),
+        None => conn.execute(
+            "UPDATE tasks SET archived_at=?1, updated_at=?1 WHERE status='done' AND archived_at IS NULL",
+            params![timestamp],
+        ),
+    }
+    .map_err(db_error)?;
+    Ok(count)
+}
+
+#[tauri::command(async)]
+pub fn learning_tasks_unarchive_task(app: AppHandle, id: String) -> Result<(), String> {
+    if !valid_id(&id) {
+        return Err("任务编号无效。".to_string());
+    }
+    let conn = open(&app)?;
+    let timestamp = now();
+    conn.execute(
+        "UPDATE tasks SET archived_at=NULL, updated_at=?2 WHERE id=?1",
+        params![id, timestamp],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -675,6 +727,8 @@ mod tests {
             prerequisite_ids: vec![],
             origin_key: None,
             expected_revision: None,
+            completed_at: None,
+            archived_at: None,
         }
     }
     #[test]
@@ -791,5 +845,42 @@ mod tests {
         let current = snapshot(&conn).unwrap().tasks.remove(0);
         assert_eq!(current.due_date.as_deref(), Some("2026-10-29"));
         assert_eq!(current.title, "Read chapter");
+    }
+
+    #[test]
+    fn archives_completed_tasks_and_unarchives() {
+        let conn = db();
+        let mut t1 = task("t1");
+        t1.status = "done".into();
+        save_task(&conn, &t1, 10).unwrap();
+
+        let t2 = task("t2");
+        save_task(&conn, &t2, 10).unwrap();
+
+        let s = snapshot(&conn).unwrap();
+        let t1_saved = s.tasks.iter().find(|t| t.id == "t1").unwrap();
+        assert_eq!(t1_saved.completed_at, Some(10));
+        assert_eq!(t1_saved.archived_at, None);
+
+        conn.execute(
+            "UPDATE tasks SET archived_at=20, updated_at=20 WHERE status='done' AND archived_at IS NULL",
+            [],
+        )
+        .unwrap();
+
+        let s2 = snapshot(&conn).unwrap();
+        let t1_archived = s2.tasks.iter().find(|t| t.id == "t1").unwrap();
+        assert_eq!(t1_archived.archived_at, Some(20));
+
+        conn.execute(
+            "UPDATE tasks SET archived_at=NULL, updated_at=30 WHERE id='t1'",
+            [],
+        )
+        .unwrap();
+        let s3 = snapshot(&conn).unwrap();
+        assert_eq!(
+            s3.tasks.iter().find(|t| t.id == "t1").unwrap().archived_at,
+            None
+        );
     }
 }

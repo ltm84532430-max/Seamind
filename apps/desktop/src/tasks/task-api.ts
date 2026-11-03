@@ -46,4 +46,15 @@ export const taskApi = {
     tasksChanged();
     return result;
   },
+  archiveDone: async (planId?: string | null) => {
+    const count = await invoke<number>('learning_tasks_archive_done', {
+      planId: planId ?? null,
+    });
+    tasksChanged();
+    return count;
+  },
+  unarchiveTask: async (id: string) => {
+    await invoke<void>('learning_tasks_unarchive_task', { id });
+    tasksChanged();
+  },
 };

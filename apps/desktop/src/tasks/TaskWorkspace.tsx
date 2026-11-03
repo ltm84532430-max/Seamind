@@ -11,6 +11,7 @@ import {
 import { playerApi } from '../player/player-api';
 import type { WatchState } from '../player/types';
 import { parseYouTubeTarget } from '../player/video-links';
+import { dateStamp, downloadTextFile } from '../player/download';
 import TaskCalendar from './TaskCalendar';
 import { ebookImportCandidates, videoImportCandidate } from './legacy-import';
 import type { ImportCandidate } from './legacy-import';
@@ -86,6 +87,89 @@ function blankTask(planId: string | null, resource?: TaskResource): TaskInput {
 
 function errorText(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function formatTimestamp(t: number | null | undefined): string {
+  if (!t) return '';
+  const d = new Date(t);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function formatDateOnly(t: number | null | undefined): string {
+  if (!t) return '';
+  const d = new Date(t);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+interface ArchiveGroup {
+  dateKey: string;
+  dateLabel: string;
+  tasks: LearningTask[];
+}
+
+function groupArchivedTasks(tasks: LearningTask[]): ArchiveGroup[] {
+  const sorted = [...tasks].sort((a, b) => {
+    const timeA = a.archivedAt ?? a.completedAt ?? a.position;
+    const timeB = b.archivedAt ?? b.completedAt ?? b.position;
+    return timeB - timeA;
+  });
+
+  const today = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const todayKey = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+  const groupsMap = new Map<string, { label: string; tasks: LearningTask[] }>();
+
+  sorted.forEach((task) => {
+    const t = task.archivedAt ?? task.completedAt ?? Date.now();
+    const d = new Date(t);
+    const dateKey = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const label = dateKey === todayKey ? `今日归档 (${dateKey})` : dateKey;
+
+    const current = groupsMap.get(dateKey) ?? { label, tasks: [] };
+    current.tasks.push(task);
+    groupsMap.set(dateKey, current);
+  });
+
+  return Array.from(groupsMap.entries()).map(([dateKey, val]) => ({
+    dateKey,
+    dateLabel: val.label,
+    tasks: val.tasks,
+  }));
+}
+
+function generateMindmapMarkdown(
+  archivedTasks: LearningTask[],
+  plans: Array<{ id: string; title: string }>,
+): string {
+  const planMap = new Map(plans.map((p) => [p.id, p.title]));
+  const lines: string[] = ['# 学习任务复盘与归档', ''];
+  const grouped = new Map<string, LearningTask[]>();
+  archivedTasks.forEach((t) => {
+    const planName = (t.planId && planMap.get(t.planId)) || '未归类任务';
+    const list = grouped.get(planName) ?? [];
+    list.push(t);
+    grouped.set(planName, list);
+  });
+  grouped.forEach((tasks, planName) => {
+    lines.push(`## ${planName} (${tasks.length})`);
+    tasks.forEach((t) => {
+      const timeStr = t.completedAt
+        ? ` [完成于 ${formatDateOnly(t.completedAt)}]`
+        : '';
+      lines.push(`- ${t.title}${timeStr}`);
+      if (t.note) {
+        lines.push(`  - 备注: ${t.note.replace(/\r?\n+/g, ' ')}`);
+      }
+      t.resources.forEach((r) => {
+        const kind = r.kind === 'ebook' ? '电子书' : 'YouTube';
+        lines.push(`  - 关联${kind}: ${r.title}`);
+      });
+    });
+    lines.push('');
+  });
+  return lines.join('\n');
 }
 
 function formatSeconds(value: number) {
@@ -295,27 +379,32 @@ export default function TaskWorkspace({
   const filtered = useMemo(
     () =>
       snapshot.tasks.filter((entry) => {
-        const inPlan =
-          planFilter === 'all' ||
-          (planFilter === 'today'
-            ? Boolean(
-                entry.dueDate &&
-                  entry.dueDate <= todayKey &&
-                  entry.status !== 'done' &&
-                  entry.status !== 'cancelled',
-              )
-            : planFilter === 'unplanned'
-              ? !entry.planId
-              : entry.planId === planFilter);
+        if (planFilter === 'archived') {
+          if (!entry.archivedAt) return false;
+        } else {
+          if (entry.archivedAt) return false;
+          const inPlan =
+            planFilter === 'all' ||
+            (planFilter === 'today'
+              ? Boolean(
+                  entry.dueDate &&
+                    entry.dueDate <= todayKey &&
+                    entry.status !== 'done' &&
+                    entry.status !== 'cancelled',
+                )
+              : planFilter === 'unplanned'
+                ? !entry.planId
+                : entry.planId === planFilter);
+          if (!inPlan) return false;
+        }
         const term = query.trim().toLocaleLowerCase();
         return (
-          inPlan &&
-          (!term ||
-            [
-              entry.title,
-              entry.note,
-              ...entry.resources.map((resource) => resource.title),
-            ].some((value) => value?.toLocaleLowerCase().includes(term)))
+          !term ||
+          [
+            entry.title,
+            entry.note,
+            ...entry.resources.map((resource) => resource.title),
+          ].some((value) => value?.toLocaleLowerCase().includes(term))
         );
       }),
     [snapshot.tasks, planFilter, query, todayKey],
@@ -537,6 +626,45 @@ export default function TaskWorkspace({
     }
   };
 
+  const archiveDoneTasks = async () => {
+    try {
+      const targetPlan =
+        planFilter !== 'all' &&
+        planFilter !== 'today' &&
+        planFilter !== 'unplanned' &&
+        planFilter !== 'archived'
+          ? planFilter
+          : null;
+      const count = await taskApi.archiveDone(targetPlan);
+      if (count > 0) {
+        setNotice(`已归档 ${count} 项已完成任务`);
+      } else {
+        setNotice('没有可归档的已完成任务');
+      }
+      await reload();
+    } catch (reason) {
+      setError(errorText(reason));
+    }
+  };
+
+  const unarchiveTask = async (entry: LearningTask) => {
+    try {
+      await taskApi.unarchiveTask(entry.id);
+      setNotice(`已恢复任务「${entry.title}」至进行中看板`);
+      await reload();
+    } catch (reason) {
+      setError(errorText(reason));
+    }
+  };
+
+  const exportArchiveMindmap = () => {
+    if (filtered.length === 0) return;
+    const md = generateMindmapMarkdown(filtered, snapshot.plans);
+    const fileName = `复盘归档_${dateStamp()}.md`;
+    downloadTextFile(fileName, md, 'text/markdown;charset=utf-8');
+    setNotice(`已导出复盘导图「${fileName}」，可在导图工作台中打开`);
+  };
+
   const deleteTask = async (entry: LearningTask) => {
     if (!window.confirm(`删除任务「${entry.title}」？关联的书籍和视频会保留。`))
       return;
@@ -588,7 +716,10 @@ export default function TaskWorkspace({
           className={`task-filter${planFilter === 'all' ? ' is-active' : ''}`}
           onClick={() => setPlanFilter('all')}
         >
-          全部任务 <span>{snapshot.tasks.length}</span>
+          全部任务{' '}
+          <span>
+            {snapshot.tasks.filter((item) => !item.archivedAt).length}
+          </span>
         </button>
         <button
           type="button"
@@ -600,6 +731,7 @@ export default function TaskWorkspace({
             {
               snapshot.tasks.filter(
                 (item) =>
+                  !item.archivedAt &&
                   item.dueDate &&
                   item.dueDate <= todayKey &&
                   item.status !== 'done' &&
@@ -614,7 +746,22 @@ export default function TaskWorkspace({
           onClick={() => setPlanFilter('unplanned')}
         >
           未归类{' '}
-          <span>{snapshot.tasks.filter((item) => !item.planId).length}</span>
+          <span>
+            {
+              snapshot.tasks.filter((item) => !item.archivedAt && !item.planId)
+                .length
+            }
+          </span>
+        </button>
+        <button
+          type="button"
+          className={`task-filter${planFilter === 'archived' ? ' is-active' : ''}`}
+          onClick={() => setPlanFilter('archived')}
+        >
+          历史归档{' '}
+          <span>
+            {snapshot.tasks.filter((item) => Boolean(item.archivedAt)).length}
+          </span>
         </button>
         <div className="task-section-label">计划</div>
         <div className="task-plan-list">
@@ -664,10 +811,27 @@ export default function TaskWorkspace({
           <div>
             <strong>任务工作台</strong>
             <span className="task-toolbar-count">
-              {snapshot.tasks.filter((item) => item.status === 'doing').length}{' '}
+              {
+                snapshot.tasks.filter(
+                  (item) => !item.archivedAt && item.status === 'doing',
+                ).length
+              }{' '}
               进行中 ·{' '}
-              {snapshot.tasks.filter((item) => item.status === 'done').length}{' '}
+              {
+                snapshot.tasks.filter(
+                  (item) => !item.archivedAt && item.status === 'done',
+                ).length
+              }{' '}
               已完成
+              {snapshot.tasks.some((item) => item.archivedAt) && (
+                <>
+                  {' '}
+                  · {
+                    snapshot.tasks.filter((item) => item.archivedAt).length
+                  }{' '}
+                  已归档
+                </>
+              )}
             </span>
           </div>
           <div className="task-toolbar-actions">
@@ -706,7 +870,8 @@ export default function TaskWorkspace({
                   blankTask(
                     planFilter !== 'all' &&
                       planFilter !== 'unplanned' &&
-                      planFilter !== 'today'
+                      planFilter !== 'today' &&
+                      planFilter !== 'archived'
                       ? planFilter
                       : null,
                   ),
@@ -735,6 +900,146 @@ export default function TaskWorkspace({
         )}
         {loading ? (
           <div className="task-empty">正在加载任务…</div>
+        ) : planFilter === 'archived' ? (
+          <div className="task-archive-view">
+            <div className="task-archive-summary">
+              <div className="task-archive-summary-left">
+                <div className="task-archive-title">历史归档审阅</div>
+                <div className="task-archive-stats">
+                  <span className="task-archive-stat-item">
+                    总归档 <strong>{filtered.length}</strong> 项
+                  </span>
+                  <span className="task-archive-stat-item">
+                    关联电子书{' '}
+                    <strong>
+                      {
+                        filtered.filter((t) =>
+                          t.resources.some((r) => r.kind === 'ebook'),
+                        ).length
+                      }
+                    </strong>{' '}
+                    项
+                  </span>
+                  <span className="task-archive-stat-item">
+                    关联视频{' '}
+                    <strong>
+                      {
+                        filtered.filter((t) =>
+                          t.resources.some((r) => r.kind === 'youtube'),
+                        ).length
+                      }
+                    </strong>{' '}
+                    项
+                  </span>
+                </div>
+              </div>
+              <div className="task-archive-summary-right">
+                <button
+                  type="button"
+                  className="task-archive-export-btn"
+                  onClick={exportArchiveMindmap}
+                  disabled={filtered.length === 0}
+                >
+                  导出复盘导图
+                </button>
+              </div>
+            </div>
+
+            {filtered.length === 0 ? (
+              <div className="task-empty">
+                暂无归档任务。在「看板」或「任务详情」中可一键归档已完成的任务。
+              </div>
+            ) : (
+              <div className="task-archive-timeline">
+                {groupArchivedTasks(filtered).map((group) => (
+                  <section key={group.dateKey} className="task-archive-group">
+                    <div className="task-archive-group-header">
+                      <span className="task-archive-group-date">
+                        {group.dateLabel}
+                      </span>
+                      <span className="task-archive-group-count">
+                        {group.tasks.length} 项
+                      </span>
+                    </div>
+                    <div className="task-archive-group-list">
+                      {group.tasks.map((entry) => (
+                        <article
+                          key={entry.id}
+                          className={`task-archive-card${selectedId === entry.id ? ' is-selected' : ''}`}
+                          onClick={() => setSelectedId(entry.id)}
+                        >
+                          <div className="task-archive-card-top">
+                            <span className="task-archive-card-title">
+                              {entry.title}
+                            </span>
+                            <div
+                              className="task-archive-card-actions"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <button
+                                type="button"
+                                className="task-archive-unarchive-btn"
+                                onClick={() => void unarchiveTask(entry)}
+                              >
+                                取消归档
+                              </button>
+                            </div>
+                          </div>
+                          <div className="task-archive-card-meta">
+                            {entry.completedAt && (
+                              <span className="task-archive-meta-time">
+                                完成时间：{formatTimestamp(entry.completedAt)}
+                              </span>
+                            )}
+                            {entry.planId && (
+                              <span className="task-archive-meta-plan">
+                                计划：
+                                {snapshot.plans.find(
+                                  (p) => p.id === entry.planId,
+                                )?.title || '已删除计划'}
+                              </span>
+                            )}
+                          </div>
+                          {entry.note && (
+                            <div className="task-archive-card-note">
+                              {entry.note}
+                            </div>
+                          )}
+                          {entry.resources.length > 0 && (
+                            <div
+                              className="task-archive-card-resources"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {entry.resources.map((resource) => (
+                                <div
+                                  key={`${resource.kind}:${resource.resourceId}`}
+                                  className="task-archive-resource-row"
+                                >
+                                  <span className="task-archive-resource-name">
+                                    {resource.kind === 'ebook'
+                                      ? '电子书'
+                                      : 'YouTube'}{' '}
+                                    · {resource.title}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="task-archive-resource-btn"
+                                    onClick={() => void openResource(resource)}
+                                  >
+                                    打开资源
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            )}
+          </div>
         ) : view === 'board' ? (
           <div className="task-board">
             {COLUMNS.map((column) => {
@@ -756,9 +1061,24 @@ export default function TaskWorkspace({
                     setDragging(null);
                   }}
                 >
-                  <header>
-                    {column.label}
-                    <span>{entries.length}</span>
+                  <header className="task-column-head">
+                    <div className="task-column-head-title">
+                      <span>{column.label}</span>
+                      <span className="task-column-count">
+                        {entries.length}
+                      </span>
+                    </div>
+                    {column.status === 'done' && (
+                      <button
+                        type="button"
+                        className="task-column-archive-btn"
+                        title="归档当前已完成任务"
+                        disabled={entries.length === 0}
+                        onClick={() => void archiveDoneTasks()}
+                      >
+                        归档已完成
+                      </button>
+                    )}
                   </header>
                   <div className="task-column-items">
                     {entries.map(renderCard)}
