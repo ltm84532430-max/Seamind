@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 
 import {
   parseYouTubeJson3,
-  parseYouTubeXml,
   parseVttOrSrt,
   alignBilingualCues,
   parseYouTubeTimedTextList,
