@@ -54,6 +54,11 @@ export interface MarkdownDocWorkbenchProps {
   onChangeCategory?(category: string): Promise<boolean>;
   onChangeTags?(tags: string[]): Promise<boolean>;
   onOpenWikilink?(target: string): void;
+  onOpenYouTubeLink?(
+    videoId: string,
+    startSeconds: number,
+    fallbackTitle?: string,
+  ): void;
   onRunInTerminal?: CodeBlockHandlers['onRunInTerminal'];
   /** Opens the file on the mind map canvas without changing what kind of file it is. */
   onOpenAsMindmap(): void;
@@ -82,6 +87,7 @@ export default function MarkdownDocWorkbench({
   onChangeCategory,
   onChangeTags,
   onOpenWikilink,
+  onOpenYouTubeLink,
   onRunInTerminal,
   onOpenAsMindmap,
   onConvertToMindmap,
@@ -409,6 +415,12 @@ export default function MarkdownDocWorkbench({
               hideMinimap
               onCodeChange={handleCodeChange}
               onOpenWikilink={onOpenWikilink}
+              onOpenYouTubeLink={
+                onOpenYouTubeLink
+                  ? (videoId, startSeconds) =>
+                      onOpenYouTubeLink(videoId, startSeconds, document.title)
+                  : undefined
+              }
               onRunInTerminal={onRunInTerminal}
             />
           </section>

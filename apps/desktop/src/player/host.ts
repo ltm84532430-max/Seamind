@@ -41,7 +41,11 @@ export interface PlayerHost {
   ): Promise<void>;
   toggleWatchLater(item: VideoItem): void;
   toggleWatched(item: VideoItem): Promise<void>;
-  notify(text: string, kind?: 'info' | 'error'): void;
+  notify(
+    text: string,
+    kind?: 'info' | 'error',
+    action?: { label: string; onClick(): void },
+  ): void;
   reloadOverview(): Promise<void>;
 }
 

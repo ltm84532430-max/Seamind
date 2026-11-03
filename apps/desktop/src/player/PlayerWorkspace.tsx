@@ -39,12 +39,17 @@ import { startSecondsFor } from './watch-state';
 import { StateMessage } from './VideoList';
 import WatchView from './WatchView';
 import type { Watching } from './WatchView';
+import type {
+  TranscriptKnowledgeExportPayload,
+  TranscriptKnowledgeExportResult,
+} from './transcript';
 import { describeDataError, resolveChannelId } from './youtube-data';
 import './learning-path.css';
 
 interface Notice {
   text: string;
   kind: 'info' | 'error';
+  action?: { label: string; onClick(): void };
 }
 
 function viewLabel(view: PlayerView, overview: PlayerOverview | null): string {
@@ -100,6 +105,7 @@ export default function PlayerWorkspace({
   onOpenFavoritesRequestHandled,
   onSendTerminalCommand,
   onExportMarkdownToMindmap,
+  onExportTranscriptToKnowledge,
 }: {
   active: boolean;
   provider: AgentProviderSettings;
@@ -119,6 +125,9 @@ export default function PlayerWorkspace({
   onOpenFavoritesRequestHandled?(id: number): void;
   onSendTerminalCommand?: (text: string, execute?: boolean) => void;
   onExportMarkdownToMindmap?: (title: string, markdown: string) => void;
+  onExportTranscriptToKnowledge?: (
+    payload: TranscriptKnowledgeExportPayload,
+  ) => Promise<TranscriptKnowledgeExportResult | void>;
 }) {
   const [overview, setOverview] = useState<PlayerOverview | null>(null);
   const handledTaskVideoRef = useRef<number | null>(null);
@@ -218,12 +227,17 @@ export default function PlayerWorkspace({
   );
 
   const notify = useCallback(
-    (text: string, kind: 'info' | 'error' = 'info') => {
+    (
+      text: string,
+      kind: 'info' | 'error' = 'info',
+      action?: { label: string; onClick(): void },
+    ) => {
       if (noticeTimerRef.current) window.clearTimeout(noticeTimerRef.current);
-      setNotice({ text, kind });
+      setNotice({ text, kind, action });
+      const durationMs = kind === 'error' ? 9000 : action ? 7500 : 4500;
       noticeTimerRef.current = window.setTimeout(
         () => setNotice(null),
-        kind === 'error' ? 9000 : 4500,
+        durationMs,
       );
     },
     [],
@@ -733,6 +747,7 @@ export default function PlayerWorkspace({
               onSaved={onProgressSaved}
               onCreateTask={onCreateVideoTask}
               onOpenTask={onOpenTask}
+              onExportTranscriptToKnowledge={onExportTranscriptToKnowledge}
             />
           )}
         </main>
@@ -742,6 +757,19 @@ export default function PlayerWorkspace({
             role={notice.kind === 'error' ? 'alert' : 'status'}
           >
             <span>{notice.text}</span>
+            {notice.action && (
+              <button
+                type="button"
+                className="player-toast-action"
+                onClick={() => {
+                  const action = notice.action;
+                  setNotice(null);
+                  action?.onClick();
+                }}
+              >
+                {notice.action.label}
+              </button>
+            )}
             <button
               type="button"
               className="player-icon-button"

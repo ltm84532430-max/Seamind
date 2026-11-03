@@ -18,6 +18,11 @@ export interface DocumentWorkbenchProps {
   onChangeCategory?(category: string): Promise<boolean>;
   onChangeTags?(tags: string[]): Promise<boolean>;
   onOpenWikilink?(target: string): void;
+  onOpenYouTubeLink?(
+    videoId: string,
+    startSeconds: number,
+    fallbackTitle?: string,
+  ): void;
   onRunInTerminal?: CodeBlockHandlers['onRunInTerminal'];
   onOpenAsMindmap(): void;
   onConvertToMindmap(): void;
@@ -35,6 +40,7 @@ export default function DocumentWorkbench({
   onChangeCategory,
   onChangeTags,
   onOpenWikilink,
+  onOpenYouTubeLink,
   onRunInTerminal,
   theme,
   documents,
@@ -61,6 +67,7 @@ export default function DocumentWorkbench({
       onChangeCategory={onChangeCategory}
       onChangeTags={onChangeTags}
       onOpenWikilink={onOpenWikilink}
+      onOpenYouTubeLink={onOpenYouTubeLink}
       onRunInTerminal={onRunInTerminal}
       onOpenAsMindmap={onOpenAsMindmap}
       onConvertToMindmap={onConvertToMindmap}

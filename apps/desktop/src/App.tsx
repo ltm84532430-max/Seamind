@@ -103,6 +103,10 @@ import FavoritesProposalDialog, {
 import LearningPathProposalDialog from './player/LearningPathProposalDialog';
 import { playerApi } from './player/player-api';
 import type { VideoInput } from './player/types';
+import type {
+  TranscriptKnowledgeExportPayload,
+  TranscriptKnowledgeExportResult,
+} from './player/transcript/export';
 import { searchYouTubeVideos } from './player/youtube-data';
 import {
   applyMarkdownNodeBranch,
@@ -3007,6 +3011,22 @@ export default function App() {
     return true;
   };
 
+  const openYouTubeVideoInPlayer = (
+    videoId: string,
+    startSeconds: number,
+    fallbackTitle?: string,
+  ) => {
+    taskRequestIdRef.current += 1;
+    setPlayerOpenTaskVideoRequest({
+      id: taskRequestIdRef.current,
+      videoId,
+      title: fallbackTitle?.trim() || 'YouTube 视频',
+      startSeconds: Math.max(0, Math.floor(startSeconds)),
+    });
+    setPlayerOpened(true);
+    setActiveWorkspace('player');
+  };
+
   const openLibraryPlantUml = async (file: PlantUmlDocument) => {
     if (!(await workbench.controller.leave())) return;
     try {
@@ -3104,6 +3124,59 @@ export default function App() {
       return;
     }
     await workbench.controller.createDocument('doc', folder);
+  };
+
+  const exportTranscriptToKnowledge = async (
+    payload: TranscriptKnowledgeExportPayload,
+  ): Promise<TranscriptKnowledgeExportResult> => {
+    if (!librarySnapshotRef.current?.rootPath) {
+      throw new Error('请先在顶部或知识库中选择文件库目录，再导出字幕文档。');
+    }
+    const input: SaveDocumentInput = {
+      id: null,
+      relativePath: null,
+      title: payload.title,
+      category: payload.category,
+      mapType: '视频字幕',
+      tags: payload.tags,
+      markdown: payload.markdown,
+      historySource: 'manual',
+      kind: 'doc',
+    };
+    const saved = await invoke<MapDocument>('save_document', { input });
+    const latestSnapshot = librarySnapshotRef.current;
+    if (latestSnapshot) {
+      const categories = new Set(latestSnapshot.categories);
+      const parts = saved.category.split('/').filter(Boolean);
+      for (let idx = 1; idx <= parts.length; idx += 1) {
+        categories.add(parts.slice(0, idx).join('/'));
+      }
+      installLibrarySnapshot({
+        ...latestSnapshot,
+        categories: [...categories].sort(),
+        documents: [
+          saved,
+          ...latestSnapshot.documents.filter(
+            (doc) =>
+              doc.relativePath !== saved.relativePath && doc.id !== saved.id,
+          ),
+        ],
+      });
+    }
+    void searchLibrary().catch(() => undefined);
+    setLibraryError('');
+    setSaveMessage(`已导出视频字幕至知识库「${saved.title}」`);
+    return {
+      title: saved.title,
+      category: saved.category || payload.category,
+      relativePath: saved.relativePath,
+      open: () => {
+        void (async () => {
+          await openKnowledgeNote(saved);
+          setActiveWorkspace('knowledge');
+        })();
+      },
+    };
   };
 
   const createKnowledgeCategory = async (
@@ -5391,6 +5464,7 @@ export default function App() {
               }
               onChangeTags={(tags) => workbench.controller.setTags(tags)}
               onOpenWikilink={(target) => void openWikilinkTarget(target)}
+              onOpenYouTubeLink={openYouTubeVideoInPlayer}
               onRunInTerminal={handleRunCodeInTerminal}
               onOpenAsMindmap={() => void openActiveDocumentAsMindmap()}
               onConvertToMindmap={() => void convertActiveDocumentToMindmap()}
@@ -6369,6 +6443,7 @@ export default function App() {
                   setActiveWorkspace('mindmap');
                 })();
               }}
+              onExportTranscriptToKnowledge={exportTranscriptToKnowledge}
             />
           </Suspense>
         )}
@@ -6407,6 +6482,7 @@ export default function App() {
                 workbench.controller.setCategory(category),
               onChangeTags: (tags) => workbench.controller.setTags(tags),
               onOpenWikilink: (target) => void openWikilinkTarget(target),
+              onOpenYouTubeLink: openYouTubeVideoInPlayer,
               onRunInTerminal: handleRunCodeInTerminal,
               onOpenAsMindmap: () => void openKnowledgeNoteAsMindmap(),
               onConvertToMindmap: () => void convertActiveDocumentToMindmap(),
@@ -6874,6 +6950,7 @@ export default function App() {
               }
               onChangeTags={(tags) => workbench.controller.setTags(tags)}
               onOpenWikilink={(target) => void openWikilinkTarget(target)}
+              onOpenYouTubeLink={openYouTubeVideoInPlayer}
               onRunInTerminal={handleRunCodeInTerminal}
               onOpenAsMindmap={() => void openActiveDocumentAsMindmap()}
               onConvertToMindmap={() => void convertActiveDocumentToMindmap()}

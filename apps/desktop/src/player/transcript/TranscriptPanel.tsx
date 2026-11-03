@@ -7,6 +7,12 @@ import {
   transcriptErrorMessage,
   TranscriptFetchError,
 } from './fetcher';
+import {
+  buildTranscriptKnowledgeExport,
+  formatCueTime,
+  type TranscriptKnowledgeExportPayload,
+  type TranscriptKnowledgeExportResult,
+} from './export';
 import { parseVttOrSrt } from './parser';
 import type {
   TranscriptCue,
@@ -17,27 +23,23 @@ import type {
 
 export interface TranscriptPanelProps {
   videoId: string;
-  videoTitle?: string;
+  videoTitle?: string | null;
+  channelName?: string | null;
   currentTime: number;
   onSeek(seconds: number): void;
   onToggleLoopCue?(cue: TranscriptCue | null): void;
   loopingCueId?: string | null;
   onToggleShadowMode?(enabled: boolean): void;
   shadowMode?: boolean;
-  onShowNotice?(text: string): void;
+  onShowNotice?(
+    text: string,
+    kind?: 'info' | 'error',
+    action?: { label: string; onClick(): void },
+  ): void;
   onCuesLoaded?(cues: TranscriptCue[]): void;
-}
-
-function formatCueTime(seconds: number): string {
-  const s = Math.floor(seconds);
-  const m = Math.floor(s / 60);
-  const secs = s % 60;
-  if (m >= 60) {
-    const h = Math.floor(m / 60);
-    const mins = m % 60;
-    return `${h}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  }
-  return `${m}:${secs.toString().padStart(2, '0')}`;
+  onExportToKnowledge?(
+    payload: TranscriptKnowledgeExportPayload,
+  ): Promise<TranscriptKnowledgeExportResult | void>;
 }
 
 function transcriptErrorTitle(code: TranscriptFetchError['code']): string {
@@ -75,6 +77,7 @@ function transcriptErrorTitle(code: TranscriptFetchError['code']): string {
 export default function TranscriptPanel({
   videoId,
   videoTitle,
+  channelName,
   currentTime,
   onSeek,
   onToggleLoopCue,
@@ -83,6 +86,7 @@ export default function TranscriptPanel({
   shadowMode = false,
   onShowNotice,
   onCuesLoaded,
+  onExportToKnowledge,
 }: TranscriptPanelProps) {
   const [cues, setCues] = useState<TranscriptCue[]>([]);
   const [tracks, setTracks] = useState<TranscriptTrack[]>([]);
@@ -96,6 +100,7 @@ export default function TranscriptPanel({
     trackId: string;
   } | null>(null);
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<TranscriptFetchError | null>(null);
   const [retryCount, setRetryCount] = useState(0);
   const [browser, setBrowser] = useState<'firefox' | 'edge' | 'chrome'>(
@@ -314,11 +319,63 @@ export default function TranscriptPanel({
           onShowNotice?.(`已复制导图引用卡片 [▶ ${timeLabel}]`);
         })
         .catch(() => {
-          onShowNotice?.('复制失败，请重试');
+          onShowNotice?.('复制失败，请重试', 'error');
         });
     },
     [videoId, onShowNotice],
   );
+
+  const activeTrack = useMemo(
+    () =>
+      tracks.find(
+        (track) => track.id === (requestedTrackId ?? activeTrackId),
+      ) ?? null,
+    [tracks, requestedTrackId, activeTrackId],
+  );
+
+  const handleExportToKnowledge = useCallback(async () => {
+    if (!onExportToKnowledge || exporting || filteredCues.length === 0) return;
+    setExporting(true);
+    try {
+      const trackLabel = activeTrack
+        ? `${activeTrack.name} · ${activeTrack.languageCode}${activeTrack.isGenerated ? ' · 自动生成' : ''}`
+        : undefined;
+      const payload = buildTranscriptKnowledgeExport({
+        videoId,
+        videoTitle,
+        channelName,
+        cues: filteredCues,
+        viewMode,
+        trackLabel,
+        searchQuery: search,
+      });
+      const result = await onExportToKnowledge(payload);
+      if (result) {
+        onShowNotice?.(
+          `已导出 ${payload.cueCount} 条带时间戳字幕至知识库「${result.category} / ${result.title}」`,
+          'info',
+          { label: '打开文档', onClick: result.open },
+        );
+      } else {
+        onShowNotice?.(`已导出 ${payload.cueCount} 条带时间戳字幕至知识库`);
+      }
+    } catch (reason) {
+      onShowNotice?.(transcriptErrorMessage(reason), 'error');
+    } finally {
+      setExporting(false);
+    }
+  }, [
+    onExportToKnowledge,
+    exporting,
+    filteredCues,
+    activeTrack,
+    videoId,
+    videoTitle,
+    channelName,
+    viewMode,
+    search,
+    onShowNotice,
+  ]);
 
   return (
     <div
@@ -556,6 +613,47 @@ export default function TranscriptPanel({
             style={{ display: 'none' }}
             onChange={handleImportFile}
           />
+
+          {/* 一键导出至知识库文档 */}
+          {onExportToKnowledge && (
+            <button
+              type="button"
+              className="player-transcript-tool-icon is-export"
+              disabled={loading || exporting || filteredCues.length === 0}
+              onClick={() => void handleExportToKnowledge()}
+              title={
+                filteredCues.length === 0
+                  ? '暂无可导出的字幕'
+                  : search.trim()
+                    ? `导出当前筛选的 ${filteredCues.length} 条带时间戳字幕到知识库`
+                    : `一键导出全部 ${cues.length} 条带时间戳字幕到知识库文档`
+              }
+            >
+              <svg
+                viewBox="0 0 16 16"
+                width="13"
+                height="13"
+                aria-hidden="true"
+              >
+                <path
+                  d="M4 2.5h5.5L13 6v7.5H4V2.5Z"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M9.2 2.5V6H13M6.5 9.5h4M8.5 7.8l1.8 1.7-1.8 1.7"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              <span>{exporting ? '导出中…' : '导出'}</span>
+            </button>
+          )}
         </div>
       </div>
 

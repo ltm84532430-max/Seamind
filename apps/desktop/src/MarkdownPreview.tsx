@@ -3,6 +3,7 @@ import type { MouseEvent as ReactMouseEvent } from 'react';
 import { hydrateCodeBlocks } from './code-blocks';
 import type { CodeBlockHandlers } from './code-blocks';
 import { createMarkdownPreviewMinimap } from './markdown-minimap';
+import { parseYouTubeEmbedInput } from './youtube';
 
 interface MarkdownPreviewProps {
   html: string;
@@ -12,6 +13,7 @@ interface MarkdownPreviewProps {
   onCodeChange?: CodeBlockHandlers['onCodeChange'];
   onOpenPlantUmlEditor?: CodeBlockHandlers['onOpenPlantUmlEditor'];
   onOpenWikilink?: (target: string) => void;
+  onOpenYouTubeLink?: (videoId: string, startSeconds: number) => void;
   onRunInTerminal?: CodeBlockHandlers['onRunInTerminal'];
 }
 
@@ -23,6 +25,7 @@ export default function MarkdownPreview({
   onCodeChange,
   onOpenPlantUmlEditor,
   onOpenWikilink,
+  onOpenYouTubeLink,
   onRunInTerminal,
 }: MarkdownPreviewProps) {
   const rootRef = useRef<HTMLElement>(null);
@@ -69,15 +72,29 @@ export default function MarkdownPreview({
   ]);
 
   const handleClick = (event: ReactMouseEvent<HTMLElement>) => {
-    if (!onOpenWikilink) return;
     const target = event.target;
     if (!(target instanceof Element)) return;
-    const wikilink = target.closest('[data-wikilink]');
-    if (!wikilink) return;
-    event.preventDefault();
-    const noteTarget = wikilink.getAttribute('data-wikilink')?.trim();
-    if (noteTarget) {
-      onOpenWikilink(noteTarget);
+    if (onOpenWikilink) {
+      const wikilink = target.closest('[data-wikilink]');
+      if (wikilink) {
+        event.preventDefault();
+        const noteTarget = wikilink.getAttribute('data-wikilink')?.trim();
+        if (noteTarget) {
+          onOpenWikilink(noteTarget);
+        }
+        return;
+      }
+    }
+    if (onOpenYouTubeLink) {
+      const anchor = target.closest<HTMLAnchorElement>('a[href]');
+      const rawHref = anchor?.getAttribute('href')?.trim();
+      if (rawHref) {
+        const youtube = parseYouTubeEmbedInput(rawHref);
+        if (youtube) {
+          event.preventDefault();
+          onOpenYouTubeLink(youtube.id, youtube.startSeconds);
+        }
+      }
     }
   };
 

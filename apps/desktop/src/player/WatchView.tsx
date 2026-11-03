@@ -20,6 +20,8 @@ import {
   TranscriptPanel,
   SubtitleOverlay,
   type TranscriptCue,
+  type TranscriptKnowledgeExportPayload,
+  type TranscriptKnowledgeExportResult,
 } from './transcript';
 
 /** The video being played, the list it came from and where it starts. */
@@ -65,6 +67,7 @@ export default function WatchView({
   onSaved,
   onCreateTask,
   onOpenTask,
+  onExportTranscriptToKnowledge,
 }: {
   watching: Watching;
   /** Whether the player page is the workspace in front. */
@@ -74,6 +77,9 @@ export default function WatchView({
   onSaved(videoId: string, state: WatchState): void;
   onCreateTask(item: VideoItem, startSeconds: number): void;
   onOpenTask(id: string): void;
+  onExportTranscriptToKnowledge?(
+    payload: TranscriptKnowledgeExportPayload,
+  ): Promise<TranscriptKnowledgeExportResult | void>;
 }) {
   const host = usePlayerHost();
   const { queue } = watching;
@@ -678,7 +684,8 @@ export default function WatchView({
             ) : (
               <TranscriptPanel
                 videoId={videoId}
-                videoTitle={watching.item.title}
+                videoTitle={item.title}
+                channelName={item.channelName}
                 currentTime={currentTime}
                 onSeek={(sec) => {
                   handle?.seekTo(sec);
@@ -690,6 +697,7 @@ export default function WatchView({
                 shadowMode={shadowMode}
                 onShowNotice={host.notify}
                 onCuesLoaded={setCues}
+                onExportToKnowledge={onExportTranscriptToKnowledge}
               />
             )}
           </>
