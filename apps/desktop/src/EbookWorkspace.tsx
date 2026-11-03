@@ -62,12 +62,27 @@ export default function EbookWorkspace({
   const [planDueDate, setPlanDueDate] = useState(defaultPlanDate);
   const [planError, setPlanError] = useState('');
   const [dashboardOpen, setDashboardOpen] = useState(false);
-  const [dashboardCollapsed, setDashboardCollapsed] = useState(false);
+  const [dashboardCollapsed, setDashboardCollapsed] = useState(() => {
+    try {
+      return (
+        localStorage.getItem('seamind_ebook_dashboard_collapsed') === 'true'
+      );
+    } catch {
+      return false;
+    }
+  });
   const [dashboardRevision, setDashboardRevision] = useState(0);
   const [exams, setExams] = useState<EpubExamSummary[]>([]);
   const [examsLoading, setExamsLoading] = useState(true);
   const [examsError, setExamsError] = useState('');
   const [examLibraryOpen, setExamLibraryOpen] = useState(false);
+  const [examLibraryCollapsed, setExamLibraryCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem('seamind_ebook_exam_collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [filteredExamBookKey, setFilteredExamBookKey] = useState('');
   const [selectedExam, setSelectedExam] = useState<EpubExamSummary | null>(
     null,
@@ -379,7 +394,7 @@ export default function EbookWorkspace({
 
   return (
     <main
-      className={`ebook-shelf${dashboardCollapsed ? ' is-dashboard-collapsed' : ''}${examLibraryOpen ? ' is-exam-library-open' : ''}`}
+      className={`ebook-shelf${dashboardCollapsed ? ' is-dashboard-collapsed' : ''}${examLibraryOpen ? ' is-exam-library-open' : ''}${examLibraryCollapsed ? ' is-exam-collapsed' : ''}`}
       aria-label="电子书书架"
     >
       <EbookReadingDashboard
@@ -388,7 +403,18 @@ export default function EbookWorkspace({
         collapsed={dashboardCollapsed}
         onClose={() => setDashboardOpen(false)}
         onToggleCollapsed={() =>
-          setDashboardCollapsed((collapsed) => !collapsed)
+          setDashboardCollapsed((collapsed) => {
+            const next = !collapsed;
+            try {
+              localStorage.setItem(
+                'seamind_ebook_dashboard_collapsed',
+                String(next),
+              );
+            } catch {
+              // ignore
+            }
+            return next;
+          })
         }
         onCancelPlan={cancelReadingPlan}
         rootPath={snapshot?.rootPath ?? ''}
@@ -412,12 +438,32 @@ export default function EbookWorkspace({
             <button
               type="button"
               className="ebook-exam-library-toggle"
-              aria-expanded={examLibraryOpen}
-              onClick={() => setExamLibraryOpen((open) => !open)}
+              aria-expanded={!examLibraryCollapsed || examLibraryOpen}
+              onClick={() => {
+                if (
+                  typeof window !== 'undefined' &&
+                  window.innerWidth <= 1480
+                ) {
+                  setExamLibraryOpen((open) => !open);
+                } else {
+                  setExamLibraryCollapsed((collapsed) => {
+                    const next = !collapsed;
+                    try {
+                      localStorage.setItem(
+                        'seamind_ebook_exam_collapsed',
+                        String(next),
+                      );
+                    } catch {
+                      // ignore
+                    }
+                    return next;
+                  });
+                }
+              }}
             >
-              {examLibraryOpen
-                ? '收起试卷库'
-                : `试卷库${exams.length ? ` · ${exams.length}` : ''}`}
+              {examLibraryCollapsed
+                ? `试卷库${exams.length ? ` · ${exams.length}` : ''}`
+                : '收起试卷库'}
             </button>
             <button
               type="button"
@@ -867,16 +913,34 @@ export default function EbookWorkspace({
       </div>
 
       <EpubExamLibraryPanel
-        books={books.map((book) => ({
-          relativePath: book.relativePath,
-          title:
-            loadEpubBookMetadata(epubProgressKey(book))?.title || book.title,
-        }))}
+        books={books.map((book) => {
+          const meta = loadEpubBookMetadata(epubProgressKey(book));
+          return {
+            relativePath: book.relativePath,
+            title: meta?.title || book.title,
+            coverDataUrl: meta?.coverDataUrl || null,
+          };
+        })}
         exams={exams}
         filteredBookKey={filteredExamBookKey}
         loading={examsLoading}
         error={examsError}
         open={examLibraryOpen}
+        collapsed={examLibraryCollapsed}
+        onToggleCollapsed={() =>
+          setExamLibraryCollapsed((collapsed) => {
+            const next = !collapsed;
+            try {
+              localStorage.setItem(
+                'seamind_ebook_exam_collapsed',
+                String(next),
+              );
+            } catch {
+              // ignore
+            }
+            return next;
+          })
+        }
         onClose={() => setExamLibraryOpen(false)}
         onFilterBook={setFilteredExamBookKey}
         onOpenExam={(exam) => setSelectedExam(exam)}

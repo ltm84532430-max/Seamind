@@ -8,8 +8,13 @@ import type {
   EpubExamSummary,
 } from './epub-exams';
 import { formatEpubExamDate } from './epub-exams';
+import { findStoredCoverByBookKey } from './ebook-storage';
 
-type ExamBook = { relativePath: string; title: string };
+export type ExamBook = {
+  relativePath: string;
+  title: string;
+  coverDataUrl?: string | null;
+};
 
 function formatExamAnswer(answer: EpubExamAnswer | undefined): string {
   if (answer === undefined || answer === '') return '未作答';
@@ -30,6 +35,8 @@ export function EpubExamLibraryPanel({
   loading,
   error,
   open,
+  collapsed = false,
+  onToggleCollapsed,
   onClose,
   onFilterBook,
   onOpenExam,
@@ -40,13 +47,18 @@ export function EpubExamLibraryPanel({
   loading: boolean;
   error: string;
   open: boolean;
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
   onClose: () => void;
   onFilterBook: (bookKey: string) => void;
   onOpenExam: (exam: EpubExamSummary) => void;
 }) {
   const [query, setQuery] = useState('');
-  const bookTitles = new Map(
-    books.map((book) => [book.relativePath, book.title]),
+  const bookMeta = new Map(
+    books.map((book) => [
+      book.relativePath,
+      { title: book.title, coverDataUrl: book.coverDataUrl },
+    ]),
   );
   const grouped = new Map<string, EpubExamSummary[]>();
   for (const exam of exams) {
@@ -56,17 +68,24 @@ export function EpubExamLibraryPanel({
   }
   const search = query.trim().toLocaleLowerCase();
   const groups = [...grouped.entries()]
-    .map(([bookKey, items]) => ({
-      bookKey,
-      title: bookTitles.get(bookKey) || items[0]?.bookTitle || '未命名书籍',
-      exams: items
-        .filter((exam) =>
-          `${exam.sourceSectionLabel} ${exam.bookTitle} ${bookTitles.get(exam.bookKey) ?? ''}`
-            .toLocaleLowerCase()
-            .includes(search),
-        )
-        .sort((left, right) => right.createdAt - left.createdAt),
-    }))
+    .map(([bookKey, items]) => {
+      const meta = bookMeta.get(bookKey);
+      const title = meta?.title || items[0]?.bookTitle || '未命名书籍';
+      const coverDataUrl =
+        meta?.coverDataUrl || findStoredCoverByBookKey(bookKey);
+      return {
+        bookKey,
+        title,
+        coverDataUrl,
+        exams: items
+          .filter((exam) =>
+            `${exam.sourceSectionLabel} ${exam.bookTitle} ${title}`
+              .toLocaleLowerCase()
+              .includes(search),
+          )
+          .sort((left, right) => right.createdAt - left.createdAt),
+      };
+    })
     .filter(
       (group) =>
         (!filteredBookKey || group.bookKey === filteredBookKey) &&
@@ -88,14 +107,26 @@ export function EpubExamLibraryPanel({
         />
       )}
       <aside
-        className={`epub-exam-library${open ? ' is-open' : ''}`}
+        className={`epub-exam-library${open ? ' is-open' : ''}${collapsed ? ' is-collapsed' : ''}`}
         aria-label="试卷库"
       >
         <header className="epub-exam-library-heading">
-          <div>
+          <div className="epub-exam-library-heading-main">
             <span className="ebook-shelf-kicker">LOCAL EXAM LIBRARY</span>
             <h2>试卷库</h2>
           </div>
+          {onToggleCollapsed && (
+            <button
+              className="epub-exam-library-collapse"
+              type="button"
+              aria-label={collapsed ? '展开试卷库' : '收起试卷库'}
+              aria-expanded={!collapsed}
+              title={collapsed ? '展开试卷库' : '收起试卷库'}
+              onClick={onToggleCollapsed}
+            >
+              {collapsed ? '‹' : '›'}
+            </button>
+          )}
           <button
             className="epub-exam-library-close"
             type="button"
@@ -105,95 +136,142 @@ export function EpubExamLibraryPanel({
             ×
           </button>
         </header>
-        <p className="epub-exam-library-intro">
-          阅读时按当前段落生成，试卷和作答保存在本机。
-        </p>
-        <label className="epub-exam-library-search">
-          <span aria-hidden="true">⌕</span>
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索书名或段落"
-            aria-label="搜索试卷"
-          />
-          {query && (
-            <button
-              type="button"
-              onClick={() => setQuery('')}
-              aria-label="清除搜索"
-            >
-              ×
-            </button>
-          )}
-        </label>
-        {filteredBookKey && (
+
+        {collapsed && onToggleCollapsed && (
           <button
             type="button"
-            className="epub-exam-library-clear-filter"
-            onClick={() => onFilterBook('')}
+            className="epub-exam-library-collapsed-rail"
+            onClick={onToggleCollapsed}
+            title="展开试卷库"
+            aria-label="展开试卷库"
           >
-            显示全部书籍的试卷
+            <span className="epub-exam-library-rail-text">试卷库</span>
+            {exams.length > 0 && (
+              <span className="epub-exam-library-rail-badge">
+                {exams.length}
+              </span>
+            )}
           </button>
         )}
-        {error && (
-          <p className="epub-exam-library-error" role="alert">
-            {error}
-          </p>
-        )}
-        {loading ? (
-          <p className="epub-exam-library-empty">正在读取本地试卷…</p>
-        ) : groups.length ? (
-          <div className="epub-exam-library-groups">
-            {groups.map((group) => (
-              <section className="epub-exam-book-group" key={group.bookKey}>
+
+        {!collapsed && (
+          <>
+            <p className="epub-exam-library-intro">
+              阅读时按当前段落生成，试卷和作答保存在本机。
+            </p>
+            <label className="epub-exam-library-search">
+              <span aria-hidden="true">⌕</span>
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="搜索书名或段落"
+                aria-label="搜索试卷"
+              />
+              {query && (
                 <button
                   type="button"
-                  className={`epub-exam-book-heading${filteredBookKey === group.bookKey ? ' is-active' : ''}`}
-                  onClick={() => onFilterBook(group.bookKey)}
-                  title={`筛选《${group.title}》的试卷`}
+                  onClick={() => setQuery('')}
+                  aria-label="清除搜索"
                 >
-                  <span title={group.title}>{group.title}</span>
-                  <small>{group.exams.length}</small>
+                  ×
                 </button>
-                <div className="epub-exam-book-list">
-                  {group.exams.map((exam) => (
+              )}
+            </label>
+            {filteredBookKey && (
+              <button
+                type="button"
+                className="epub-exam-library-clear-filter"
+                onClick={() => onFilterBook('')}
+              >
+                显示全部书籍的试卷
+              </button>
+            )}
+            {error && (
+              <p className="epub-exam-library-error" role="alert">
+                {error}
+              </p>
+            )}
+            {loading ? (
+              <p className="epub-exam-library-empty">正在读取本地试卷…</p>
+            ) : groups.length ? (
+              <div className="epub-exam-library-groups">
+                {groups.map((group) => (
+                  <section className="epub-exam-book-group" key={group.bookKey}>
                     <button
                       type="button"
-                      className="epub-exam-entry"
-                      key={exam.id}
-                      onClick={() => onOpenExam(exam)}
+                      className={`epub-exam-book-heading${filteredBookKey === group.bookKey ? ' is-active' : ''}`}
+                      onClick={() => onFilterBook(group.bookKey)}
+                      title={`筛选《${group.title}》的试卷`}
                     >
-                      <span
-                        className="epub-exam-entry-title"
-                        title={exam.sourceSectionLabel}
-                      >
-                        {exam.sourceSectionLabel || '当前阅读段落'}
-                      </span>
-                      <span className="epub-exam-entry-meta">
-                        {formatEpubExamDate(exam.createdAt)} ·{' '}
-                        {exam.questionCount} 题
-                      </span>
-                      <span className={`epub-exam-status is-${exam.status}`}>
-                        {exam.status === 'submitted' ? '已交卷' : '未交卷'}
-                      </span>
+                      <div className="epub-exam-book-cover" aria-hidden="true">
+                        {group.coverDataUrl ? (
+                          <img
+                            src={group.coverDataUrl}
+                            alt=""
+                            loading="lazy"
+                            className="epub-exam-book-cover-img"
+                          />
+                        ) : (
+                          <span className="epub-exam-book-cover-fallback">
+                            {group.title.slice(0, 1)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="epub-exam-book-info">
+                        <span
+                          className="epub-exam-book-title"
+                          title={group.title}
+                        >
+                          {group.title}
+                        </span>
+                        <small className="epub-exam-book-count">
+                          {group.exams.length} 份试卷
+                        </small>
+                      </div>
                     </button>
-                  ))}
-                </div>
-              </section>
-            ))}
-          </div>
-        ) : (
-          <div className="epub-exam-library-empty">
-            <span aria-hidden="true">▤</span>
-            <strong>
-              {search || filteredBookKey ? '没有匹配的试卷' : '还没有试卷'}
-            </strong>
-            <p>
-              {filteredBookKey
-                ? '这本书还没有试卷，阅读时可以根据当前段落生成。'
-                : '打开一本书，在阅读器中选择“根据当前内容生成试卷”。'}
-            </p>
-          </div>
+                    <div className="epub-exam-book-list">
+                      {group.exams.map((exam) => (
+                        <button
+                          type="button"
+                          className="epub-exam-entry"
+                          key={exam.id}
+                          onClick={() => onOpenExam(exam)}
+                        >
+                          <span
+                            className="epub-exam-entry-title"
+                            title={exam.sourceSectionLabel}
+                          >
+                            {exam.sourceSectionLabel || '当前阅读段落'}
+                          </span>
+                          <span className="epub-exam-entry-meta">
+                            {formatEpubExamDate(exam.createdAt)} ·{' '}
+                            {exam.questionCount} 题
+                          </span>
+                          <span
+                            className={`epub-exam-status is-${exam.status}`}
+                          >
+                            {exam.status === 'submitted' ? '已交卷' : '未交卷'}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            ) : (
+              <div className="epub-exam-library-empty">
+                <span aria-hidden="true">▤</span>
+                <strong>
+                  {search || filteredBookKey ? '没有匹配的试卷' : '还没有试卷'}
+                </strong>
+                <p>
+                  {filteredBookKey
+                    ? '这本书还没有试卷，阅读时可以根据当前段落生成。'
+                    : '打开一本书，在阅读器中选择“根据当前内容生成试卷”。'}
+                </p>
+              </div>
+            )}
+          </>
         )}
       </aside>
     </>

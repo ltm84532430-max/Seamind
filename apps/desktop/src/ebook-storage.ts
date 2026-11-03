@@ -130,6 +130,40 @@ export function loadEpubBookMetadata(
   }
 }
 
+export function findStoredCoverByBookKey(bookKey: string): string | null {
+  if (!bookKey) {
+    return null;
+  }
+  try {
+    if (typeof localStorage === 'undefined') {
+      return null;
+    }
+    const encodedTarget = encodeURIComponent(`library:${bookKey}:`);
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (
+        key &&
+        key.startsWith(METADATA_PREFIX) &&
+        key.includes(encodedTarget)
+      ) {
+        const item = localStorage.getItem(key);
+        if (item) {
+          const parsed = JSON.parse(item) as { coverDataUrl?: unknown };
+          if (
+            typeof parsed?.coverDataUrl === 'string' &&
+            parsed.coverDataUrl.startsWith('data:image/')
+          ) {
+            return parsed.coverDataUrl;
+          }
+        }
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 export function saveEpubBookMetadata(
   progressKey: string,
   update: Partial<EpubBookMetadata>,
