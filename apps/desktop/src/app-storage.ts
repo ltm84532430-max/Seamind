@@ -3,7 +3,7 @@ import { resolveBookMindmapTarget as resolveBookMindmapTargetFromLibrary } from 
 import { resolveBookKnowledgeTarget as resolveBookKnowledgeTargetFromLibrary } from './book-knowledge-target';
 
 export type ProviderSettings = { baseUrl: string; model: string };
-export type Theme = 'light' | 'dark';
+export type Theme = 'light' | 'dark' | 'navy' | 'purple';
 export type ActiveWorkspace =
   | 'mindmap'
   | 'reader'
@@ -346,9 +346,18 @@ export function readProviderSettings(): ProviderSettings {
 
 export function readTheme(): Theme {
   try {
-    return localStorage.getItem(themeStorageKey) === 'dark' ? 'dark' : 'light';
+    const saved = localStorage.getItem(themeStorageKey);
+    if (
+      saved === 'dark' ||
+      saved === 'navy' ||
+      saved === 'purple' ||
+      saved === 'light'
+    ) {
+      return saved;
+    }
+    return 'dark';
   } catch {
-    return 'light';
+    return 'dark';
   }
 }
 

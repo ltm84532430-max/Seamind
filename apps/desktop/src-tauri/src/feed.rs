@@ -60,8 +60,31 @@ fn build_client() -> Result<reqwest::Client, String> {
 }
 
 // -----------------------------------------------------------------------------
-// Feed Parser (RSS 2.0 / Atom / JSON Feed)
+// Feed Parser (RSS 2.0 / Atom / JSON Feed / Podcast Audio Enclosure)
 // -----------------------------------------------------------------------------
+
+fn parse_duration_to_seconds(s: &str) -> Option<i64> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(secs) = trimmed.parse::<i64>() {
+        return Some(secs);
+    }
+    let parts: Vec<&str> = trimmed.split(':').collect();
+    if parts.len() == 3 {
+        let h = parts[0].parse::<i64>().ok()?;
+        let m = parts[1].parse::<i64>().ok()?;
+        let s = parts[2].parse::<i64>().ok()?;
+        Some(h * 3600 + m * 60 + s)
+    } else if parts.len() == 2 {
+        let m = parts[0].parse::<i64>().ok()?;
+        let s = parts[1].parse::<i64>().ok()?;
+        Some(m * 60 + s)
+    } else {
+        None
+    }
+}
 
 #[derive(Debug)]
 struct ParsedFeed {
@@ -133,6 +156,23 @@ fn parse_json_feed(json_str: &str) -> Result<ParsedFeed, String> {
 
             let reading_time_min = calculate_reading_time(&content_html);
 
+            let mut audio_url = None;
+            let mut audio_type = None;
+            let mut audio_duration = None;
+
+            if let Some(attachments) = it["attachments"].as_array() {
+                for att in attachments {
+                    let mime = att["mime_type"].as_str().unwrap_or("").to_lowercase();
+                    let u = att["url"].as_str().unwrap_or("").trim().to_string();
+                    if mime.starts_with("audio/") || u.ends_with(".mp3") || u.ends_with(".m4a") {
+                        audio_url = Some(u);
+                        audio_type = Some(if mime.is_empty() { "audio/mpeg".to_string() } else { mime });
+                        audio_duration = att["duration_in_seconds"].as_i64();
+                        break;
+                    }
+                }
+            }
+
             articles.push(store::ArticleInput {
                 guid,
                 title: article_title,
@@ -142,6 +182,9 @@ fn parse_json_feed(json_str: &str) -> Result<ParsedFeed, String> {
                 summary,
                 published_at,
                 reading_time_min,
+                audio_url,
+                audio_type,
+                audio_duration,
             });
         }
     }
@@ -269,6 +312,48 @@ fn parse_rss(root: Node, _feed_url: &str) -> Result<ParsedFeed, String> {
         let published_at = pub_date_str.and_then(parse_date_string).unwrap_or_else(now_secs);
         let reading_time_min = calculate_reading_time(raw_content);
 
+        // 提取播客/音频 Enclosure 及时长元数据
+        let mut audio_url = None;
+        let mut audio_type = None;
+        let mut audio_duration = None;
+
+        for enc in item.children().filter(|c| c.is_element() && c.tag_name().name().eq_ignore_ascii_case("enclosure")) {
+            let url = enc.attribute("url").map(|s| s.trim().to_string());
+            let mime = enc.attribute("type").map(|s| s.trim().to_lowercase()).unwrap_or_default();
+            if let Some(u) = url {
+                let is_audio = mime.starts_with("audio/")
+                    || u.ends_with(".mp3")
+                    || u.ends_with(".m4a")
+                    || u.ends_with(".aac")
+                    || u.ends_with(".ogg")
+                    || u.ends_with(".wav");
+                if is_audio {
+                    audio_url = Some(u);
+                    audio_type = Some(if mime.is_empty() { "audio/mpeg".to_string() } else { mime });
+                    break;
+                }
+            }
+        }
+
+        if let Some(dur_node) = item.children().find(|c| {
+            let n = c.tag_name().name();
+            n.eq_ignore_ascii_case("duration")
+        }) {
+            if let Some(txt) = dur_node.text() {
+                audio_duration = parse_duration_to_seconds(txt);
+            }
+        }
+
+        if audio_url.is_none() {
+            let re_audio = regex::Regex::new(r#"(?i)<audio[^>]+src=["']([^"']+)["']"#).unwrap();
+            if let Some(caps) = re_audio.captures(raw_content) {
+                if let Some(matched_url) = caps.get(1) {
+                    audio_url = Some(matched_url.as_str().trim().to_string());
+                    audio_type = Some("audio/mpeg".to_string());
+                }
+            }
+        }
+
         articles.push(store::ArticleInput {
             guid,
             title,
@@ -278,6 +363,9 @@ fn parse_rss(root: Node, _feed_url: &str) -> Result<ParsedFeed, String> {
             summary,
             published_at,
             reading_time_min,
+            audio_url,
+            audio_type,
+            audio_duration,
         });
     }
 
@@ -385,6 +473,49 @@ fn parse_atom(root: Node) -> Result<ParsedFeed, String> {
         let published_at = date_str.and_then(parse_date_string).unwrap_or_else(now_secs);
         let reading_time_min = calculate_reading_time(raw_content);
 
+        // 提取 Atom 格式播客/音频附件
+        let mut audio_url = None;
+        let mut audio_type = None;
+        let mut audio_duration = None;
+
+        for link_node in entry.children().filter(|c| c.is_element() && c.tag_name().name().eq_ignore_ascii_case("link")) {
+            let rel = link_node.attribute("rel").unwrap_or("");
+            let href = link_node.attribute("href").map(|s| s.trim().to_string());
+            let mime = link_node.attribute("type").map(|s| s.trim().to_lowercase()).unwrap_or_default();
+            if let Some(h) = href {
+                if rel.eq_ignore_ascii_case("enclosure")
+                    || mime.starts_with("audio/")
+                    || h.ends_with(".mp3")
+                    || h.ends_with(".m4a")
+                    || h.ends_with(".aac")
+                    || h.ends_with(".ogg")
+                {
+                    audio_url = Some(h);
+                    audio_type = Some(if mime.is_empty() { "audio/mpeg".to_string() } else { mime });
+                    break;
+                }
+            }
+        }
+
+        if let Some(dur_node) = entry.children().find(|c| {
+            let n = c.tag_name().name();
+            n.eq_ignore_ascii_case("duration")
+        }) {
+            if let Some(txt) = dur_node.text() {
+                audio_duration = parse_duration_to_seconds(txt);
+            }
+        }
+
+        if audio_url.is_none() {
+            let re_audio = regex::Regex::new(r#"(?i)<audio[^>]+src=["']([^"']+)["']"#).unwrap();
+            if let Some(caps) = re_audio.captures(raw_content) {
+                if let Some(matched_url) = caps.get(1) {
+                    audio_url = Some(matched_url.as_str().trim().to_string());
+                    audio_type = Some("audio/mpeg".to_string());
+                }
+            }
+        }
+
         articles.push(store::ArticleInput {
             guid: id,
             title: entry_title,
@@ -394,6 +525,9 @@ fn parse_atom(root: Node) -> Result<ParsedFeed, String> {
             summary,
             published_at,
             reading_time_min,
+            audio_url,
+            audio_type,
+            audio_duration,
         });
     }
 
@@ -445,6 +579,21 @@ fn strip_html_tags(input: &str) -> String {
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&rsquo;", "'")
+        .replace("&lsquo;", "'")
+        .replace("&rdquo;", "\"")
+        .replace("&ldquo;", "\"")
+        .replace("&hellip;", "...")
+        .replace("&mdash;", "—")
+        .replace("&ndash;", "–")
+        .replace("&#8217;", "'")
+        .replace("&#8216;", "'")
+        .replace("&#8220;", "\"")
+        .replace("&#8221;", "\"")
+        .replace("&#8230;", "...")
+        .replace("&#8212;", "—")
+        .replace("&#8211;", "–")
 }
 
 fn extract_summary_from_html(html: &str) -> String {
@@ -698,10 +847,13 @@ pub async fn feed_create_category(app: AppHandle, name: String) -> Result<(), St
 }
 
 #[tauri::command]
-pub async fn feed_seed_default_sources(app: AppHandle) -> Result<Vec<String>, String> {
+pub async fn feed_seed_default_sources(
+    app: AppHandle,
+    force: Option<bool>,
+) -> Result<Vec<String>, String> {
     tokio::task::spawn_blocking(move || {
         let conn = open_db(&app)?;
-        store::seed_default_sources(&conn, now_secs())
+        store::seed_default_sources(&conn, now_secs(), force.unwrap_or(false))
     })
     .await
     .map_err(|e| format!("预置订阅源任务失败：{e}"))?
@@ -999,14 +1151,25 @@ pub async fn feed_article_to_mindmap(app: AppHandle, id: String) -> Result<Strin
 }
 
 #[tauri::command]
-pub async fn feed_import_opml(app: AppHandle, opml_xml: String) -> Result<usize, String> {
-    let items = parse_opml(&opml_xml)?;
-    if items.is_empty() {
+pub async fn feed_import_opml(
+    app: AppHandle,
+    items: Option<Vec<OpmlOutlineItem>>,
+    opml_xml: Option<String>,
+) -> Result<usize, String> {
+    let list = if let Some(items) = items {
+        items
+    } else if let Some(xml) = opml_xml {
+        parse_opml(&xml)?
+    } else {
+        return Ok(0);
+    };
+
+    if list.is_empty() {
         return Ok(0);
     }
 
     let mut imported = 0;
-    for item in items {
+    for item in list {
         let input = store::ChannelInput {
             id: None,
             url: item.xml_url,
@@ -1110,6 +1273,9 @@ mod tests {
             starred: true,
             reading_time_min: 3,
             created_at: 1716000000,
+            audio_url: None,
+            audio_type: None,
+            audio_duration: None,
         };
 
         let md = convert_article_to_mindmap(&art);

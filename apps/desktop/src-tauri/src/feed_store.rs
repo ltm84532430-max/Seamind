@@ -48,6 +48,9 @@ CREATE TABLE IF NOT EXISTS feed_articles (
     starred INTEGER NOT NULL DEFAULT 0,
     reading_time_min INTEGER NOT NULL DEFAULT 1,
     created_at INTEGER NOT NULL,
+    audio_url TEXT,
+    audio_type TEXT,
+    audio_duration INTEGER,
     FOREIGN KEY(channel_id) REFERENCES feed_channels(id) ON DELETE CASCADE,
     UNIQUE(channel_id, guid)
 );
@@ -56,6 +59,7 @@ CREATE INDEX IF NOT EXISTS idx_feed_articles_channel_id ON feed_articles(channel
 CREATE INDEX IF NOT EXISTS idx_feed_articles_published_at ON feed_articles(published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_feed_articles_read_status ON feed_articles(read_status);
 CREATE INDEX IF NOT EXISTS idx_feed_articles_starred ON feed_articles(starred);
+CREATE INDEX IF NOT EXISTS idx_feed_articles_audio ON feed_articles(audio_url) WHERE audio_url IS NOT NULL;
 ";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,6 +116,9 @@ pub struct FeedArticle {
     pub starred: bool,
     pub reading_time_min: i64,
     pub created_at: i64,
+    pub audio_url: Option<String>,
+    pub audio_type: Option<String>,
+    pub audio_duration: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,6 +132,9 @@ pub struct ArticleInput {
     pub summary: String,
     pub published_at: i64,
     pub reading_time_min: i64,
+    pub audio_url: Option<String>,
+    pub audio_type: Option<String>,
+    pub audio_duration: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -137,6 +147,7 @@ pub struct ArticleFilter {
     pub search: Option<String>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
+    pub has_audio: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,6 +165,7 @@ pub struct FeedOverview {
     pub total_unread: usize,
     pub total_articles: usize,
     pub total_starred: usize,
+    pub total_audios: usize,
     pub channels: Vec<FeedChannelWithStats>,
     pub categories: Vec<CategoryStats>,
 }
@@ -164,6 +176,16 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
         .map_err(|e| format!("启用订阅数据库关联约束失败：{e}"))?;
     conn.execute_batch(SCHEMA)
         .map_err(|e| format!("初始化订阅数据库结构失败：{e}"))?;
+
+    // 增量热迁移：为已有数据库扩展音频支持字段
+    let _ = conn.execute("ALTER TABLE feed_articles ADD COLUMN audio_url TEXT;", []);
+    let _ = conn.execute("ALTER TABLE feed_articles ADD COLUMN audio_type TEXT;", []);
+    let _ = conn.execute("ALTER TABLE feed_articles ADD COLUMN audio_duration INTEGER;", []);
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_feed_articles_audio ON feed_articles(audio_url) WHERE audio_url IS NOT NULL;",
+        [],
+    );
+
     conn.execute(
         "UPDATE feed_channels SET category = CASE
             WHEN trim(category) = '' THEN '默认分类'
@@ -179,6 +201,18 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
          ON feed_categories(color);",
     )
     .map_err(|e| format!("建立订阅分类颜色唯一约束失败：{e}"))?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+    let channel_count: usize = conn
+        .query_row("SELECT count(*) FROM feed_channels", [], |r| r.get(0))
+        .unwrap_or(0);
+    if channel_count == 0 {
+        let _ = seed_default_sources(&conn, now, true);
+    }
+
     Ok(conn)
 }
 
@@ -200,6 +234,7 @@ fn category_color_candidate(name: &str, used_colors: &HashSet<String>) -> String
     let preferred = match name {
         "金融与量化" => Some("#d6a354"),
         "政府与公共机构" => Some("#6ba8d6"),
+        "军事与防务安全" => Some("#d57966"),
         "技术博客" => Some("#70b89a"),
         "默认分类" => Some("#8993a4"),
         _ => None,
@@ -364,6 +399,20 @@ const STARTER_FEEDS: &[(&str, &str, &str, &str)] = &[
     ("金融与量化", "New York Fed · Liberty Street Economics", "https://libertystreeteconomics.newyorkfed.org/feed/", "https://libertystreeteconomics.newyorkfed.org/"),
     ("金融与量化", "Quantpedia · Quantitative Trading Research", "https://quantpedia.com/feed/", "https://quantpedia.com/"),
     ("金融与量化", "Alpha Architect · Quantitative Investing Research", "https://alphaarchitect.com/feed/", "https://alphaarchitect.com/"),
+    ("金融与量化", "European Central Bank · The ECB Podcast", "https://www.ecb.europa.eu/rss/podcast.html", "https://www.ecb.europa.eu/press/podcasts/"),
+    ("金融与量化", "International Monetary Fund · IMF Podcasts", "https://feeds.simplecast.com/7xXq1w_K", "https://www.imf.org/en/News/Podcasts"),
+    ("金融与量化", "Goldman Sachs · Exchanges", "https://feeds.megaphone.fm/GLD4133496924", "https://www.goldmansachs.com/insights/series/exchanges-at-goldman-sachs"),
+    ("金融与量化", "Morgan Stanley · Thoughts on the Market", "https://feeds.megaphone.fm/thoughtsonmarket", "https://www.morganstanley.com/ideas/thoughts-on-the-market"),
+    ("金融与量化", "Bloomberg · Odd Lots", "https://feeds.megaphone.fm/BLM2451951590", "https://www.bloomberg.com/oddlots"),
+
+    // 军事与防务安全：全球顶尖防务播客、战略智库与军事前沿研究
+    ("军事与防务安全", "西点军校现代战争研究所 · MWI Podcast", "https://mwi.westpoint.edu/feed/podcast/", "https://mwi.westpoint.edu/category/podcasts/"),
+    ("军事与防务安全", "War on the Rocks · 战略与防务播客", "https://warontherocks.libsyn.com/rss", "https://warontherocks.com/"),
+    ("军事与防务安全", "美国海军学会 · USNI Proceedings Podcast", "https://feeds.buzzsprout.com/269098.rss", "https://www.usni.org/magazines/proceedings/proceedings-podcast"),
+    ("军事与防务安全", "战略与国际研究中心 · CSIS Defense360", "https://feeds.simplecast.com/4S9i1V4_", "https://defense360.csis.org/"),
+    ("军事与防务安全", "美国国防部 · U.S. Department of Defense News", "https://www.defense.gov/DesktopModules/ArticleCS/RSS.ashx?ContentType=1&Site=945", "https://www.defense.gov/News/"),
+    ("军事与防务安全", "兰德公司 · RAND National Security Research", "https://www.rand.org/topics/national-security-and-terrorism.xml", "https://www.rand.org/"),
+    ("军事与防务安全", "英国皇家联合军种防务所 · RUSI Defense Podcast", "https://feeds.acast.com/public/shows/the-western-way-of-war", "https://rusi.org/"),
 
     // Public institutions across the United States, China, Japan and the EU.
     ("政府与公共机构", "U.S. Census Bureau · Economic Indicators", "https://www.census.gov/economic-indicators/indicator.xml", "https://www.census.gov/economic-indicators/"),
@@ -394,8 +443,16 @@ const STARTER_FEEDS: &[(&str, &str, &str, &str)] = &[
     ("技术博客", "TypeScript Blog", "https://devblogs.microsoft.com/typescript/feed/", "https://devblogs.microsoft.com/typescript/"),
 ];
 
-pub fn seed_default_sources(conn: &Connection, now: i64) -> Result<Vec<String>, String> {
-    const SEED_KEY: &str = "starter-feeds-v2";
+pub fn seed_default_sources(
+    conn: &Connection,
+    now: i64,
+    force: bool,
+) -> Result<Vec<String>, String> {
+    const SEED_KEY: &str = "starter-feeds-v3-podcast-military";
+    let channel_count: usize = conn
+        .query_row("SELECT count(*) FROM feed_channels", [], |r| r.get(0))
+        .unwrap_or(0);
+
     let already_seeded: bool = conn
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM feed_seed_state WHERE key = ?1)",
@@ -403,7 +460,8 @@ pub fn seed_default_sources(conn: &Connection, now: i64) -> Result<Vec<String>, 
             |row| row.get(0),
         )
         .map_err(|e| format!("检查默认订阅源状态失败：{e}"))?;
-    if already_seeded {
+
+    if already_seeded && channel_count > 0 && !force {
         return Ok(Vec::new());
     }
 
@@ -466,7 +524,7 @@ pub fn seed_default_sources(conn: &Connection, now: i64) -> Result<Vec<String>, 
 
     conn.execute(
         "INSERT INTO feed_seed_state (key, applied_at) VALUES (?1, ?2)
-         ON CONFLICT(key) DO NOTHING",
+         ON CONFLICT(key) DO UPDATE SET applied_at = ?2",
         params![SEED_KEY, now],
     )
     .map_err(|e| format!("保存默认订阅源状态失败：{e}"))?;
@@ -662,8 +720,11 @@ pub fn upsert_articles(
                     content = CASE WHEN ?4 != '' THEN ?4 ELSE content END,
                     summary = CASE WHEN ?5 != '' THEN ?5 ELSE summary END,
                     published_at = CASE WHEN ?6 > 0 THEN ?6 ELSE published_at END,
-                    reading_time_min = ?7
-                WHERE id = ?8",
+                    reading_time_min = ?7,
+                    audio_url = COALESCE(?8, audio_url),
+                    audio_type = COALESCE(?9, audio_type),
+                    audio_duration = COALESCE(?10, audio_duration)
+                WHERE id = ?11",
                 params![
                     a.title,
                     a.author.as_deref(),
@@ -672,6 +733,9 @@ pub fn upsert_articles(
                     a.summary,
                     a.published_at,
                     a.reading_time_min,
+                    a.audio_url.as_deref(),
+                    a.audio_type.as_deref(),
+                    a.audio_duration,
                     existing_id
                 ],
             )
@@ -681,8 +745,9 @@ pub fn upsert_articles(
             conn.execute(
                 "INSERT INTO feed_articles (
                     id, channel_id, guid, title, author, url, content, summary,
-                    published_at, read_status, starred, reading_time_min, created_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'unread', 0, ?10, ?11)",
+                    published_at, read_status, starred, reading_time_min, created_at,
+                    audio_url, audio_type, audio_duration
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'unread', 0, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     id,
                     channel_id,
@@ -694,7 +759,10 @@ pub fn upsert_articles(
                     a.summary,
                     a.published_at,
                     a.reading_time_min,
-                    now
+                    now,
+                    a.audio_url.as_deref(),
+                    a.audio_type.as_deref(),
+                    a.audio_duration,
                 ],
             )
             .map_err(|e| format!("插入文章失败：{e}"))?;
@@ -710,7 +778,8 @@ pub fn list_articles(
 ) -> Result<Vec<FeedArticle>, String> {
     let mut sql = String::from(
         "SELECT a.id, a.channel_id, c.title as channel_title, a.guid, a.title, a.author, a.url,
-                a.content, a.summary, a.published_at, a.read_status, a.starred, a.reading_time_min, a.created_at
+                a.content, a.summary, a.published_at, a.read_status, a.starred, a.reading_time_min, a.created_at,
+                a.audio_url, a.audio_type, a.audio_duration
          FROM feed_articles a
          JOIN feed_channels c ON a.channel_id = c.id
          WHERE 1=1",
@@ -743,6 +812,10 @@ pub fn list_articles(
     if let Some(is_starred) = filter.starred {
         sql.push_str(" AND a.starred = ?");
         param_values.push(Box::new(if is_starred { 1 } else { 0 }));
+    }
+
+    if let Some(true) = filter.has_audio {
+        sql.push_str(" AND a.audio_url IS NOT NULL AND trim(a.audio_url) != ''");
     }
 
     if let Some(search) = &filter.search {
@@ -786,7 +859,8 @@ pub fn list_articles(
 pub fn get_article(conn: &Connection, id: &str) -> Result<Option<FeedArticle>, String> {
     conn.query_row(
         "SELECT a.id, a.channel_id, c.title as channel_title, a.guid, a.title, a.author, a.url,
-                a.content, a.summary, a.published_at, a.read_status, a.starred, a.reading_time_min, a.created_at
+                a.content, a.summary, a.published_at, a.read_status, a.starred, a.reading_time_min, a.created_at,
+                a.audio_url, a.audio_type, a.audio_duration
          FROM feed_articles a
          JOIN feed_channels c ON a.channel_id = c.id
          WHERE a.id = ?1",
@@ -868,6 +942,14 @@ pub fn get_feed_overview(conn: &Connection) -> Result<FeedOverview, String> {
         )
         .unwrap_or(0);
 
+    let total_audios: usize = conn
+        .query_row(
+            "SELECT count(*) FROM feed_articles WHERE audio_url IS NOT NULL AND trim(audio_url) != ''",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+
     let channels_raw = list_channels(conn)?;
     let mut channels = Vec::with_capacity(channels_raw.len());
 
@@ -930,6 +1012,7 @@ pub fn get_feed_overview(conn: &Connection) -> Result<FeedOverview, String> {
         total_unread,
         total_articles,
         total_starred,
+        total_audios,
         channels,
         categories,
     })
@@ -969,6 +1052,9 @@ fn map_row_to_article(row: &rusqlite::Row) -> rusqlite::Result<FeedArticle> {
         starred: starred_int != 0,
         reading_time_min: row.get(12)?,
         created_at: row.get(13)?,
+        audio_url: row.get(14)?,
+        audio_type: row.get(15)?,
+        audio_duration: row.get(16)?,
     })
 }
 
@@ -1012,6 +1098,9 @@ mod tests {
                     summary: "Summary 1".to_string(),
                     published_at: 100,
                     reading_time_min: 2,
+                    audio_url: None,
+                    audio_type: None,
+                    audio_duration: None,
                 },
                 ArticleInput {
                     guid: "guid-2".to_string(),
@@ -1022,6 +1111,9 @@ mod tests {
                     summary: "Summary 2".to_string(),
                     published_at: 105,
                     reading_time_min: 3,
+                    audio_url: Some("https://example.com/art-2.mp3".to_string()),
+                    audio_type: Some("audio/mpeg".to_string()),
+                    audio_duration: Some(180),
                 },
             ],
             110,
@@ -1033,6 +1125,7 @@ mod tests {
         let overview = get_feed_overview(&conn).unwrap();
         assert_eq!(overview.total_articles, 2);
         assert_eq!(overview.total_unread, 2);
+        assert_eq!(overview.total_audios, 1);
         assert_eq!(overview.categories.len(), 1);
         assert_eq!(overview.categories[0].name, "Tech");
 
@@ -1040,12 +1133,32 @@ mod tests {
         assert_eq!(list.len(), 2);
         set_article_read_status(&conn, &list[0].id, "read").unwrap();
 
+        let audio_list = list_articles(&conn, &ArticleFilter { has_audio: Some(true), ..Default::default() }).unwrap();
+        assert_eq!(audio_list.len(), 1);
+        assert_eq!(audio_list[0].audio_url.as_deref(), Some("https://example.com/art-2.mp3"));
+
         let overview2 = get_feed_overview(&conn).unwrap();
         assert_eq!(overview2.total_unread, 1);
 
         mark_all_read(&conn, None, None).unwrap();
         let overview3 = get_feed_overview(&conn).unwrap();
         assert_eq!(overview3.total_unread, 0);
+    }
+
+    #[test]
+    fn test_open_and_seed_on_disk() {
+        let db_path = std::env::temp_dir().join(format!("test_feed_{}.sqlite3", Uuid::new_v4()));
+        let conn = open(&db_path).unwrap();
+        let overview = get_feed_overview(&conn).unwrap();
+        assert!(!overview.channels.is_empty(), "channels should be auto-seeded");
+        assert!(!overview.categories.is_empty(), "categories should be auto-seeded");
+
+        // Reopening should succeed
+        drop(conn);
+        let conn2 = open(&db_path).unwrap();
+        let overview2 = get_feed_overview(&conn2).unwrap();
+        assert_eq!(overview2.channels.len(), overview.channels.len());
+        let _ = std::fs::remove_file(&db_path);
     }
 }
 

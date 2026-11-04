@@ -23,6 +23,7 @@ import {
   updatePlantUmlRelationship,
 } from './plantuml-model';
 import type { PlantUmlDiagramType } from './plantuml-model';
+import type { Theme } from './app-storage';
 import { plantUmlDiagramNames, splitSvgDocuments } from './plantuml-svg';
 
 export interface PlantUmlEditorRequest {
@@ -37,7 +38,7 @@ export interface PlantUmlEditorRequest {
 interface PlantUmlWorkspaceProps {
   request: PlantUmlEditorRequest;
   source: string;
-  theme: 'light' | 'dark';
+  theme: Theme;
   onSourceChange: (nextSource: string) => void;
   onSourceSaved: (savedSource: string) => void;
   onClose: () => void;
@@ -270,7 +271,7 @@ export default function PlantUmlWorkspace({
       setRenderError('');
       void invoke<PlantUmlRenderResult>('render_plantuml', {
         source,
-        dark: theme === 'dark',
+        dark: theme !== 'light',
         authorizedIncludeDirectory: authorizedDirectory || null,
         cacheKey: request.cacheKey ?? null,
       })
@@ -298,7 +299,7 @@ export default function PlantUmlWorkspace({
           svg.style.width = '100%';
           svg.style.height = '100%';
           host.replaceChildren(svg);
-          strengthenFineStrokes(svg, theme === 'dark');
+          strengthenFineStrokes(svg, theme !== 'light');
           svg.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.scale})`;
           setRenderDiagnostics(result.diagnostics);
         })
@@ -345,7 +346,7 @@ export default function PlantUmlWorkspace({
     svg.style.width = '100%';
     svg.style.height = '100%';
     host.replaceChildren(svg);
-    strengthenFineStrokes(svg, theme === 'dark');
+    strengthenFineStrokes(svg, theme !== 'light');
   }, [
     activeDiagram,
     diagramDocuments,

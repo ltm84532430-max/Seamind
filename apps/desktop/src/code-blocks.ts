@@ -12,8 +12,46 @@ import {
   renderMathSurface3d,
   type MathSurface3dController,
 } from './math-surface-3d';
+import type { Theme } from './app-storage';
 
-type AppTheme = 'light' | 'dark';
+type AppTheme = Theme;
+
+function getCodeMirrorThemeConfig(theme: AppTheme) {
+  if (theme === 'navy') {
+    return {
+      bg: '#07101e',
+      fg: '#dce8f5',
+      gutterBg: '#081424',
+      gutterFg: '#5d7e9f',
+      dark: true,
+    };
+  }
+  if (theme === 'purple') {
+    return {
+      bg: '#0d0818',
+      fg: '#eee4fa',
+      gutterBg: '#130c22',
+      gutterFg: '#856a9e',
+      dark: true,
+    };
+  }
+  if (theme === 'dark') {
+    return {
+      bg: '#11171b',
+      fg: '#d7e0e4',
+      gutterBg: '#11171b',
+      gutterFg: '#71818a',
+      dark: true,
+    };
+  }
+  return {
+    bg: '#ffffff',
+    fg: '#263238',
+    gutterBg: '#f5f7f8',
+    gutterFg: '#7a878d',
+    dark: false,
+  };
+}
 
 const maxVisualizationSource = 50_000;
 let diagramId = 0;
@@ -498,7 +536,7 @@ async function renderMermaid(
     suppressErrorRendering: true,
     maxTextSize: maxVisualizationSource,
     maxEdges: 500,
-    theme: theme === 'dark' ? 'dark' : 'neutral',
+    theme: theme === 'light' ? 'neutral' : 'dark',
     flowchart: { htmlLabels: false, useMaxWidth: true },
   });
   const { svg } = await mermaid.render(
@@ -527,7 +565,7 @@ async function renderPlantUml(
     'render_plantuml',
     {
       source,
-      dark: theme === 'dark',
+      dark: theme !== 'light',
       authorizedIncludeDirectory: null,
       cacheKey: null,
     },
@@ -616,7 +654,7 @@ async function renderEChartsOption(
     renderers.CanvasRenderer,
   ]);
   output.replaceChildren();
-  const chart = core.init(output, theme === 'dark' ? 'dark' : undefined, {
+  const chart = core.init(output, theme === 'light' ? undefined : 'dark', {
     renderer: 'canvas',
   });
   chart.setOption(option);
@@ -1091,6 +1129,7 @@ function createPythonPanel(
       editButton.hidden = true;
       saveButton.hidden = false;
       cancelButton.hidden = false;
+      const cmCfg = getCodeMirrorThemeConfig(theme);
       editor = new codemirror.EditorView({
         doc: currentSource,
         parent: editorHost,
@@ -1102,17 +1141,17 @@ function createPythonPanel(
               '&': {
                 fontSize: '12px',
                 maxHeight: '240px',
-                backgroundColor: theme === 'dark' ? '#11171b' : '#ffffff',
-                color: theme === 'dark' ? '#d7e0e4' : '#263238',
+                backgroundColor: cmCfg.bg,
+                color: cmCfg.fg,
               },
               '.cm-scroller': { overflow: 'auto', fontFamily: 'monospace' },
               '.cm-gutters': {
-                backgroundColor: theme === 'dark' ? '#11171b' : '#f5f7f8',
-                color: theme === 'dark' ? '#71818a' : '#7a878d',
+                backgroundColor: cmCfg.gutterBg,
+                color: cmCfg.gutterFg,
                 border: 'none',
               },
             },
-            { dark: theme === 'dark' },
+            { dark: cmCfg.dark },
           ),
         ],
       });
@@ -1430,6 +1469,7 @@ function createCPanel(
       editButton.hidden = true;
       saveButton.hidden = false;
       cancelButton.hidden = false;
+      const cmCfg = getCodeMirrorThemeConfig(theme);
       editor = new codemirror.EditorView({
         doc: currentSource,
         parent: editorHost,
@@ -1440,17 +1480,17 @@ function createCPanel(
               '&': {
                 fontSize: '12px',
                 maxHeight: '320px',
-                backgroundColor: theme === 'dark' ? '#11171b' : '#ffffff',
-                color: theme === 'dark' ? '#d7e0e4' : '#263238',
+                backgroundColor: cmCfg.bg,
+                color: cmCfg.fg,
               },
               '.cm-scroller': { overflow: 'auto', fontFamily: 'monospace' },
               '.cm-gutters': {
-                backgroundColor: theme === 'dark' ? '#11171b' : '#f5f7f8',
-                color: theme === 'dark' ? '#71818a' : '#7a878d',
+                backgroundColor: cmCfg.gutterBg,
+                color: cmCfg.gutterFg,
                 border: 'none',
               },
             },
-            { dark: theme === 'dark' },
+            { dark: cmCfg.dark },
           ),
         ],
       });

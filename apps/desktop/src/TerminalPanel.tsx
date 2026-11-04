@@ -4,8 +4,9 @@ import { listen } from '@tauri-apps/api/event';
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
+import type { Theme } from './app-storage';
 
-type AppTheme = 'light' | 'dark';
+type AppTheme = Theme;
 
 interface TerminalOutputEvent {
   sessionId: string;
@@ -521,8 +522,8 @@ export default function TerminalPanel({
                 dock === 'right'
                   ? '将终端移回底部'
                   : canDockRight
-                    ? '将终端收至阅读区右侧，与导图并排显示'
-                    : '请在宽屏电子书阅读区使用侧边停靠'
+                    ? '将终端停靠到阅读区右侧'
+                    : '请在宽屏阅读区或订阅页使用侧边停靠'
               }
             >
               {dock === 'right' ? '移到底部' : '收至侧边'}
@@ -583,8 +584,8 @@ export default function TerminalPanel({
       ) : (
         <div className="seamind-terminal-note">
           已自动注入 Seamind MCP 工具（导图 · 知识库 · 播放器学习路径 · 当前
-          EPUB 章节）。可直接输入 <code>agy</code>、<code>claude</code> 或{' '}
-          <code>codex</code> 调用。
+          EPUB 章节 · RSS 原文与订阅）。可直接输入 <code>agy</code>、
+          <code>claude</code> 或 <code>codex</code> 调用。
         </div>
       )}
     </section>
@@ -592,6 +593,56 @@ export default function TerminalPanel({
 }
 
 function terminalTheme(theme: AppTheme) {
+  if (theme === 'navy') {
+    return {
+      background: '#07101e',
+      foreground: '#dce8f5',
+      cursor: '#38bdf8',
+      cursorAccent: '#07101e',
+      selectionBackground: '#173b64',
+      black: '#07101e',
+      red: '#f87171',
+      green: '#34d399',
+      yellow: '#fbbf24',
+      blue: '#38bdf8',
+      magenta: '#c084fc',
+      cyan: '#22d3ee',
+      white: '#e2eefb',
+      brightBlack: '#47688d',
+      brightRed: '#fca5a5',
+      brightGreen: '#6ee7b7',
+      brightYellow: '#fde68a',
+      brightBlue: '#60a5fa',
+      brightMagenta: '#d8b4fe',
+      brightCyan: '#67e8f9',
+      brightWhite: '#ffffff',
+    };
+  }
+  if (theme === 'purple') {
+    return {
+      background: '#0d0818',
+      foreground: '#eee4fa',
+      cursor: '#c084fc',
+      cursorAccent: '#0d0818',
+      selectionBackground: '#391c5c',
+      black: '#0d0818',
+      red: '#f472b6',
+      green: '#4ade80',
+      yellow: '#facc15',
+      blue: '#818cf8',
+      magenta: '#c084fc',
+      cyan: '#38bdf8',
+      white: '#f5eeff',
+      brightBlack: '#684a86',
+      brightRed: '#fbcfe8',
+      brightGreen: '#86efac',
+      brightYellow: '#fef08a',
+      brightBlue: '#a5b4fc',
+      brightMagenta: '#e879f9',
+      brightCyan: '#7dd3fc',
+      brightWhite: '#ffffff',
+    };
+  }
   return theme === 'dark'
     ? {
         background: '#11171b',

@@ -1,30 +1,34 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { feedApi } from './feed-api';
 import { FeedAddDialog } from './FeedAddDialog';
 import { FeedArticleList } from './FeedArticleList';
+import { FeedAudioPlayerBar } from './FeedAudioPlayerBar';
 import { FeedCategoryDialog } from './FeedCategoryDialog';
 import { FeedGalaxyView } from './FeedGalaxyView';
 import { FeedOpmlDialog } from './FeedOpmlDialog';
 import { FeedReaderView } from './FeedReaderView';
 import { FeedSidebar } from './FeedSidebar';
+import { DEFAULT_STARTER_FEEDS } from './default-starter-feeds';
 import type { FeedArticle, FeedOverview } from './types';
 import './feed-workspace.css';
 
 let defaultFeedSeedPromise: Promise<string[]> | null = null;
 let defaultFeedRefreshPromise: Promise<void> | null = null;
 
-async function seedDefaultSourcesOnce(): Promise<{
+async function seedDefaultSourcesOnce(force = false): Promise<{
   refreshPromise: Promise<void> | null;
 }> {
-  if (!defaultFeedSeedPromise) {
-    defaultFeedSeedPromise = feedApi.seedDefaultSources().catch((error) => {
-      defaultFeedSeedPromise = null;
-      throw error;
-    });
+  if (!defaultFeedSeedPromise || force) {
+    defaultFeedSeedPromise = feedApi
+      .seedDefaultSources(force)
+      .catch((error) => {
+        defaultFeedSeedPromise = null;
+        throw error;
+      });
   }
 
   const seededIds = await defaultFeedSeedPromise;
-  if (seededIds.length > 0 && !defaultFeedRefreshPromise) {
+  if (seededIds.length > 0) {
     defaultFeedRefreshPromise = feedApi
       .refreshChannels(seededIds)
       .then(() => undefined)
@@ -40,20 +44,38 @@ async function seedDefaultSourcesOnce(): Promise<{
 
 export interface FeedWorkspaceProps {
   onOpenMindmap?: (markdown: string, title: string) => void;
+  onSelectedArticleChange?: (articleId: string | null, title: string) => void;
+  onAnalyzeArticle?: (articleId: string) => void;
+  externalRevision?: number;
 }
 
 const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
   onOpenMindmap,
+  onSelectedArticleChange,
+  onAnalyzeArticle,
+  externalRevision,
 }) => {
   const [overview, setOverview] = useState<FeedOverview | null>(null);
   const [articles, setArticles] = useState<FeedArticle[]>([]);
   const [selectedArticle, setSelectedArticle] = useState<FeedArticle | null>(
     null,
   );
+  const handledExternalRevision = useRef(externalRevision ?? 0);
+
+  // 终端通过 MCP 读取当前文章时，始终使用阅读区实际选中的文章 ID。
+  useEffect(() => {
+    onSelectedArticleChange?.(
+      selectedArticle?.id ?? null,
+      selectedArticle?.title ?? '',
+    );
+  }, [onSelectedArticleChange, selectedArticle?.id, selectedArticle?.title]);
 
   // Filters
-  const [filterMode, setFilterMode] = useState<'all' | 'unread' | 'starred'>(
-    'all',
+  const [filterMode, setFilterMode] = useState<
+    'all' | 'unread' | 'starred' | 'audio'
+  >('all');
+  const [playingArticle, setPlayingArticle] = useState<FeedArticle | null>(
+    null,
   );
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(
     null,
@@ -90,6 +112,7 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
         category: selectedCategory || undefined,
         readStatus: filterMode === 'unread' ? 'unread' : undefined,
         starred: filterMode === 'starred' ? true : undefined,
+        hasAudio: filterMode === 'audio' ? true : undefined,
         search: searchQuery.trim() || undefined,
         limit: 100,
       });
@@ -109,6 +132,16 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
   }, [selectedChannelId, selectedCategory, filterMode, searchQuery]);
 
   useEffect(() => {
+    if (
+      !externalRevision ||
+      externalRevision === handledExternalRevision.current
+    )
+      return;
+    handledExternalRevision.current = externalRevision;
+    void Promise.all([reloadOverview(), reloadArticles()]);
+  }, [externalRevision, reloadOverview, reloadArticles]);
+
+  useEffect(() => {
     let active = true;
     const initialize = async () => {
       let refreshPromise: Promise<void> | null = null;
@@ -116,7 +149,26 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
         const seedResult = await seedDefaultSourcesOnce();
         refreshPromise = seedResult.refreshPromise;
       } catch (err) {
-        console.error('初始化预置订阅源失败：', err);
+        console.warn('初始化预置订阅源失败：', err);
+      }
+
+      if (!active) return;
+
+      // 检查当前是否有订阅频道，如果为空则立即触发直通注入，绝不留白
+      try {
+        const initialOverview = await feedApi.getOverview();
+        if (
+          active &&
+          (!initialOverview || initialOverview.channels.length === 0)
+        ) {
+          console.info('检测到订阅源为空，正在自动直通恢复推荐源与播客...');
+          await feedApi.importOpml(DEFAULT_STARTER_FEEDS);
+          void feedApi.refreshAllChannels().then(async () => {
+            if (active) await Promise.all([reloadOverview(), reloadArticles()]);
+          });
+        }
+      } catch (e) {
+        console.warn('直通检测订阅源失败：', e);
       }
 
       if (!active) return;
@@ -216,10 +268,34 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
     }
   }, [selectedChannelId, selectedCategory, reloadOverview, reloadArticles]);
 
+  const handleMarkCategoryRead = useCallback(
+    async (category: string) => {
+      try {
+        await feedApi.markAllRead(undefined, category);
+        await Promise.all([reloadOverview(), reloadArticles()]);
+      } catch (e) {
+        console.error('标记分类已读失败：', e);
+      }
+    },
+    [reloadOverview, reloadArticles],
+  );
+
   const handleGenerateMindmap = useCallback(
     async (articleId: string, title: string) => {
       try {
-        const md = await feedApi.articleToMindmap(articleId);
+        const rawMd = await feedApi.articleToMindmap(articleId);
+        const md = rawMd
+          .replace(/&rsquo;|&lsquo;|&#8217;|&#8216;/g, "'")
+          .replace(/&rdquo;|&ldquo;|&#8220;|&#8221;/g, '"')
+          .replace(/&hellip;|&#8230;/g, '...')
+          .replace(/&mdash;|&#8212;/g, '—')
+          .replace(/&ndash;|&#8211;/g, '–')
+          .replace(/&apos;|&#39;/g, "'")
+          .replace(/&quot;|&#34;/g, '"')
+          .replace(/&amp;/g, '&')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&nbsp;/g, ' ');
         if (onOpenMindmap) {
           onOpenMindmap(md, title);
         }
@@ -267,14 +343,53 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
     [selectedChannelId, reloadOverview, reloadArticles],
   );
 
+  const handleRestoreDefaultFeeds = useCallback(async () => {
+    setLoadingArticles(true);
+    try {
+      // 步骤 1：尝试种子接口
+      try {
+        await seedDefaultSourcesOnce(true);
+      } catch (err) {
+        console.warn('种子接口未响应，执行直通注入：', err);
+      }
+
+      // 步骤 2：直通注入全量金融、军事与公共机构订阅源及播客
+      const current = await feedApi.getOverview().catch(() => null);
+      if (!current || (current.channels?.length ?? 0) === 0) {
+        await feedApi.importOpml(DEFAULT_STARTER_FEEDS);
+      }
+
+      // 步骤 3：立即更新界面
+      await Promise.all([reloadOverview(), reloadArticles()]);
+
+      // 步骤 4：后台触发内容同步
+      void feedApi.refreshAllChannels().then(async () => {
+        await Promise.all([reloadOverview(), reloadArticles()]);
+      });
+    } catch (err) {
+      console.error('恢复推荐订阅源失败：', err);
+    } finally {
+      setLoadingArticles(false);
+    }
+  }, [reloadOverview, reloadArticles]);
+
   const handleRefreshAll = useCallback(async () => {
     try {
+      if ((overview?.channels?.length ?? 0) === 0) {
+        await handleRestoreDefaultFeeds();
+        return;
+      }
       await feedApi.refreshAllChannels();
       await Promise.all([reloadOverview(), reloadArticles()]);
     } catch (e) {
       console.error('刷新订阅源失败：', e);
     }
-  }, [reloadOverview, reloadArticles]);
+  }, [
+    overview?.channels?.length,
+    handleRestoreDefaultFeeds,
+    reloadOverview,
+    reloadArticles,
+  ]);
 
   const handleOpenExportOpml = useCallback(async () => {
     try {
@@ -363,6 +478,11 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
           setSelectedCategory(null);
           setFilterMode('starred');
         }}
+        onSelectAudio={() => {
+          setSelectedChannelId(null);
+          setSelectedCategory(null);
+          setFilterMode('audio');
+        }}
         onSelectCategory={(cat) => {
           setSelectedChannelId(null);
           setSelectedCategory(cat);
@@ -380,6 +500,9 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
         onOpenExportOpml={handleOpenExportOpml}
         onRefreshAll={handleRefreshAll}
         onDeleteChannel={handleDeleteChannel}
+        onMarkCategoryRead={handleMarkCategoryRead}
+        onRestoreDefaultFeeds={handleRestoreDefaultFeeds}
+        isRestoring={loadingArticles}
       />
 
       <FeedArticleList
@@ -393,6 +516,7 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
         onChangeSearchQuery={(q) => setSearchQuery(q)}
         onMarkAllRead={handleMarkAllRead}
         onOpenGalaxy={() => setIsGalaxyOpen(true)}
+        onPlayAudio={(art) => setPlayingArticle(art)}
       />
 
       <FeedReaderView
@@ -402,6 +526,10 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
         onToggleStar={handleToggleStar}
         onGenerateMindmap={handleGenerateMindmap}
         onAddPreset={handleAddChannel}
+        onAnalyzeArticle={onAnalyzeArticle}
+        onPlayAudio={(art) => setPlayingArticle(art)}
+        onRestoreDefaultFeeds={handleRestoreDefaultFeeds}
+        isRestoring={loadingArticles}
       />
 
       <FeedAddDialog
@@ -450,6 +578,14 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
             setFilterMode('all');
             setIsGalaxyOpen(false);
           }}
+        />
+      )}
+
+      {playingArticle && (
+        <FeedAudioPlayerBar
+          article={playingArticle}
+          onClose={() => setPlayingArticle(null)}
+          onGenerateMindmap={handleGenerateMindmap}
         />
       )}
     </div>

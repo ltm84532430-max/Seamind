@@ -130,11 +130,19 @@ class MarkdownMinimapView implements MarkdownMinimapController {
   private navigateTo(clientY: number) {
     const bounds = this.canvas.getBoundingClientRect();
     if (bounds.height <= 0) return;
-    const ratio = Math.max(
-      0,
-      Math.min(1, (clientY - bounds.top) / bounds.height),
-    );
+
     const lineCount = Math.max(1, this.model.getLineCount());
+    const targetRowHeight = 2.8;
+    const totalRenderHeight = Math.min(
+      bounds.height,
+      Math.max(bounds.height * 0.35, lineCount * targetRowHeight),
+    );
+
+    const relativeY = Math.max(
+      0,
+      Math.min(totalRenderHeight, clientY - bounds.top),
+    );
+    const ratio = totalRenderHeight > 0 ? relativeY / totalRenderHeight : 0;
     const lineIndex = Math.max(
       0,
       Math.min(lineCount - 1, Math.floor(ratio * lineCount)),
@@ -160,12 +168,21 @@ class MarkdownMinimapView implements MarkdownMinimapController {
     const codeColor = style.getPropertyValue('--minimap-code').trim();
     const accentColor = style.getPropertyValue('--minimap-active').trim();
     const lineCount = Math.max(1, this.model.getLineCount());
-    const rowCount = Math.min(
-      lineCount,
-      Math.max(1, Math.floor(bounds.height * maximumRowsPerPixel)),
+
+    // VS Code style natural line height: lines stay compact (~2.6-3.2px) and don't stretch
+    // across the entire window height when there are few lines.
+    const targetRowHeight = 2.8;
+    const maxFittingRows = Math.max(
+      1,
+      Math.floor(bounds.height * maximumRowsPerPixel),
     );
-    const rowHeight = bounds.height / rowCount;
-    const xInset = 5;
+    const rowCount = Math.min(lineCount, maxFittingRows);
+
+    const isDense = lineCount * targetRowHeight > bounds.height;
+    const rowHeight = isDense ? bounds.height / rowCount : targetRowHeight;
+    const totalRenderHeight = Math.min(bounds.height, rowCount * rowHeight);
+
+    const xInset = 4;
     const availableWidth = Math.max(1, bounds.width - xInset * 2);
     const activeLine = Math.max(
       0,
@@ -188,7 +205,7 @@ class MarkdownMinimapView implements MarkdownMinimapController {
     );
     context.globalAlpha = 1;
 
-    const fontSize = Math.max(0.8, Math.min(3.2, rowHeight * 0.88));
+    const fontSize = Math.max(1.8, Math.min(2.8, rowHeight * 0.88));
     context.font = `${fontSize}px ui-monospace, SFMono-Regular, Consolas, monospace`;
     context.textBaseline = 'middle';
 
@@ -213,12 +230,20 @@ class MarkdownMinimapView implements MarkdownMinimapController {
               ? codeColor
               : lineColor;
       context.fillStyle = color || '#8c9aa5';
+
+      // VS Code style natural line rendering:
+      // Clip to maxWidth instead of horizontally squishing characters into maxWidth.
+      // This preserves normal character aspect ratio and variable natural line lengths.
+      context.save();
+      context.beginPath();
+      context.rect(xInset + indent, row * rowHeight, maxWidth, rowHeight);
+      context.clip();
       context.fillText(
         trimmed,
         xInset + indent,
         row * rowHeight + rowHeight / 2,
-        maxWidth,
       );
+      context.restore();
     }
 
     this.root.setAttribute('aria-valuemax', String(lineCount));
@@ -226,16 +251,21 @@ class MarkdownMinimapView implements MarkdownMinimapController {
 
     const scroll = this.model.scrollElement;
     const scrollHeight = Math.max(scroll.scrollHeight, scroll.clientHeight);
+    const scrollRange = Math.max(0, scrollHeight - scroll.clientHeight);
+    const visibleRatio =
+      scrollHeight > 0 ? scroll.clientHeight / scrollHeight : 1;
+
+    // Viewport box matches the visible proportion of rendered document height
     const viewportHeight = Math.min(
       bounds.height,
-      Math.max(18, (scroll.clientHeight / scrollHeight) * bounds.height),
+      Math.max(18, visibleRatio * totalRenderHeight),
     );
-    const scrollRange = Math.max(0, scrollHeight - scroll.clientHeight);
-    const top = scrollRange
-      ? (scroll.scrollTop / scrollRange) * (bounds.height - viewportHeight)
-      : 0;
-    this.viewport.style.height = `${viewportHeight}px`;
-    this.viewport.style.transform = `translateY(${top}px)`;
+    const travelRange = Math.max(0, totalRenderHeight - viewportHeight);
+    const top =
+      scrollRange > 0 ? (scroll.scrollTop / scrollRange) * travelRange : 0;
+
+    this.viewport.style.height = `${Math.round(viewportHeight)}px`;
+    this.viewport.style.transform = `translateY(${Math.round(top)}px)`;
   }
 }
 

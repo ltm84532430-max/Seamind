@@ -81,6 +81,7 @@ import {
   loadEpubBookMetadata,
 } from './ebook-storage';
 import AgentPanel from './AgentPanel';
+import { feedApi } from './feed/feed-api';
 import {
   agentToolCatalog,
   buildValidatedLearningPathNodes,
@@ -230,6 +231,41 @@ import {
 } from './app-mindmap-utils';
 import { Icon } from './components/AppIcon';
 
+const THEME_OPTIONS: Record<
+  Theme,
+  {
+    next: Theme;
+    name: string;
+    title: string;
+    icon: 'moon' | 'sun' | 'compass' | 'sparkle';
+  }
+> = {
+  dark: {
+    next: 'navy',
+    name: '暗色',
+    title: '当前主题：暗色（点击切换为深蓝）',
+    icon: 'moon',
+  },
+  navy: {
+    next: 'purple',
+    name: '深蓝',
+    title: '当前主题：深蓝（点击切换为紫色）',
+    icon: 'compass',
+  },
+  purple: {
+    next: 'light',
+    name: '紫色',
+    title: '当前主题：紫色（点击切换为浅色）',
+    icon: 'sparkle',
+  },
+  light: {
+    next: 'dark',
+    name: '浅色',
+    title: '当前主题：浅色（点击切换为暗色）',
+    icon: 'sun',
+  },
+};
+
 interface MapColorNode {
   state: { depth: number; path?: string };
 }
@@ -352,6 +388,9 @@ export default function App() {
   const [markdownFullscreen, setMarkdownFullscreen] = useState(false);
   const [libraryCollapsed, setLibraryCollapsed] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const feedSelectedArticleIdRef = useRef<string | null>(null);
+  const [feedExternalRevision, setFeedExternalRevision] = useState(0);
+  const [terminalFeedArticleTitle, setTerminalFeedArticleTitle] = useState('');
   const [terminalHeight, setTerminalHeight] = useState(readTerminalHeight);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   useEffect(() => {
@@ -368,6 +407,10 @@ export default function App() {
       return 'bottom';
     }
   });
+  useEffect(() => {
+    // 订阅页默认把终端停靠到阅读区右侧；用户仍可在终端中手动移回底部。
+    if (activeWorkspace === 'feed') setTerminalDock('right');
+  }, [activeWorkspace]);
   const [terminalWidth, setTerminalWidth] = useState(() => {
     try {
       return Math.max(
@@ -446,7 +489,8 @@ export default function App() {
   const readerKnowledgeActive =
     activeWorkspace === 'reader' && readerKnowledgeOpen && Boolean(epubReader);
   const canDockTerminalRight =
-    activeWorkspace === 'reader' && viewportWidth >= 1250;
+    (activeWorkspace === 'reader' && viewportWidth >= 1250) ||
+    (activeWorkspace === 'feed' && viewportWidth >= 1400);
   const isTerminalDrawerOpen = terminalOpen || runnerTerminalOpen;
   const terminalRightActive =
     isTerminalDrawerOpen && terminalDock === 'right' && canDockTerminalRight;
@@ -1398,6 +1442,33 @@ export default function App() {
   };
 
   const agentCapabilities: AgentCapabilities = {
+    readCurrentFeedArticle: async () => {
+      if (activeWorkspace !== 'feed') throw new Error('请先打开订阅页面。');
+      const id = feedSelectedArticleIdRef.current;
+      if (!id) throw new Error('请先在订阅页面选择一篇文章。');
+      const article = await feedApi.getArticle(id);
+      if (!article) throw new Error('当前文章已不存在，请重新选择。');
+      return article;
+    },
+    listFeedSubscriptions: () => {
+      if (activeWorkspace !== 'feed') throw new Error('请先打开订阅页面。');
+      return feedApi.listChannels();
+    },
+    addFeedSubscription: async ({ url, category, title }) => {
+      if (activeWorkspace !== 'feed') throw new Error('请先打开订阅页面。');
+      const channels = await feedApi.listChannels();
+      if (channels.some((channel) => channel.url === url))
+        throw new Error('该 RSS 地址已在本机订阅。');
+      if (
+        !window.confirm(
+          `确认添加 RSS 订阅源？\n标题：${title || '使用订阅源标题'}\n分类：${category || '默认分类'}\n地址：${url}`,
+        )
+      )
+        throw new Error('用户取消了添加订阅。');
+      const channel = await feedApi.addChannel(url, category, title);
+      setFeedExternalRevision((revision) => revision + 1);
+      return channel;
+    },
     readCurrentEpubChapter: () => {
       if (activeWorkspace !== 'reader' || !readerAgentBridgeRef.current) {
         throw new Error('请先在电子书阅读器中打开一本书。');
@@ -5378,13 +5449,14 @@ export default function App() {
           <button
             type="button"
             className="theme-toggle-button"
-            title={theme === 'light' ? '切换到暗色主题' : '切换到浅色主题'}
-            aria-label={theme === 'light' ? '切换到暗色主题' : '切换到浅色主题'}
+            data-active-theme={theme}
+            title={THEME_OPTIONS[theme]?.title ?? '切换主题'}
+            aria-label={THEME_OPTIONS[theme]?.title ?? '切换主题'}
             onClick={() =>
-              setTheme((current) => (current === 'light' ? 'dark' : 'light'))
+              setTheme((current) => THEME_OPTIONS[current]?.next ?? 'dark')
             }
           >
-            <Icon name={theme === 'light' ? 'moon' : 'sun'} />
+            <Icon name={THEME_OPTIONS[theme]?.icon ?? 'moon'} />
           </button>
           {activeWorkspace === 'mindmap' && !plantUmlSession && (
             <button
@@ -6645,6 +6717,16 @@ export default function App() {
             }
           >
             <FeedWorkspace
+              externalRevision={feedExternalRevision}
+              onSelectedArticleChange={(id, title) => {
+                feedSelectedArticleIdRef.current = id;
+                setTerminalFeedArticleTitle(title);
+              }}
+              onAnalyzeArticle={(id) => {
+                feedSelectedArticleIdRef.current = id;
+                setTerminalDock('right');
+                setTerminalOpen(true);
+              }}
               onOpenMindmap={(md, title) => {
                 void (async () => {
                   if (!leavePlantUmlSession()) return;
@@ -6737,6 +6819,11 @@ export default function App() {
                     <TerminalPanel
                       key={`ai-terminal-${librarySnapshot?.rootPath ?? 'default'}`}
                       title="AI · 终端"
+                      noteText={
+                        activeWorkspace === 'feed'
+                          ? `当前文章：${terminalFeedArticleTitle || '请在左侧选择文章'}。启动 AI CLI 后，可调用 rss_get_current_article 读取订阅源正文并分析，也可调用 rss_add_subscription 添加订阅。`
+                          : undefined
+                      }
                       cwd={librarySnapshot?.rootPath ?? ''}
                       theme={theme}
                       dock={terminalRightActive ? 'right' : 'bottom'}
@@ -6828,6 +6915,11 @@ export default function App() {
                 <TerminalPanel
                   key={
                     librarySnapshot?.rootPath ?? 'default-terminal-directory'
+                  }
+                  noteText={
+                    activeWorkspace === 'feed'
+                      ? `当前文章：${terminalFeedArticleTitle || '请在左侧选择文章'}。启动 AI CLI 后，可调用 rss_get_current_article 读取订阅源正文并分析，也可调用 rss_add_subscription 添加订阅。`
+                      : undefined
                   }
                   cwd={librarySnapshot?.rootPath ?? ''}
                   theme={theme}

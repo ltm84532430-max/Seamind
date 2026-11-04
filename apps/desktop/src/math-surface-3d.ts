@@ -2,8 +2,9 @@ import type {
   MathVisualizationSurface,
   Surface3dVisualization,
 } from './math-visualization';
+import type { Theme } from './app-storage';
 
-type AppTheme = 'light' | 'dark';
+type AppTheme = Theme;
 
 export interface MathSurface3dController {
   setSurface(
@@ -37,7 +38,7 @@ export function renderMathSurface3d(
   let pointer: { id: number; x: number; y: number } | undefined;
   let disposed = false;
   let frame = 0;
-  const dark = theme === 'dark';
+  const dark = theme !== 'light';
   const palette = dark
     ? {
         axis: 'rgba(178, 196, 207, 0.7)',

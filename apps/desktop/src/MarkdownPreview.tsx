@@ -4,11 +4,12 @@ import { hydrateCodeBlocks } from './code-blocks';
 import type { CodeBlockHandlers } from './code-blocks';
 import { createMarkdownPreviewMinimap } from './markdown-minimap';
 import { parseYouTubeEmbedInput } from './youtube';
+import type { Theme } from './app-storage';
 
 interface MarkdownPreviewProps {
   html: string;
   source: string;
-  theme: 'light' | 'dark';
+  theme: Theme;
   hideMinimap?: boolean;
   onCodeChange?: CodeBlockHandlers['onCodeChange'];
   onOpenPlantUmlEditor?: CodeBlockHandlers['onOpenPlantUmlEditor'];

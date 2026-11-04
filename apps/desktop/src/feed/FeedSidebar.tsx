@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import type { FeedChannelWithStats, FeedOverview } from './types';
 
 const COLLAPSED_CATEGORIES_KEY = 'seamind:feed-collapsed-categories:v1';
+const COLLAPSED_SIDEBAR_KEY = 'seamind:feed-sidebar-collapsed:v1';
 
 // 从本机偏好恢复已收起的分类，避免每次打开订阅页都重新整理列表。
 function readCollapsedCategories(): Set<string> {
@@ -25,10 +26,11 @@ interface FeedSidebarProps {
   overview: FeedOverview | null;
   selectedChannelId: string | null;
   selectedCategory: string | null;
-  currentFilterMode: 'all' | 'unread' | 'starred';
+  currentFilterMode: 'all' | 'unread' | 'starred' | 'audio';
   onSelectAll: () => void;
   onSelectUnread: () => void;
   onSelectStarred: () => void;
+  onSelectAudio?: () => void;
   onSelectCategory: (category: string) => void;
   onSelectChannel: (channelId: string) => void;
   onOpenAddDialog: () => void;
@@ -37,6 +39,9 @@ interface FeedSidebarProps {
   onOpenExportOpml: () => void;
   onRefreshAll: () => void;
   onDeleteChannel: (channelId: string) => void;
+  onMarkCategoryRead?: (category: string) => void;
+  onRestoreDefaultFeeds?: () => void;
+  isRestoring?: boolean;
 }
 
 export const FeedSidebar: React.FC<FeedSidebarProps> = ({
@@ -47,6 +52,7 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
   onSelectAll,
   onSelectUnread,
   onSelectStarred,
+  onSelectAudio,
   onSelectCategory,
   onSelectChannel,
   onOpenAddDialog,
@@ -55,7 +61,17 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
   onOpenExportOpml,
   onRefreshAll,
   onDeleteChannel,
+  onMarkCategoryRead,
+  onRestoreDefaultFeeds,
+  isRestoring = false,
 }) => {
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem(COLLAPSED_SIDEBAR_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [collapsedCategories, setCollapsedCategories] = useState(
     readCollapsedCategories,
   );
@@ -75,6 +91,27 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
     }
   }, [collapsedCategories]);
 
+  const toggleSidebar = () => {
+    setSidebarCollapsed((current) => {
+      const next = !current;
+      try {
+        localStorage.setItem(COLLAPSED_SIDEBAR_KEY, String(next));
+      } catch {
+        // 存储不可用时，当前会话仍可正常收起导航。
+      }
+      return next;
+    });
+  };
+
+  const toggleCategoryCollapse = (categoryName: string) => {
+    setCollapsedCategories((current) => {
+      const next = new Set(current);
+      if (next.has(categoryName)) next.delete(categoryName);
+      else next.add(categoryName);
+      return next;
+    });
+  };
+
   // Group channels by category
   const channelsByCategory = useMemo(() => {
     if (!overview?.channels) return {};
@@ -87,14 +124,87 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
     return grouped;
   }, [overview?.channels]);
 
+  if (sidebarCollapsed) {
+    return (
+      <aside className="feed-sidebar is-rail" aria-label="收起的订阅导航">
+        <button
+          type="button"
+          className="feed-rail-button"
+          onClick={toggleSidebar}
+          title="展开订阅导航"
+          aria-label="展开订阅导航"
+        >
+          ›
+        </button>
+        <button
+          type="button"
+          className="feed-rail-button"
+          onClick={onSelectAll}
+          title="全部文章"
+          aria-label="全部文章"
+        >
+          ≡
+        </button>
+        <button
+          type="button"
+          className="feed-rail-button"
+          onClick={onSelectUnread}
+          title="未读文章"
+          aria-label="未读文章"
+        >
+          •
+        </button>
+        <button
+          type="button"
+          className="feed-rail-button"
+          onClick={onSelectStarred}
+          title="星标收藏"
+          aria-label="星标收藏"
+        >
+          ☆
+        </button>
+        {onSelectAudio && (
+          <button
+            type="button"
+            className="feed-rail-button"
+            onClick={onSelectAudio}
+            title="播客与音频"
+            aria-label="播客与音频"
+          >
+            ♫
+          </button>
+        )}
+        <button
+          type="button"
+          className="feed-rail-button"
+          onClick={onOpenAddDialog}
+          title="添加订阅源"
+          aria-label="添加订阅源"
+        >
+          ＋
+        </button>
+      </aside>
+    );
+  }
+
   return (
     <aside className="feed-sidebar">
+      {/* 侧边栏头部 */}
       <div className="feed-sidebar-header">
         <span className="feed-sidebar-title">博客与 RSS</span>
         <div className="feed-sidebar-actions">
           <button
             type="button"
-            className="feed-text-btn is-primary"
+            className="feed-header-btn feed-sidebar-collapse"
+            onClick={toggleSidebar}
+            title="收起订阅导航"
+            aria-label="收起订阅导航"
+          >
+            ‹
+          </button>
+          <button
+            type="button"
+            className="feed-header-btn is-primary"
             onClick={onOpenAddDialog}
             title="添加新订阅源"
           >
@@ -102,7 +212,7 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
           </button>
           <button
             type="button"
-            className="feed-text-btn"
+            className="feed-header-btn"
             onClick={onRefreshAll}
             title="刷新全部订阅源"
           >
@@ -112,238 +222,412 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
       </div>
 
       <div className="feed-sidebar-scroll">
-        {/* Core Views */}
-        <div className="feed-nav-section-title">阅读导航</div>
+        {/* 阅读导航区 */}
+        <div className="feed-section-header">
+          <span className="feed-section-label">阅读导航</span>
+        </div>
 
-        <button
-          type="button"
-          className={`feed-nav-item ${
-            currentFilterMode === 'all' &&
-            !selectedChannelId &&
-            !selectedCategory
-              ? 'is-active'
-              : ''
-          }`}
-          onClick={onSelectAll}
-        >
-          <span className="feed-nav-item-name">全部文章</span>
-          <span className="feed-badge">[{overview?.totalArticles ?? 0}]</span>
-        </button>
-
-        <button
-          type="button"
-          className={`feed-nav-item ${
-            currentFilterMode === 'unread' &&
-            !selectedChannelId &&
-            !selectedCategory
-              ? 'is-active'
-              : ''
-          }`}
-          onClick={onSelectUnread}
-        >
-          <span className="feed-nav-item-name">未读文章</span>
-          <span
-            className={`feed-badge ${
-              (overview?.totalUnread ?? 0) > 0 ? 'has-unread' : ''
-            }`}
-          >
-            [{overview?.totalUnread ?? 0}]
-          </span>
-        </button>
-
-        <button
-          type="button"
-          className={`feed-nav-item ${
-            currentFilterMode === 'starred' &&
-            !selectedChannelId &&
-            !selectedCategory
-              ? 'is-active'
-              : ''
-          }`}
-          onClick={onSelectStarred}
-        >
-          <span className="feed-nav-item-name">星标收藏</span>
-          <span className="feed-badge">[{overview?.totalStarred ?? 0}]</span>
-        </button>
-
-        {/* Categories & Channels */}
-        <div className="feed-nav-section-heading">
-          <div className="feed-nav-section-title">分类订阅源</div>
-          {categories.length > 1 && (
-            <button
-              type="button"
-              className="feed-category-bulk-toggle"
-              onClick={() =>
-                setCollapsedCategories(
-                  allCategoriesCollapsed
-                    ? new Set()
-                    : new Set(categories.map((category) => category.name)),
-                )
-              }
-              title={allCategoriesCollapsed ? '展开全部分类' : '收起全部分类'}
-              aria-label={
-                allCategoriesCollapsed ? '展开全部分类' : '收起全部分类'
-              }
-            >
-              {allCategoriesCollapsed ? '全部展开' : '全部收起'}
-            </button>
-          )}
+        <nav className="feed-nav-list" aria-label="阅读视图导航">
           <button
             type="button"
-            className="feed-text-btn feed-add-category-btn"
-            onClick={onOpenCreateCategory}
-            title="新建分类"
+            className={`feed-nav-row ${
+              currentFilterMode === 'all' &&
+              !selectedChannelId &&
+              !selectedCategory
+                ? 'is-active'
+                : ''
+            }`}
+            onClick={onSelectAll}
           >
-            + 分类
+            <span className="feed-nav-icon" aria-hidden="true">
+              <svg viewBox="0 0 16 16" width="13" height="13">
+                <path
+                  d="M2.5 4h11M2.5 8h11M2.5 12h8"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </span>
+            <span className="feed-nav-label">全部文章</span>
+            <span className="feed-nav-count">
+              {overview?.totalArticles ?? 0}
+            </span>
           </button>
+
+          <button
+            type="button"
+            className={`feed-nav-row ${
+              currentFilterMode === 'unread' &&
+              !selectedChannelId &&
+              !selectedCategory
+                ? 'is-active'
+                : ''
+            }`}
+            onClick={onSelectUnread}
+          >
+            <span className="feed-nav-icon is-unread-dot" aria-hidden="true">
+              <svg viewBox="0 0 16 16" width="13" height="13">
+                <circle cx="4.5" cy="8" r="2.5" fill="currentColor" />
+                <path
+                  d="M8.5 5h5M8.5 8h5M8.5 11h4"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </span>
+            <span className="feed-nav-label">未读文章</span>
+            <span
+              className={`feed-nav-count ${(overview?.totalUnread ?? 0) > 0 ? 'has-unread' : ''}`}
+            >
+              {overview?.totalUnread ?? 0}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            className={`feed-nav-row ${
+              currentFilterMode === 'starred' &&
+              !selectedChannelId &&
+              !selectedCategory
+                ? 'is-active'
+                : ''
+            }`}
+            onClick={onSelectStarred}
+          >
+            <span className="feed-nav-icon is-star" aria-hidden="true">
+              <svg viewBox="0 0 16 16" width="13" height="13">
+                <path
+                  d="M8 1.5l1.9 4.3 4.6.4-3.4 3.1 1 4.6L8 11.5l-4.1 2.4 1-4.6-3.4-3.1 4.6-.4L8 1.5z"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </span>
+            <span className="feed-nav-label">星标收藏</span>
+            <span className="feed-nav-count">
+              {overview?.totalStarred ?? 0}
+            </span>
+          </button>
+
+          {onSelectAudio && (
+            <button
+              type="button"
+              className={`feed-nav-row ${
+                currentFilterMode === 'audio' &&
+                !selectedChannelId &&
+                !selectedCategory
+                  ? 'is-active'
+                  : ''
+              }`}
+              onClick={onSelectAudio}
+            >
+              <span className="feed-nav-icon is-audio" aria-hidden="true">
+                <svg
+                  viewBox="0 0 16 16"
+                  width="13"
+                  height="13"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                >
+                  <path d="M2.5 8v0M5 5.5v5M7.5 3v10M10 5.5v5M12.5 7v2" />
+                </svg>
+              </span>
+              <span className="feed-nav-label">播客与音频</span>
+              <span className="feed-nav-count">
+                {overview?.totalAudios ?? 0}
+              </span>
+            </button>
+          )}
+        </nav>
+
+        {/* 分类订阅源头部 */}
+        <div className="feed-section-header is-collapsible">
+          <span className="feed-section-label">分类订阅源</span>
+          <div className="feed-section-controls">
+            {categories.length > 1 && (
+              <button
+                type="button"
+                className="feed-mini-btn"
+                onClick={() =>
+                  setCollapsedCategories(
+                    allCategoriesCollapsed
+                      ? new Set()
+                      : new Set(categories.map((category) => category.name)),
+                  )
+                }
+                title={allCategoriesCollapsed ? '展开全部分类' : '收起全部分类'}
+                aria-label={
+                  allCategoriesCollapsed ? '展开全部分类' : '收起全部分类'
+                }
+              >
+                {allCategoriesCollapsed ? '全部展开' : '全部收起'}
+              </button>
+            )}
+            <button
+              type="button"
+              className="feed-mini-btn is-add"
+              onClick={onOpenCreateCategory}
+              title="新建分类"
+            >
+              + 分类
+            </button>
+          </div>
         </div>
 
         {(!overview?.categories || overview.categories.length === 0) && (
           <div
+            className="feed-empty-tip"
             style={{
-              padding: '12px 8px',
-              fontSize: '12px',
-              color: 'var(--muted)',
-              lineHeight: '1.6',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '8px',
+              alignItems: 'center',
+              padding: '16px 12px',
             }}
           >
-            暂无分类，可新建分类或添加订阅源
+            <span>暂无分类或订阅源</span>
+            {onRestoreDefaultFeeds && (
+              <button
+                type="button"
+                className="feed-header-btn is-primary"
+                style={{ padding: '4px 12px', fontSize: '12px' }}
+                onClick={onRestoreDefaultFeeds}
+                disabled={isRestoring}
+                title="一键恢复所有官方金融、军事与技术订阅源及播客"
+              >
+                {isRestoring ? '正在恢复推荐源...' : '恢复推荐订阅源'}
+              </button>
+            )}
           </div>
         )}
 
-        {categories.map((category) => {
-          const channels = channelsByCategory[category.name] ?? [];
-          const isCatActive =
-            selectedCategory === category.name && !selectedChannelId;
-          const isCollapsed = collapsedCategories.has(category.name);
-          const channelsPanelId = `feed-category-${encodeURIComponent(category.name)}`;
-          const catUnread = channels.reduce(
-            (sum, ch) => sum + ch.unreadCount,
-            0,
-          );
+        {/* 分类列表（一体化机构级树形结构） */}
+        <div
+          className="feed-category-tree"
+          role="tree"
+          aria-label="订阅源分类树"
+        >
+          {categories.map((category) => {
+            const channels = channelsByCategory[category.name] ?? [];
+            const isCatActive =
+              selectedCategory === category.name && !selectedChannelId;
+            const isCollapsed = collapsedCategories.has(category.name);
+            const channelsPanelId = `feed-category-${encodeURIComponent(category.name)}`;
+            const catUnread = channels.reduce(
+              (sum, ch) => sum + ch.unreadCount,
+              0,
+            );
 
-          return (
-            <section
-              key={category.name}
-              className={`feed-category-group ${isCollapsed ? 'is-collapsed' : ''}`}
-              aria-label={`${category.name}分类`}
-            >
-              <div className="feed-category-heading-row">
-                <button
-                  type="button"
-                  className="feed-category-toggle"
-                  onClick={() => {
-                    setCollapsedCategories((current) => {
-                      const next = new Set(current);
-                      if (next.has(category.name)) next.delete(category.name);
-                      else next.add(category.name);
-                      return next;
-                    });
-                  }}
-                  title={`${isCollapsed ? '展开' : '收起'}该分类`}
-                  aria-label={`${isCollapsed ? '展开' : '收起'}${category.name}分类`}
-                  aria-expanded={!isCollapsed}
-                  aria-controls={channelsPanelId}
-                >
-                  <span className="feed-category-chevron" aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  className={`feed-category-filter ${isCatActive ? 'is-active' : ''}`}
+            return (
+              <div
+                key={category.name}
+                className={`feed-category-group ${isCollapsed ? 'is-collapsed' : ''}`}
+                role="treeitem"
+                aria-expanded={!isCollapsed}
+                aria-selected={isCatActive}
+              >
+                {/* 一体化分类行 */}
+                <div
+                  className={`feed-category-row ${isCatActive ? 'is-active' : ''}`}
                   onClick={() => onSelectCategory(category.name)}
-                  title={`查看「${category.name}」中的全部文章`}
-                  aria-pressed={isCatActive}
+                  onDoubleClick={() => toggleCategoryCollapse(category.name)}
+                  title={`点击查看「${category.name}」，双击${isCollapsed ? '展开' : '折叠'}`}
                 >
+                  {/* 折叠切换图标按钮 */}
+                  <button
+                    type="button"
+                    className="feed-category-expander"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleCategoryCollapse(category.name);
+                    }}
+                    title={
+                      isCollapsed
+                        ? `展开「${category.name}」`
+                        : `折叠「${category.name}」`
+                    }
+                    aria-label={
+                      isCollapsed
+                        ? `展开「${category.name}」`
+                        : `折叠「${category.name}」`
+                    }
+                    aria-controls={channelsPanelId}
+                  >
+                    <svg
+                      className={`feed-chevron-icon ${isCollapsed ? '' : 'is-expanded'}`}
+                      viewBox="0 0 16 16"
+                      width="10"
+                      height="10"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M5.5 3.5l4.5 4.5-4.5 4.5"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.8"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </button>
+
+                  {/* 机构级分类精致色标 */}
                   <span
-                    className="feed-category-dot"
-                    style={{ backgroundColor: category.color }}
+                    className="feed-category-indicator"
+                    style={{ backgroundColor: category.color || '#3b82f6' }}
                     aria-hidden="true"
                   />
+
+                  {/* 分类标题 */}
                   <span className="feed-category-name">{category.name}</span>
+
+                  {/* 悬浮快捷操作 */}
+                  <div
+                    className="feed-category-actions"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {catUnread > 0 && onMarkCategoryRead && (
+                      <button
+                        type="button"
+                        className="feed-category-action-icon"
+                        onClick={() => onMarkCategoryRead(category.name)}
+                        title={`将「${category.name}」分类下所有文章标记为已读`}
+                        aria-label={`标记「${category.name}」已读`}
+                      >
+                        <svg viewBox="0 0 16 16" width="11" height="11">
+                          <path
+                            d="M2.5 8.5l3.5 3.5 7.5-7.5"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.8"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* 等宽未读计数胶囊 */}
                   <span
-                    className={`feed-category-count ${catUnread > 0 ? 'has-unread' : ''}`}
+                    className={`feed-category-pill ${catUnread > 0 ? 'has-unread' : 'is-zero'}`}
                     title={`${catUnread} 篇未读`}
                   >
                     {catUnread}
                   </span>
-                </button>
-              </div>
+                </div>
 
-              <div
-                id={channelsPanelId}
-                className="feed-category-channels"
-                hidden={isCollapsed}
-                aria-hidden={isCollapsed}
-              >
-                {channels.map((ch) => {
-                  const isChActive = selectedChannelId === ch.id;
-                  return (
-                    <div
-                      key={ch.id}
-                      className={`feed-channel-row ${isChActive ? 'is-active' : ''}`}
-                    >
-                      <button
-                        type="button"
-                        className={`feed-nav-item feed-channel-item ${
-                          isChActive ? 'is-active' : ''
-                        }`}
-                        onClick={() => onSelectChannel(ch.id)}
-                        title={ch.url}
-                        aria-pressed={isChActive}
-                      >
-                        <span className="feed-nav-item-name">
-                          {ch.title || '未命名'}
-                        </span>
-                        {ch.unreadCount > 0 && (
-                          <span className="feed-channel-count">
-                            {ch.unreadCount}
-                          </span>
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        className="feed-channel-unsubscribe"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          if (window.confirm(`确认退订「${ch.title}」？`)) {
-                            onDeleteChannel(ch.id);
-                          }
-                        }}
-                        title={`退订「${ch.title}」`}
-                        aria-label={`退订「${ch.title}」`}
-                      >
-                        退订
-                      </button>
+                {/* 子订阅源列表（带树状导引线） */}
+                {!isCollapsed && channels.length > 0 && (
+                  <div
+                    id={channelsPanelId}
+                    className="feed-category-channels"
+                    role="group"
+                  >
+                    <div className="feed-tree-guide" aria-hidden="true" />
+                    <div className="feed-channel-list">
+                      {channels.map((ch) => {
+                        const isChActive = selectedChannelId === ch.id;
+                        return (
+                          <div
+                            key={ch.id}
+                            className={`feed-channel-row ${isChActive ? 'is-active' : ''}`}
+                            onClick={() => onSelectChannel(ch.id)}
+                            role="treeitem"
+                            aria-selected={isChActive}
+                            title={ch.url}
+                          >
+                            <svg
+                              className="feed-channel-icon"
+                              viewBox="0 0 16 16"
+                              width="12"
+                              height="12"
+                              aria-hidden="true"
+                            >
+                              <circle
+                                cx="3"
+                                cy="13"
+                                r="1.5"
+                                fill="currentColor"
+                              />
+                              <path
+                                d="M2 8a6 6 0 0 1 6 6M2 4a10 10 0 0 1 10 10"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.5"
+                                strokeLinecap="round"
+                              />
+                            </svg>
+                            <span className="feed-channel-name">
+                              {ch.title || '未命名订阅源'}
+                            </span>
+
+                            <div
+                              className="feed-channel-actions"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <button
+                                type="button"
+                                className="feed-channel-unsub-btn"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  if (
+                                    window.confirm(`确认退订「${ch.title}」？`)
+                                  ) {
+                                    onDeleteChannel(ch.id);
+                                  }
+                                }}
+                                title={`退订「${ch.title}」`}
+                                aria-label={`退订「${ch.title}」`}
+                              >
+                                <svg viewBox="0 0 16 16" width="9" height="9">
+                                  <path
+                                    d="M3.5 3.5l9 9M12.5 3.5l-9 9"
+                                    stroke="currentColor"
+                                    strokeWidth="1.6"
+                                    strokeLinecap="round"
+                                  />
+                                </svg>
+                              </button>
+                            </div>
+
+                            {ch.unreadCount > 0 && (
+                              <span className="feed-channel-pill has-unread">
+                                {ch.unreadCount}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
-                  );
-                })}
+                  </div>
+                )}
               </div>
-            </section>
-          );
-        })}
+            );
+          })}
+        </div>
 
-        {/* OPML Actions */}
-        <div
-          style={{
-            marginTop: 'auto',
-            paddingTop: '16px',
-            display: 'flex',
-            gap: '6px',
-          }}
-        >
+        {/* 底部 OPML 机构级工具栏 */}
+        <div className="feed-sidebar-footer">
           <button
             type="button"
-            className="feed-text-btn"
-            style={{ flex: 1, textAlign: 'center' }}
+            className="feed-footer-btn"
             onClick={onOpenImportOpml}
+            title="导入 OPML 订阅清单"
           >
             导入 OPML
           </button>
           <button
             type="button"
-            className="feed-text-btn"
-            style={{ flex: 1, textAlign: 'center' }}
+            className="feed-footer-btn"
             onClick={onOpenExportOpml}
+            title="导出 OPML 订阅清单"
           >
             导出 OPML
           </button>

@@ -19,8 +19,8 @@ export const feedApi = {
     return invoke<void>('feed_create_category', { name });
   },
 
-  async seedDefaultSources(): Promise<string[]> {
-    return invoke<string[]>('feed_seed_default_sources');
+  async seedDefaultSources(force = false): Promise<string[]> {
+    return invoke<string[]>('feed_seed_default_sources', { force });
   },
 
   async refreshChannels(ids: string[]): Promise<number> {
@@ -101,8 +101,13 @@ export const feedApi = {
     });
   },
 
-  async importOpml(opmlXml: string): Promise<number> {
-    return invoke<number>('feed_import_opml', { opmlXml });
+  async importOpml(
+    itemsOrXml: import('./types').OpmlOutlineItem[] | string,
+  ): Promise<number> {
+    if (typeof itemsOrXml === 'string') {
+      return invoke<number>('feed_import_opml', { opmlXml: itemsOrXml });
+    }
+    return invoke<number>('feed_import_opml', { items: itemsOrXml });
   },
 
   async exportOpml(): Promise<string> {

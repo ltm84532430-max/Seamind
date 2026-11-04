@@ -7,12 +7,13 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from 'react';
 import type { BookGalaxyGraph, GalaxyNode } from './book-galaxy-model';
+import type { Theme } from './app-storage';
 import './book-galaxy-view.css';
 
 export interface BookGalaxyGraphViewProps {
   graph: BookGalaxyGraph;
   currentChapterHref?: string;
-  theme?: 'light' | 'dark';
+  theme?: Theme;
   onSelectNode: (node: GalaxyNode) => void;
   onSwitchToEditor?: () => void;
 }

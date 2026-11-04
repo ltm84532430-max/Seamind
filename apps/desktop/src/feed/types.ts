@@ -33,6 +33,9 @@ export interface FeedArticle {
   starred: boolean;
   readingTimeMin: number;
   createdAt: number;
+  audioUrl?: string | null;
+  audioType?: string | null;
+  audioDuration?: number | null;
 }
 
 export interface ArticleFilter {
@@ -43,6 +46,7 @@ export interface ArticleFilter {
   search?: string;
   limit?: number;
   offset?: number;
+  hasAudio?: boolean;
 }
 
 export interface CategoryStats {
@@ -56,6 +60,7 @@ export interface FeedOverview {
   totalUnread: number;
   totalArticles: number;
   totalStarred: number;
+  totalAudios?: number;
   channels: FeedChannelWithStats[];
   categories: CategoryStats[];
 }

@@ -1,0 +1,2088 @@
+/* ==========================================================================
+   SeaMind Custom Themes: Navy (深蓝) & Purple (紫色)
+   Complete styling system covering typography, panels, controls, editors,
+   feeds, mindmap, canvas, audio player, terminal and modals.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. Theme: NAVY (深海蓝 / Midnight Oceanic Cyber-Sapphire)
+   -------------------------------------------------------------------------- */
+.app-shell[data-theme='navy'] {
+  color-scheme: dark;
+  --bg: #070f1e;
+  --line: #162a47;
+  --line-strong: #22436d;
+  --muted: #7293b8;
+  --ink: #e0f0fe;
+  --accent: #38bdf8;
+  --accent-hover: #7dd3fc;
+  --accent-active: #0ea5e9;
+  --panel: #0b172a;
+  --panel-elevated: #0f213b;
+  --card-bg: #0d1b32;
+  --input-bg: #081324;
+  --input-border: #1a3658;
+  --hover-bg: rgba(56, 189, 248, 0.08);
+  --active-bg: rgba(56, 189, 248, 0.16);
+  --badge-bg: #0c2747;
+  --badge-border: #1e4a7d;
+  --badge-text: #7dd3fc;
+  --scrollbar-slider: rgba(56, 189, 248, 0.22);
+  --scrollbar-slider-hover: rgba(56, 189, 248, 0.42);
+  --scrollbar-slider-active: rgba(56, 189, 248, 0.65);
+  color: #cde0f5;
+  background: #070f1e;
+}
+
+/* Base Layout & Panels (Navy) */
+.app-shell[data-theme='navy'] .topbar,
+.app-shell[data-theme='navy'] .workspace,
+.app-shell[data-theme='navy'] .editor-pane,
+.app-shell[data-theme='navy'] .preview-pane,
+.app-shell[data-theme='navy'] .library-sidebar,
+.app-shell[data-theme='navy'] .ai-sidebar,
+.app-shell[data-theme='navy'] .settings-dialog {
+  border-color: var(--line);
+  background: #0b172a;
+}
+
+.app-shell[data-theme='navy'] .topbar,
+.app-shell[data-theme='navy'] .prompt-bar,
+.app-shell[data-theme='navy'] .pane-heading,
+.app-shell[data-theme='navy'] .document-metadata,
+.app-shell[data-theme='navy'] .editor-footer,
+.app-shell[data-theme='navy'] .statusbar,
+.app-shell[data-theme='navy'] .library-heading,
+.app-shell[data-theme='navy'] .library-location,
+.app-shell[data-theme='navy'] .document-list-heading {
+  border-color: var(--line);
+}
+
+.app-shell[data-theme='navy'] .statusbar {
+  background: #091424;
+  color: #7293b8;
+}
+
+/* Brand mark (Navy) */
+.app-shell[data-theme='navy'] .brand-mark {
+  border-color: #1e4778;
+  background: #0c203b;
+  color: var(--accent);
+}
+
+.app-shell[data-theme='navy'] .brand-mark svg {
+  color: var(--accent);
+}
+
+.app-shell[data-theme='navy'] .brand-name,
+.app-shell[data-theme='navy'] .pane-heading h1,
+.app-shell[data-theme='navy'] .settings-heading h2 {
+  color: #eaf3fd;
+}
+
+.app-shell[data-theme='navy'] .brand-name span,
+.app-shell[data-theme='navy'] .document-name,
+.app-shell[data-theme='navy'] .sync-state,
+.app-shell[data-theme='navy'] .prompt-copy span,
+.app-shell[data-theme='navy'] .pane-kicker,
+.app-shell[data-theme='navy'] .format-badge,
+.app-shell[data-theme='navy'] .editor-footer,
+.app-shell[data-theme='navy'] .canvas-corner,
+.app-shell[data-theme='navy'] .library-location-label,
+.app-shell[data-theme='navy'] .library-section-label,
+.app-shell[data-theme='navy'] .settings-footer,
+.app-shell[data-theme='navy'] .settings-field,
+.app-shell[data-theme='navy'] .secret-status {
+  color: #7293b8;
+}
+
+/* Buttons, Toggles & Badges (Navy) */
+.app-shell[data-theme='navy'] .phase-badge,
+.app-shell[data-theme='navy'] .format-badge,
+.app-shell[data-theme='navy'] .library-count,
+.app-shell[data-theme='navy'] .pane-collapse-button,
+.app-shell[data-theme='navy'] .theme-toggle-button,
+.app-shell[data-theme='navy'] .settings-button,
+.app-shell[data-theme='navy'] .quiet-button,
+.app-shell[data-theme='navy'] .library-import-action,
+.app-shell[data-theme='navy'] .icon-text-button,
+.app-shell[data-theme='navy'] .canvas-tools .fit-button,
+.app-shell[data-theme='navy'] .canvas-tools .map-style-trigger {
+  border-color: #1d3b66;
+  color: #cde0f5;
+  background: #0f223d;
+}
+
+.app-shell[data-theme='navy'] .pane-collapse-button:hover,
+.app-shell[data-theme='navy'] .theme-toggle-button:hover,
+.app-shell[data-theme='navy'] .settings-button:hover,
+.app-shell[data-theme='navy'] .quiet-button:hover,
+.app-shell[data-theme='navy'] .library-import-action:hover:not(:disabled),
+.app-shell[data-theme='navy'] .icon-text-button:hover:not(:disabled),
+.app-shell[data-theme='navy'] .canvas-tools .fit-button:hover,
+.app-shell[data-theme='navy'] .canvas-tools .map-style-trigger:hover,
+.app-shell[data-theme='navy']
+  .canvas-tools
+  .map-style-trigger[aria-expanded='true'] {
+  border-color: #38bdf8;
+  color: #ffffff;
+  background: #152f55;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.25);
+}
+
+.app-shell[data-theme='navy'] .save-document-button,
+.app-shell[data-theme='navy'] .agent-apply-button {
+  background: #0284c7;
+  border-color: #38bdf8;
+  color: #ffffff;
+}
+
+.app-shell[data-theme='navy'] .save-document-button:hover:not(:disabled),
+.app-shell[data-theme='navy'] .agent-apply-button:hover:not(:disabled) {
+  background: #0369a1;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.35);
+}
+
+/* Inputs & Forms (Navy) */
+.app-shell[data-theme='navy'] .prompt-input-wrap textarea,
+.app-shell[data-theme='navy'] .document-metadata input,
+.app-shell[data-theme='navy'] .settings-field input,
+.app-shell[data-theme='navy'] .library-search input {
+  border-color: #1a3658;
+  color: #eaf3fd;
+  background: #081324;
+}
+
+.app-shell[data-theme='navy'] .prompt-input-wrap textarea:focus,
+.app-shell[data-theme='navy'] .document-metadata input:focus,
+.app-shell[data-theme='navy'] .settings-field input:focus,
+.app-shell[data-theme='navy'] .library-search input:focus {
+  border-color: #38bdf8;
+  background: #091729;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25);
+}
+
+.app-shell[data-theme='navy'] .prompt-input-wrap textarea::placeholder,
+.app-shell[data-theme='navy'] .library-search input::placeholder {
+  color: #55779c;
+}
+
+/* Markdown Editor (Navy) */
+.app-shell[data-theme='navy'] .markdown-editor {
+  color: #dce8f5;
+  background: #0b172a;
+}
+
+.app-shell[data-theme='navy'] .markdown-editor:focus,
+.app-shell[data-theme='navy'] .markdown-editor:focus-within {
+  box-shadow: inset 2px 0 0 #38bdf8;
+}
+
+.app-shell[data-theme='navy'] .markdown-editor .cm-editor {
+  color: #dce8f5;
+  background: transparent;
+}
+
+.app-shell[data-theme='navy'] .markdown-editor .cm-gutters {
+  border-color: #162a47;
+  color: #5d7e9f;
+  background: #081324;
+}
+
+.app-shell[data-theme='navy'] .markdown-editor .cm-activeLine {
+  background: #102848;
+}
+
+.app-shell[data-theme='navy'] .markdown-editor .cm-selectionBackground,
+.app-shell[data-theme='navy']
+  .markdown-editor
+  .cm-focused
+  .cm-selectionBackground {
+  background: #1a3f6e !important;
+}
+
+/* Markdown Minimap (Navy) */
+.app-shell[data-theme='navy'] .markdown-minimap {
+  --minimap-line: #4a6d92;
+  --minimap-heading: #38bdf8;
+  --minimap-code: #60a5fa;
+  --minimap-active: #7dd3fc;
+  --minimap-slider: rgba(56, 189, 248, 0.2);
+  --minimap-slider-hover: rgba(56, 189, 248, 0.35);
+  --minimap-slider-active: rgba(56, 189, 248, 0.5);
+  background: #071220;
+}
+
+/* Markdown Rendered Preview (Navy) */
+.app-shell[data-theme='navy'] .markdown-rendered-preview {
+  color: #d6e4f2;
+  background: #0b172a;
+}
+
+.app-shell[data-theme='navy'] .markdown-rendered-preview h1,
+.app-shell[data-theme='navy'] .markdown-rendered-preview h2,
+.app-shell[data-theme='navy'] .markdown-rendered-preview h3,
+.app-shell[data-theme='navy'] .markdown-rendered-preview h4,
+.app-shell[data-theme='navy'] .markdown-rendered-preview h5,
+.app-shell[data-theme='navy'] .markdown-rendered-preview h6 {
+  color: #eaf3fd;
+}
+
+.app-shell[data-theme='navy'] .markdown-rendered-preview pre,
+.app-shell[data-theme='navy'] .markdown-rendered-preview th,
+.app-shell[data-theme='navy'] .markdown-rendered-preview td {
+  border-color: #1a3658;
+}
+
+.app-shell[data-theme='navy'] .markdown-rendered-preview pre,
+.app-shell[data-theme='navy'] .markdown-rendered-preview th,
+.app-shell[data-theme='navy'] .markdown-rendered-preview :not(pre) > code {
+  color: #7dd3fc;
+  background: #071220;
+}
+
+.app-shell[data-theme='navy'] .markdown-rendered-preview blockquote {
+  border-color: #0284c7;
+  color: #9bb7d4;
+  background: rgba(2, 132, 199, 0.08);
+}
+
+.app-shell[data-theme='navy'] .markdown-rendered-preview a {
+  color: #38bdf8;
+}
+
+.app-shell[data-theme='navy'] .markdown-rendered-preview hr {
+  border-color: #1a3658;
+}
+
+.app-shell[data-theme='navy'] .markdown-mode-switch button.is-active {
+  color: var(--accent);
+  background: #0b172a;
+  border-bottom-color: var(--accent);
+}
+
+/* Canvas & Markmap (Navy) */
+.app-shell[data-theme='navy'] .canvas-wrap {
+  background: #07101e;
+  --map-line: #1e3a64;
+}
+
+.app-shell[data-theme='navy'] .markmap {
+  --markmap-circle-open-bg: #07101e;
+  --markmap-text-color: #dce8f5;
+}
+
+.app-shell[data-theme='navy'] .markmap-node > foreignObject > div > div {
+  border: 1px solid #1d3b66;
+  color: #e0f0fe;
+  background: #0d1b32;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+
+.app-shell[data-theme='navy'] .markmap-node > foreignObject > div > div:hover {
+  border-color: #38bdf8;
+}
+
+.app-shell[data-theme='navy'] .canvas-node-context-menu {
+  border-color: #1d3b66;
+  color: #dce8f5;
+  background: #0d1b32;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.6);
+}
+
+.app-shell[data-theme='navy'] .canvas-node-context-menu button:hover {
+  background: #152f55;
+  color: #ffffff;
+}
+
+/* Feed Workspace (Navy) */
+.app-shell[data-theme='navy'] .feed-sidebar {
+  background: #091424;
+}
+
+.app-shell[data-theme='navy'] .feed-sidebar-header,
+.app-shell[data-theme='navy'] .feed-article-header,
+.app-shell[data-theme='navy'] .feed-reader-toolbar,
+.app-shell[data-theme='navy'] .feed-article-search-bar {
+  background: #0b172a;
+  border-bottom-color: #162a47;
+}
+
+.app-shell[data-theme='navy'] .feed-search-input-wrap {
+  background: rgba(56, 189, 248, 0.05);
+  border-color: #1a3658;
+  color: #e0f0fe;
+}
+
+.app-shell[data-theme='navy'] .feed-search-input-wrap:hover {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.09);
+}
+
+.app-shell[data-theme='navy'] .feed-search-input-wrap:focus-within {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25);
+}
+
+.app-shell[data-theme='navy'] .feed-header-btn,
+.app-shell[data-theme='navy'] .feed-action-btn {
+  border-color: #1d3b66;
+  background: #0f223d;
+  color: #cde0f5;
+}
+
+.app-shell[data-theme='navy'] .feed-header-btn:hover,
+.app-shell[data-theme='navy'] .feed-action-btn:hover {
+  border-color: #38bdf8;
+  background: #152f55;
+  color: #ffffff;
+}
+
+.app-shell[data-theme='navy'] .feed-action-btn.is-starred-active {
+  background: #382d12;
+  border-color: #f59e0b;
+  color: #fbbf24;
+}
+
+.app-shell[data-theme='navy'] .feed-action-btn.is-read-active {
+  background: #0c2747;
+  border-color: #38bdf8;
+  color: #38bdf8;
+}
+
+.app-shell[data-theme='navy'] .feed-filter-segmented {
+  background: #081324;
+  border: 1px solid #162a47;
+}
+
+.app-shell[data-theme='navy'] .feed-segmented-item.is-active {
+  background: #0e223d;
+  color: #38bdf8;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.app-shell[data-theme='navy'] .feed-nav-row.is-active,
+.app-shell[data-theme='navy'] .feed-category-row.is-active,
+.app-shell[data-theme='navy'] .feed-channel-row.is-active {
+  background: #102442;
+  border-left-color: #38bdf8;
+}
+
+.app-shell[data-theme='navy'] .feed-nav-count.has-unread,
+.app-shell[data-theme='navy'] .feed-category-pill.has-unread,
+.app-shell[data-theme='navy'] .feed-channel-pill.has-unread {
+  background: #0c2a4c;
+  color: #7dd3fc;
+  border: 1px solid #1e4d82;
+}
+
+.app-shell[data-theme='navy'] .feed-article-card:hover {
+  background: #0e2038;
+}
+
+.app-shell[data-theme='navy'] .feed-article-card.is-active {
+  background: #122846;
+  border-left-color: #38bdf8;
+}
+
+.app-shell[data-theme='navy'] .feed-tag-pill.is-starred {
+  background: #382810;
+  color: #fbbf24;
+  border-color: #8c631a;
+}
+
+.app-shell[data-theme='navy'] .feed-tag-pill.is-unread {
+  background: #0c2747;
+  color: #38bdf8;
+  border-color: #1e4a7d;
+}
+
+.app-shell[data-theme='navy'] .feed-audio-player-dock {
+  background: rgba(11, 23, 42, 0.94);
+  border-top-color: #1e3a64;
+  box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.5);
+}
+
+.app-shell[data-theme='navy'] .feed-audio-badge-icon {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+}
+
+.app-shell[data-theme='navy'] .feed-audio-track-scrub {
+  background: #142845;
+}
+
+.app-shell[data-theme='navy'] .feed-audio-buffered-bar {
+  background: #1e3d68;
+}
+
+.app-shell[data-theme='navy'] .feed-audio-progress-bar {
+  background: #38bdf8;
+}
+
+/* --------------------------------------------------------------------------
+   2. Theme: PURPLE (暗夜紫晶 / Deep Twilight Amethyst)
+   -------------------------------------------------------------------------- */
+.app-shell[data-theme='purple'] {
+  color-scheme: dark;
+  --bg: #0e081a;
+  --line: #2b1b42;
+  --line-strong: #3e265f;
+  --muted: #a48fbe;
+  --ink: #f6effe;
+  --accent: #c084fc;
+  --accent-hover: #e879f9;
+  --accent-active: #a855f7;
+  --panel: #140d24;
+  --panel-elevated: #1b1130;
+  --card-bg: #19102c;
+  --input-bg: #0d0818;
+  --input-border: #331e50;
+  --hover-bg: rgba(192, 132, 252, 0.08);
+  --active-bg: rgba(192, 132, 252, 0.16);
+  --badge-bg: #291447;
+  --badge-border: #5b2896;
+  --badge-text: #e879f9;
+  --scrollbar-slider: rgba(192, 132, 252, 0.22);
+  --scrollbar-slider-hover: rgba(192, 132, 252, 0.42);
+  --scrollbar-slider-active: rgba(192, 132, 252, 0.65);
+  color: #e5d7f7;
+  background: #0e081a;
+}
+
+/* Base Layout & Panels (Purple) */
+.app-shell[data-theme='purple'] .topbar,
+.app-shell[data-theme='purple'] .workspace,
+.app-shell[data-theme='purple'] .editor-pane,
+.app-shell[data-theme='purple'] .preview-pane,
+.app-shell[data-theme='purple'] .library-sidebar,
+.app-shell[data-theme='purple'] .ai-sidebar,
+.app-shell[data-theme='purple'] .settings-dialog {
+  border-color: var(--line);
+  background: #140d24;
+}
+
+.app-shell[data-theme='purple'] .topbar,
+.app-shell[data-theme='purple'] .prompt-bar,
+.app-shell[data-theme='purple'] .pane-heading,
+.app-shell[data-theme='purple'] .document-metadata,
+.app-shell[data-theme='purple'] .editor-footer,
+.app-shell[data-theme='purple'] .statusbar,
+.app-shell[data-theme='purple'] .library-heading,
+.app-shell[data-theme='purple'] .library-location,
+.app-shell[data-theme='purple'] .document-list-heading {
+  border-color: var(--line);
+}
+
+.app-shell[data-theme='purple'] .statusbar {
+  background: #10091d;
+  color: #a48fbe;
+}
+
+/* Brand mark (Purple) */
+.app-shell[data-theme='purple'] .brand-mark {
+  border-color: #552786;
+  background: #24133f;
+  color: var(--accent);
+}
+
+.app-shell[data-theme='purple'] .brand-mark svg {
+  color: var(--accent);
+}
+
+.app-shell[data-theme='purple'] .brand-name,
+.app-shell[data-theme='purple'] .pane-heading h1,
+.app-shell[data-theme='purple'] .settings-heading h2 {
+  color: #f8f4ff;
+}
+
+.app-shell[data-theme='purple'] .brand-name span,
+.app-shell[data-theme='purple'] .document-name,
+.app-shell[data-theme='purple'] .sync-state,
+.app-shell[data-theme='purple'] .prompt-copy span,
+.app-shell[data-theme='purple'] .pane-kicker,
+.app-shell[data-theme='purple'] .format-badge,
+.app-shell[data-theme='purple'] .editor-footer,
+.app-shell[data-theme='purple'] .canvas-corner,
+.app-shell[data-theme='purple'] .library-location-label,
+.app-shell[data-theme='purple'] .library-section-label,
+.app-shell[data-theme='purple'] .settings-footer,
+.app-shell[data-theme='purple'] .settings-field,
+.app-shell[data-theme='purple'] .secret-status {
+  color: #a48fbe;
+}
+
+/* Buttons, Toggles & Badges (Purple) */
+.app-shell[data-theme='purple'] .phase-badge,
+.app-shell[data-theme='purple'] .format-badge,
+.app-shell[data-theme='purple'] .library-count,
+.app-shell[data-theme='purple'] .pane-collapse-button,
+.app-shell[data-theme='purple'] .theme-toggle-button,
+.app-shell[data-theme='purple'] .settings-button,
+.app-shell[data-theme='purple'] .quiet-button,
+.app-shell[data-theme='purple'] .library-import-action,
+.app-shell[data-theme='purple'] .icon-text-button,
+.app-shell[data-theme='purple'] .canvas-tools .fit-button,
+.app-shell[data-theme='purple'] .canvas-tools .map-style-trigger {
+  border-color: #3b255c;
+  color: #e5d7f7;
+  background: #201438;
+}
+
+.app-shell[data-theme='purple'] .pane-collapse-button:hover,
+.app-shell[data-theme='purple'] .theme-toggle-button:hover,
+.app-shell[data-theme='purple'] .settings-button:hover,
+.app-shell[data-theme='purple'] .quiet-button:hover,
+.app-shell[data-theme='purple'] .library-import-action:hover:not(:disabled),
+.app-shell[data-theme='purple'] .icon-text-button:hover:not(:disabled),
+.app-shell[data-theme='purple'] .canvas-tools .fit-button:hover,
+.app-shell[data-theme='purple'] .canvas-tools .map-style-trigger:hover,
+.app-shell[data-theme='purple']
+  .canvas-tools
+  .map-style-trigger[aria-expanded='true'] {
+  border-color: #c084fc;
+  color: #ffffff;
+  background: #2b1b4b;
+  box-shadow: 0 0 8px rgba(192, 132, 252, 0.25);
+}
+
+.app-shell[data-theme='purple'] .save-document-button,
+.app-shell[data-theme='purple'] .agent-apply-button {
+  background: #9333ea;
+  border-color: #c084fc;
+  color: #ffffff;
+}
+
+.app-shell[data-theme='purple'] .save-document-button:hover:not(:disabled),
+.app-shell[data-theme='purple'] .agent-apply-button:hover:not(:disabled) {
+  background: #7e22ce;
+  box-shadow: 0 0 10px rgba(192, 132, 252, 0.35);
+}
+
+/* Inputs & Forms (Purple) */
+.app-shell[data-theme='purple'] .prompt-input-wrap textarea,
+.app-shell[data-theme='purple'] .document-metadata input,
+.app-shell[data-theme='purple'] .settings-field input,
+.app-shell[data-theme='purple'] .library-search input {
+  border-color: #331e50;
+  color: #f8f4ff;
+  background: #0d0818;
+}
+
+.app-shell[data-theme='purple'] .prompt-input-wrap textarea:focus,
+.app-shell[data-theme='purple'] .document-metadata input:focus,
+.app-shell[data-theme='purple'] .settings-field input:focus,
+.app-shell[data-theme='purple'] .library-search input:focus {
+  border-color: #c084fc;
+  background: #120a22;
+  box-shadow: 0 0 0 2px rgba(192, 132, 252, 0.25);
+}
+
+.app-shell[data-theme='purple'] .prompt-input-wrap textarea::placeholder,
+.app-shell[data-theme='purple'] .library-search input::placeholder {
+  color: #795d98;
+}
+
+/* Markdown Editor (Purple) */
+.app-shell[data-theme='purple'] .markdown-editor {
+  color: #eee4fa;
+  background: #140d24;
+}
+
+.app-shell[data-theme='purple'] .markdown-editor:focus,
+.app-shell[data-theme='purple'] .markdown-editor:focus-within {
+  box-shadow: inset 2px 0 0 #c084fc;
+}
+
+.app-shell[data-theme='purple'] .markdown-editor .cm-editor {
+  color: #eee4fa;
+  background: transparent;
+}
+
+.app-shell[data-theme='purple'] .markdown-editor .cm-gutters {
+  border-color: #2b1b42;
+  color: #856a9e;
+  background: #10091e;
+}
+
+.app-shell[data-theme='purple'] .markdown-editor .cm-activeLine {
+  background: #22133c;
+}
+
+.app-shell[data-theme='purple'] .markdown-editor .cm-selectionBackground,
+.app-shell[data-theme='purple']
+  .markdown-editor
+  .cm-focused
+  .cm-selectionBackground {
+  background: #391c5c !important;
+}
+
+/* Markdown Minimap (Purple) */
+.app-shell[data-theme='purple'] .markdown-minimap {
+  --minimap-line: #6e4e8c;
+  --minimap-heading: #c084fc;
+  --minimap-code: #818cf8;
+  --minimap-active: #e879f9;
+  --minimap-slider: rgba(192, 132, 252, 0.2);
+  --minimap-slider-hover: rgba(192, 132, 252, 0.35);
+  --minimap-slider-active: rgba(192, 132, 252, 0.5);
+  background: #0d0818;
+}
+
+/* Markdown Rendered Preview (Purple) */
+.app-shell[data-theme='purple'] .markdown-rendered-preview {
+  color: #e8ddf7;
+  background: #140d24;
+}
+
+.app-shell[data-theme='purple'] .markdown-rendered-preview h1,
+.app-shell[data-theme='purple'] .markdown-rendered-preview h2,
+.app-shell[data-theme='purple'] .markdown-rendered-preview h3,
+.app-shell[data-theme='purple'] .markdown-rendered-preview h4,
+.app-shell[data-theme='purple'] .markdown-rendered-preview h5,
+.app-shell[data-theme='purple'] .markdown-rendered-preview h6 {
+  color: #f8f4ff;
+}
+
+.app-shell[data-theme='purple'] .markdown-rendered-preview pre,
+.app-shell[data-theme='purple'] .markdown-rendered-preview th,
+.app-shell[data-theme='purple'] .markdown-rendered-preview td {
+  border-color: #331e50;
+}
+
+.app-shell[data-theme='purple'] .markdown-rendered-preview pre,
+.app-shell[data-theme='purple'] .markdown-rendered-preview th,
+.app-shell[data-theme='purple'] .markdown-rendered-preview :not(pre) > code {
+  color: #e879f9;
+  background: #0d0818;
+}
+
+.app-shell[data-theme='purple'] .markdown-rendered-preview blockquote {
+  border-color: #a855f7;
+  color: #c3b2db;
+  background: rgba(168, 85, 247, 0.08);
+}
+
+.app-shell[data-theme='purple'] .markdown-rendered-preview a {
+  color: #c084fc;
+}
+
+.app-shell[data-theme='purple'] .markdown-rendered-preview hr {
+  border-color: #331e50;
+}
+
+.app-shell[data-theme='purple'] .markdown-mode-switch button.is-active {
+  color: var(--accent);
+  background: #140d24;
+  border-bottom-color: var(--accent);
+}
+
+/* Canvas & Markmap (Purple) */
+.app-shell[data-theme='purple'] .canvas-wrap {
+  background: #0d0818;
+  --map-line: #3b2259;
+}
+
+.app-shell[data-theme='purple'] .markmap {
+  --markmap-circle-open-bg: #0d0818;
+  --markmap-text-color: #eee4fa;
+}
+
+.app-shell[data-theme='purple'] .markmap-node > foreignObject > div > div {
+  border: 1px solid #3b255c;
+  color: #f6effe;
+  background: #19102c;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+
+.app-shell[data-theme='purple']
+  .markmap-node
+  > foreignObject
+  > div
+  > div:hover {
+  border-color: #c084fc;
+}
+
+.app-shell[data-theme='purple'] .canvas-node-context-menu {
+  border-color: #3b255c;
+  color: #eee4fa;
+  background: #19102c;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.6);
+}
+
+.app-shell[data-theme='purple'] .canvas-node-context-menu button:hover {
+  background: #2b1b4b;
+  color: #ffffff;
+}
+
+/* Feed Workspace (Purple) */
+.app-shell[data-theme='purple'] .feed-sidebar {
+  background: #10091d;
+}
+
+.app-shell[data-theme='purple'] .feed-sidebar-header,
+.app-shell[data-theme='purple'] .feed-article-header,
+.app-shell[data-theme='purple'] .feed-reader-toolbar,
+.app-shell[data-theme='purple'] .feed-article-search-bar {
+  background: #140d24;
+  border-bottom-color: #2b1b42;
+}
+
+.app-shell[data-theme='purple'] .feed-search-input-wrap {
+  background: rgba(192, 132, 252, 0.05);
+  border-color: #331e50;
+  color: #f6effe;
+}
+
+.app-shell[data-theme='purple'] .feed-search-input-wrap:hover {
+  border-color: #c084fc;
+  background: rgba(192, 132, 252, 0.09);
+}
+
+.app-shell[data-theme='purple'] .feed-search-input-wrap:focus-within {
+  border-color: #c084fc;
+  background: rgba(192, 132, 252, 0.12);
+  box-shadow: 0 0 0 2px rgba(192, 132, 252, 0.25);
+}
+
+.app-shell[data-theme='purple'] .feed-header-btn,
+.app-shell[data-theme='purple'] .feed-action-btn {
+  border-color: #3b255c;
+  background: #201438;
+  color: #e5d7f7;
+}
+
+.app-shell[data-theme='purple'] .feed-header-btn:hover,
+.app-shell[data-theme='purple'] .feed-action-btn:hover {
+  border-color: #c084fc;
+  background: #2b1b4b;
+  color: #ffffff;
+}
+
+.app-shell[data-theme='purple'] .feed-action-btn.is-starred-active {
+  background: #382d12;
+  border-color: #f59e0b;
+  color: #fbbf24;
+}
+
+.app-shell[data-theme='purple'] .feed-action-btn.is-read-active {
+  background: #2b154a;
+  border-color: #c084fc;
+  color: #c084fc;
+}
+
+.app-shell[data-theme='purple'] .feed-filter-segmented {
+  background: #0d0818;
+  border: 1px solid #2b1b42;
+}
+
+.app-shell[data-theme='purple'] .feed-segmented-item.is-active {
+  background: #22133c;
+  color: #c084fc;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.app-shell[data-theme='purple'] .feed-nav-row.is-active,
+.app-shell[data-theme='purple'] .feed-category-row.is-active,
+.app-shell[data-theme='purple'] .feed-channel-row.is-active {
+  background: #23143e;
+  border-left-color: #c084fc;
+}
+
+.app-shell[data-theme='purple'] .feed-nav-count.has-unread,
+.app-shell[data-theme='purple'] .feed-category-pill.has-unread,
+.app-shell[data-theme='purple'] .feed-channel-pill.has-unread {
+  background: #2b154a;
+  color: #e879f9;
+  border: 1px solid #5c2a96;
+}
+
+.app-shell[data-theme='purple'] .feed-article-card:hover {
+  background: #1c1133;
+}
+
+.app-shell[data-theme='purple'] .feed-article-card.is-active {
+  background: #261642;
+  border-left-color: #c084fc;
+}
+
+.app-shell[data-theme='purple'] .feed-tag-pill.is-starred {
+  background: #382810;
+  color: #fbbf24;
+  border-color: #8c631a;
+}
+
+.app-shell[data-theme='purple'] .feed-tag-pill.is-unread {
+  background: #2b154a;
+  color: #c084fc;
+  border-color: #5c2a96;
+}
+
+.app-shell[data-theme='purple'] .feed-audio-player-dock {
+  background: rgba(20, 13, 36, 0.94);
+  border-top-color: #3b2259;
+  box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.5);
+}
+
+.app-shell[data-theme='purple'] .feed-audio-badge-icon {
+  background: rgba(192, 132, 252, 0.15);
+  color: #c084fc;
+}
+
+.app-shell[data-theme='purple'] .feed-audio-track-scrub {
+  background: #2a1643;
+}
+
+.app-shell[data-theme='purple'] .feed-audio-buffered-bar {
+  background: #3e2261;
+}
+
+.app-shell[data-theme='purple'] .feed-audio-progress-bar {
+  background: #c084fc;
+}
+
+/* --------------------------------------------------------------------------
+   3. Library & Outline (Navy & Purple)
+   -------------------------------------------------------------------------- */
+.app-shell[data-theme='navy'] .library-tabs {
+  background: #081324;
+  border-bottom-color: #162a47;
+}
+
+.app-shell[data-theme='navy'] .library-tab {
+  color: #7293b8;
+}
+
+.app-shell[data-theme='navy'] .library-tab:hover {
+  color: #e0f0fe;
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.app-shell[data-theme='navy'] .library-tab.is-active {
+  color: #ffffff;
+  background: #102442;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.app-shell[data-theme='navy'] .library-tab-badge {
+  background: #0d1d36;
+  color: #7293b8;
+}
+
+.app-shell[data-theme='navy'] .library-tab.is-active .library-tab-badge {
+  background: #0c2a4c;
+  color: #7dd3fc;
+}
+
+.app-shell[data-theme='navy'] .library-folder-header {
+  color: #cde0f5;
+}
+
+.app-shell[data-theme='navy'] .library-folder-header:hover {
+  background: #0e223d;
+  color: #ffffff;
+}
+
+.app-shell[data-theme='navy'] .library-doc-row:hover {
+  background: #0e223d;
+  border-color: #1a3658;
+}
+
+.app-shell[data-theme='navy'] .library-doc-row.is-selected {
+  background: #102747;
+  border-color: #38bdf8;
+}
+
+.app-shell[data-theme='navy'] .outline-filter-bar {
+  background: #081324;
+  border-color: #162a47;
+}
+
+.app-shell[data-theme='navy'] .outline-row:hover {
+  background: #0e223d;
+  color: #38bdf8;
+}
+
+/* Purple Library */
+.app-shell[data-theme='purple'] .library-tabs {
+  background: #0d0818;
+  border-bottom-color: #2b1b42;
+}
+
+.app-shell[data-theme='purple'] .library-tab {
+  color: #a48fbe;
+}
+
+.app-shell[data-theme='purple'] .library-tab:hover {
+  color: #f6effe;
+  background: rgba(192, 132, 252, 0.08);
+}
+
+.app-shell[data-theme='purple'] .library-tab.is-active {
+  color: #ffffff;
+  background: #23143e;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.app-shell[data-theme='purple'] .library-tab-badge {
+  background: #1b1030;
+  color: #a48fbe;
+}
+
+.app-shell[data-theme='purple'] .library-tab.is-active .library-tab-badge {
+  background: #2b154a;
+  color: #e879f9;
+}
+
+.app-shell[data-theme='purple'] .library-folder-header {
+  color: #e5d7f7;
+}
+
+.app-shell[data-theme='purple'] .library-folder-header:hover {
+  background: #1c1133;
+  color: #ffffff;
+}
+
+.app-shell[data-theme='purple'] .library-doc-row:hover {
+  background: #1c1133;
+  border-color: #331e50;
+}
+
+.app-shell[data-theme='purple'] .library-doc-row.is-selected {
+  background: #261642;
+  border-color: #c084fc;
+}
+
+.app-shell[data-theme='purple'] .outline-filter-bar {
+  background: #0d0818;
+  border-color: #2b1b42;
+}
+
+.app-shell[data-theme='purple'] .outline-row:hover {
+  background: #1c1133;
+  color: #c084fc;
+}
+
+/* --------------------------------------------------------------------------
+   4. Galaxy View & Readers (Navy & Purple)
+   -------------------------------------------------------------------------- */
+.app-shell[data-theme='navy'] .book-galaxy-container {
+  background: radial-gradient(circle at center, #0c1a2e 0%, #050b16 100%);
+  color: #e0f0fe;
+}
+
+.app-shell[data-theme='navy'] .book-galaxy-header {
+  border-bottom-color: rgba(56, 189, 248, 0.15);
+  background: rgba(7, 15, 30, 0.85);
+}
+
+.app-shell[data-theme='navy'] .galaxy-orbit-ring {
+  stroke: rgba(56, 189, 248, 0.14);
+}
+
+.app-shell[data-theme='purple'] .book-galaxy-container {
+  background: radial-gradient(circle at center, #170d2b 0%, #090512 100%);
+  color: #f6effe;
+}
+
+.app-shell[data-theme='purple'] .book-galaxy-header {
+  border-bottom-color: rgba(192, 132, 252, 0.15);
+  background: rgba(14, 8, 26, 0.85);
+}
+
+.app-shell[data-theme='purple'] .galaxy-orbit-ring {
+  stroke: rgba(192, 132, 252, 0.14);
+}
+
+/* --------------------------------------------------------------------------
+   5. Modals & Dialogs (Navy & Purple)
+   -------------------------------------------------------------------------- */
+.app-shell[data-theme='navy'] .settings-backdrop,
+.app-shell[data-theme='navy'] .library-modal-backdrop {
+  background: rgba(4, 9, 18, 0.75);
+}
+
+.app-shell[data-theme='navy'] .settings-dialog,
+.app-shell[data-theme='navy'] .library-modal-card,
+.app-shell[data-theme='navy'] .zlib-modal,
+.app-shell[data-theme='navy'] .sub-modal {
+  background: #0b172a;
+  border: 1px solid #1d3b66;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7);
+  color: #cde0f5;
+}
+
+.app-shell[data-theme='navy'] .modal-header,
+.app-shell[data-theme='navy'] .settings-header {
+  border-bottom-color: #162a47;
+}
+
+.app-shell[data-theme='navy'] .zlib-book-card {
+  background: #0d1b32;
+  border-color: #1a3658;
+}
+
+.app-shell[data-theme='navy'] .zlib-book-card:hover {
+  border-color: #38bdf8;
+  background: #112440;
+}
+
+.app-shell[data-theme='purple'] .settings-backdrop,
+.app-shell[data-theme='purple'] .library-modal-backdrop {
+  background: rgba(8, 4, 15, 0.75);
+}
+
+.app-shell[data-theme='purple'] .settings-dialog,
+.app-shell[data-theme='purple'] .library-modal-card,
+.app-shell[data-theme='purple'] .zlib-modal,
+.app-shell[data-theme='purple'] .sub-modal {
+  background: #140d24;
+  border: 1px solid #3b255c;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7);
+  color: #e5d7f7;
+}
+
+.app-shell[data-theme='purple'] .modal-header,
+.app-shell[data-theme='purple'] .settings-header {
+  border-bottom-color: #2b1b42;
+}
+
+.app-shell[data-theme='purple'] .zlib-book-card {
+  background: #19102c;
+  border-color: #331e50;
+}
+
+.app-shell[data-theme='purple'] .zlib-book-card:hover {
+  border-color: #c084fc;
+  background: #23163d;
+}
+
+/* ==========================================================================
+   6. Topbar Workspace Switcher (Navy, Purple, Dark, Light)
+   ========================================================================== */
+.app-shell[data-theme='navy'] .workspace-switcher {
+  border: 1px solid #1a3658;
+  background: #081324;
+}
+.app-shell[data-theme='navy'] .workspace-switcher button {
+  color: #7293b8;
+  background: transparent;
+  border-color: transparent;
+}
+.app-shell[data-theme='navy'] .workspace-switcher button:hover {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.08);
+}
+.app-shell[data-theme='navy'] .workspace-switcher button.is-active {
+  border-color: #1e4a7d;
+  color: #38bdf8;
+  background: #0e223d;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.app-shell[data-theme='purple'] .workspace-switcher {
+  border: 1px solid #331e50;
+  background: #0d0818;
+}
+.app-shell[data-theme='purple'] .workspace-switcher button {
+  color: #a48fbe;
+  background: transparent;
+  border-color: transparent;
+}
+.app-shell[data-theme='purple'] .workspace-switcher button:hover {
+  color: #c084fc;
+  background: rgba(192, 132, 252, 0.08);
+}
+.app-shell[data-theme='purple'] .workspace-switcher button.is-active {
+  border-color: #5c2a96;
+  color: #c084fc;
+  background: #23143e;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+/* ==========================================================================
+   7. Document Metadata Bar & Inputs (Navy & Purple)
+   ========================================================================== */
+.app-shell[data-theme='navy'] .document-metadata {
+  background: #0b172a;
+  border-color: #162a47;
+}
+.app-shell[data-theme='navy'] .document-metadata label {
+  color: #7293b8;
+}
+.app-shell[data-theme='navy'] .document-metadata input {
+  background: #081324;
+  border-color: #1a3658;
+  color: #e0f0fe;
+}
+.app-shell[data-theme='navy'] .document-metadata input:focus {
+  background: #091729;
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25);
+}
+.app-shell[data-theme='navy'] .document-metadata-collapsed-row {
+  color: #7293b8;
+}
+.app-shell[data-theme='navy'] .document-metadata-toggle {
+  background: #0f223d;
+  border-color: #1d3b66;
+  color: #7293b8;
+}
+.app-shell[data-theme='navy'] .document-metadata-toggle:hover {
+  background: #152f55;
+  border-color: #38bdf8;
+  color: #ffffff;
+}
+
+.app-shell[data-theme='purple'] .document-metadata {
+  background: #140d24;
+  border-color: #2b1b42;
+}
+.app-shell[data-theme='purple'] .document-metadata label {
+  color: #a48fbe;
+}
+.app-shell[data-theme='purple'] .document-metadata input {
+  background: #0d0818;
+  border-color: #331e50;
+  color: #f6effe;
+}
+.app-shell[data-theme='purple'] .document-metadata input:focus {
+  background: #120a22;
+  border-color: #c084fc;
+  box-shadow: 0 0 0 2px rgba(192, 132, 252, 0.25);
+}
+.app-shell[data-theme='purple'] .document-metadata-collapsed-row {
+  color: #a48fbe;
+}
+.app-shell[data-theme='purple'] .document-metadata-toggle {
+  background: #201438;
+  border-color: #3b255c;
+  color: #a48fbe;
+}
+.app-shell[data-theme='purple'] .document-metadata-toggle:hover {
+  background: #2b1b4b;
+  border-color: #c084fc;
+  color: #ffffff;
+}
+
+/* ==========================================================================
+   8. Markmap Nodes High-Specificity (Navy & Purple across all 6 map styles)
+   ========================================================================== */
+.app-shell[data-theme='navy']
+  .markmap-node[data-depth='0']
+  > foreignObject
+  > div
+  > div,
+.app-shell[data-theme='navy'][data-map-style]
+  .markmap-node[data-depth='0']
+  > foreignObject
+  > div
+  > div {
+  background: #0f2545 !important;
+  color: #ffffff !important;
+  border: 2px solid #38bdf8 !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5) !important;
+}
+
+.app-shell[data-theme='navy']
+  .markmap-node[data-depth='1']
+  > foreignObject
+  > div
+  > div,
+.app-shell[data-theme='navy'][data-map-style]
+  .markmap-node[data-depth='1']
+  > foreignObject
+  > div
+  > div {
+  background: #0d1b32 !important;
+  color: #e0f0fe !important;
+  border: 1.5px solid #1e4778 !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35) !important;
+}
+.app-shell[data-theme='navy']
+  .markmap-node[data-depth='1']:hover
+  > foreignObject
+  > div
+  > div,
+.app-shell[data-theme='navy'][data-map-style]
+  .markmap-node[data-depth='1']:hover
+  > foreignObject
+  > div
+  > div {
+  border-color: #38bdf8 !important;
+  background: #112543 !important;
+}
+
+.app-shell[data-theme='navy']
+  .markmap-node[data-depth='2']
+  > foreignObject
+  > div
+  > div,
+.app-shell[data-theme='navy'][data-map-style]
+  .markmap-node[data-depth='2']
+  > foreignObject
+  > div
+  > div {
+  background: #0a1628 !important;
+  color: #cde0f5 !important;
+  border: 1px solid #162e4f !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25) !important;
+}
+.app-shell[data-theme='navy']
+  .markmap-node[data-depth='2']:hover
+  > foreignObject
+  > div
+  > div,
+.app-shell[data-theme='navy'][data-map-style]
+  .markmap-node[data-depth='2']:hover
+  > foreignObject
+  > div
+  > div {
+  border-color: #38bdf8 !important;
+  background: #0e2038 !important;
+}
+
+.app-shell[data-theme='navy']
+  .markmap-node:not([data-depth='0']):not([data-depth='1']):not(
+    [data-depth='2']
+  )
+  > foreignObject
+  > div
+  > div,
+.app-shell[data-theme='navy'][data-map-style]
+  .markmap-node:not([data-depth='0']):not([data-depth='1']):not(
+    [data-depth='2']
+  )
+  > foreignObject
+  > div
+  > div {
+  background: #07101e !important;
+  color: #b0cceb !important;
+  border: 1px solid #13243e !important;
+}
+.app-shell[data-theme='navy']
+  .markmap-node:not([data-depth='0']):not([data-depth='1']):not(
+    [data-depth='2']
+  ):hover
+  > foreignObject
+  > div
+  > div,
+.app-shell[data-theme='navy'][data-map-style]
+  .markmap-node:not([data-depth='0']):not([data-depth='1']):not(
+    [data-depth='2']
+  ):hover
+  > foreignObject
+  > div
+  > div {
+  border-color: #38bdf8 !important;
+  color: #ffffff !important;
+  background: #0a182c !important;
+}
+
+.app-shell[data-theme='navy'] .markmap-node > line {
+  stroke: #1e3a64 !important;
+}
+.app-shell[data-theme='navy'] .markmap-node > circle {
+  stroke: #38bdf8 !important;
+  fill: #07101e !important;
+}
+.app-shell[data-theme='navy']
+  .markmap-node
+  > foreignObject
+  > div
+  > div[contenteditable='true'] {
+  background: #081324 !important;
+  color: #e0f0fe !important;
+  box-shadow: 0 0 0 2px #38bdf8 !important;
+}
+
+/* Purple Markmap Nodes across all map styles */
+.app-shell[data-theme='purple']
+  .markmap-node[data-depth='0']
+  > foreignObject
+  > div
+  > div,
+.app-shell[data-theme='purple'][data-map-style]
+  .markmap-node[data-depth='0']
+  > foreignObject
+  > div
+  > div {
+  background: #2a144a !important;
+  color: #ffffff !important;
+  border: 2px solid #c084fc !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5) !important;
+}
+
+.app-shell[data-theme='purple']
+  .markmap-node[data-depth='1']
+  > foreignObject
+  > div
+  > div,
+.app-shell[data-theme='purple'][data-map-style]
+  .markmap-node[data-depth='1']
+  > foreignObject
+  > div
+  > div {
+  background: #1e1136 !important;
+  color: #f6effe !important;
+  border: 1.5px solid #4d267d !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35) !important;
+}
+.app-shell[data-theme='purple']
+  .markmap-node[data-depth='1']:hover
+  > foreignObject
+  > div
+  > div,
+.app-shell[data-theme='purple'][data-map-style]
+  .markmap-node[data-depth='1']:hover
+  > foreignObject
+  > div
+  > div {
+  border-color: #c084fc !important;
+  background: #261642 !important;
+}
+
+.app-shell[data-theme='purple']
+  .markmap-node[data-depth='2']
+  > foreignObject
+  > div
+  > div,
+.app-shell[data-theme='purple'][data-map-style]
+  .markmap-node[data-depth='2']
+  > foreignObject
+  > div
+  > div {
+  background: #170d2b !important;
+  color: #e5d7f7 !important;
+  border: 1px solid #3a1d5e !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25) !important;
+}
+.app-shell[data-theme='purple']
+  .markmap-node[data-depth='2']:hover
+  > foreignObject
+  > div
+  > div,
+.app-shell[data-theme='purple'][data-map-style]
+  .markmap-node[data-depth='2']:hover
+  > foreignObject
+  > div
+  > div {
+  border-color: #c084fc !important;
+  background: #20133a !important;
+}
+
+.app-shell[data-theme='purple']
+  .markmap-node:not([data-depth='0']):not([data-depth='1']):not(
+    [data-depth='2']
+  )
+  > foreignObject
+  > div
+  > div,
+.app-shell[data-theme='purple'][data-map-style]
+  .markmap-node:not([data-depth='0']):not([data-depth='1']):not(
+    [data-depth='2']
+  )
+  > foreignObject
+  > div
+  > div {
+  background: #110820 !important;
+  color: #cbb4e6 !important;
+  border: 1px solid #2d164a !important;
+}
+.app-shell[data-theme='purple']
+  .markmap-node:not([data-depth='0']):not([data-depth='1']):not(
+    [data-depth='2']
+  ):hover
+  > foreignObject
+  > div
+  > div,
+.app-shell[data-theme='purple'][data-map-style]
+  .markmap-node:not([data-depth='0']):not([data-depth='1']):not(
+    [data-depth='2']
+  ):hover
+  > foreignObject
+  > div
+  > div {
+  border-color: #c084fc !important;
+  color: #ffffff !important;
+  background: #180b2d !important;
+}
+
+.app-shell[data-theme='purple'] .markmap-node > line {
+  stroke: #3b2259 !important;
+}
+.app-shell[data-theme='purple'] .markmap-node > circle {
+  stroke: #c084fc !important;
+  fill: #0d0818 !important;
+}
+.app-shell[data-theme='purple']
+  .markmap-node
+  > foreignObject
+  > div
+  > div[contenteditable='true'] {
+  background: #0d0818 !important;
+  color: #f6effe !important;
+  box-shadow: 0 0 0 2px #c084fc !important;
+}
+
+/* ==========================================================================
+   9. Epub Reader & Ebook Workspace (Navy & Purple)
+   ========================================================================== */
+.app-shell[data-theme='navy'] .ebook-workspace-stage,
+.app-shell[data-theme='navy'] .ebook-shelf,
+.epub-reader[data-theme='navy'] {
+  color: #cde0f5;
+  background: #070f1e;
+}
+
+.epub-reader[data-theme='navy'] .epub-reader-header,
+.epub-reader[data-theme='navy'] .epub-reader-footer,
+.epub-reader[data-theme='navy'] .epub-reader-main > .epub-reader-footer,
+.epub-reader[data-theme='navy'] .epub-reader-toc,
+.epub-reader[data-theme='navy'] .epub-reader-toc-heading,
+.epub-reader[data-theme='navy'] .epub-reader-sidebar-tabs,
+.epub-reader[data-theme='navy'] .epub-reader-sidebar-tools {
+  border-color: #162a47;
+  color: #cde0f5;
+  background: #0b172a;
+}
+
+.epub-reader[data-theme='navy'] .epub-reader-book-heading strong {
+  color: #e0f0fe;
+}
+.epub-reader[data-theme='navy'] .epub-reader-kicker,
+.epub-reader[data-theme='navy'] .epub-reader-author,
+.epub-reader[data-theme='navy'] .epub-reader-location {
+  color: #7293b8;
+}
+
+.epub-reader[data-theme='navy'] .epub-reader-tool,
+.epub-reader[data-theme='navy'] .epub-reader-close,
+.epub-reader[data-theme='navy'] .epub-reader-page-button,
+.epub-reader[data-theme='navy'] .epub-reader-bilingual-btn {
+  border-color: #1d3b66;
+  color: #cde0f5;
+  background: #0f223d;
+}
+.epub-reader[data-theme='navy'] .epub-reader-tool:hover,
+.epub-reader[data-theme='navy'] .epub-reader-close:hover,
+.epub-reader[data-theme='navy'] .epub-reader-page-button:hover {
+  border-color: #38bdf8;
+  color: #ffffff;
+  background: #152f55;
+}
+
+.epub-reader[data-theme='navy'] .epub-reader-progress {
+  accent-color: #38bdf8;
+}
+
+.epub-reader[data-theme='navy'] .epub-reader-settings-panel,
+.epub-reader[data-theme='navy'] .epub-reader-search-panel,
+.epub-reader[data-theme='navy'] .epub-reader-bookmark-panel,
+.epub-reader[data-theme='navy'] .epub-reader-selection-toolbar,
+.epub-reader[data-theme='navy'] .epub-reader-bilingual-dropdown {
+  border-color: #1d3b66;
+  color: #cde0f5;
+  background: #0b172a;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.6);
+}
+
+.epub-reader[data-theme='navy'] .epub-reader-search-form input,
+.epub-reader[data-theme='navy'] .epub-reader-bookmark-editor input,
+.epub-reader[data-theme='navy'] .epub-reader-setting-row select {
+  background: #081324;
+  border-color: #1a3658;
+  color: #e0f0fe;
+}
+
+.epub-reader[data-theme='navy'] .epub-reader-toc-item {
+  color: #cde0f5;
+}
+.epub-reader[data-theme='navy']
+  .epub-reader-toc-node.is-current
+  > .epub-reader-toc-row
+  .epub-reader-toc-item,
+.epub-reader[data-theme='navy'] .epub-reader-toc-item:hover {
+  color: #38bdf8;
+  background: #0e223d;
+}
+
+.app-shell[data-theme='navy'] .ebook-book-card,
+.app-shell[data-theme='navy'] .ebook-paths-node {
+  background: #0d1b32;
+  border-color: #1a3658;
+  color: #cde0f5;
+}
+.app-shell[data-theme='navy'] .ebook-book-title {
+  color: #e0f0fe;
+}
+.app-shell[data-theme='navy'] .ebook-book-meta {
+  color: #7293b8;
+}
+
+/* Purple Epub Reader & Ebook Workspace */
+.app-shell[data-theme='purple'] .ebook-workspace-stage,
+.app-shell[data-theme='purple'] .ebook-shelf,
+.epub-reader[data-theme='purple'] {
+  color: #e5d7f7;
+  background: #0e081a;
+}
+
+.epub-reader[data-theme='purple'] .epub-reader-header,
+.epub-reader[data-theme='purple'] .epub-reader-footer,
+.epub-reader[data-theme='purple'] .epub-reader-main > .epub-reader-footer,
+.epub-reader[data-theme='purple'] .epub-reader-toc,
+.epub-reader[data-theme='purple'] .epub-reader-toc-heading,
+.epub-reader[data-theme='purple'] .epub-reader-sidebar-tabs,
+.epub-reader[data-theme='purple'] .epub-reader-sidebar-tools {
+  border-color: #2b1b42;
+  color: #e5d7f7;
+  background: #140d24;
+}
+
+.epub-reader[data-theme='purple'] .epub-reader-book-heading strong {
+  color: #f6effe;
+}
+.epub-reader[data-theme='purple'] .epub-reader-kicker,
+.epub-reader[data-theme='purple'] .epub-reader-author,
+.epub-reader[data-theme='purple'] .epub-reader-location {
+  color: #a48fbe;
+}
+
+.epub-reader[data-theme='purple'] .epub-reader-tool,
+.epub-reader[data-theme='purple'] .epub-reader-close,
+.epub-reader[data-theme='purple'] .epub-reader-page-button,
+.epub-reader[data-theme='purple'] .epub-reader-bilingual-btn {
+  border-color: #3b255c;
+  color: #e5d7f7;
+  background: #201438;
+}
+.epub-reader[data-theme='purple'] .epub-reader-tool:hover,
+.epub-reader[data-theme='purple'] .epub-reader-close:hover,
+.epub-reader[data-theme='purple'] .epub-reader-page-button:hover {
+  border-color: #c084fc;
+  color: #ffffff;
+  background: #2b1b4b;
+}
+
+.epub-reader[data-theme='purple'] .epub-reader-progress {
+  accent-color: #c084fc;
+}
+
+.epub-reader[data-theme='purple'] .epub-reader-settings-panel,
+.epub-reader[data-theme='purple'] .epub-reader-search-panel,
+.epub-reader[data-theme='purple'] .epub-reader-bookmark-panel,
+.epub-reader[data-theme='purple'] .epub-reader-selection-toolbar,
+.epub-reader[data-theme='purple'] .epub-reader-bilingual-dropdown {
+  border-color: #3b255c;
+  color: #e5d7f7;
+  background: #140d24;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.6);
+}
+
+.epub-reader[data-theme='purple'] .epub-reader-search-form input,
+.epub-reader[data-theme='purple'] .epub-reader-bookmark-editor input,
+.epub-reader[data-theme='purple'] .epub-reader-setting-row select {
+  background: #0d0818;
+  border-color: #331e50;
+  color: #f6effe;
+}
+
+.epub-reader[data-theme='purple'] .epub-reader-toc-item {
+  color: #e5d7f7;
+}
+.epub-reader[data-theme='purple']
+  .epub-reader-toc-node.is-current
+  > .epub-reader-toc-row
+  .epub-reader-toc-item,
+.epub-reader[data-theme='purple'] .epub-reader-toc-item:hover {
+  color: #c084fc;
+  background: #22133c;
+}
+
+.app-shell[data-theme='purple'] .ebook-book-card,
+.app-shell[data-theme='purple'] .ebook-paths-node {
+  background: #19102c;
+  border-color: #331e50;
+  color: #e5d7f7;
+}
+.app-shell[data-theme='purple'] .ebook-book-title {
+  color: #f6effe;
+}
+.app-shell[data-theme='purple'] .ebook-book-meta {
+  color: #a48fbe;
+}
+
+/* ==========================================================================
+   10. Player Workspace (Navy & Purple Variables & Controls)
+   ========================================================================== */
+.app-shell[data-theme='navy'] .player-workspace-stage {
+  --player-bg: #070f1e;
+  --player-panel: #0b172a;
+  --player-panel-alt: #0d1b32;
+  --player-line: #162a47;
+  --player-line-strong: #1e3a64;
+  --player-ink: #e0f0fe;
+  --player-muted: #7293b8;
+  --player-accent: #38bdf8;
+  --player-accent-soft: rgba(56, 189, 248, 0.15);
+  --player-hover: #0e223d;
+  --player-danger: #f87171;
+  --player-scrollbar-slider: rgba(56, 189, 248, 0.22);
+  --player-scrollbar-slider-hover: rgba(56, 189, 248, 0.45);
+  --player-scrollbar-slider-active: rgba(56, 189, 248, 0.72);
+}
+.app-shell[data-theme='navy'] .player-open-button {
+  background: #0284c7 !important;
+  color: #ffffff !important;
+  border-color: #38bdf8 !important;
+}
+.app-shell[data-theme='navy'] .player-open-button:hover {
+  background: #0369a1 !important;
+}
+.app-shell[data-theme='navy'] .player-sidebar input[type='checkbox'] {
+  accent-color: #38bdf8;
+}
+
+.app-shell[data-theme='purple'] .player-workspace-stage {
+  --player-bg: #0e081a;
+  --player-panel: #140d24;
+  --player-panel-alt: #19102c;
+  --player-line: #2b1b42;
+  --player-line-strong: #3b255c;
+  --player-ink: #f6effe;
+  --player-muted: #a48fbe;
+  --player-accent: #c084fc;
+  --player-accent-soft: rgba(192, 132, 252, 0.15);
+  --player-hover: #1c1133;
+  --player-danger: #f87171;
+  --player-scrollbar-slider: rgba(192, 132, 252, 0.22);
+  --player-scrollbar-slider-hover: rgba(192, 132, 252, 0.45);
+  --player-scrollbar-slider-active: rgba(192, 132, 252, 0.72);
+}
+.app-shell[data-theme='purple'] .player-open-button {
+  background: #9333ea !important;
+  color: #ffffff !important;
+  border-color: #c084fc !important;
+}
+.app-shell[data-theme='purple'] .player-open-button:hover {
+  background: #7e22ce !important;
+}
+.app-shell[data-theme='purple'] .player-sidebar input[type='checkbox'] {
+  accent-color: #c084fc;
+}
+
+/* ==========================================================================
+   11. Knowledge Workspace (Navy & Purple Variables & Buttons)
+   ========================================================================== */
+.app-shell[data-theme='navy'] .knowledge-workspace-stage {
+  --kb-canvas: #070f1e;
+  --kb-sidebar: #091424;
+  --kb-surface: #0b172a;
+  --kb-surface-subtle: #0d1b32;
+  --kb-hover: rgba(56, 189, 248, 0.08);
+  --kb-active: rgba(56, 189, 248, 0.16);
+  --kb-ink: #e0f0fe;
+  --kb-muted: #7293b8;
+  --kb-line: #162a47;
+  --kb-accent: #38bdf8;
+  --kb-danger: #f87171;
+  --kb-danger-soft: rgba(248, 113, 113, 0.15);
+}
+.app-shell[data-theme='navy'] .kb-primary-btn,
+.app-shell[data-theme='navy'] .kb-new-note-btn {
+  background: #0284c7 !important;
+  color: #ffffff !important;
+  border-color: #38bdf8 !important;
+}
+.app-shell[data-theme='navy'] .kb-primary-btn:hover,
+.app-shell[data-theme='navy'] .kb-new-note-btn:hover {
+  background: #0369a1 !important;
+}
+
+.app-shell[data-theme='purple'] .knowledge-workspace-stage {
+  --kb-canvas: #0e081a;
+  --kb-sidebar: #10091d;
+  --kb-surface: #140d24;
+  --kb-surface-subtle: #19102c;
+  --kb-hover: rgba(192, 132, 252, 0.08);
+  --kb-active: rgba(192, 132, 252, 0.16);
+  --kb-ink: #f6effe;
+  --kb-muted: #a48fbe;
+  --kb-line: #2b1b42;
+  --kb-accent: #c084fc;
+  --kb-danger: #f87171;
+  --kb-danger-soft: rgba(248, 113, 113, 0.15);
+}
+.app-shell[data-theme='purple'] .kb-primary-btn,
+.app-shell[data-theme='purple'] .kb-new-note-btn {
+  background: #9333ea !important;
+  color: #ffffff !important;
+  border-color: #c084fc !important;
+}
+.app-shell[data-theme='purple'] .kb-primary-btn:hover,
+.app-shell[data-theme='purple'] .kb-new-note-btn:hover {
+  background: #7e22ce !important;
+}
+
+/* ==========================================================================
+   12. Unread Count Badges & Tag Counter Pills Across Themes (Addressing Image 1)
+   ========================================================================== */
+.app-shell[data-theme='navy'] .feed-nav-count.has-unread,
+.app-shell[data-theme='navy'] .feed-category-pill.has-unread,
+.app-shell[data-theme='navy'] .feed-channel-pill.has-unread,
+.app-shell[data-theme='navy']
+  .feed-channel-row:hover
+  .feed-channel-pill.has-unread,
+.app-shell[data-theme='navy']
+  .feed-channel-row.is-active
+  .feed-channel-pill.has-unread {
+  background: rgba(56, 189, 248, 0.16) !important;
+  color: #7dd3fc !important;
+  border: 1px solid rgba(56, 189, 248, 0.32) !important;
+}
+
+.app-shell[data-theme='purple'] .feed-nav-count.has-unread,
+.app-shell[data-theme='purple'] .feed-category-pill.has-unread,
+.app-shell[data-theme='purple'] .feed-channel-pill.has-unread,
+.app-shell[data-theme='purple']
+  .feed-channel-row:hover
+  .feed-channel-pill.has-unread,
+.app-shell[data-theme='purple']
+  .feed-channel-row.is-active
+  .feed-channel-pill.has-unread {
+  background: rgba(192, 132, 252, 0.16) !important;
+  color: #e879f9 !important;
+  border: 1px solid rgba(192, 132, 252, 0.32) !important;
+}
+
+.app-shell[data-theme='dark'] .feed-nav-count.has-unread,
+.app-shell[data-theme='dark'] .feed-category-pill.has-unread,
+.app-shell[data-theme='dark'] .feed-channel-pill.has-unread,
+.app-shell[data-theme='dark']
+  .feed-channel-row:hover
+  .feed-channel-pill.has-unread,
+.app-shell[data-theme='dark']
+  .feed-channel-row.is-active
+  .feed-channel-pill.has-unread {
+  background: rgba(223, 115, 91, 0.15) !important;
+  color: #fba088 !important;
+  border: 1px solid rgba(223, 115, 91, 0.28) !important;
+}
+
+/* ==========================================================================
+   13. Minimap Slider Viewport (VS Code Style) & CodeMirror Entity Tokens
+   ========================================================================== */
+.markdown-minimap-viewport {
+  border-radius: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-sizing: border-box;
+}
+
+.app-shell[data-theme='navy'] .markdown-minimap-viewport {
+  border-color: rgba(56, 189, 248, 0.28);
+  background: rgba(56, 189, 248, 0.15);
+}
+.app-shell[data-theme='navy']
+  .markdown-minimap:hover
+  .markdown-minimap-viewport {
+  border-color: rgba(56, 189, 248, 0.45);
+  background: rgba(56, 189, 248, 0.26);
+}
+.app-shell[data-theme='navy']
+  .markdown-minimap.is-dragging
+  .markdown-minimap-viewport {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.4);
+}
+
+.app-shell[data-theme='purple'] .markdown-minimap-viewport {
+  border-color: rgba(192, 132, 252, 0.28);
+  background: rgba(192, 132, 252, 0.15);
+}
+.app-shell[data-theme='purple']
+  .markdown-minimap:hover
+  .markdown-minimap-viewport {
+  border-color: rgba(192, 132, 252, 0.45);
+  background: rgba(192, 132, 252, 0.26);
+}
+.app-shell[data-theme='purple']
+  .markdown-minimap.is-dragging
+  .markdown-minimap-viewport {
+  border-color: #c084fc;
+  background: rgba(192, 132, 252, 0.4);
+}
+
+.app-shell[data-theme='dark'] .markdown-minimap-viewport {
+  border-color: rgba(223, 115, 91, 0.28);
+  background: rgba(223, 115, 91, 0.15);
+}
+.app-shell[data-theme='dark']
+  .markdown-minimap:hover
+  .markdown-minimap-viewport {
+  border-color: rgba(223, 115, 91, 0.45);
+  background: rgba(223, 115, 91, 0.26);
+}
+.app-shell[data-theme='dark']
+  .markdown-minimap.is-dragging
+  .markdown-minimap-viewport {
+  border-color: #df735b;
+  background: rgba(223, 115, 91, 0.4);
+}
+
+/* Harmonize character entities and escape symbols in CodeMirror across dark themes */
+.app-shell[data-theme='dark']
+  .markdown-editor
+  .cm-line
+  span[class*='tok-escape'],
+.app-shell[data-theme='dark']
+  .markdown-editor
+  .cm-line
+  span[class*='tok-invalid'],
+.app-shell[data-theme='navy']
+  .markdown-editor
+  .cm-line
+  span[class*='tok-escape'],
+.app-shell[data-theme='navy']
+  .markdown-editor
+  .cm-line
+  span[class*='tok-invalid'],
+.app-shell[data-theme='purple']
+  .markdown-editor
+  .cm-line
+  span[class*='tok-escape'],
+.app-shell[data-theme='purple']
+  .markdown-editor
+  .cm-line
+  span[class*='tok-invalid'] {
+  color: var(--muted) !important;
+}
+
+/* ==========================================================================
+   14. File Library Badges, Search, Buttons & Footers (Navy, Purple, Dark)
+   ========================================================================== */
+
+/* --- Document Format & Category Badges in File List --- */
+.app-shell[data-theme='navy'] .doc-badge {
+  background: #0f223d !important;
+  color: #7dd3fc !important;
+  border: 1px solid #1d3b66 !important;
+}
+.app-shell[data-theme='navy'] .doc-cat-badge {
+  background: #0c2747 !important;
+  color: #38bdf8 !important;
+  border-color: #1e4a7d !important;
+}
+.app-shell[data-theme='navy'] .doc-meta-row {
+  color: #7293b8;
+}
+
+.app-shell[data-theme='purple'] .doc-badge {
+  background: #201438 !important;
+  color: #e879f9 !important;
+  border: 1px solid #3b255c !important;
+}
+.app-shell[data-theme='purple'] .doc-cat-badge {
+  background: #2b154a !important;
+  color: #c084fc !important;
+  border-color: #5c2a96 !important;
+}
+.app-shell[data-theme='purple'] .doc-meta-row {
+  color: #a48fbe;
+}
+
+/* --- Library Search, Sort & Action Controls --- */
+.app-shell[data-theme='navy'] .library-search-input-wrap {
+  background: #081324 !important;
+  border-color: #1a3658 !important;
+  color: #e0f0fe !important;
+}
+.app-shell[data-theme='navy'] .library-search-input-wrap:focus-within {
+  background: #091729 !important;
+  border-color: #38bdf8 !important;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25) !important;
+}
+.app-shell[data-theme='navy'] .library-search-input-wrap input {
+  color: #e0f0fe !important;
+}
+.app-shell[data-theme='navy'] .library-search-input-wrap input::placeholder {
+  color: #55779c !important;
+}
+.app-shell[data-theme='navy'] .library-sort-btn,
+.app-shell[data-theme='navy'] .library-icon-btn {
+  background: #0f223d !important;
+  border-color: #1d3b66 !important;
+  color: #cde0f5 !important;
+}
+.app-shell[data-theme='navy'] .library-sort-btn:hover,
+.app-shell[data-theme='navy'] .library-icon-btn:hover:not(:disabled) {
+  border-color: #38bdf8 !important;
+  background: #152f55 !important;
+  color: #ffffff !important;
+}
+
+.app-shell[data-theme='purple'] .library-search-input-wrap {
+  background: #0d0818 !important;
+  border-color: #331e50 !important;
+  color: #f6effe !important;
+}
+.app-shell[data-theme='purple'] .library-search-input-wrap:focus-within {
+  background: #120a22 !important;
+  border-color: #c084fc !important;
+  box-shadow: 0 0 0 2px rgba(192, 132, 252, 0.25) !important;
+}
+.app-shell[data-theme='purple'] .library-search-input-wrap input {
+  color: #f6effe !important;
+}
+.app-shell[data-theme='purple'] .library-search-input-wrap input::placeholder {
+  color: #795d98 !important;
+}
+.app-shell[data-theme='purple'] .library-sort-btn,
+.app-shell[data-theme='purple'] .library-icon-btn {
+  background: #201438 !important;
+  border-color: #3b255c !important;
+  color: #e5d7f7 !important;
+}
+.app-shell[data-theme='purple'] .library-sort-btn:hover,
+.app-shell[data-theme='purple'] .library-icon-btn:hover:not(:disabled) {
+  border-color: #c084fc !important;
+  background: #2b1b4b !important;
+  color: #ffffff !important;
+}
+
+/* --- Library Footer & Storage Info --- */
+.app-shell[data-theme='navy'] .library-footer {
+  background: #081324 !important;
+  border-top-color: #162a47 !important;
+  color: #7293b8 !important;
+}
+.app-shell[data-theme='navy'] .library-footer .storage-path {
+  color: #7293b8 !important;
+}
+.app-shell[data-theme='navy'] .library-change-root-btn {
+  color: #38bdf8 !important;
+  background: transparent !important;
+}
+.app-shell[data-theme='navy'] .library-change-root-btn:hover {
+  color: #7dd3fc !important;
+}
+
+.app-shell[data-theme='purple'] .library-footer {
+  background: #0d0818 !important;
+  border-top-color: #2b1b42 !important;
+  color: #a48fbe !important;
+}
+.app-shell[data-theme='purple'] .library-footer .storage-path {
+  color: #a48fbe !important;
+}
+.app-shell[data-theme='purple'] .library-change-root-btn {
+  color: #c084fc !important;
+  background: transparent !important;
+}
+.app-shell[data-theme='purple'] .library-change-root-btn:hover {
+  color: #e879f9 !important;
+}
+
+/* --- Editor Toolbar Controls: History, Format Badge, SVG/HTML Inserts, Fullscreen --- */
+.app-shell[data-theme='navy'] .source-history-button,
+.app-shell[data-theme='navy'] .source-insert-tools button,
+.app-shell[data-theme='navy'] .markdown-fullscreen-button,
+.app-shell[data-theme='navy'] .format-badge,
+.app-shell[data-theme='navy'] .editor-pane .format-badge {
+  background: #0f223d !important;
+  border: 1px solid #1d3b66 !important;
+  color: #cde0f5 !important;
+}
+.app-shell[data-theme='navy'] .source-history-button:hover:not(:disabled),
+.app-shell[data-theme='navy'] .source-insert-tools button:hover:not(:disabled),
+.app-shell[data-theme='navy'] .markdown-fullscreen-button:hover {
+  border-color: #38bdf8 !important;
+  background: #152f55 !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 6px rgba(56, 189, 248, 0.25);
+}
+
+.app-shell[data-theme='purple'] .source-history-button,
+.app-shell[data-theme='purple'] .source-insert-tools button,
+.app-shell[data-theme='purple'] .markdown-fullscreen-button,
+.app-shell[data-theme='purple'] .format-badge,
+.app-shell[data-theme='purple'] .editor-pane .format-badge {
+  background: #201438 !important;
+  border: 1px solid #3b255c !important;
+  color: #e5d7f7 !important;
+}
+.app-shell[data-theme='purple'] .source-history-button:hover:not(:disabled),
+.app-shell[data-theme='purple']
+  .source-insert-tools
+  button:hover:not(:disabled),
+.app-shell[data-theme='purple'] .markdown-fullscreen-button:hover {
+  border-color: #c084fc !important;
+  background: #2b1b4b !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 6px rgba(192, 132, 252, 0.25);
+}
+
+/* Dark Theme Fallbacks for newly unified toolbar buttons */
+.app-shell[data-theme='dark'] .source-insert-tools button,
+.app-shell[data-theme='dark'] .markdown-fullscreen-button,
+.app-shell[data-theme='dark'] .editor-pane .format-badge {
+  background: #20272d !important;
+  border: 1px solid #3a444c !important;
+  color: #c5cdd3 !important;
+}
+.app-shell[data-theme='dark'] .source-insert-tools button:hover:not(:disabled),
+.app-shell[data-theme='dark'] .markdown-fullscreen-button:hover {
+  border-color: #8b594d !important;
+  color: #ed9c89 !important;
+  background: #252b31 !important;
+}
+
+/* --- Library New Dropdown Menu (Navy & Purple) --- */
+.app-shell[data-theme='navy'] .library-new-menu {
+  background: #0b172a !important;
+  border-color: #1d3b66 !important;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.6) !important;
+}
+.app-shell[data-theme='navy'] .library-new-menu strong {
+  color: #e0f0fe !important;
+}
+.app-shell[data-theme='navy'] .library-new-menu small {
+  color: #7293b8 !important;
+}
+.app-shell[data-theme='navy'] .library-menu-item:hover {
+  background: #0e223d !important;
+}
+.app-shell[data-theme='navy'] .library-menu-divider {
+  background: #162a47 !important;
+}
+.app-shell[data-theme='navy'] .library-menu-checkbox {
+  color: #cde0f5 !important;
+}
+.app-shell[data-theme='navy'] .library-menu-checkbox:hover {
+  background: #0e223d !important;
+}
+
+.app-shell[data-theme='purple'] .library-new-menu {
+  background: #140d24 !important;
+  border-color: #3b255c !important;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.6) !important;
+}
+.app-shell[data-theme='purple'] .library-new-menu strong {
+  color: #f6effe !important;
+}
+.app-shell[data-theme='purple'] .library-new-menu small {
+  color: #a48fbe !important;
+}
+.app-shell[data-theme='purple'] .library-menu-item:hover {
+  background: #23143e !important;
+}
+.app-shell[data-theme='purple'] .library-menu-divider {
+  background: #2b1b42 !important;
+}
+.app-shell[data-theme='purple'] .library-menu-checkbox {
+  color: #e5d7f7 !important;
+}
+.app-shell[data-theme='purple'] .library-menu-checkbox:hover {
+  background: #23143e !important;
+}

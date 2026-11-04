@@ -3,12 +3,13 @@ import MarkdownDocWorkbench from './MarkdownDocWorkbench';
 import MermaidWorkbench from './MermaidWorkbench';
 import type { MapDocument } from '../library';
 import type { CodeBlockHandlers } from '../code-blocks';
+import type { Theme } from '../app-storage';
 
 export interface DocumentWorkbenchProps {
   document: ActiveDocument;
   dirty: boolean;
   statusText: string;
-  theme: 'light' | 'dark';
+  theme: Theme;
   documents?: readonly MapDocument[];
   categories?: readonly string[];
   renderMarkdownPreview(markdown: string): { html: string; source: string };

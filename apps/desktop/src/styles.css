@@ -14824,6 +14824,11 @@ button {
   grid-row: 2;
   min-width: 0;
 }
+.app-shell.is-terminal-right > .feed-workspace-stage {
+  grid-column: 1;
+  grid-row: 2;
+  min-width: 0;
+}
 .app-shell.is-terminal-right > .seamind-terminal-drawer {
   grid-column: 2 / 4;
   grid-row: 2;

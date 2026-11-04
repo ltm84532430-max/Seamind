@@ -28,6 +28,7 @@ import type {
   EpubExamQuestion,
 } from './epub-exams';
 import { extractEpubSectionPlainText } from './epub-exams';
+import type { Theme } from './app-storage';
 import {
   defaultExamMix,
   examMixTotal,
@@ -569,11 +570,11 @@ async function createCoverThumbnail(blob: Blob): Promise<string> {
 
 function loadReaderSettings(
   progressKey: string,
-  appTheme: 'light' | 'dark',
+  appTheme: Theme,
 ): ReaderSettings {
   const defaults = {
     ...DEFAULT_READER_SETTINGS,
-    palette: appTheme === 'dark' ? ('dark' as const) : ('light' as const),
+    palette: appTheme === 'light' ? ('light' as const) : ('dark' as const),
   };
   try {
     const value = JSON.parse(
@@ -582,6 +583,15 @@ function loadReaderSettings(
     if (!value || typeof value !== 'object') return defaults;
     const fontSize = Number(value.fontSize);
     const lineHeight = Number(value.lineHeight);
+    const rawPalette = value.palette;
+    let resolvedPalette: ReaderPalette = defaults.palette;
+    if (rawPalette === 'sepia') {
+      resolvedPalette = 'sepia';
+    } else if (appTheme === 'light') {
+      resolvedPalette = rawPalette === 'dark' ? 'dark' : 'light';
+    } else {
+      resolvedPalette = rawPalette === 'light' ? 'dark' : rawPalette || 'dark';
+    }
     return {
       fontSize: Number.isFinite(fontSize)
         ? Math.min(30, Math.max(14, Math.round(fontSize)))
@@ -589,9 +599,7 @@ function loadReaderSettings(
       lineHeight: [1.4, 1.6, 1.8, 2].includes(lineHeight)
         ? lineHeight
         : defaults.lineHeight,
-      palette: ['light', 'sepia', 'dark'].includes(value.palette)
-        ? value.palette
-        : defaults.palette,
+      palette: resolvedPalette,
       flow: value.flow === 'scrolled' ? 'scrolled' : 'paginated',
     };
   } catch {
@@ -599,16 +607,33 @@ function loadReaderSettings(
   }
 }
 
+function getReaderPalette(paletteKey: ReaderPalette, appTheme?: Theme) {
+  if (paletteKey === 'sepia') {
+    return READER_PALETTES.sepia;
+  }
+  if (paletteKey === 'light') {
+    return READER_PALETTES.light;
+  }
+  if (appTheme === 'navy') {
+    return { background: '#070f1e', foreground: '#cde0f5', link: '#38bdf8' };
+  }
+  if (appTheme === 'purple') {
+    return { background: '#0e081a', foreground: '#e5d7f7', link: '#c084fc' };
+  }
+  return READER_PALETTES.dark;
+}
+
 function applyReaderSettings(
   view: FoliateViewElement | null,
   settings: ReaderSettings,
+  appTheme?: Theme,
 ) {
   const renderer = view?.renderer;
   if (!renderer) return;
   renderer.setAttribute('flow', settings.flow);
   if (!renderer.setStyles || view?.isFixedLayout) return;
 
-  const palette = READER_PALETTES[settings.palette];
+  const palette = getReaderPalette(settings.palette, appTheme);
   renderer.setStyles(`
     html {
       color-scheme: ${settings.palette === 'dark' ? 'dark' : 'light'} !important;
@@ -648,7 +673,7 @@ export default function EpubReader({
   onClose,
 }: {
   selection: EpubReaderSelection;
-  theme: 'light' | 'dark';
+  theme: Theme;
   provider: EpubReaderProviderSettings;
   embedded?: boolean;
   knowledgeOpen?: boolean;
@@ -981,6 +1006,18 @@ export default function EpubReader({
   };
 
   useEffect(() => {
+    if (theme === 'navy' || theme === 'purple' || theme === 'dark') {
+      setReaderSettings((prev) =>
+        prev.palette === 'sepia' ? prev : { ...prev, palette: 'dark' },
+      );
+    } else if (theme === 'light') {
+      setReaderSettings((prev) =>
+        prev.palette === 'sepia' ? prev : { ...prev, palette: 'light' },
+      );
+    }
+  }, [theme]);
+
+  useEffect(() => {
     try {
       localStorage.setItem(
         savedSettingsKey(selection.progressKey),
@@ -989,8 +1026,8 @@ export default function EpubReader({
     } catch {
       // The reader remains usable when browser storage is unavailable.
     }
-    applyReaderSettings(viewRef.current, readerSettings);
-  }, [readerSettings]);
+    applyReaderSettings(viewRef.current, readerSettings, theme);
+  }, [readerSettings, theme]);
 
   useEffect(() => {
     saveEpubBookmarks(selection.progressKey, bookmarks);
@@ -2324,7 +2361,7 @@ export default function EpubReader({
 
         await view.open(selection.source);
         setIsFixedLayout(Boolean(view.isFixedLayout));
-        applyReaderSettings(view, readerSettingsRef.current);
+        applyReaderSettings(view, readerSettingsRef.current, theme);
         if (cancelled) {
           view.close();
           view.remove();
@@ -2833,7 +2870,7 @@ export default function EpubReader({
                     onClick={() =>
                       updateReaderSettings({
                         ...DEFAULT_READER_SETTINGS,
-                        palette: theme,
+                        palette: theme === 'light' ? 'light' : 'dark',
                       })
                     }
                   >

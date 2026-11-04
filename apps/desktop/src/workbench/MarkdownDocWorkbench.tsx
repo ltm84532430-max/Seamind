@@ -16,6 +16,7 @@ import type { MapDocument } from '../library';
 import { createKnowledgeEditorExtensions } from '../knowledge-completions';
 import { enhanceKnowledgePreviewHtml } from '../knowledge-markdown';
 import { UNFILED_FOLDER } from '../knowledge-notes';
+import type { Theme } from '../app-storage';
 
 export type DocViewMode = 'edit' | 'split' | 'read';
 
@@ -43,7 +44,7 @@ export interface MarkdownDocWorkbenchProps {
   document: ActiveDocument;
   dirty: boolean;
   statusText: string;
-  theme: 'light' | 'dark';
+  theme: Theme;
   documents?: readonly MapDocument[];
   categories?: readonly string[];
   /** Turns Markdown into the sanitized HTML the preview shows. */
