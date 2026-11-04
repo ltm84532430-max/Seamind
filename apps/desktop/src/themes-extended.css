@@ -102,6 +102,7 @@
 .app-shell[data-theme='navy'] .library-count,
 .app-shell[data-theme='navy'] .pane-collapse-button,
 .app-shell[data-theme='navy'] .theme-toggle-button,
+.app-shell[data-theme='navy'] .terminal-toggle-button,
 .app-shell[data-theme='navy'] .settings-button,
 .app-shell[data-theme='navy'] .quiet-button,
 .app-shell[data-theme='navy'] .library-import-action,
@@ -128,6 +129,14 @@
   color: #ffffff;
   background: #152f55;
   box-shadow: 0 0 8px rgba(56, 189, 248, 0.25);
+}
+
+.app-shell[data-theme='navy'] .terminal-toggle-button:hover,
+.app-shell[data-theme='navy'] .terminal-toggle-button.is-active {
+  border-color: #38bdf8;
+  color: #38bdf8;
+  background: #102644;
+  box-shadow: 0 0 6px rgba(56, 189, 248, 0.25);
 }
 
 .app-shell[data-theme='navy'] .save-document-button,
@@ -519,6 +528,7 @@
 .app-shell[data-theme='purple'] .library-count,
 .app-shell[data-theme='purple'] .pane-collapse-button,
 .app-shell[data-theme='purple'] .theme-toggle-button,
+.app-shell[data-theme='purple'] .terminal-toggle-button,
 .app-shell[data-theme='purple'] .settings-button,
 .app-shell[data-theme='purple'] .quiet-button,
 .app-shell[data-theme='purple'] .library-import-action,
@@ -545,6 +555,14 @@
   color: #ffffff;
   background: #2b1b4b;
   box-shadow: 0 0 8px rgba(192, 132, 252, 0.25);
+}
+
+.app-shell[data-theme='purple'] .terminal-toggle-button:hover,
+.app-shell[data-theme='purple'] .terminal-toggle-button.is-active {
+  border-color: #c084fc;
+  color: #c084fc;
+  background: #281845;
+  box-shadow: 0 0 6px rgba(192, 132, 252, 0.25);
 }
 
 .app-shell[data-theme='purple'] .save-document-button,

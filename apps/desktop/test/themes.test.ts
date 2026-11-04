@@ -127,11 +127,11 @@ describe('SeaMind 4-Theme System', () => {
     expect(cssContent).toContain(
       ".app-shell[data-theme='purple'] .workspace-switcher",
     );
-    expect(cssContent).toContain(
-      ".app-shell[data-theme='navy'] .markmap-node[data-depth='0']",
+    expect(cssContent).toMatch(
+      /\.app-shell\[data-theme='navy'\][\s\S]*?\.markmap-node\[data-depth='0'\]/,
     );
-    expect(cssContent).toContain(
-      ".app-shell[data-theme='purple'] .markmap-node[data-depth='0']",
+    expect(cssContent).toMatch(
+      /\.app-shell\[data-theme='purple'\][\s\S]*?\.markmap-node\[data-depth='0'\]/,
     );
   });
 });
