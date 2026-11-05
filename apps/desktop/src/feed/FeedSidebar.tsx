@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import type { FeedChannelWithStats, FeedOverview } from './types';
 
 const COLLAPSED_CATEGORIES_KEY = 'seamind:feed-collapsed-categories:v1';
-const COLLAPSED_SIDEBAR_KEY = 'seamind:feed-sidebar-collapsed:v1';
 
 // 从本机偏好恢复已收起的分类，避免每次打开订阅页都重新整理列表。
 function readCollapsedCategories(): Set<string> {
@@ -65,13 +64,8 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
   onRestoreDefaultFeeds,
   isRestoring = false,
 }) => {
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    try {
-      return localStorage.getItem(COLLAPSED_SIDEBAR_KEY) === 'true';
-    } catch {
-      return false;
-    }
-  });
+  // 进入订阅页时默认显示订阅源列表，避免旧版本收起状态造成数据已丢失的错觉。
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [collapsedCategories, setCollapsedCategories] = useState(
     readCollapsedCategories,
   );
@@ -92,15 +86,7 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
   }, [collapsedCategories]);
 
   const toggleSidebar = () => {
-    setSidebarCollapsed((current) => {
-      const next = !current;
-      try {
-        localStorage.setItem(COLLAPSED_SIDEBAR_KEY, String(next));
-      } catch {
-        // 存储不可用时，当前会话仍可正常收起导航。
-      }
-      return next;
-    });
+    setSidebarCollapsed((current) => !current);
   };
 
   const toggleCategoryCollapse = (categoryName: string) => {
@@ -131,7 +117,7 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
           type="button"
           className="feed-rail-button"
           onClick={toggleSidebar}
-          title="展开订阅导航"
+          title={`展开订阅导航（${overview?.channels.length ?? 0} 个订阅源）`}
           aria-label="展开订阅导航"
         >
           ›

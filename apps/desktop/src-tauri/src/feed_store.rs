@@ -59,7 +59,6 @@ CREATE INDEX IF NOT EXISTS idx_feed_articles_channel_id ON feed_articles(channel
 CREATE INDEX IF NOT EXISTS idx_feed_articles_published_at ON feed_articles(published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_feed_articles_read_status ON feed_articles(read_status);
 CREATE INDEX IF NOT EXISTS idx_feed_articles_starred ON feed_articles(starred);
-CREATE INDEX IF NOT EXISTS idx_feed_articles_audio ON feed_articles(audio_url) WHERE audio_url IS NOT NULL;
 ";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -181,6 +180,7 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
     let _ = conn.execute("ALTER TABLE feed_articles ADD COLUMN audio_url TEXT;", []);
     let _ = conn.execute("ALTER TABLE feed_articles ADD COLUMN audio_type TEXT;", []);
     let _ = conn.execute("ALTER TABLE feed_articles ADD COLUMN audio_duration INTEGER;", []);
+    // 旧库先补齐音频列，再创建依赖新列的索引，避免启动时整库打不开。
     let _ = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_feed_articles_audio ON feed_articles(audio_url) WHERE audio_url IS NOT NULL;",
         [],
