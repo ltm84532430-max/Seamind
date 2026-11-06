@@ -65,3 +65,43 @@ export function shiftedMonth(
   if (nextYear < 1 || nextYear > 9999) return { year, month };
   return { year: nextYear, month: (zeroBased % 12) + 1 };
 }
+
+/** 翻月时尽量保留所选日；目标月份较短时落到该月最后一天。 */
+export function shiftedDateByMonth(value: string, delta: number): string {
+  const parsed = parseDateKey(value);
+  if (!parsed) return value;
+  const next = shiftedMonth(parsed.year, parsed.month, delta);
+  return dateKey(
+    next.year,
+    next.month,
+    Math.min(parsed.day, daysInMonth(next.year, next.month)),
+  );
+}
+
+export function shiftedDateByDays(value: string, delta: number): string {
+  const parsed = parseDateKey(value);
+  if (!parsed) return value;
+  const next = new Date(0);
+  next.setUTCFullYear(parsed.year, parsed.month - 1, parsed.day + delta);
+  next.setUTCHours(12, 0, 0, 0);
+  const year = next.getUTCFullYear();
+  return year >= 1 && year <= 9999
+    ? dateKey(year, next.getUTCMonth() + 1, next.getUTCDate())
+    : value;
+}
+
+/** 周视图与月视图使用相同的周一开始规则。 */
+export function weekGrid(
+  value: string,
+): Array<{ date: string; day: number; inMonth: boolean }> {
+  const parsed = parseDateKey(value);
+  if (!parsed) return [];
+  const selected = new Date(0);
+  selected.setUTCFullYear(parsed.year, parsed.month - 1, parsed.day);
+  const mondayOffset = (selected.getUTCDay() + 6) % 7;
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = shiftedDateByDays(value, index - mondayOffset);
+    const day = parseDateKey(date)!;
+    return { date, day: day.day, inMonth: day.month === parsed.month };
+  });
+}

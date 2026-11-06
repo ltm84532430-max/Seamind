@@ -8,6 +8,7 @@ mod epub_exam_grading;
 mod epub_translation;
 mod installer_components;
 mod feed;
+mod feed_asr;
 mod feed_store;
 mod learning_tasks;
 mod java_runtime;
@@ -49,6 +50,7 @@ pub fn run() {
         .manage(youtube_embed_transcript::YouTubeEmbedTranscriptState::default())
         .manage(youtube_net::YouTubeNet::default())
         .manage(youtube_transcript::TranscriptState::default())
+        .manage(feed_asr::FeedAsrState::default())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             app.state::<agent_bridge::AgentBridgeState>()
@@ -185,6 +187,12 @@ pub fn run() {
             player::player_clear_channel_errors,
             player::player_fetch_video_info,
             learning_tasks::learning_tasks_snapshot,
+            learning_tasks::learning_tasks_habits_snapshot,
+            learning_tasks::learning_tasks_habits_save,
+            learning_tasks::learning_tasks_habits_set_active,
+            learning_tasks::learning_tasks_habits_set_occurrence,
+            learning_tasks::learning_tasks_habits_save_category,
+            learning_tasks::learning_tasks_habits_delete_category,
             learning_tasks::learning_tasks_save_plan,
             learning_tasks::learning_tasks_save_task,
             learning_tasks::learning_tasks_delete_task,
@@ -247,6 +255,10 @@ pub fn run() {
             feed::feed_parse_opml,
             feed::feed_import_opml,
             feed::feed_export_opml,
+            feed_asr::feed_asr_get_status,
+            feed_asr::feed_asr_install_model,
+            feed_asr::feed_asr_start,
+            feed_asr::feed_asr_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Markmap Desktop");

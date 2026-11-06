@@ -4,7 +4,7 @@ use roxmltree::Node;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 use tokio::sync::Semaphore;
@@ -42,10 +42,7 @@ fn now_secs() -> i64 {
 
 fn build_client() -> Result<reqwest::Client, String> {
     let mut headers = HeaderMap::new();
-    headers.insert(
-        USER_AGENT,
-        HeaderValue::from_static(USER_AGENT_STRING),
-    );
+    headers.insert(USER_AGENT, HeaderValue::from_static(USER_AGENT_STRING));
     headers.insert(
         ACCEPT,
         HeaderValue::from_static("application/rss+xml, application/atom+xml, application/xml, text/xml, application/json, */*"),
@@ -97,13 +94,13 @@ struct ParsedFeed {
 fn parse_feed_content(content: &str, feed_url: &str) -> Result<ParsedFeed, String> {
     let trimmed = content.trim_start();
     if trimmed.starts_with('{') {
-        parse_json_feed(trimmed)
+        parse_json_feed(trimmed, feed_url)
     } else {
         parse_xml_feed(content, feed_url)
     }
 }
 
-fn parse_json_feed(json_str: &str) -> Result<ParsedFeed, String> {
+fn parse_json_feed(json_str: &str, feed_url: &str) -> Result<ParsedFeed, String> {
     let v: serde_json::Value =
         serde_json::from_str(json_str).map_err(|e| format!("JSON Feed 解析失败：{e}"))?;
 
@@ -114,6 +111,10 @@ fn parse_json_feed(json_str: &str) -> Result<ParsedFeed, String> {
         .to_string();
     let description = v["description"].as_str().map(|s| s.trim().to_string());
     let site_url = v["home_page_url"].as_str().map(|s| s.trim().to_string());
+    let feed_image_url = v["icon"]
+        .as_str()
+        .or_else(|| v["favicon"].as_str())
+        .and_then(|url| resolve_feed_image_url(url, feed_url));
 
     let mut articles = Vec::new();
     if let Some(items) = v["items"].as_array() {
@@ -155,6 +156,23 @@ fn parse_json_feed(json_str: &str) -> Result<ParsedFeed, String> {
                 .unwrap_or_else(now_secs);
 
             let reading_time_min = calculate_reading_time(&content_html);
+            let image_url = it["image"]
+                .as_str()
+                .or_else(|| it["banner_image"].as_str())
+                .and_then(|url| resolve_feed_image_url(url, feed_url))
+                .or_else(|| {
+                    it["attachments"].as_array()?.iter().find_map(|attachment| {
+                        let mime = attachment["mime_type"].as_str().unwrap_or("");
+                        if !mime.to_ascii_lowercase().starts_with("image/") {
+                            return None;
+                        }
+                        attachment["url"]
+                            .as_str()
+                            .and_then(|url| resolve_feed_image_url(url, feed_url))
+                    })
+                })
+                .or_else(|| extract_inline_image_url(&content_html, feed_url))
+                .or_else(|| feed_image_url.clone());
 
             let mut audio_url = None;
             let mut audio_type = None;
@@ -166,7 +184,11 @@ fn parse_json_feed(json_str: &str) -> Result<ParsedFeed, String> {
                     let u = att["url"].as_str().unwrap_or("").trim().to_string();
                     if mime.starts_with("audio/") || u.ends_with(".mp3") || u.ends_with(".m4a") {
                         audio_url = Some(u);
-                        audio_type = Some(if mime.is_empty() { "audio/mpeg".to_string() } else { mime });
+                        audio_type = Some(if mime.is_empty() {
+                            "audio/mpeg".to_string()
+                        } else {
+                            mime
+                        });
                         audio_duration = att["duration_in_seconds"].as_i64();
                         break;
                     }
@@ -185,6 +207,7 @@ fn parse_json_feed(json_str: &str) -> Result<ParsedFeed, String> {
                 audio_url,
                 audio_type,
                 audio_duration,
+                image_url,
             });
         }
     }
@@ -205,22 +228,87 @@ fn parse_xml_feed(xml_str: &str, feed_url: &str) -> Result<ParsedFeed, String> {
     let root_tag = root.tag_name().name().to_lowercase();
 
     if root_tag == "feed" {
-        parse_atom(root)
-    } else if root_tag == "rss" || root_tag == "rdf" || root.children().any(|c| c.tag_name().name() == "channel") {
+        parse_atom(root, feed_url)
+    } else if root_tag == "rss"
+        || root_tag == "rdf"
+        || root.children().any(|c| c.tag_name().name() == "channel")
+    {
         parse_rss(root, feed_url)
     } else {
         // Fallback: look for channel or entry anywhere
         if root.descendants().any(|n| n.tag_name().name() == "channel") {
             parse_rss(root, feed_url)
         } else if root.descendants().any(|n| n.tag_name().name() == "entry") {
-            parse_atom(root)
+            parse_atom(root, feed_url)
         } else {
             Err("未识别的 RSS 或 Atom 结构".to_string())
         }
     }
 }
 
-fn parse_rss(root: Node, _feed_url: &str) -> Result<ParsedFeed, String> {
+// 统一解析 RSS/Atom 封面地址，并拒绝非 HTTP(S) 协议，避免将脚本地址交给 WebView。
+fn resolve_feed_image_url(value: &str, feed_url: &str) -> Option<String> {
+    let base = reqwest::Url::parse(feed_url).ok()?;
+    let resolved = base.join(value.trim()).ok()?;
+    matches!(resolved.scheme(), "http" | "https").then(|| resolved.to_string())
+}
+
+fn extract_node_image_url(container: Node, feed_url: &str) -> Option<String> {
+    for node in container.children().filter(|node| node.is_element()) {
+        let name = node.tag_name().name().to_ascii_lowercase();
+        let mime = node.attribute("type").unwrap_or("").to_ascii_lowercase();
+        let is_image_content = mime.starts_with("image/")
+            || node
+                .attribute("medium")
+                .is_some_and(|value| value.eq_ignore_ascii_case("image"));
+
+        let candidate = match name.as_str() {
+            "image" | "thumbnail" | "picture" => node
+                .attribute("href")
+                .or_else(|| node.attribute("url"))
+                .or_else(|| node.attribute("src"))
+                .or_else(|| {
+                    node.children()
+                        .find(|child| {
+                            child.is_element()
+                                && child.tag_name().name().eq_ignore_ascii_case("url")
+                        })
+                        .and_then(|child| child.text())
+                }),
+            "logo" | "icon" => node
+                .attribute("href")
+                .or_else(|| node.attribute("url"))
+                .or_else(|| node.text()),
+            "content" | "enclosure" if is_image_content => node
+                .attribute("url")
+                .or_else(|| node.attribute("href"))
+                .or_else(|| node.attribute("src")),
+            "link" if node.attribute("rel") == Some("enclosure") && is_image_content => {
+                node.attribute("href")
+            }
+            _ => None,
+        };
+
+        if let Some(url) = candidate.and_then(|value| resolve_feed_image_url(value, feed_url)) {
+            return Some(url);
+        }
+    }
+    None
+}
+
+fn extract_inline_image_url(html: &str, feed_url: &str) -> Option<String> {
+    static IMAGE_SRC_PATTERN: OnceLock<regex::Regex> = OnceLock::new();
+    let pattern = IMAGE_SRC_PATTERN.get_or_init(|| {
+        regex::Regex::new(r#"(?is)<img\b[^>]*\b(?:src|data-src)\s*=\s*["']([^"']+)["']"#)
+            .expect("图片地址匹配规则有效")
+    });
+    pattern
+        .captures(html)
+        .and_then(|captures| captures.get(1))
+        .and_then(|image| resolve_feed_image_url(image.as_str(), feed_url))
+}
+
+fn parse_rss(root: Node, feed_url: &str) -> Result<ParsedFeed, String> {
     let channel = root
         .descendants()
         .find(|n| n.is_element() && n.tag_name().name().eq_ignore_ascii_case("channel"))
@@ -245,9 +333,21 @@ fn parse_rss(root: Node, _feed_url: &str) -> Result<ParsedFeed, String> {
         .find(|c| c.is_element() && c.tag_name().name().eq_ignore_ascii_case("link"))
         .and_then(|c| c.text())
         .map(|s| s.trim().to_string());
+    let channel_image_url = extract_node_image_url(channel, feed_url);
 
     let mut articles = Vec::new();
-    for item in channel.children().filter(|c| c.is_element() && c.tag_name().name().eq_ignore_ascii_case("item")) {
+    // RSS 1.0 使用 RDF 格式，item 通常与 channel 同级；RSS 2.0 则把 item 放在 channel 内。
+    let item_nodes: Vec<Node> = if root.tag_name().name().eq_ignore_ascii_case("rdf") {
+        root.children()
+            .filter(|c| c.is_element() && c.tag_name().name().eq_ignore_ascii_case("item"))
+            .collect()
+    } else {
+        channel
+            .children()
+            .filter(|c| c.is_element() && c.tag_name().name().eq_ignore_ascii_case("item"))
+            .collect()
+    };
+    for item in item_nodes {
         let title = item
             .children()
             .find(|c| c.is_element() && c.tag_name().name().eq_ignore_ascii_case("title"))
@@ -289,7 +389,10 @@ fn parse_rss(root: Node, _feed_url: &str) -> Result<ParsedFeed, String> {
 
         let content_encoded = item
             .children()
-            .find(|c| c.tag_name().name().eq_ignore_ascii_case("encoded") || c.tag_name().name().eq_ignore_ascii_case("content"))
+            .find(|c| {
+                c.tag_name().name().eq_ignore_ascii_case("encoded")
+                    || c.tag_name().name().eq_ignore_ascii_case("content")
+            })
             .and_then(|c| c.text());
 
         let desc = item
@@ -300,6 +403,9 @@ fn parse_rss(root: Node, _feed_url: &str) -> Result<ParsedFeed, String> {
         let raw_content = content_encoded.or(desc).unwrap_or("").trim();
         let summary = extract_summary_from_html(desc.unwrap_or(raw_content));
         let cleaned_html = clean_article_html(raw_content);
+        let image_url = extract_node_image_url(item, feed_url)
+            .or_else(|| extract_inline_image_url(raw_content, feed_url))
+            .or_else(|| channel_image_url.clone());
 
         let pub_date_str = item
             .children()
@@ -309,7 +415,9 @@ fn parse_rss(root: Node, _feed_url: &str) -> Result<ParsedFeed, String> {
             })
             .and_then(|c| c.text());
 
-        let published_at = pub_date_str.and_then(parse_date_string).unwrap_or_else(now_secs);
+        let published_at = pub_date_str
+            .and_then(parse_date_string)
+            .unwrap_or_else(now_secs);
         let reading_time_min = calculate_reading_time(raw_content);
 
         // 提取播客/音频 Enclosure 及时长元数据
@@ -317,9 +425,15 @@ fn parse_rss(root: Node, _feed_url: &str) -> Result<ParsedFeed, String> {
         let mut audio_type = None;
         let mut audio_duration = None;
 
-        for enc in item.children().filter(|c| c.is_element() && c.tag_name().name().eq_ignore_ascii_case("enclosure")) {
+        for enc in item
+            .children()
+            .filter(|c| c.is_element() && c.tag_name().name().eq_ignore_ascii_case("enclosure"))
+        {
             let url = enc.attribute("url").map(|s| s.trim().to_string());
-            let mime = enc.attribute("type").map(|s| s.trim().to_lowercase()).unwrap_or_default();
+            let mime = enc
+                .attribute("type")
+                .map(|s| s.trim().to_lowercase())
+                .unwrap_or_default();
             if let Some(u) = url {
                 let is_audio = mime.starts_with("audio/")
                     || u.ends_with(".mp3")
@@ -329,7 +443,11 @@ fn parse_rss(root: Node, _feed_url: &str) -> Result<ParsedFeed, String> {
                     || u.ends_with(".wav");
                 if is_audio {
                     audio_url = Some(u);
-                    audio_type = Some(if mime.is_empty() { "audio/mpeg".to_string() } else { mime });
+                    audio_type = Some(if mime.is_empty() {
+                        "audio/mpeg".to_string()
+                    } else {
+                        mime
+                    });
                     break;
                 }
             }
@@ -366,6 +484,7 @@ fn parse_rss(root: Node, _feed_url: &str) -> Result<ParsedFeed, String> {
             audio_url,
             audio_type,
             audio_duration,
+            image_url,
         });
     }
 
@@ -377,7 +496,7 @@ fn parse_rss(root: Node, _feed_url: &str) -> Result<ParsedFeed, String> {
     })
 }
 
-fn parse_atom(root: Node) -> Result<ParsedFeed, String> {
+fn parse_atom(root: Node, feed_url: &str) -> Result<ParsedFeed, String> {
     let title = root
         .children()
         .find(|c| c.is_element() && c.tag_name().name().eq_ignore_ascii_case("title"))
@@ -388,7 +507,11 @@ fn parse_atom(root: Node) -> Result<ParsedFeed, String> {
 
     let description = root
         .children()
-        .find(|c| c.is_element() && (c.tag_name().name().eq_ignore_ascii_case("subtitle") || c.tag_name().name().eq_ignore_ascii_case("description")))
+        .find(|c| {
+            c.is_element()
+                && (c.tag_name().name().eq_ignore_ascii_case("subtitle")
+                    || c.tag_name().name().eq_ignore_ascii_case("description"))
+        })
         .and_then(|c| c.text())
         .map(|s| s.trim().to_string());
 
@@ -401,9 +524,13 @@ fn parse_atom(root: Node) -> Result<ParsedFeed, String> {
         })
         .and_then(|c| c.attribute("href"))
         .map(|s| s.trim().to_string());
+    let feed_image_url = extract_node_image_url(root, feed_url);
 
     let mut articles = Vec::new();
-    for entry in root.descendants().filter(|c| c.is_element() && c.tag_name().name().eq_ignore_ascii_case("entry")) {
+    for entry in root
+        .descendants()
+        .filter(|c| c.is_element() && c.tag_name().name().eq_ignore_ascii_case("entry"))
+    {
         let entry_title = entry
             .children()
             .find(|c| c.is_element() && c.tag_name().name().eq_ignore_ascii_case("title"))
@@ -461,6 +588,9 @@ fn parse_atom(root: Node) -> Result<ParsedFeed, String> {
         let raw_content = content_node.or(summary_node).unwrap_or("").trim();
         let summary = extract_summary_from_html(summary_node.unwrap_or(raw_content));
         let cleaned_html = clean_article_html(raw_content);
+        let image_url = extract_node_image_url(entry, feed_url)
+            .or_else(|| extract_inline_image_url(raw_content, feed_url))
+            .or_else(|| feed_image_url.clone());
 
         let date_str = entry
             .children()
@@ -470,7 +600,9 @@ fn parse_atom(root: Node) -> Result<ParsedFeed, String> {
             })
             .and_then(|c| c.text());
 
-        let published_at = date_str.and_then(parse_date_string).unwrap_or_else(now_secs);
+        let published_at = date_str
+            .and_then(parse_date_string)
+            .unwrap_or_else(now_secs);
         let reading_time_min = calculate_reading_time(raw_content);
 
         // 提取 Atom 格式播客/音频附件
@@ -478,10 +610,16 @@ fn parse_atom(root: Node) -> Result<ParsedFeed, String> {
         let mut audio_type = None;
         let mut audio_duration = None;
 
-        for link_node in entry.children().filter(|c| c.is_element() && c.tag_name().name().eq_ignore_ascii_case("link")) {
+        for link_node in entry
+            .children()
+            .filter(|c| c.is_element() && c.tag_name().name().eq_ignore_ascii_case("link"))
+        {
             let rel = link_node.attribute("rel").unwrap_or("");
             let href = link_node.attribute("href").map(|s| s.trim().to_string());
-            let mime = link_node.attribute("type").map(|s| s.trim().to_lowercase()).unwrap_or_default();
+            let mime = link_node
+                .attribute("type")
+                .map(|s| s.trim().to_lowercase())
+                .unwrap_or_default();
             if let Some(h) = href {
                 if rel.eq_ignore_ascii_case("enclosure")
                     || mime.starts_with("audio/")
@@ -491,7 +629,11 @@ fn parse_atom(root: Node) -> Result<ParsedFeed, String> {
                     || h.ends_with(".ogg")
                 {
                     audio_url = Some(h);
-                    audio_type = Some(if mime.is_empty() { "audio/mpeg".to_string() } else { mime });
+                    audio_type = Some(if mime.is_empty() {
+                        "audio/mpeg".to_string()
+                    } else {
+                        mime
+                    });
                     break;
                 }
             }
@@ -528,6 +670,7 @@ fn parse_atom(root: Node) -> Result<ParsedFeed, String> {
             audio_url,
             audio_type,
             audio_duration,
+            image_url,
         });
     }
 
@@ -666,7 +809,11 @@ pub fn convert_article_to_mindmap(article: &store::FeedArticle) -> String {
         }
     }
     if !article.url.is_empty() {
-        md.push_str(&format!("- 原文链接：[{}]({})\n", article.title.trim(), article.url));
+        md.push_str(&format!(
+            "- 原文链接：[{}]({})\n",
+            article.title.trim(),
+            article.url
+        ));
     }
     md.push('\n');
 
@@ -719,8 +866,8 @@ pub struct OpmlOutlineItem {
 }
 
 pub fn parse_opml(opml_xml: &str) -> Result<Vec<OpmlOutlineItem>, String> {
-    let doc = roxmltree::Document::parse(opml_xml)
-        .map_err(|e| format!("解析 OPML 文件失败：{e}"))?;
+    let doc =
+        roxmltree::Document::parse(opml_xml).map_err(|e| format!("解析 OPML 文件失败：{e}"))?;
 
     let mut items = Vec::new();
     let body = doc
@@ -728,7 +875,10 @@ pub fn parse_opml(opml_xml: &str) -> Result<Vec<OpmlOutlineItem>, String> {
         .find(|n| n.is_element() && n.tag_name().name().eq_ignore_ascii_case("body"))
         .ok_or_else(|| "OPML 缺少 <body> 节点".to_string())?;
 
-    for node in body.children().filter(|c| c.is_element() && c.tag_name().name().eq_ignore_ascii_case("outline")) {
+    for node in body
+        .children()
+        .filter(|c| c.is_element() && c.tag_name().name().eq_ignore_ascii_case("outline"))
+    {
         extract_opml_node(node, "默认分类", &mut items);
     }
 
@@ -766,7 +916,10 @@ fn extract_opml_node(node: Node, parent_category: &str, items: &mut Vec<OpmlOutl
         parent_category
     };
 
-    for child in node.children().filter(|c| c.is_element() && c.tag_name().name().eq_ignore_ascii_case("outline")) {
+    for child in node
+        .children()
+        .filter(|c| c.is_element() && c.tag_name().name().eq_ignore_ascii_case("outline"))
+    {
         extract_opml_node(child, new_category, items);
     }
 }
@@ -782,7 +935,11 @@ pub fn generate_opml(channels: &[store::FeedChannel]) -> String {
     }
 
     for (cat, chs) in map {
-        xml.push_str(&format!("  <outline text=\"{}\" title=\"{}\">\n", escape_xml(cat), escape_xml(cat)));
+        xml.push_str(&format!(
+            "  <outline text=\"{}\" title=\"{}\">\n",
+            escape_xml(cat),
+            escape_xml(cat)
+        ));
         for ch in chs {
             let html_attr = ch
                 .site_url
@@ -920,18 +1077,24 @@ pub async fn feed_add_channel(
     };
 
     let app_clone = app.clone();
-    let (channel, articles) = tokio::task::spawn_blocking(move || -> Result<(store::FeedChannel, Vec<store::ArticleInput>), String> {
-        let conn = open_db(&app_clone)?;
-        let now = now_secs();
-        let ch = store::upsert_channel(&conn, &input, now)?;
-        store::upsert_articles(&conn, &ch.id, &parsed.articles, now)?;
-        store::update_channel_sync_status(&conn, &ch.id, "idle", None, now)?;
-        Ok((ch, parsed.articles))
-    })
+    let (channel, articles) = tokio::task::spawn_blocking(
+        move || -> Result<(store::FeedChannel, Vec<store::ArticleInput>), String> {
+            let conn = open_db(&app_clone)?;
+            let now = now_secs();
+            let ch = store::upsert_channel(&conn, &input, now)?;
+            store::upsert_articles(&conn, &ch.id, &parsed.articles, now)?;
+            store::update_channel_sync_status(&conn, &ch.id, "idle", None, now)?;
+            Ok((ch, parsed.articles))
+        },
+    )
     .await
     .map_err(|e| format!("保存订阅源任务失败：{e}"))??;
 
-    println!("添加订阅源成功：{} (共导入 {} 篇文章)", channel.title, articles.len());
+    println!(
+        "添加订阅源成功：{} (共导入 {} 篇文章)",
+        channel.title,
+        articles.len()
+    );
     Ok(channel)
 }
 
@@ -972,12 +1135,13 @@ pub async fn feed_delete_channel(app: AppHandle, id: String) -> Result<(), Strin
 #[tauri::command]
 pub async fn feed_refresh_channel(app: AppHandle, id: String) -> Result<usize, String> {
     let app_clone = app.clone();
-    let ch_opt = tokio::task::spawn_blocking(move || -> Result<Option<store::FeedChannel>, String> {
-        let conn = open_db(&app_clone)?;
-        store::get_channel(&conn, &id)
-    })
-    .await
-    .map_err(|e| format!("获取订阅源失败：{e}"))??;
+    let ch_opt =
+        tokio::task::spawn_blocking(move || -> Result<Option<store::FeedChannel>, String> {
+            let conn = open_db(&app_clone)?;
+            store::get_channel(&conn, &id)
+        })
+        .await
+        .map_err(|e| format!("获取订阅源失败：{e}"))??;
 
     let ch = ch_opt.ok_or_else(|| "订阅源不存在".to_string())?;
 
@@ -991,9 +1155,17 @@ pub async fn feed_refresh_channel(app: AppHandle, id: String) -> Result<usize, S
             let msg_clone = msg.clone();
             tokio::task::spawn_blocking(move || {
                 if let Ok(conn) = open_db(&app_clone) {
-                    let _ = store::update_channel_sync_status(&conn, &ch_id, "error", Some(&msg_clone), now_secs());
+                    let _ = store::update_channel_sync_status(
+                        &conn,
+                        &ch_id,
+                        "error",
+                        Some(&msg_clone),
+                        now_secs(),
+                    );
                 }
-            }).await.ok();
+            })
+            .await
+            .ok();
             return Err(msg);
         }
     };
@@ -1007,9 +1179,17 @@ pub async fn feed_refresh_channel(app: AppHandle, id: String) -> Result<usize, S
             let msg_clone = msg.clone();
             tokio::task::spawn_blocking(move || {
                 if let Ok(conn) = open_db(&app_clone) {
-                    let _ = store::update_channel_sync_status(&conn, &ch_id, "error", Some(&msg_clone), now_secs());
+                    let _ = store::update_channel_sync_status(
+                        &conn,
+                        &ch_id,
+                        "error",
+                        Some(&msg_clone),
+                        now_secs(),
+                    );
                 }
-            }).await.ok();
+            })
+            .await
+            .ok();
             return Err(msg);
         }
     };
@@ -1022,9 +1202,17 @@ pub async fn feed_refresh_channel(app: AppHandle, id: String) -> Result<usize, S
             let e_clone = e.clone();
             tokio::task::spawn_blocking(move || {
                 if let Ok(conn) = open_db(&app_clone) {
-                    let _ = store::update_channel_sync_status(&conn, &ch_id, "error", Some(&e_clone), now_secs());
+                    let _ = store::update_channel_sync_status(
+                        &conn,
+                        &ch_id,
+                        "error",
+                        Some(&e_clone),
+                        now_secs(),
+                    );
                 }
-            }).await.ok();
+            })
+            .await
+            .ok();
             return Err(e);
         }
     };
@@ -1092,7 +1280,10 @@ pub async fn feed_list_articles(
 }
 
 #[tauri::command]
-pub async fn feed_get_article(app: AppHandle, id: String) -> Result<Option<store::FeedArticle>, String> {
+pub async fn feed_get_article(
+    app: AppHandle,
+    id: String,
+) -> Result<Option<store::FeedArticle>, String> {
     tokio::task::spawn_blocking(move || {
         let conn = open_db(&app)?;
         store::get_article(&conn, &id)
@@ -1250,7 +1441,8 @@ mod tests {
   </entry>
 </feed>"#;
 
-        let parsed = parse_feed_content(sample_atom, "http://www.ruanyifeng.com/blog/atom.xml").unwrap();
+        let parsed =
+            parse_feed_content(sample_atom, "http://www.ruanyifeng.com/blog/atom.xml").unwrap();
         assert_eq!(parsed.title, "阮一峰的网络日志");
         assert_eq!(parsed.articles.len(), 1);
         assert_eq!(parsed.articles[0].title, "科技爱好者周刊（第 300 期）");
@@ -1303,4 +1495,3 @@ mod tests {
         assert_eq!(items[0].xml_url, "https://blog.rust-lang.org/feed.xml");
     }
 }
-

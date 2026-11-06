@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS feed_articles (
     audio_url TEXT,
     audio_type TEXT,
     audio_duration INTEGER,
+    image_url TEXT,
     FOREIGN KEY(channel_id) REFERENCES feed_channels(id) ON DELETE CASCADE,
     UNIQUE(channel_id, guid)
 );
@@ -85,6 +86,7 @@ pub struct FeedChannelWithStats {
     pub channel: FeedChannel,
     pub unread_count: usize,
     pub total_count: usize,
+    pub audio_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,6 +120,7 @@ pub struct FeedArticle {
     pub audio_url: Option<String>,
     pub audio_type: Option<String>,
     pub audio_duration: Option<i64>,
+    pub image_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,6 +137,7 @@ pub struct ArticleInput {
     pub audio_url: Option<String>,
     pub audio_type: Option<String>,
     pub audio_duration: Option<i64>,
+    pub image_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -156,6 +160,7 @@ pub struct CategoryStats {
     pub color: String,
     pub unread_count: usize,
     pub channel_count: usize,
+    pub audio_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -179,7 +184,12 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
     // 增量热迁移：为已有数据库扩展音频支持字段
     let _ = conn.execute("ALTER TABLE feed_articles ADD COLUMN audio_url TEXT;", []);
     let _ = conn.execute("ALTER TABLE feed_articles ADD COLUMN audio_type TEXT;", []);
-    let _ = conn.execute("ALTER TABLE feed_articles ADD COLUMN audio_duration INTEGER;", []);
+    let _ = conn.execute(
+        "ALTER TABLE feed_articles ADD COLUMN audio_duration INTEGER;",
+        [],
+    );
+    // 旧订阅库启动时补齐封面地址列，不丢失已有文章数据。
+    let _ = conn.execute("ALTER TABLE feed_articles ADD COLUMN image_url TEXT;", []);
     // 旧库先补齐音频列，再创建依赖新列的索引，避免启动时整库打不开。
     let _ = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_feed_articles_audio ON feed_articles(audio_url) WHERE audio_url IS NOT NULL;",
@@ -217,8 +227,8 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
 }
 
 const CATEGORY_COLORS: &[&str] = &[
-    "#d6a354", "#6ba8d6", "#70b89a", "#be8ac8", "#d57966", "#8e9fca", "#b4a55f",
-    "#5faeb0", "#d58faa", "#8cae72",
+    "#d6a354", "#6ba8d6", "#70b89a", "#be8ac8", "#d57966", "#8e9fca", "#b4a55f", "#5faeb0",
+    "#d58faa", "#8cae72",
 ];
 
 fn category_hash(name: &str) -> u32 {
@@ -386,61 +396,298 @@ pub fn create_category(conn: &Connection, name: &str, now: i64) -> Result<(), St
 
 const STARTER_FEEDS: &[(&str, &str, &str, &str)] = &[
     // Finance and quantitative research.
-    ("金融与量化", "Federal Reserve · Press Releases", "https://www.federalreserve.gov/feeds/press_all.xml", "https://www.federalreserve.gov/"),
-    ("金融与量化", "Federal Reserve · Speeches & Testimony", "https://www.federalreserve.gov/feeds/speeches_and_testimony.xml", "https://www.federalreserve.gov/"),
-    ("金融与量化", "Federal Reserve · Working Papers", "https://www.federalreserve.gov/feeds/working_papers.xml", "https://www.federalreserve.gov/"),
-    ("金融与量化", "Federal Reserve · Finance & Economics Discussion Series", "https://www.federalreserve.gov/feeds/feds.xml", "https://www.federalreserve.gov/"),
-    ("金融与量化", "Federal Reserve · FEDS Notes", "https://www.federalreserve.gov/feeds/feds_notes.xml", "https://www.federalreserve.gov/"),
-    ("金融与量化", "Federal Reserve · Selected Interest Rates (H.15)", "https://www.federalreserve.gov/feeds/h15.xml", "https://www.federalreserve.gov/"),
-    ("金融与量化", "TreasuryDirect · Offering Announcements", "https://www.treasurydirect.gov/TA_WS/securities/announced/rss", "https://www.treasurydirect.gov/"),
-    ("金融与量化", "TreasuryDirect · Auction Results", "https://www.treasurydirect.gov/TA_WS/securities/auctioned/rss", "https://www.treasurydirect.gov/"),
-    ("金融与量化", "TreasuryDirect · Debt to the Penny", "https://www.treasurydirect.gov/NP_WS/debt/feeds/recent", "https://www.treasurydirect.gov/"),
-    ("金融与量化", "Financial Stability Board · Press Releases", "https://www.fsb.org/wordpress/content_type/press-releases/feed/", "https://www.fsb.org/"),
-    ("金融与量化", "New York Fed · Liberty Street Economics", "https://libertystreeteconomics.newyorkfed.org/feed/", "https://libertystreeteconomics.newyorkfed.org/"),
-    ("金融与量化", "Quantpedia · Quantitative Trading Research", "https://quantpedia.com/feed/", "https://quantpedia.com/"),
-    ("金融与量化", "Alpha Architect · Quantitative Investing Research", "https://alphaarchitect.com/feed/", "https://alphaarchitect.com/"),
-    ("金融与量化", "European Central Bank · The ECB Podcast", "https://www.ecb.europa.eu/rss/podcast.html", "https://www.ecb.europa.eu/press/podcasts/"),
-    ("金融与量化", "International Monetary Fund · IMF Podcasts", "https://feeds.simplecast.com/7xXq1w_K", "https://www.imf.org/en/News/Podcasts"),
-    ("金融与量化", "Goldman Sachs · Exchanges", "https://feeds.megaphone.fm/GLD4133496924", "https://www.goldmansachs.com/insights/series/exchanges-at-goldman-sachs"),
-    ("金融与量化", "Morgan Stanley · Thoughts on the Market", "https://feeds.megaphone.fm/thoughtsonmarket", "https://www.morganstanley.com/ideas/thoughts-on-the-market"),
-    ("金融与量化", "Bloomberg · Odd Lots", "https://feeds.megaphone.fm/BLM2451951590", "https://www.bloomberg.com/oddlots"),
-
+    (
+        "金融与量化",
+        "Federal Reserve · Press Releases",
+        "https://www.federalreserve.gov/feeds/press_all.xml",
+        "https://www.federalreserve.gov/",
+    ),
+    (
+        "金融与量化",
+        "Federal Reserve · Speeches & Testimony",
+        "https://www.federalreserve.gov/feeds/speeches_and_testimony.xml",
+        "https://www.federalreserve.gov/",
+    ),
+    (
+        "金融与量化",
+        "Federal Reserve · Working Papers",
+        "https://www.federalreserve.gov/feeds/working_papers.xml",
+        "https://www.federalreserve.gov/",
+    ),
+    (
+        "金融与量化",
+        "Federal Reserve · Finance & Economics Discussion Series",
+        "https://www.federalreserve.gov/feeds/feds.xml",
+        "https://www.federalreserve.gov/",
+    ),
+    (
+        "金融与量化",
+        "Federal Reserve · FEDS Notes",
+        "https://www.federalreserve.gov/feeds/feds_notes.xml",
+        "https://www.federalreserve.gov/",
+    ),
+    (
+        "金融与量化",
+        "Federal Reserve · Selected Interest Rates (H.15)",
+        "https://www.federalreserve.gov/feeds/h15.xml",
+        "https://www.federalreserve.gov/",
+    ),
+    (
+        "金融与量化",
+        "TreasuryDirect · Offering Announcements",
+        "https://www.treasurydirect.gov/TA_WS/securities/announced/rss",
+        "https://www.treasurydirect.gov/",
+    ),
+    (
+        "金融与量化",
+        "TreasuryDirect · Auction Results",
+        "https://www.treasurydirect.gov/TA_WS/securities/auctioned/rss",
+        "https://www.treasurydirect.gov/",
+    ),
+    (
+        "金融与量化",
+        "TreasuryDirect · Debt to the Penny",
+        "https://www.treasurydirect.gov/NP_WS/debt/feeds/recent",
+        "https://www.treasurydirect.gov/",
+    ),
+    (
+        "金融与量化",
+        "Financial Stability Board · Press Releases",
+        "https://www.fsb.org/wordpress/content_type/press-releases/feed/",
+        "https://www.fsb.org/",
+    ),
+    (
+        "金融与量化",
+        "New York Fed · Liberty Street Economics",
+        "https://libertystreeteconomics.newyorkfed.org/feed/",
+        "https://libertystreeteconomics.newyorkfed.org/",
+    ),
+    (
+        "金融与量化",
+        "Quantpedia · Quantitative Trading Research",
+        "https://quantpedia.com/feed/",
+        "https://quantpedia.com/",
+    ),
+    (
+        "金融与量化",
+        "Alpha Architect · Quantitative Investing Research",
+        "https://alphaarchitect.com/feed/",
+        "https://alphaarchitect.com/",
+    ),
+    (
+        "金融与量化",
+        "European Central Bank · The ECB Podcast",
+        "https://www.ecb.europa.eu/rss/podcast.html",
+        "https://www.ecb.europa.eu/press/podcasts/",
+    ),
+    (
+        "金融与量化",
+        "International Monetary Fund · IMF Podcasts",
+        "https://feeds.simplecast.com/7xXq1w_K",
+        "https://www.imf.org/en/News/Podcasts",
+    ),
+    (
+        "金融与量化",
+        "Goldman Sachs · Exchanges",
+        "https://feeds.megaphone.fm/GLD4133496924",
+        "https://www.goldmansachs.com/insights/series/exchanges-at-goldman-sachs",
+    ),
+    (
+        "金融与量化",
+        "Morgan Stanley · Thoughts on the Market",
+        "https://feeds.megaphone.fm/thoughtsonmarket",
+        "https://www.morganstanley.com/ideas/thoughts-on-the-market",
+    ),
+    (
+        "金融与量化",
+        "Bloomberg · Odd Lots",
+        "https://feeds.megaphone.fm/BLM2451951590",
+        "https://www.bloomberg.com/oddlots",
+    ),
     // 军事与防务安全：全球顶尖防务播客、战略智库与军事前沿研究
-    ("军事与防务安全", "西点军校现代战争研究所 · MWI Podcast", "https://mwi.westpoint.edu/feed/podcast/", "https://mwi.westpoint.edu/category/podcasts/"),
-    ("军事与防务安全", "War on the Rocks · 战略与防务播客", "https://warontherocks.libsyn.com/rss", "https://warontherocks.com/"),
-    ("军事与防务安全", "美国海军学会 · USNI Proceedings Podcast", "https://feeds.buzzsprout.com/269098.rss", "https://www.usni.org/magazines/proceedings/proceedings-podcast"),
-    ("军事与防务安全", "战略与国际研究中心 · CSIS Defense360", "https://feeds.simplecast.com/4S9i1V4_", "https://defense360.csis.org/"),
-    ("军事与防务安全", "美国国防部 · U.S. Department of Defense News", "https://www.defense.gov/DesktopModules/ArticleCS/RSS.ashx?ContentType=1&Site=945", "https://www.defense.gov/News/"),
-    ("军事与防务安全", "兰德公司 · RAND National Security Research", "https://www.rand.org/topics/national-security-and-terrorism.xml", "https://www.rand.org/"),
-    ("军事与防务安全", "英国皇家联合军种防务所 · RUSI Defense Podcast", "https://feeds.acast.com/public/shows/the-western-way-of-war", "https://rusi.org/"),
-
+    (
+        "军事与防务安全",
+        "西点军校现代战争研究所 · MWI Podcast",
+        "https://mwi.westpoint.edu/feed/podcast/",
+        "https://mwi.westpoint.edu/category/podcasts/",
+    ),
+    (
+        "军事与防务安全",
+        "War on the Rocks · 战略与防务播客",
+        "https://warontherocks.libsyn.com/rss",
+        "https://warontherocks.com/",
+    ),
+    (
+        "军事与防务安全",
+        "美国海军学会 · USNI Proceedings Podcast",
+        "https://feeds.buzzsprout.com/269098.rss",
+        "https://www.usni.org/magazines/proceedings/proceedings-podcast",
+    ),
+    (
+        "军事与防务安全",
+        "战略与国际研究中心 · CSIS Defense360",
+        "https://feeds.simplecast.com/4S9i1V4_",
+        "https://defense360.csis.org/",
+    ),
+    (
+        "军事与防务安全",
+        "美国国防部 · U.S. Department of Defense News",
+        "https://www.defense.gov/DesktopModules/ArticleCS/RSS.ashx?ContentType=1&Site=945",
+        "https://www.defense.gov/News/",
+    ),
+    (
+        "军事与防务安全",
+        "兰德公司 · RAND National Security Research",
+        "https://www.rand.org/topics/national-security-and-terrorism.xml",
+        "https://www.rand.org/",
+    ),
+    (
+        "军事与防务安全",
+        "英国皇家联合军种防务所 · RUSI Defense Podcast",
+        "https://feeds.acast.com/public/shows/the-western-way-of-war",
+        "https://rusi.org/",
+    ),
     // Public institutions across the United States, China, Japan and the EU.
-    ("政府与公共机构", "U.S. Census Bureau · Economic Indicators", "https://www.census.gov/economic-indicators/indicator.xml", "https://www.census.gov/economic-indicators/"),
-    ("政府与公共机构", "U.S. Census Bureau · Press Releases", "https://www.census.gov/content/census/en/newsroom/press-releases.xml", "https://www.census.gov/newsroom.html"),
-    ("政府与公共机构", "U.S. Bureau of Labor Statistics · Latest Releases", "https://www.bls.gov/feed/bls_latest.rss", "https://www.bls.gov/"),
-    ("政府与公共机构", "U.S. Bureau of Economic Analysis · Current Releases", "https://apps.bea.gov/rss/rss.xml", "https://www.bea.gov/news/current-releases"),
-    ("政府与公共机构", "国家统计局 · 最新发布", "https://www.stats.gov.cn/sj/zxfb/rss.xml", "https://www.stats.gov.cn/"),
-    ("政府与公共机构", "国家统计局 · 数据解读", "https://www.stats.gov.cn/sj/sjjd/rss.xml", "https://www.stats.gov.cn/"),
-    ("政府与公共机构", "Japan Ministry of Finance · What's New", "https://www.mof.go.jp/english/news.rss", "https://www.mof.go.jp/english/"),
-    ("政府与公共机构", "Bank of Japan · What's New", "https://www.boj.or.jp/en/rss/whatsnew.xml", "https://www.boj.or.jp/en/"),
-    ("政府与公共机构", "Bank of Japan · Statistics", "https://www.boj.or.jp/en/rss/statistics.xml", "https://www.boj.or.jp/en/statistics/"),
-    ("政府与公共机构", "European Central Bank · Press Releases", "https://www.ecb.europa.eu/rss/press.html", "https://www.ecb.europa.eu/press/"),
-    ("政府与公共机构", "European Central Bank · Statistical Press Releases", "https://www.ecb.europa.eu/rss/statpress.html", "https://www.ecb.europa.eu/stats/"),
-    ("政府与公共机构", "European Central Bank · Blog", "https://www.ecb.europa.eu/rss/blog.html", "https://www.ecb.europa.eu/press/blog/"),
-    ("政府与公共机构", "European Central Bank · Publications", "https://www.ecb.europa.eu/rss/pub.html", "https://www.ecb.europa.eu/pub/"),
-
+    (
+        "政府与公共机构",
+        "U.S. Census Bureau · Economic Indicators",
+        "https://www.census.gov/economic-indicators/indicator.xml",
+        "https://www.census.gov/economic-indicators/",
+    ),
+    (
+        "政府与公共机构",
+        "U.S. Census Bureau · Press Releases",
+        "https://www.census.gov/content/census/en/newsroom/press-releases.xml",
+        "https://www.census.gov/newsroom.html",
+    ),
+    (
+        "政府与公共机构",
+        "U.S. Bureau of Labor Statistics · Latest Releases",
+        "https://www.bls.gov/feed/bls_latest.rss",
+        "https://www.bls.gov/",
+    ),
+    (
+        "政府与公共机构",
+        "U.S. Bureau of Economic Analysis · Current Releases",
+        "https://apps.bea.gov/rss/rss.xml",
+        "https://www.bea.gov/news/current-releases",
+    ),
+    (
+        "政府与公共机构",
+        "国家统计局 · 最新发布",
+        "https://www.stats.gov.cn/sj/zxfb/rss.xml",
+        "https://www.stats.gov.cn/",
+    ),
+    (
+        "政府与公共机构",
+        "国家统计局 · 数据解读",
+        "https://www.stats.gov.cn/sj/sjjd/rss.xml",
+        "https://www.stats.gov.cn/",
+    ),
+    (
+        "政府与公共机构",
+        "Japan Ministry of Finance · What's New",
+        "https://www.mof.go.jp/english/news.rss",
+        "https://www.mof.go.jp/english/",
+    ),
+    (
+        "政府与公共机构",
+        "Bank of Japan · What's New",
+        "https://www.boj.or.jp/en/rss/whatsnew.xml",
+        "https://www.boj.or.jp/en/",
+    ),
+    (
+        "政府与公共机构",
+        "Bank of Japan · Statistics",
+        "https://www.boj.or.jp/en/rss/statistics.xml",
+        "https://www.boj.or.jp/en/statistics/",
+    ),
+    (
+        "政府与公共机构",
+        "European Central Bank · Press Releases",
+        "https://www.ecb.europa.eu/rss/press.html",
+        "https://www.ecb.europa.eu/press/",
+    ),
+    (
+        "政府与公共机构",
+        "European Central Bank · Statistical Press Releases",
+        "https://www.ecb.europa.eu/rss/statpress.html",
+        "https://www.ecb.europa.eu/stats/",
+    ),
+    (
+        "政府与公共机构",
+        "European Central Bank · Blog",
+        "https://www.ecb.europa.eu/rss/blog.html",
+        "https://www.ecb.europa.eu/press/blog/",
+    ),
+    (
+        "政府与公共机构",
+        "European Central Bank · Publications",
+        "https://www.ecb.europa.eu/rss/pub.html",
+        "https://www.ecb.europa.eu/pub/",
+    ),
     // Technology publishers and engineering blogs. Rust is included for clean installs;
     // existing subscriptions are deduplicated by URL.
-    ("技术博客", "Rust 官方博客", "https://blog.rust-lang.org/feed.xml", "https://blog.rust-lang.org/"),
-    ("技术博客", "GitHub Blog", "https://github.blog/feed/", "https://github.blog/"),
-    ("技术博客", "GitHub Changelog", "https://github.blog/changelog/feed/", "https://github.blog/changelog/"),
-    ("技术博客", "Cloudflare Blog", "https://blog.cloudflare.com/rss/", "https://blog.cloudflare.com/"),
-    ("技术博客", "Kubernetes Blog", "https://kubernetes.io/feed.xml", "https://kubernetes.io/blog/"),
-    ("技术博客", "Mozilla Hacks", "https://hacks.mozilla.org/feed/", "https://hacks.mozilla.org/"),
-    ("技术博客", "AWS News Blog", "https://aws.amazon.com/blogs/aws/feed/", "https://aws.amazon.com/blogs/aws/"),
-    ("技术博客", "Go Blog", "https://go.dev/blog/feed.atom", "https://go.dev/blog/"),
-    ("技术博客", "Python Insider", "https://blog.python.org/feeds/posts/default", "https://blog.python.org/"),
-    ("技术博客", "TypeScript Blog", "https://devblogs.microsoft.com/typescript/feed/", "https://devblogs.microsoft.com/typescript/"),
+    (
+        "技术博客",
+        "Rust 官方博客",
+        "https://blog.rust-lang.org/feed.xml",
+        "https://blog.rust-lang.org/",
+    ),
+    (
+        "技术博客",
+        "GitHub Blog",
+        "https://github.blog/feed/",
+        "https://github.blog/",
+    ),
+    (
+        "技术博客",
+        "GitHub Changelog",
+        "https://github.blog/changelog/feed/",
+        "https://github.blog/changelog/",
+    ),
+    (
+        "技术博客",
+        "Cloudflare Blog",
+        "https://blog.cloudflare.com/rss/",
+        "https://blog.cloudflare.com/",
+    ),
+    (
+        "技术博客",
+        "Kubernetes Blog",
+        "https://kubernetes.io/feed.xml",
+        "https://kubernetes.io/blog/",
+    ),
+    (
+        "技术博客",
+        "Mozilla Hacks",
+        "https://hacks.mozilla.org/feed/",
+        "https://hacks.mozilla.org/",
+    ),
+    (
+        "技术博客",
+        "AWS News Blog",
+        "https://aws.amazon.com/blogs/aws/feed/",
+        "https://aws.amazon.com/blogs/aws/",
+    ),
+    (
+        "技术博客",
+        "Go Blog",
+        "https://go.dev/blog/feed.atom",
+        "https://go.dev/blog/",
+    ),
+    (
+        "技术博客",
+        "Python Insider",
+        "https://blog.python.org/feeds/posts/default",
+        "https://blog.python.org/",
+    ),
+    (
+        "技术博客",
+        "TypeScript Blog",
+        "https://devblogs.microsoft.com/typescript/feed/",
+        "https://devblogs.microsoft.com/typescript/",
+    ),
 ];
 
 pub fn seed_default_sources(
@@ -723,8 +970,9 @@ pub fn upsert_articles(
                     reading_time_min = ?7,
                     audio_url = COALESCE(?8, audio_url),
                     audio_type = COALESCE(?9, audio_type),
-                    audio_duration = COALESCE(?10, audio_duration)
-                WHERE id = ?11",
+                    audio_duration = COALESCE(?10, audio_duration),
+                    image_url = COALESCE(?11, image_url)
+                WHERE id = ?12",
                 params![
                     a.title,
                     a.author.as_deref(),
@@ -736,6 +984,7 @@ pub fn upsert_articles(
                     a.audio_url.as_deref(),
                     a.audio_type.as_deref(),
                     a.audio_duration,
+                    a.image_url.as_deref(),
                     existing_id
                 ],
             )
@@ -746,8 +995,8 @@ pub fn upsert_articles(
                 "INSERT INTO feed_articles (
                     id, channel_id, guid, title, author, url, content, summary,
                     published_at, read_status, starred, reading_time_min, created_at,
-                    audio_url, audio_type, audio_duration
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'unread', 0, ?10, ?11, ?12, ?13, ?14)",
+                    audio_url, audio_type, audio_duration, image_url
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'unread', 0, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     id,
                     channel_id,
@@ -763,6 +1012,7 @@ pub fn upsert_articles(
                     a.audio_url.as_deref(),
                     a.audio_type.as_deref(),
                     a.audio_duration,
+                    a.image_url.as_deref(),
                 ],
             )
             .map_err(|e| format!("插入文章失败：{e}"))?;
@@ -779,7 +1029,7 @@ pub fn list_articles(
     let mut sql = String::from(
         "SELECT a.id, a.channel_id, c.title as channel_title, a.guid, a.title, a.author, a.url,
                 a.content, a.summary, a.published_at, a.read_status, a.starred, a.reading_time_min, a.created_at,
-                a.audio_url, a.audio_type, a.audio_duration
+                a.audio_url, a.audio_type, a.audio_duration, a.image_url
          FROM feed_articles a
          JOIN feed_channels c ON a.channel_id = c.id
          WHERE 1=1",
@@ -842,8 +1092,7 @@ pub fn list_articles(
         .prepare(&sql)
         .map_err(|e| format!("准备文章查询失败：{e}"))?;
 
-    let params_slice: Vec<&dyn rusqlite::ToSql> =
-        param_values.iter().map(|p| p.as_ref()).collect();
+    let params_slice: Vec<&dyn rusqlite::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
 
     let iter = stmt
         .query_map(params_slice.as_slice(), map_row_to_article)
@@ -860,7 +1109,7 @@ pub fn get_article(conn: &Connection, id: &str) -> Result<Option<FeedArticle>, S
     conn.query_row(
         "SELECT a.id, a.channel_id, c.title as channel_title, a.guid, a.title, a.author, a.url,
                 a.content, a.summary, a.published_at, a.read_status, a.starred, a.reading_time_min, a.created_at,
-                a.audio_url, a.audio_type, a.audio_duration
+                a.audio_url, a.audio_type, a.audio_duration, a.image_url
          FROM feed_articles a
          JOIN feed_channels c ON a.channel_id = c.id
          WHERE a.id = ?1",
@@ -912,11 +1161,8 @@ pub fn mark_all_read(
         )
         .map_err(|e| format!("标记分类全部已读失败：{e}"))?;
     } else {
-        conn.execute(
-            "UPDATE feed_articles SET read_status = 'read'",
-            [],
-        )
-        .map_err(|e| format!("标记所有文章已读失败：{e}"))?;
+        conn.execute("UPDATE feed_articles SET read_status = 'read'", [])
+            .map_err(|e| format!("标记所有文章已读失败：{e}"))?;
     }
     Ok(())
 }
@@ -954,26 +1200,23 @@ pub fn get_feed_overview(conn: &Connection) -> Result<FeedOverview, String> {
     let mut channels = Vec::with_capacity(channels_raw.len());
 
     for ch in channels_raw {
-        let unread: usize = conn
+        // 同一次聚合查询统计来源文章、未读文章和可播放音频，供播客分类侧栏直接使用。
+        let (total, unread, audio): (usize, usize, usize) = conn
             .query_row(
-                "SELECT count(*) FROM feed_articles WHERE channel_id = ?1 AND read_status = 'unread'",
+                "SELECT COUNT(*),
+                        COUNT(CASE WHEN read_status = 'unread' THEN 1 END),
+                        COUNT(CASE WHEN audio_url IS NOT NULL AND trim(audio_url) != '' THEN 1 END)
+                 FROM feed_articles WHERE channel_id = ?1",
                 params![ch.id],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
-            .unwrap_or(0);
-
-        let total: usize = conn
-            .query_row(
-                "SELECT count(*) FROM feed_articles WHERE channel_id = ?1",
-                params![ch.id],
-                |r| r.get(0),
-            )
-            .unwrap_or(0);
+            .unwrap_or((0, 0, 0));
 
         channels.push(FeedChannelWithStats {
             channel: ch,
             unread_count: unread,
             total_count: total,
+            audio_count: audio,
         });
     }
 
@@ -983,7 +1226,8 @@ pub fn get_feed_overview(conn: &Connection) -> Result<FeedOverview, String> {
             "SELECT categories.name,
                     categories.color,
                     COUNT(DISTINCT channels.id) as channel_cnt,
-                    COUNT(CASE WHEN articles.read_status = 'unread' THEN 1 END) as unread_cnt
+                    COUNT(CASE WHEN articles.read_status = 'unread' THEN 1 END) as unread_cnt,
+                    COUNT(CASE WHEN articles.audio_url IS NOT NULL AND trim(articles.audio_url) != '' THEN 1 END) as audio_cnt
              FROM feed_categories categories
              LEFT JOIN feed_channels channels ON channels.category = categories.name
              LEFT JOIN feed_articles articles ON channels.id = articles.channel_id
@@ -999,6 +1243,7 @@ pub fn get_feed_overview(conn: &Connection) -> Result<FeedOverview, String> {
                 color: r.get(1)?,
                 channel_count: r.get(2)?,
                 unread_count: r.get(3)?,
+                audio_count: r.get(4)?,
             })
         })
         .map_err(|e| format!("遍历分类数据失败：{e}"))?;
@@ -1055,6 +1300,7 @@ fn map_row_to_article(row: &rusqlite::Row) -> rusqlite::Result<FeedArticle> {
         audio_url: row.get(14)?,
         audio_type: row.get(15)?,
         audio_duration: row.get(16)?,
+        image_url: row.get(17)?,
     })
 }
 
@@ -1101,6 +1347,7 @@ mod tests {
                     audio_url: None,
                     audio_type: None,
                     audio_duration: None,
+                    image_url: None,
                 },
                 ArticleInput {
                     guid: "guid-2".to_string(),
@@ -1114,6 +1361,7 @@ mod tests {
                     audio_url: Some("https://example.com/art-2.mp3".to_string()),
                     audio_type: Some("audio/mpeg".to_string()),
                     audio_duration: Some(180),
+                    image_url: None,
                 },
             ],
             110,
@@ -1133,9 +1381,19 @@ mod tests {
         assert_eq!(list.len(), 2);
         set_article_read_status(&conn, &list[0].id, "read").unwrap();
 
-        let audio_list = list_articles(&conn, &ArticleFilter { has_audio: Some(true), ..Default::default() }).unwrap();
+        let audio_list = list_articles(
+            &conn,
+            &ArticleFilter {
+                has_audio: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(audio_list.len(), 1);
-        assert_eq!(audio_list[0].audio_url.as_deref(), Some("https://example.com/art-2.mp3"));
+        assert_eq!(
+            audio_list[0].audio_url.as_deref(),
+            Some("https://example.com/art-2.mp3")
+        );
 
         let overview2 = get_feed_overview(&conn).unwrap();
         assert_eq!(overview2.total_unread, 1);
@@ -1150,8 +1408,14 @@ mod tests {
         let db_path = std::env::temp_dir().join(format!("test_feed_{}.sqlite3", Uuid::new_v4()));
         let conn = open(&db_path).unwrap();
         let overview = get_feed_overview(&conn).unwrap();
-        assert!(!overview.channels.is_empty(), "channels should be auto-seeded");
-        assert!(!overview.categories.is_empty(), "categories should be auto-seeded");
+        assert!(
+            !overview.channels.is_empty(),
+            "channels should be auto-seeded"
+        );
+        assert!(
+            !overview.categories.is_empty(),
+            "categories should be auto-seeded"
+        );
 
         // Reopening should succeed
         drop(conn);
@@ -1161,4 +1425,3 @@ mod tests {
         let _ = std::fs::remove_file(&db_path);
     }
 }
-

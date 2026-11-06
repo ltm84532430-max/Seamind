@@ -19,6 +19,10 @@ import { notifyResourceProgress } from '../tasks/task-api';
 import ResourceTaskLinks from '../tasks/ResourceTaskLinks';
 import VideoList from './VideoList';
 import {
+  PlayerDocumentEditor,
+  type PlayerExportedDocument,
+} from './PlayerNotePanel';
+import {
   TranscriptPanel,
   SubtitleOverlay,
   type TranscriptCue,
@@ -42,6 +46,14 @@ const RATE_KEY = 'seamind:player-rate:v1';
 const QUEUE_COLLAPSED_KEY = 'seamind:player-queue-collapsed:v1';
 const WATCH_TAB_KEY = 'seamind:watch-tab:v1';
 const SUBTITLES_VISIBLE_KEY = 'seamind:watch-subtitles:v1';
+const PERSONAL_NOTES_HEADING = '## 我的观看笔记';
+
+function preservePersonalNotes(current: string, incoming: string) {
+  const headingIndex = current.lastIndexOf(`\n${PERSONAL_NOTES_HEADING}`);
+  if (headingIndex < 0 || incoming.includes(PERSONAL_NOTES_HEADING))
+    return incoming;
+  return `${incoming.trimEnd()}\n\n${current.slice(headingIndex).trimStart()}`;
+}
 
 function readRate(): number {
   try {
@@ -108,9 +120,8 @@ export default function WatchView({
     }
   });
 
-  const [activeTab, setActiveTab] = useState<
-    'queue' | 'transcript' | 'settings'
-  >(() => {
+  type WatchTab = 'queue' | 'transcript' | 'notes' | 'settings';
+  const [activeTab, setActiveTab] = useState<WatchTab>(() => {
     try {
       const saved = localStorage.getItem(WATCH_TAB_KEY);
       if (saved === 'queue' || saved === 'transcript' || saved === 'settings') {
@@ -122,6 +133,9 @@ export default function WatchView({
     }
     return hasQueue ? 'queue' : 'transcript';
   });
+  const [transcriptPanelMounted, setTranscriptPanelMounted] = useState(
+    activeTab === 'transcript',
+  );
 
   const [subtitlesVisible, setSubtitlesVisible] = useState<boolean>(() => {
     try {
@@ -132,6 +146,10 @@ export default function WatchView({
   });
 
   const [cues, setCues] = useState<TranscriptCue[]>([]);
+  const [exportedDocument, setExportedDocument] =
+    useState<PlayerExportedDocument | null>(null);
+  const [documentRefinementActive, setDocumentRefinementActive] =
+    useState(false);
   const [loopingCue, setLoopingCue] = useState<TranscriptCue | null>(null);
   const [shadowMode, setShadowMode] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(
@@ -167,12 +185,15 @@ export default function WatchView({
     };
   }, [videoId]);
 
-  const switchTab = useCallback((tab: 'queue' | 'transcript' | 'settings') => {
+  const switchTab = useCallback((tab: WatchTab) => {
     setActiveTab(tab);
-    try {
-      localStorage.setItem(WATCH_TAB_KEY, tab);
-    } catch {
-      // ignore
+    if (tab === 'transcript') setTranscriptPanelMounted(true);
+    if (tab === 'queue' || tab === 'transcript' || tab === 'settings') {
+      try {
+        localStorage.setItem(WATCH_TAB_KEY, tab);
+      } catch {
+        // ignore
+      }
     }
   }, []);
 
@@ -284,8 +305,11 @@ export default function WatchView({
     setLoopingCue(null);
     setCues([]);
     setCurrentTime(watching.startSeconds || 0);
+    setExportedDocument(null);
+    setDocumentRefinementActive(false);
+    setActiveTab(hasQueue ? 'queue' : 'transcript');
     lastShadowPausedCueIdRef.current = null;
-  }, [videoId, watching.token]);
+  }, [videoId, watching.token, hasQueue]);
 
   const jumpToRelativeCue = useCallback(
     (offset: -1 | 1) => {
@@ -630,7 +654,7 @@ export default function WatchView({
       </div>
       <aside
         className={`player-watch-queue${queueCollapsed ? ' is-collapsed' : ''}`}
-        aria-label="播放队列与视频字幕"
+        aria-label="播放队列、字幕与笔记"
       >
         <header>
           {!queueCollapsed ? (
@@ -643,8 +667,9 @@ export default function WatchView({
                     aria-selected={activeTab === 'queue'}
                     className={`player-watch-tab${activeTab === 'queue' ? ' is-active' : ''}`}
                     onClick={() => switchTab('queue')}
+                    title={`播放队列 (${queue.items.length})`}
                   >
-                    播放队列 ({queue.items.length})
+                    队列
                   </button>
                 )}
                 <button
@@ -653,8 +678,19 @@ export default function WatchView({
                   aria-selected={activeTab === 'transcript'}
                   className={`player-watch-tab${activeTab === 'transcript' ? ' is-active' : ''}`}
                   onClick={() => switchTab('transcript')}
+                  title="台词 / 字幕"
                 >
-                  台词 / 字幕
+                  字幕
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={activeTab === 'notes'}
+                  className={`player-watch-tab${activeTab === 'notes' ? ' is-active' : ''}`}
+                  onClick={() => switchTab('notes')}
+                  title="文稿与笔记"
+                >
+                  文稿笔记
                 </button>
                 <button
                   type="button"
@@ -662,14 +698,17 @@ export default function WatchView({
                   aria-selected={activeTab === 'settings'}
                   className={`player-watch-tab${activeTab === 'settings' ? ' is-active' : ''}`}
                   onClick={() => switchTab('settings')}
+                  title="播放设置"
                 >
-                  播放设置
+                  设置
                 </button>
               </div>
               <div className="player-watch-queue-controls">
-                {hasQueue && activeTab === 'queue' && (
+                {hasQueue && (
                   <span>
-                    {position >= 0 ? `${position + 1}/` : ''}
+                    {activeTab === 'queue' && position >= 0
+                      ? `${position + 1}/`
+                      : ''}
                     {queue.items.length}
                   </span>
                 )}
@@ -735,25 +774,95 @@ export default function WatchView({
                   compact
                 />
               </div>
-            ) : activeTab === 'transcript' ? (
-              <TranscriptPanel
-                videoId={videoId}
-                videoTitle={item.title}
-                channelName={item.channelName}
-                provider={provider}
-                currentTime={currentTime}
-                onSeek={(sec) => {
-                  handle?.seekTo(sec);
-                  setCurrentTime(sec);
-                }}
-                onToggleLoopCue={toggleSentenceLoop}
-                loopingCueId={loopingCue?.id}
-                onToggleShadowMode={setShadowMode}
-                shadowMode={shadowMode}
-                onShowNotice={host.notify}
-                onCuesLoaded={setCues}
-                onExportToKnowledge={onExportTranscriptToKnowledge}
-              />
+            ) : null}
+            {transcriptPanelMounted && (
+              <div
+                className="player-watch-transcript-slot"
+                hidden={activeTab !== 'transcript'}
+              >
+                <TranscriptPanel
+                  videoId={videoId}
+                  videoTitle={item.title}
+                  channelName={item.channelName}
+                  provider={provider}
+                  currentTime={currentTime}
+                  onSeek={(sec) => {
+                    handle?.seekTo(sec);
+                    setCurrentTime(sec);
+                  }}
+                  onToggleLoopCue={toggleSentenceLoop}
+                  loopingCueId={loopingCue?.id}
+                  onToggleShadowMode={setShadowMode}
+                  shadowMode={shadowMode}
+                  onShowNotice={host.notify}
+                  onCuesLoaded={setCues}
+                  onExportToKnowledge={onExportTranscriptToKnowledge}
+                  onDocumentExported={(document) => {
+                    let legacyNotes = '';
+                    try {
+                      const combinedEditor = localStorage.getItem(
+                        `seamind:player-document:v1:${videoId}`,
+                      );
+                      const priorNotes = combinedEditor?.match(
+                        /(?:^|\r?\n)## 我的观看笔记\s*\r?\n([\s\S]*)$/,
+                      )?.[1];
+                      legacyNotes =
+                        priorNotes?.trim() ||
+                        localStorage
+                          .getItem(`seamind:player-note:v1:${videoId}`)
+                          ?.trim() ||
+                        '';
+                    } catch {
+                      legacyNotes = '';
+                    }
+                    const mergedDocument =
+                      legacyNotes &&
+                      (!document.id || exportedDocument?.id !== document.id)
+                        ? {
+                            ...document,
+                            markdown: `${document.markdown.trim()}\n\n${PERSONAL_NOTES_HEADING}\n\n${legacyNotes}`,
+                            pendingManualSync: true,
+                          }
+                        : document;
+                    setExportedDocument(mergedDocument);
+                    setQueueCollapsed(false);
+                    switchTab('notes');
+                  }}
+                  onDocumentMarkdownChange={(markdown) =>
+                    setExportedDocument((current) =>
+                      current
+                        ? {
+                            ...current,
+                            markdown: preservePersonalNotes(
+                              current.markdown,
+                              markdown,
+                            ),
+                          }
+                        : current,
+                    )
+                  }
+                  onRefinementActivityChange={setDocumentRefinementActive}
+                />
+              </div>
+            )}
+            {activeTab === 'notes' ? (
+              <div
+                className="player-document-notes"
+                aria-label="文稿与视频笔记"
+              >
+                <PlayerDocumentEditor
+                  videoId={videoId}
+                  videoTitle={item.title}
+                  currentTime={currentTime}
+                  document={exportedDocument}
+                  suspendDocumentSave={documentRefinementActive}
+                  onDocumentMarkdownChange={(markdown) =>
+                    setExportedDocument((current) =>
+                      current ? { ...current, markdown } : current,
+                    )
+                  }
+                />
+              </div>
             ) : null}
           </>
         )}

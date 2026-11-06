@@ -1,5 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { FeedArticle } from './types';
+import {
+  feedAsrApi,
+  type FeedAsrCaption,
+  type FeedAsrStatus,
+} from './feed-asr-api';
 
 interface FeedAudioPlayerBarProps {
   article: FeedArticle | null;
@@ -34,8 +39,132 @@ export const FeedAudioPlayerBar: React.FC<FeedAudioPlayerBarProps> = ({
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [bufferedPercent, setBufferedPercent] = useState(0);
+  const [imageFailed, setImageFailed] = useState(false);
+  const [captionEnabled, setCaptionEnabled] = useState(false);
+  const [captionBusy, setCaptionBusy] = useState(false);
+  const [captionStatus, setCaptionStatus] = useState<FeedAsrStatus | null>(
+    null,
+  );
+  const [captionError, setCaptionError] = useState('');
+  const [captionDownload, setCaptionDownload] = useState({
+    downloadedBytes: 0,
+    totalBytes: 0,
+  });
+  const [captionCues, setCaptionCues] = useState<FeedAsrCaption[]>([]);
+  const [partialCaption, setPartialCaption] = useState<FeedAsrCaption | null>(
+    null,
+  );
+  const [seekRevision, setSeekRevision] = useState(0);
+  const captionSessionRef = useRef<string | null>(null);
+  const captionListenerReadyRef = useRef<Promise<void>>(Promise.resolve());
 
   const audioUrl = article?.audioUrl ?? '';
+
+  useEffect(() => {
+    let mounted = true;
+    void feedAsrApi
+      .getStatus()
+      .then((status) => {
+        if (mounted) setCaptionStatus(status);
+      })
+      .catch((error: unknown) => {
+        if (mounted)
+          setCaptionError(
+            error instanceof Error ? error.message : '无法读取本机字幕组件状态',
+          );
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    let unlisten: (() => void) | undefined;
+    captionListenerReadyRef.current = feedAsrApi
+      .listen((caption) => {
+        if (!mounted || caption.sessionId !== captionSessionRef.current) return;
+        if (caption.error) {
+          setCaptionError(caption.error);
+          setCaptionEnabled(false);
+          return;
+        }
+        setCaptionError('');
+        if (caption.isFinal) {
+          if (caption.text.trim()) {
+            setCaptionCues((current) => [...current, caption].slice(-40));
+          }
+          setPartialCaption(null);
+        } else {
+          setPartialCaption(caption);
+        }
+      })
+      .then((stopListening) => {
+        if (mounted) unlisten = stopListening;
+        else stopListening();
+      })
+      .catch((error: unknown) => {
+        setCaptionError(
+          error instanceof Error ? error.message : '字幕事件监听启动失败',
+        );
+      });
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    setCaptionCues([]);
+    setPartialCaption(null);
+    setCaptionError('');
+  }, [article?.id]);
+
+  useEffect(() => {
+    if (!captionEnabled || !isPlaying || !audioUrl || !article?.id) return;
+
+    let cancelled = false;
+    let sessionId: string | null = null;
+    setPartialCaption(null);
+    void (async () => {
+      try {
+        await captionListenerReadyRef.current;
+        const id = await feedAsrApi.start(
+          audioUrl,
+          audioRef.current?.currentTime ?? 0,
+          SPEED_OPTIONS[speedIndex],
+        );
+        sessionId = id;
+        if (cancelled) {
+          await feedAsrApi.stop(id);
+          return;
+        }
+        captionSessionRef.current = id;
+        setCaptionError('');
+      } catch (error) {
+        if (cancelled) return;
+        setCaptionEnabled(false);
+        setCaptionError(
+          error instanceof Error ? error.message : '实时字幕启动失败',
+        );
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (!sessionId) return;
+      if (captionSessionRef.current === sessionId)
+        captionSessionRef.current = null;
+      void feedAsrApi.stop(sessionId).catch(() => undefined);
+    };
+  }, [
+    captionEnabled,
+    isPlaying,
+    audioUrl,
+    article?.id,
+    speedIndex,
+    seekRevision,
+  ]);
 
   useEffect(() => {
     const el = audioRef.current;
@@ -53,6 +182,10 @@ export const FeedAudioPlayerBar: React.FC<FeedAudioPlayerBarProps> = ({
         .catch(() => setIsPlaying(false));
     }
   }, [audioUrl, article?.id]);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [article?.id, article?.imageUrl]);
 
   useEffect(() => {
     const el = audioRef.current;
@@ -88,6 +221,7 @@ export const FeedAudioPlayerBar: React.FC<FeedAudioPlayerBarProps> = ({
     );
     el.currentTime = target;
     setCurrentTime(target);
+    setSeekRevision((revision) => revision + 1);
   };
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -96,10 +230,49 @@ export const FeedAudioPlayerBar: React.FC<FeedAudioPlayerBarProps> = ({
     const target = parseFloat(e.target.value);
     el.currentTime = target;
     setCurrentTime(target);
+    setSeekRevision((revision) => revision + 1);
   };
 
   const cycleSpeed = () => {
     setSpeedIndex((prev) => (prev + 1) % SPEED_OPTIONS.length);
+  };
+
+  const toggleCaptions = async () => {
+    if (captionEnabled) {
+      setCaptionEnabled(false);
+      setPartialCaption(null);
+      return;
+    }
+    if (captionBusy) return;
+    setCaptionBusy(true);
+    setCaptionError('');
+    try {
+      let status = await feedAsrApi.getStatus();
+      setCaptionStatus(status);
+      if (!status.ffmpegAvailable) {
+        setCaptionError(
+          '未检测到 FFmpeg。请先安装 FFmpeg 并加入 PATH，然后重启 Seamind。',
+        );
+        return;
+      }
+      if (!status.modelInstalled) {
+        setCaptionDownload({ downloadedBytes: 0, totalBytes: 0 });
+        status = await feedAsrApi.installModel((progress) => {
+          setCaptionDownload({
+            downloadedBytes: progress.downloadedBytes,
+            totalBytes: progress.totalBytes ?? 0,
+          });
+        });
+        setCaptionStatus(status);
+      }
+      setCaptionEnabled(true);
+    } catch (error) {
+      setCaptionError(
+        error instanceof Error ? error.message : '本地字幕模型安装失败',
+      );
+    } finally {
+      setCaptionBusy(false);
+    }
   };
 
   const handleTimeUpdate = () => {
@@ -128,7 +301,10 @@ export const FeedAudioPlayerBar: React.FC<FeedAudioPlayerBarProps> = ({
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
-    <aside className="feed-audio-player-dock" aria-label="音频播客播放控制台">
+    <aside
+      className="feed-audio-player-panel feed-audio-player-inline"
+      aria-label="播客播放面板"
+    >
       <audio
         ref={audioRef}
         src={audioUrl}
@@ -139,6 +315,74 @@ export const FeedAudioPlayerBar: React.FC<FeedAudioPlayerBarProps> = ({
         onPause={() => setIsPlaying(false)}
         onPlay={() => setIsPlaying(true)}
       />
+
+      {(captionEnabled ||
+        captionBusy ||
+        captionCues.length > 0 ||
+        captionError) && (
+        <section
+          className="feed-audio-live-captions"
+          aria-label="播客实时字幕"
+          aria-live="polite"
+        >
+          <div className="feed-audio-live-captions-head">
+            <span>实时字幕</span>
+            <span className="feed-audio-live-captions-local">本机识别</span>
+            {captionBusy && captionDownload.totalBytes > 0 && (
+              <span className="feed-audio-live-captions-progress">
+                已下载{' '}
+                {Math.round(
+                  (captionDownload.downloadedBytes /
+                    captionDownload.totalBytes) *
+                    100,
+                )}
+                %
+              </span>
+            )}
+            {captionBusy && captionDownload.totalBytes === 0 && (
+              <span className="feed-audio-live-captions-progress">
+                正在准备本地模型…
+              </span>
+            )}
+          </div>
+          {captionError ? (
+            <p className="feed-audio-live-captions-error">{captionError}</p>
+          ) : (
+            <div className="feed-audio-live-captions-lines">
+              {captionCues.slice(-2).map((cue) => (
+                <button
+                  type="button"
+                  key={`${cue.sessionId}-${cue.start}-${cue.end}`}
+                  onClick={() => {
+                    const audio = audioRef.current;
+                    if (!audio) return;
+                    audio.currentTime = cue.start;
+                    setCurrentTime(cue.start);
+                    setSeekRevision((revision) => revision + 1);
+                  }}
+                >
+                  <time>{formatAudioTime(cue.start)}</time>
+                  <span>{cue.text}</span>
+                </button>
+              ))}
+              {partialCaption ? (
+                <div className="feed-audio-live-caption-partial">
+                  <time>{formatAudioTime(partialCaption.start)}</time>
+                  <span>{partialCaption.text}</span>
+                </div>
+              ) : captionEnabled ? (
+                <p className="feed-audio-live-captions-waiting">
+                  {isPlaying ? '正在识别播放中的音频…' : '播放后开始识别'}
+                </p>
+              ) : captionBusy ? (
+                <p className="feed-audio-live-captions-waiting">
+                  正在下载中英双语字幕模型，完成后会自动开始识别。
+                </p>
+              ) : null}
+            </div>
+          )}
+        </section>
+      )}
 
       {/* 顶部微薄进度指示线 */}
       <div
@@ -171,10 +415,25 @@ export const FeedAudioPlayerBar: React.FC<FeedAudioPlayerBarProps> = ({
         {/* 左侧：节目信息 */}
         <div className="feed-audio-info">
           <div className="feed-audio-badge-icon" aria-hidden="true">
-            <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
-              <path d="M8 2a4 4 0 00-4 4v3.5a1.5 1.5 0 001.5 1.5h.5V7H5a3 3 0 016 0h-1v4h.5a1.5 1.5 0 001.5-1.5V6a4 4 0 00-4-4z" />
-              <path d="M3 13.5A1.5 1.5 0 004.5 15h7a1.5 1.5 0 001.5-1.5v-.5H3v.5z" />
-            </svg>
+            {article.imageUrl && !imageFailed ? (
+              <img
+                className="feed-audio-cover-image"
+                src={article.imageUrl}
+                alt=""
+                loading="lazy"
+                onError={() => setImageFailed(true)}
+              />
+            ) : (
+              <svg
+                viewBox="0 0 16 16"
+                width="28"
+                height="28"
+                fill="currentColor"
+              >
+                <path d="M8 2a4 4 0 00-4 4v3.5a1.5 1.5 0 001.5 1.5h.5V7H5a3 3 0 016 0h-1v4h.5a1.5 1.5 0 001.5-1.5V6a4 4 0 00-4-4z" />
+                <path d="M3 13.5A1.5 1.5 0 004.5 15h7a1.5 1.5 0 001.5-1.5v-.5H3v.5z" />
+              </svg>
+            )}
           </div>
           <div className="feed-audio-meta">
             <span className="feed-audio-title" title={article.title}>
@@ -282,6 +541,22 @@ export const FeedAudioPlayerBar: React.FC<FeedAudioPlayerBarProps> = ({
 
         {/* 右侧：倍速、音量、导图与关闭 */}
         <div className="feed-audio-extra">
+          <button
+            type="button"
+            className={`feed-audio-caption-toggle${captionEnabled ? ' is-active' : ''}`}
+            onClick={() => void toggleCaptions()}
+            disabled={captionBusy}
+            title="首次启用会从 GitHub 下载本地中英模型，之后在本机识别音频"
+            aria-pressed={captionEnabled}
+          >
+            {captionBusy
+              ? '准备字幕中'
+              : captionEnabled
+                ? '字幕开'
+                : captionStatus && !captionStatus.modelInstalled
+                  ? '安装字幕模型'
+                  : '实时字幕'}
+          </button>
           <button
             type="button"
             className="feed-audio-speed-btn"

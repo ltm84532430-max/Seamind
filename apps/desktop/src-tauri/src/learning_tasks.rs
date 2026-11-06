@@ -54,6 +54,36 @@ CREATE TABLE IF NOT EXISTS plan_sources (
     last_synced_at INTEGER NOT NULL,
     sort_order INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS habit_categories (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL UNIQUE,
+    position INTEGER NOT NULL DEFAULT 0,
+    is_builtin INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS habits (
+    id TEXT PRIMARY KEY NOT NULL,
+    title TEXT NOT NULL,
+    note TEXT,
+    category_id TEXT REFERENCES habit_categories(id) ON DELETE SET NULL,
+    interval_days INTEGER NOT NULL CHECK(interval_days BETWEEN 1 AND 365),
+    start_date TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_habits_category_active ON habits(category_id, active);
+CREATE TABLE IF NOT EXISTS habit_occurrences (
+    id TEXT PRIMARY KEY NOT NULL,
+    habit_id TEXT NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
+    due_date TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('done', 'skipped')),
+    completed_at INTEGER,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(habit_id, due_date)
+);
+CREATE INDEX IF NOT EXISTS idx_habit_occurrences_due_date ON habit_occurrences(due_date, habit_id);
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -167,6 +197,74 @@ pub struct TaskSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct HabitCategoryInput {
+    pub id: Option<String>,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HabitCategory {
+    pub id: String,
+    pub name: String,
+    pub position: i64,
+    pub is_builtin: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HabitInput {
+    pub id: Option<String>,
+    pub title: String,
+    pub note: Option<String>,
+    pub category_id: Option<String>,
+    pub interval_days: i64,
+    pub start_date: String,
+    pub active: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Habit {
+    pub id: String,
+    pub title: String,
+    pub note: Option<String>,
+    pub category_id: Option<String>,
+    pub interval_days: i64,
+    pub start_date: String,
+    pub active: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HabitOccurrenceInput {
+    pub habit_id: String,
+    pub due_date: String,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HabitOccurrence {
+    pub habit_id: String,
+    pub due_date: String,
+    pub status: String,
+    pub completed_at: Option<i64>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HabitSnapshot {
+    pub categories: Vec<HabitCategory>,
+    pub habits: Vec<Habit>,
+    pub occurrences: Vec<HabitOccurrence>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ImportPlan {
     pub plan: PlanInput,
     pub tasks: Vec<TaskInput>,
@@ -219,6 +317,24 @@ fn now() -> i64 {
         .unwrap_or(0)
 }
 
+fn seed_habit_categories(conn: &Connection) -> Result<(), String> {
+    // 内置分类只在首次写入，后续启动不会覆盖用户自定义内容。
+    for (id, name, position) in [
+        ("habit-category-health", "健康", 0),
+        ("habit-category-learning", "学习", 1),
+        ("habit-category-work", "工作", 2),
+        ("habit-category-life", "生活", 3),
+    ] {
+        conn.execute(
+            "INSERT OR IGNORE INTO habit_categories(id,name,position,is_builtin,created_at,updated_at)
+             VALUES (?1,?2,?3,1,?4,?4)",
+            params![id, name, position, now()],
+        )
+        .map_err(db_error)?;
+    }
+    Ok(())
+}
+
 fn open_path(path: &Path) -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(db_error)?;
     conn.busy_timeout(Duration::from_secs(5))
@@ -226,6 +342,7 @@ fn open_path(path: &Path) -> Result<Connection, String> {
     conn.pragma_update(None, "foreign_keys", "ON")
         .map_err(db_error)?;
     conn.execute_batch(SCHEMA).map_err(db_error)?;
+    seed_habit_categories(&conn)?;
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN completed_at INTEGER", []);
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN archived_at INTEGER", []);
     let _ = conn.execute("ALTER TABLE tasks ADD COLUMN source_key TEXT", []);
@@ -1233,9 +1350,408 @@ fn import_plan(
     import_plan_with_target(conn, draft, None, None, false, None, timestamp)
 }
 
+fn habit_date_ordinal(value: &str) -> Result<i64, String> {
+    // 按本地日历日期换算公历日序号，避免用 UTC 时间戳计算重复间隔。
+    let date = validate_due_date(&Some(value.to_string()))?
+        .ok_or_else(|| "习惯日期不能为空。".to_string())?;
+    let year = date[0..4].parse::<i64>().map_err(db_error)?;
+    let month = date[5..7].parse::<i64>().map_err(db_error)?;
+    let day = date[8..10].parse::<i64>().map_err(db_error)?;
+    let adjusted_year = year - i64::from(month <= 2);
+    let era = adjusted_year / 400;
+    let year_of_era = adjusted_year - era * 400;
+    let shifted_month = month + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * shifted_month + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    Ok(era * 146_097 + day_of_era)
+}
+
+fn habit_is_due_on(start_date: &str, date: &str, interval_days: i64) -> Result<bool, String> {
+    if interval_days < 1 {
+        return Err("习惯重复间隔必须至少为 1 天。".to_string());
+    }
+    let elapsed = habit_date_ordinal(date)? - habit_date_ordinal(start_date)?;
+    Ok(elapsed >= 0 && elapsed % interval_days == 0)
+}
+
+fn list_habit_categories(conn: &Connection) -> Result<Vec<HabitCategory>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id,name,position,is_builtin FROM habit_categories ORDER BY position,name")
+        .map_err(db_error)?;
+    let rows = stmt.query_map([], |row| {
+        Ok(HabitCategory {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            position: row.get(2)?,
+            is_builtin: row.get::<_, i64>(3)? != 0,
+        })
+    })
+    .map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
+fn list_habits(conn: &Connection) -> Result<Vec<Habit>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id,title,note,category_id,interval_days,start_date,active,created_at,updated_at
+             FROM habits ORDER BY active DESC,category_id,title COLLATE NOCASE,id",
+        )
+        .map_err(db_error)?;
+    let rows = stmt.query_map([], |row| {
+        Ok(Habit {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            note: row.get(2)?,
+            category_id: row.get(3)?,
+            interval_days: row.get(4)?,
+            start_date: row.get(5)?,
+            active: row.get::<_, i64>(6)? != 0,
+            created_at: row.get(7)?,
+            updated_at: row.get(8)?,
+        })
+    })
+    .map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
+fn habit_snapshot(
+    conn: &Connection,
+    from_date: &str,
+    to_date: &str,
+) -> Result<HabitSnapshot, String> {
+    let from_ordinal = habit_date_ordinal(from_date)?;
+    let to_ordinal = habit_date_ordinal(to_date)?;
+    // 年度统计最多读取 366 个自然日，首尾日期都包含在查询范围内。
+    if to_ordinal < from_ordinal || to_ordinal - from_ordinal > 365 {
+        return Err("习惯统计查询范围最多为 366 天。".to_string());
+    }
+    let categories = list_habit_categories(conn)?;
+    let habits = list_habits(conn)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT habit_id,due_date,status,completed_at,updated_at
+             FROM habit_occurrences WHERE due_date >= ?1 AND due_date <= ?2
+             ORDER BY due_date,habit_id",
+        )
+        .map_err(db_error)?;
+    let occurrences = stmt
+        .query_map(params![from_date, to_date], |row| {
+            Ok(HabitOccurrence {
+                habit_id: row.get(0)?,
+                due_date: row.get(1)?,
+                status: row.get(2)?,
+                completed_at: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
+        })
+        .map_err(db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)?;
+    Ok(HabitSnapshot {
+        categories,
+        habits,
+        occurrences,
+    })
+}
+
+fn get_habit(conn: &Connection, id: &str) -> Result<Habit, String> {
+    conn.query_row(
+        "SELECT id,title,note,category_id,interval_days,start_date,active,created_at,updated_at
+         FROM habits WHERE id=?1",
+        params![id],
+        |row| {
+            Ok(Habit {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                note: row.get(2)?,
+                category_id: row.get(3)?,
+                interval_days: row.get(4)?,
+                start_date: row.get(5)?,
+                active: row.get::<_, i64>(6)? != 0,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
+        },
+    )
+    .map_err(db_error)
+}
+
+fn write_habit(conn: &Connection, input: &HabitInput, timestamp: i64) -> Result<Habit, String> {
+    let title = input.title.trim();
+    if title.is_empty() || title.chars().count() > 120 {
+        return Err("习惯名称需要为 1 到 120 个字符。".to_string());
+    }
+    if !(1..=365).contains(&input.interval_days) {
+        return Err("重复间隔需要在 1 到 365 天之间。".to_string());
+    }
+    let start_date = validate_due_date(&Some(input.start_date.clone()))?
+        .ok_or_else(|| "习惯开始日期不能为空。".to_string())?;
+    habit_date_ordinal(&start_date)?;
+    let note = clean_optional(&input.note, 4000)?;
+    let category_id = input
+        .category_id
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
+    if let Some(category_id) = category_id {
+        if !valid_id(category_id) {
+            return Err("习惯分类编号无效。".to_string());
+        }
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM habit_categories WHERE id=?1)",
+                params![category_id],
+                |row| row.get(0),
+            )
+            .map_err(db_error)?;
+        if !exists {
+            return Err("习惯分类不存在，请刷新后重试。".to_string());
+        }
+    }
+    let id = input
+        .id
+        .clone()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    if !valid_id(&id) {
+        return Err("习惯编号无效。".to_string());
+    }
+    conn.execute(
+        "INSERT INTO habits(id,title,note,category_id,interval_days,start_date,active,created_at,updated_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8)
+         ON CONFLICT(id) DO UPDATE SET title=excluded.title,note=excluded.note,
+           category_id=excluded.category_id,interval_days=excluded.interval_days,
+           start_date=excluded.start_date,active=excluded.active,updated_at=excluded.updated_at",
+        params![
+            id,
+            title,
+            note,
+            category_id,
+            input.interval_days,
+            start_date,
+            i64::from(input.active.unwrap_or(true)),
+            timestamp,
+        ],
+    )
+    .map_err(db_error)?;
+    get_habit(conn, &id)
+}
+
+fn write_habit_category(
+    conn: &Connection,
+    input: &HabitCategoryInput,
+    timestamp: i64,
+) -> Result<HabitCategory, String> {
+    let name = input.name.trim();
+    if name.is_empty() || name.chars().count() > 32 {
+        return Err("分类名称需要为 1 到 32 个字符。".to_string());
+    }
+    let id = input
+        .id
+        .clone()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    if !valid_id(&id) {
+        return Err("习惯分类编号无效。".to_string());
+    }
+    let existing_builtin: Option<i64> = conn
+        .query_row(
+            "SELECT is_builtin FROM habit_categories WHERE id=?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_error)?;
+    if existing_builtin == Some(1) {
+        return Err("内置分类不能改名。".to_string());
+    }
+    let name_owner: Option<String> = conn
+        .query_row(
+            "SELECT id FROM habit_categories WHERE name=?1",
+            params![name],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_error)?;
+    if name_owner.as_deref().is_some_and(|owner| owner != id.as_str()) {
+        return Err("已经存在同名分类。".to_string());
+    }
+    let position: i64 = if existing_builtin.is_some() {
+        conn.query_row(
+            "SELECT position FROM habit_categories WHERE id=?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .map_err(db_error)?
+    } else {
+        conn.query_row(
+            "SELECT COALESCE(MAX(position)+1,4) FROM habit_categories",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(db_error)?
+    };
+    conn.execute(
+        "INSERT INTO habit_categories(id,name,position,is_builtin,created_at,updated_at)
+         VALUES (?1,?2,?3,0,?4,?4)
+         ON CONFLICT(id) DO UPDATE SET name=excluded.name,updated_at=excluded.updated_at",
+        params![id, name, position, timestamp],
+    )
+    .map_err(db_error)?;
+    conn.query_row(
+        "SELECT id,name,position,is_builtin FROM habit_categories WHERE id=?1",
+        params![id],
+        |row| {
+            Ok(HabitCategory {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                position: row.get(2)?,
+                is_builtin: row.get::<_, i64>(3)? != 0,
+            })
+        },
+    )
+    .map_err(db_error)
+}
+
+fn delete_habit_category(conn: &Connection, id: &str) -> Result<(), String> {
+    if !valid_id(id) {
+        return Err("习惯分类编号无效。".to_string());
+    }
+    let is_builtin: Option<i64> = conn
+        .query_row(
+            "SELECT is_builtin FROM habit_categories WHERE id=?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_error)?;
+    match is_builtin {
+        None => return Err("习惯分类不存在。".to_string()),
+        Some(1) => return Err("内置分类不能删除。".to_string()),
+        Some(_) => {}
+    }
+    conn.execute("DELETE FROM habit_categories WHERE id=?1", params![id])
+        .map_err(db_error)?;
+    Ok(())
+}
+
+fn set_habit_active(conn: &Connection, id: &str, active: bool) -> Result<(), String> {
+    if !valid_id(id) {
+        return Err("习惯编号无效。".to_string());
+    }
+    let changed = conn
+        .execute(
+            "UPDATE habits SET active=?1,updated_at=?2 WHERE id=?3",
+            params![i64::from(active), now(), id],
+        )
+        .map_err(db_error)?;
+    if changed == 0 {
+        return Err("习惯不存在。".to_string());
+    }
+    Ok(())
+}
+
+fn set_habit_occurrence(conn: &Connection, input: &HabitOccurrenceInput) -> Result<(), String> {
+    if !valid_id(&input.habit_id) {
+        return Err("习惯编号无效。".to_string());
+    }
+    let due_date = validate_due_date(&Some(input.due_date.clone()))?
+        .ok_or_else(|| "习惯日期不能为空。".to_string())?;
+    let timestamp = now();
+    let Some(status) = input.status.as_deref() else {
+        conn.execute(
+            "DELETE FROM habit_occurrences WHERE habit_id=?1 AND due_date=?2",
+            params![input.habit_id, due_date],
+        )
+        .map_err(db_error)?;
+        return Ok(());
+    };
+    if !matches!(status, "done" | "skipped") {
+        return Err("习惯记录状态无效。".to_string());
+    }
+    let (start_date, interval_days, active): (String, i64, i64) = conn
+        .query_row(
+            "SELECT start_date,interval_days,active FROM habits WHERE id=?1",
+            params![input.habit_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(db_error)?;
+    if active == 0 {
+        return Err("已暂停的习惯不能记录打卡。".to_string());
+    }
+    if !habit_is_due_on(&start_date, &due_date, interval_days)? {
+        return Err("所选日期不在该习惯的重复计划内。".to_string());
+    }
+    let id = Uuid::new_v4().to_string();
+    let completed_at = if status == "done" {
+        Some(timestamp)
+    } else {
+        None
+    };
+    conn.execute(
+        "INSERT INTO habit_occurrences(id,habit_id,due_date,status,completed_at,updated_at)
+         VALUES (?1,?2,?3,?4,?5,?6)
+         ON CONFLICT(habit_id,due_date) DO UPDATE SET status=excluded.status,
+           completed_at=excluded.completed_at,updated_at=excluded.updated_at",
+        params![id, input.habit_id, due_date, status, completed_at, timestamp],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
 #[tauri::command(async)]
 pub fn learning_tasks_snapshot(app: AppHandle) -> Result<TaskSnapshot, String> {
     snapshot(&open(&app)?)
+}
+
+#[tauri::command(async)]
+pub fn learning_tasks_habits_snapshot(
+    app: AppHandle,
+    from_date: String,
+    to_date: String,
+) -> Result<HabitSnapshot, String> {
+    habit_snapshot(&open(&app)?, &from_date, &to_date)
+}
+
+#[tauri::command(async)]
+pub fn learning_tasks_habits_save(
+    app: AppHandle,
+    input: HabitInput,
+) -> Result<Habit, String> {
+    write_habit(&open(&app)?, &input, now())
+}
+
+#[tauri::command(async)]
+pub fn learning_tasks_habits_set_active(
+    app: AppHandle,
+    id: String,
+    active: bool,
+) -> Result<(), String> {
+    set_habit_active(&open(&app)?, &id, active)
+}
+
+#[tauri::command(async)]
+pub fn learning_tasks_habits_set_occurrence(
+    app: AppHandle,
+    input: HabitOccurrenceInput,
+) -> Result<(), String> {
+    set_habit_occurrence(&open(&app)?, &input)
+}
+
+#[tauri::command(async)]
+pub fn learning_tasks_habits_save_category(
+    app: AppHandle,
+    input: HabitCategoryInput,
+) -> Result<HabitCategory, String> {
+    write_habit_category(&open(&app)?, &input, now())
+}
+
+#[tauri::command(async)]
+pub fn learning_tasks_habits_delete_category(
+    app: AppHandle,
+    id: String,
+) -> Result<(), String> {
+    delete_habit_category(&open(&app)?, &id)
 }
 
 #[tauri::command(async)]

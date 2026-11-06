@@ -64,6 +64,47 @@ export interface LearningPathLayoutResult {
   nextUpNodeId: string | null;
 }
 
+export interface LearningPathStageOverview {
+  nodeId: string;
+  title: string;
+  note: string | null;
+  index: number;
+  completedCount: number;
+  videoCount: number;
+  optionalCount: number;
+  isCurrent: boolean;
+}
+
+export function buildLearningPathStageOverview(
+  detail: LearningPathDetail,
+  layout: LearningPathLayoutResult,
+): LearningPathStageOverview[] {
+  const nodes = [...detail.nodes].sort(
+    (a, b) => a.position - b.position || a.nodeId.localeCompare(b.nodeId),
+  );
+  const ids = new Set(nodes.map((node) => node.nodeId));
+  const roots = nodes.filter(
+    (node) => !node.parentId || !ids.has(node.parentId),
+  );
+
+  return roots.map((root, index) => {
+    const lessons = layout.nodes.filter(
+      (item) => item.stageIndex === index && item.video,
+    );
+    return {
+      nodeId: root.nodeId,
+      title: root.title,
+      note: root.note ?? null,
+      index,
+      completedCount: lessons.filter((item) => item.status === 'completed')
+        .length,
+      videoCount: lessons.length,
+      optionalCount: lessons.filter((item) => item.node.optional).length,
+      isCurrent: lessons.some((item) => item.isNextUp),
+    };
+  });
+}
+
 const NODE_WIDTH_VIDEO = 276;
 const NODE_HEIGHT_VIDEO = 148;
 const NODE_WIDTH_STAGE = 276;

@@ -13,7 +13,9 @@ import { playerApi } from '../player/player-api';
 import type { WatchState } from '../player/types';
 import { parseYouTubeTarget } from '../player/video-links';
 import { dateStamp, downloadTextFile } from '../player/download';
+import HabitWorkspace from './HabitWorkspace';
 import TaskCalendar from './TaskCalendar';
+import { localToday } from './calendar-model';
 import { ebookImportCandidates, videoImportCandidate } from './legacy-import';
 import type { ImportCandidate } from './legacy-import';
 import {
@@ -100,6 +102,7 @@ const statusName: Record<TaskStatus, string> = {
 };
 const emptySnapshot: TaskSnapshot = { plans: [], tasks: [], sources: [] };
 const TASK_VIEW_KEY = 'seamind:task-view:v1';
+const TASK_WORKSPACE_MODE_KEY = 'seamind:task-workspace-mode:v1';
 const TASK_COLLAPSE_KEY = 'seamind:task-collapse:v1';
 const TASK_SIDEBAR_COLLAPSED_KEY = 'seamind:task-sidebar-collapsed:v1';
 
@@ -108,6 +111,16 @@ function readTaskSidebarCollapsed(): boolean {
     return localStorage.getItem(TASK_SIDEBAR_COLLAPSED_KEY) === '1';
   } catch {
     return false;
+  }
+}
+
+function readWorkspaceMode(): 'tasks' | 'habits' {
+  try {
+    return sessionStorage.getItem(TASK_WORKSPACE_MODE_KEY) === 'habits'
+      ? 'habits'
+      : 'tasks';
+  } catch {
+    return 'tasks';
   }
 }
 
@@ -448,6 +461,10 @@ export default function TaskWorkspace({
   const [planFilter, setPlanFilter] = useState('all');
   const [query, setQuery] = useState('');
   const [view, setView] = useState<'board' | 'list' | 'calendar'>(readTaskView);
+  const [workspaceMode, setWorkspaceMode] = useState<'tasks' | 'habits'>(
+    readWorkspaceMode,
+  );
+  const [todayKey, setTodayKey] = useState(localToday);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     readTaskSidebarCollapsed,
   );
@@ -482,6 +499,45 @@ export default function TaskWorkspace({
     const timeout = window.setTimeout(() => setStatusUndo(null), 8000);
     return () => window.clearTimeout(timeout);
   }, [statusUndo]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(TASK_WORKSPACE_MODE_KEY, workspaceMode);
+    } catch {
+      // 禁用存储时只保留当前组件的视图状态。
+    }
+  }, [workspaceMode]);
+
+  useEffect(() => {
+    let midnightTimer = 0;
+    const syncDate = () => setTodayKey(localToday());
+    const scheduleMidnight = () => {
+      const now = new Date();
+      const next = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate() + 1,
+      );
+      midnightTimer = window.setTimeout(
+        () => {
+          syncDate();
+          scheduleMidnight();
+        },
+        Math.max(1_000, next.getTime() - now.getTime() + 50),
+      );
+    };
+    scheduleMidnight();
+    // 休眠恢复和系统日期调整后，今日筛选也要立即更新。
+    const clockCheck = window.setInterval(syncDate, 30_000);
+    window.addEventListener('focus', syncDate);
+    document.addEventListener('visibilitychange', syncDate);
+    return () => {
+      window.clearTimeout(midnightTimer);
+      window.clearInterval(clockCheck);
+      window.removeEventListener('focus', syncDate);
+      document.removeEventListener('visibilitychange', syncDate);
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -618,8 +674,6 @@ export default function TaskWorkspace({
     onOpenTaskHandled();
   }, [openTaskId, onOpenTaskHandled]);
 
-  const today = new Date();
-  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
   const byId = useMemo(
     () =>
       new Map<string, LearningTask>(
@@ -931,9 +985,11 @@ export default function TaskWorkspace({
     try {
       await taskApi.saveTask({ ...editTask(entry), dueDate: date });
       setNotice(date ? `截止日期已改为 ${date}` : '已移除截止日期');
+      return true;
     } catch (reason) {
       await reload();
       setError(errorText(reason));
+      return false;
     }
   };
 
@@ -1559,6 +1615,10 @@ export default function TaskWorkspace({
     </article>
   );
 
+  if (workspaceMode === 'habits') {
+    return <HabitWorkspace onShowTasks={() => setWorkspaceMode('tasks')} />;
+  }
+
   return (
     <div className="task-workspace">
       <aside
@@ -1676,8 +1736,23 @@ export default function TaskWorkspace({
 
       <main className="task-main">
         <header className="task-toolbar">
-          <div>
-            <strong>任务工作台</strong>
+          <div className="task-toolbar-heading">
+            <div
+              className="task-workspace-switch"
+              role="group"
+              aria-label="工作台"
+            >
+              <button type="button" className="is-active" aria-pressed="true">
+                任务
+              </button>
+              <button
+                type="button"
+                aria-pressed="false"
+                onClick={() => setWorkspaceMode('habits')}
+              >
+                习惯
+              </button>
+            </div>
             <span className="task-toolbar-count">
               {
                 snapshot.tasks.filter(
@@ -2050,6 +2125,7 @@ export default function TaskWorkspace({
             onMoveTask={moveTaskDate}
             onToggleTaskCompletion={toggleTaskCompletion}
             statusSavingIds={statusSavingIds}
+            today={todayKey}
           />
         ) : (
           <div className="task-list">

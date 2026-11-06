@@ -16,6 +16,7 @@ export interface FeedChannel {
 export interface FeedChannelWithStats extends FeedChannel {
   unreadCount: number;
   totalCount: number;
+  audioCount: number;
 }
 
 export interface FeedArticle {
@@ -36,6 +37,7 @@ export interface FeedArticle {
   audioUrl?: string | null;
   audioType?: string | null;
   audioDuration?: number | null;
+  imageUrl?: string | null;
 }
 
 export interface ArticleFilter {
@@ -54,6 +56,7 @@ export interface CategoryStats {
   color: string;
   unreadCount: number;
   channelCount: number;
+  audioCount: number;
 }
 
 export interface FeedOverview {

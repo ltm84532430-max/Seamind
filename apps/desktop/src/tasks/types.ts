@@ -91,6 +91,62 @@ export interface TaskSnapshot {
   sources: PlanSource[];
 }
 
+export type HabitOccurrenceStatus = 'done' | 'skipped';
+
+export interface HabitCategory {
+  id: string;
+  name: string;
+  position: number;
+  isBuiltin: boolean;
+}
+
+export interface HabitInput {
+  id?: string | null;
+  title: string;
+  note?: string | null;
+  categoryId?: string | null;
+  intervalDays: number;
+  startDate: string;
+  active?: boolean;
+}
+
+export interface Habit {
+  id: string;
+  title: string;
+  note: string | null;
+  categoryId: string | null;
+  intervalDays: number;
+  startDate: string;
+  active: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface HabitOccurrenceInput {
+  habitId: string;
+  dueDate: string;
+  status: HabitOccurrenceStatus | null;
+}
+
+export interface HabitOccurrence {
+  habitId: string;
+  dueDate: string;
+  status: HabitOccurrenceStatus;
+  completedAt: number | null;
+  updatedAt: number;
+}
+
+export interface HabitSnapshot {
+  categories: HabitCategory[];
+  habits: Habit[];
+  occurrences: HabitOccurrence[];
+}
+
+export interface HabitCategoryInput {
+  id?: string | null;
+  name: string;
+}
+
 export interface ImportPlan {
   plan: PlanInput;
   tasks: TaskInput[];

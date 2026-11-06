@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import type { AgentProviderSettings } from '../../agent/runtime';
+import type { PlayerExportedDocument } from '../PlayerNotePanel';
 import {
   clearTranscriptCache,
   fetchBrowserTranscript,
@@ -11,7 +12,6 @@ import {
 import {
   buildTranscriptKnowledgeExport,
   formatCueTime,
-  formatPaddedCueTime,
   renderTranscriptStagesMarkdown,
   type TranscriptKnowledgeExportPayload,
   type TranscriptKnowledgeExportResult,
@@ -49,6 +49,9 @@ export interface TranscriptPanelProps {
   onExportToKnowledge?(
     payload: TranscriptKnowledgeExportPayload,
   ): Promise<TranscriptKnowledgeExportResult | void>;
+  onDocumentExported?(document: PlayerExportedDocument): void;
+  onDocumentMarkdownChange?(markdown: string): void;
+  onRefinementActivityChange?(active: boolean): void;
 }
 
 function transcriptErrorTitle(code: TranscriptFetchError['code']): string {
@@ -97,6 +100,9 @@ export default function TranscriptPanel({
   onShowNotice,
   onCuesLoaded,
   onExportToKnowledge,
+  onDocumentExported,
+  onDocumentMarkdownChange,
+  onRefinementActivityChange,
 }: TranscriptPanelProps) {
   const [cues, setCues] = useState<TranscriptCue[]>([]);
   const [tracks, setTracks] = useState<TranscriptTrack[]>([]);
@@ -318,28 +324,6 @@ export default function TranscriptPanel({
     event.target.value = '';
   };
 
-  const copyCueToMindmap = useCallback(
-    (cue: TranscriptCue) => {
-      const startSec = Math.floor(cue.start);
-      const timeLabel = formatPaddedCueTime(cue.start);
-      const url = `https://www.youtube.com/watch?v=${videoId}&t=${startSec}s`;
-      let snippet = `> [${timeLabel}](${url}) ${cue.text}`;
-      if (cue.translation) {
-        snippet += `\n> *${cue.translation}*`;
-      }
-
-      navigator.clipboard
-        .writeText(snippet)
-        .then(() => {
-          onShowNotice?.(`已复制导图引用卡片 [${timeLabel}]`);
-        })
-        .catch(() => {
-          onShowNotice?.('复制失败，请重试', 'error');
-        });
-    },
-    [videoId, onShowNotice],
-  );
-
   const activeTrack = useMemo(
     () =>
       tracks.find(
@@ -355,6 +339,7 @@ export default function TranscriptPanel({
     setCancelRequested(false);
     cancelRefinementRef.current = false;
     let savedResult: TranscriptKnowledgeExportResult | void = undefined;
+    let refinementActivityReported = false;
     try {
       const trackLabel = activeTrack
         ? `${activeTrack.name} · ${activeTrack.languageCode}${activeTrack.isGenerated ? ' · 自动生成' : ''}`
@@ -372,6 +357,16 @@ export default function TranscriptPanel({
       });
       const result = await onExportToKnowledge(payload);
       savedResult = result;
+      onDocumentExported?.({
+        ...(result?.id ? { id: result.id } : {}),
+        title: result?.title ?? payload.title,
+        category: result?.category ?? payload.category,
+        markdown: payload.markdown,
+        ...(result?.open ? { openKnowledge: result.open } : {}),
+        ...(result?.updateMarkdown
+          ? { updateMarkdown: result.updateMarkdown }
+          : {}),
+      });
 
       const model = provider?.model.trim() ?? '';
       const baseUrl = provider?.baseUrl.trim() ?? '';
@@ -382,7 +377,16 @@ export default function TranscriptPanel({
         payload.stageCount > 0 &&
         !search.trim()
       ) {
+        refinementActivityReported = true;
+        onRefinementActivityChange?.(true);
         const saveProgress = result.updateMarkdown;
+        const persistProgress = async (
+          markdown: string,
+          statusLabel?: string,
+        ) => {
+          await saveProgress(markdown, statusLabel);
+          onDocumentMarkdownChange?.(markdown);
+        };
         const hasTranslation = filteredCues.some((cue) =>
           Boolean(cue.translation?.trim()),
         );
@@ -415,7 +419,7 @@ export default function TranscriptPanel({
         };
         setRefinementProgress(initialProgress);
 
-        await saveProgress(
+        await persistProgress(
           renderMarkdown(payload.stages, {
             kind: 'in-progress',
             completedStages: 0,
@@ -444,7 +448,7 @@ export default function TranscriptPanel({
               totalStages: updatedTotal,
               model,
             });
-            await saveProgress(
+            await persistProgress(
               rendered.markdown,
               `AI 精修进行中：${completedStages} / ${updatedTotal} 阶段`,
             );
@@ -462,7 +466,7 @@ export default function TranscriptPanel({
             model,
           };
           const rendered = renderMarkdown(outcome.stages, finalStatus);
-          await saveProgress(
+          await persistProgress(
             rendered.markdown,
             `AI 精修完成：${outcome.refinedStages} 阶段已精修`,
           );
@@ -487,7 +491,7 @@ export default function TranscriptPanel({
           onShowNotice?.(
             `${finalSummary}${fallbackSummary}，已存入知识库「${result.category} / ${result.title}」`,
             'info',
-            { label: '打开文档', onClick: result.open },
+            { label: '知识库打开', onClick: result.open },
           );
         } else if (outcome.status === 'cancelled') {
           const finalStatus: TranscriptRefinementStatus = {
@@ -497,7 +501,7 @@ export default function TranscriptPanel({
             model,
           };
           const rendered = renderMarkdown(outcome.stages, finalStatus);
-          await saveProgress(
+          await persistProgress(
             rendered.markdown,
             `AI 精修已停止：${outcome.completedStages} / ${outcome.stages.length} 阶段已完成`,
           );
@@ -514,7 +518,7 @@ export default function TranscriptPanel({
           onShowNotice?.(
             `AI 精修已停止；已完成的 ${outcome.completedStages} 个阶段已实时写回知识库「${result.category} / ${result.title}」`,
             'info',
-            { label: '打开文档', onClick: result.open },
+            { label: '知识库打开', onClick: result.open },
           );
         } else {
           if (outcome.completedStages > 0) {
@@ -527,7 +531,7 @@ export default function TranscriptPanel({
               model,
               ...(outcome.errorMessage ? { reason: outcome.errorMessage } : {}),
             };
-            await saveProgress(
+            await persistProgress(
               renderMarkdown(outcome.stages, finalStatus).markdown,
               `AI 精修部分完成：${outcome.completedStages} / ${outcome.stages.length} 阶段`,
             );
@@ -538,7 +542,7 @@ export default function TranscriptPanel({
               model,
               ...(outcome.errorMessage ? { reason: outcome.errorMessage } : {}),
             };
-            await saveProgress(
+            await persistProgress(
               renderMarkdown(outcome.stages, finalStatus).markdown,
               'AI 精修未能开始，已保留智能整理文稿',
             );
@@ -562,7 +566,7 @@ export default function TranscriptPanel({
               ? `AI 精修中断，已完成阶段已写回，其余内容保留智能分段：${outcome.errorMessage ?? '服务调用失败'}`
               : `AI 精修未能开始，已保留智能整理文稿：${outcome.errorMessage ?? '服务调用失败'}`;
           onShowNotice?.(message, 'error', {
-            label: '打开文档',
+            label: '知识库打开',
             onClick: result.open,
           });
         }
@@ -583,7 +587,7 @@ export default function TranscriptPanel({
               ? '没有可精修的文稿阶段'
               : '';
       const action = result
-        ? { label: '打开文档', onClick: result.open }
+        ? { label: '知识库打开', onClick: result.open }
         : undefined;
       if (result) {
         onShowNotice?.(
@@ -611,14 +615,18 @@ export default function TranscriptPanel({
         transcriptErrorMessage(reason),
         'error',
         savedResult
-          ? { label: '打开文档', onClick: savedResult.open }
+          ? { label: '知识库打开', onClick: savedResult.open }
           : undefined,
       );
     } finally {
+      if (refinementActivityReported) onRefinementActivityChange?.(false);
       setExporting(false);
     }
   }, [
     onExportToKnowledge,
+    onDocumentExported,
+    onDocumentMarkdownChange,
+    onRefinementActivityChange,
     exporting,
     filteredCues,
     activeTrack,
@@ -778,20 +786,6 @@ export default function TranscriptPanel({
                   <span className="player-transcript-cue-time">
                     {formatCueTime(cue.start)}
                   </span>
-                  <div
-                    className="player-transcript-cue-tools"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    {/* 插桩思维导图 */}
-                    <button
-                      type="button"
-                      className="player-cue-btn"
-                      onClick={() => copyCueToMindmap(cue)}
-                      title="复制带时间戳的导图引用卡片"
-                    >
-                      📌
-                    </button>
-                  </div>
                 </div>
 
                 <div className="player-transcript-cue-text">

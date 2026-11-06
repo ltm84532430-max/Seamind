@@ -490,7 +490,8 @@ export default function App() {
     activeWorkspace === 'reader' && readerKnowledgeOpen && Boolean(epubReader);
   const canDockTerminalRight =
     (activeWorkspace === 'reader' && viewportWidth >= 1250) ||
-    (activeWorkspace === 'feed' && viewportWidth >= 1400);
+    ((activeWorkspace === 'feed' || activeWorkspace === 'player') &&
+      viewportWidth >= 1400);
   const isTerminalDrawerOpen = terminalOpen || runnerTerminalOpen;
   const terminalRightActive =
     isTerminalDrawerOpen && terminalDock === 'right' && canDockTerminalRight;
@@ -559,7 +560,6 @@ export default function App() {
   const [apiKeyDraft, setApiKeyDraft] = useState('');
   const [apiKeySaved, setApiKeySaved] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState('');
-  const [lastUpdated, setLastUpdated] = useState('已同步');
   const [cliAgentProposal, setCliAgentProposal] =
     useState<CliAgentProposal | null>(null);
   const [cliLearningPathProposal, setCliLearningPathProposal] =
@@ -3264,9 +3264,10 @@ export default function App() {
             '知识库文档有未保存的编辑，已停止后续阶段精修以保护你的修改。',
           );
         }
-        const transcriptTags = Array.from(
-          new Set([...currentDoc.tags, 'AI精修']),
-        );
+        const isPlayerManualEdit = statusLabel === '播放器手动编辑';
+        const transcriptTags = isPlayerManualEdit
+          ? currentDoc.tags
+          : Array.from(new Set([...currentDoc.tags, 'AI精修']));
         const updateInput: SaveDocumentInput = {
           id: currentDoc.id,
           relativePath: currentDoc.relativePath,
@@ -3275,7 +3276,7 @@ export default function App() {
           mapType: '视频字幕',
           tags: transcriptTags.length > 0 ? transcriptTags : payload.tags,
           markdown: nextMarkdown,
-          historySource: 'ai',
+          historySource: isPlayerManualEdit ? 'manual' : 'ai',
           kind: 'doc',
         };
         currentDoc = await invoke<MapDocument>('save_document', {
@@ -3985,7 +3986,6 @@ export default function App() {
     if (isGenerating || !prompt.trim()) return;
     setGenerationError('');
     setIsGenerating(true);
-    setLastUpdated('正在请求 AI…');
     try {
       const generatedMarkdown = await invoke<string>('generate_mindmap', {
         baseUrl: providerSettings.baseUrl,
@@ -3999,7 +3999,6 @@ export default function App() {
           setGenerationError(
             '当前思维导图的修改未能保存，AI 结果尚未应用。请先处理保存问题后重试。',
           );
-          setLastUpdated('生成未应用');
           return;
         }
         const currentDraft = draftRef.current;
@@ -4020,13 +4019,11 @@ export default function App() {
           title: markdownTitle(generatedMarkdown),
         });
       }
-      setLastUpdated('AI 已生成');
       setGenerationDialogOpen(false);
     } catch (error) {
       setGenerationError(
         errorMessage(error, '生成失败，请检查模型设置后重试。'),
       );
-      setLastUpdated('生成失败');
     } finally {
       setIsGenerating(false);
     }
@@ -4798,7 +4795,6 @@ export default function App() {
       if (codeBlocksAbort.signal.aborted) cleanupCodeBlocks();
       else codeBlocksCleanupRef.current = cleanupCodeBlocks;
       if (embedding && !embeddingApplied.value) setHtmlCanvasEmbed(null);
-      setLastUpdated('已同步');
       if (pendingInitialFitRef.current) {
         // Let the debounced ResizeObserver measure hydrated node content first.
         await new Promise<void>((resolve) => window.setTimeout(resolve, 120));
@@ -4830,7 +4826,6 @@ export default function App() {
         }
       }, 260);
     }, 180);
-    setLastUpdated('正在更新…');
     return () => {
       window.clearTimeout(timer);
       window.clearTimeout(visibilityRecoveryTimer);
@@ -5246,143 +5241,7 @@ export default function App() {
       }
     >
       <InstallerComponentSetup />
-      <header
-        className={`topbar${activeWorkspace === 'reader' ? ' is-ebook-workspace' : ''}`}
-      >
-        <div className="brand-lockup">
-          <div className="brand-mark" aria-hidden="true">
-            <svg viewBox="0 0 32 32" fill="none">
-              <path
-                d="M16 8V3.5M16 24v4.5M11.5 16H4M20.5 16h7.5M12 11.5L6.5 8M20 11.5l5.5-3.5M12 20.5l-5.5 3.5M20 20.5l5.5 3.5"
-                stroke="currentColor"
-                strokeWidth="1.1"
-                strokeLinecap="round"
-                opacity="0.45"
-              />
-              <circle
-                cx="16"
-                cy="3.5"
-                r="1.3"
-                fill="currentColor"
-                stroke="none"
-              />
-              <circle
-                cx="16"
-                cy="28.5"
-                r="1.3"
-                fill="currentColor"
-                stroke="none"
-              />
-              <circle
-                cx="4"
-                cy="16"
-                r="1.3"
-                fill="currentColor"
-                stroke="none"
-              />
-              <circle
-                cx="28"
-                cy="16"
-                r="1.3"
-                fill="currentColor"
-                stroke="none"
-              />
-              <circle cx="6.5" cy="8" r="1" fill="currentColor" stroke="none" />
-              <circle
-                cx="25.5"
-                cy="8"
-                r="1"
-                fill="currentColor"
-                stroke="none"
-              />
-              <circle
-                cx="6.5"
-                cy="24"
-                r="1"
-                fill="currentColor"
-                stroke="none"
-              />
-              <circle
-                cx="25.5"
-                cy="24"
-                r="1"
-                fill="currentColor"
-                stroke="none"
-              />
-              <circle
-                cx="16"
-                cy="16"
-                r="9.2"
-                stroke="currentColor"
-                strokeWidth="0.9"
-                strokeDasharray="2.5 2"
-                opacity="0.35"
-              />
-              <path
-                d="M21 10.5C21 7.8 18.8 6.2 16 6.2C12.8 6.2 10.8 8.2 10.8 11.2C10.8 15 15.2 16.2 17.2 17.6C19.8 19.4 21.2 20.8 21.2 23.2C21.2 26.2 18.8 27.2 16 27.2C12.8 27.2 10.8 25.4 10.8 22.8"
-                stroke="currentColor"
-                strokeWidth="2.3"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              <path
-                d="M14.2 8.6C12.8 10.2 13.2 13.2 16 16C18.6 18.6 19.2 21.8 17.6 24.5"
-                stroke="currentColor"
-                strokeWidth="1.2"
-                strokeLinecap="round"
-                opacity="0.75"
-              />
-            </svg>
-          </div>
-          <div>
-            <div className="brand-name">Seamind</div>
-            <div
-              className="document-name"
-              title={
-                activeWorkspace === 'player'
-                  ? 'YouTube 播放器'
-                  : activeWorkspace === 'reader'
-                    ? (epubReader?.title ?? '电子书书架')
-                    : activeWorkspace === 'knowledge'
-                      ? (activeDocument?.title ?? '知识库')
-                      : activeWorkspace === 'literature'
-                        ? '论文工作台'
-                        : activeWorkspace === 'tasks'
-                          ? '任务工作台'
-                          : (activeDocument?.relativePath ??
-                            plantUmlSession?.request.documentTitle ??
-                            editorDraft.relativePath ??
-                            '')
-              }
-            >
-              <span>
-                {activeWorkspace === 'player'
-                  ? 'YouTube 播放器'
-                  : activeWorkspace === 'reader'
-                    ? (epubReader?.title ?? '电子书书架')
-                    : activeWorkspace === 'knowledge'
-                      ? (activeDocument?.title ?? '知识库')
-                      : activeWorkspace === 'literature'
-                        ? '论文工作台'
-                        : activeWorkspace === 'tasks'
-                          ? '任务工作台'
-                          : (activeDocument?.title ??
-                              plantUmlSession?.request.documentTitle ??
-                              editorDraft.title) ||
-                            '未命名思维导图'}
-              </span>
-              {activeWorkspace === 'mindmap' && !plantUmlSession && (
-                <i
-                  className={
-                    (activeDocument ? workbench.dirty : editorDraft.dirty)
-                      ? 'is-dirty'
-                      : ''
-                  }
-                />
-              )}
-            </div>
-          </div>
-        </div>
+      <header className="topbar">
         <nav className="workspace-switcher" aria-label="工作区">
           <button
             type="button"
@@ -5442,10 +5301,6 @@ export default function App() {
           </button>
         </nav>
         <div className="topbar-actions">
-          <span className="sync-state">
-            <b />
-            {lastUpdated}
-          </span>
           <button
             type="button"
             className="theme-toggle-button"
@@ -5477,11 +5332,19 @@ export default function App() {
             className={`terminal-toggle-button${terminalOpen ? ' is-active' : ''}`}
             aria-expanded={terminalOpen}
             aria-controls="seamind-terminal-panel"
-            onClick={() => setTerminalOpen((open) => !open)}
+            onClick={() => {
+              if (
+                !terminalOpen &&
+                activeWorkspace === 'player' &&
+                viewportWidth >= 1400
+              ) {
+                setTerminalDockAndStore('right');
+              }
+              setTerminalOpen((open) => !open);
+            }}
           >
             终端
           </button>
-          <span className="phase-badge">AI · SEAMIND</span>
           <button
             type="button"
             className="settings-button"

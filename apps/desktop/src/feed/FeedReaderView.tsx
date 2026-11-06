@@ -465,14 +465,11 @@ export const FeedReaderView: React.FC<FeedReaderViewProps> = ({
                   </svg>
                 </div>
                 <div className="feed-audio-hero-info">
-                  <div className="feed-audio-hero-tag">
-                    官方机构播客 / 原声录音
-                  </div>
+                  <div className="feed-audio-hero-tag">播客节目</div>
                   <div className="feed-audio-hero-meta">
                     {article.audioDuration
                       ? `时长约 ${Math.ceil(article.audioDuration / 60)} 分钟`
-                      : '支持原声在线串流收听'}{' '}
-                    · 高清音频通道
+                      : '可在线播放'}
                   </div>
                 </div>
                 <button
@@ -490,53 +487,7 @@ export const FeedReaderView: React.FC<FeedReaderViewProps> = ({
                   >
                     <path d="M4 3.5l9 4.5-9 4.5V3.5z" />
                   </svg>
-                  <span>立即收听</span>
-                </button>
-              </div>
-            )}
-
-            {article.audioUrl && (
-              <div className="feed-article-audio-hero">
-                <div className="feed-audio-hero-visual" aria-hidden="true">
-                  <svg
-                    viewBox="0 0 24 24"
-                    width="26"
-                    height="26"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                  >
-                    <path d="M3 10v4M7 6v12M11 3v18M15 7v10M19 10v4M22 12v0" />
-                  </svg>
-                </div>
-                <div className="feed-audio-hero-info">
-                  <div className="feed-audio-hero-tag">
-                    官方机构播客 / 原声录音
-                  </div>
-                  <div className="feed-audio-hero-meta">
-                    {article.audioDuration
-                      ? `时长约 ${Math.ceil(article.audioDuration / 60)} 分钟`
-                      : '支持原声在线串流收听'}{' '}
-                    · 高清音频通道
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="feed-audio-hero-play-btn"
-                  onClick={() => onPlayAudio?.(article)}
-                  title="在底部播放器中收听"
-                >
-                  <svg
-                    viewBox="0 0 16 16"
-                    width="14"
-                    height="14"
-                    fill="currentColor"
-                    aria-hidden="true"
-                  >
-                    <path d="M4 3.5l9 4.5-9 4.5V3.5z" />
-                  </svg>
-                  <span>立即收听</span>
+                  <span>播放</span>
                 </button>
               </div>
             )}

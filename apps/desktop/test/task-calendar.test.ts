@@ -4,7 +4,10 @@ import {
   localToday,
   monthGrid,
   parseDateKey,
+  shiftedDateByDays,
+  shiftedDateByMonth,
   shiftedMonth,
+  weekGrid,
 } from '../src/tasks/calendar-model';
 
 describe('task deadline calendar', () => {
@@ -41,5 +44,24 @@ describe('task deadline calendar', () => {
     ]) {
       expect(parseDateKey(value)).toBeNull();
     }
+  });
+
+  it('keeps the selected day when moving months and clamps short months', () => {
+    expect(shiftedDateByMonth('2026-11-06', 1)).toBe('2026-12-06');
+    expect(shiftedDateByMonth('2026-01-31', 1)).toBe('2026-02-28');
+    expect(shiftedDateByMonth('2024-01-31', 1)).toBe('2024-02-29');
+  });
+
+  it('shows a Monday-first week across month and year boundaries', () => {
+    expect(weekGrid('2026-11-01').map((cell) => cell.date)).toEqual([
+      '2026-10-26',
+      '2026-10-27',
+      '2026-10-28',
+      '2026-10-29',
+      '2026-10-30',
+      '2026-10-31',
+      '2026-11-01',
+    ]);
+    expect(shiftedDateByDays('2026-12-28', 7)).toBe('2027-01-04');
   });
 });

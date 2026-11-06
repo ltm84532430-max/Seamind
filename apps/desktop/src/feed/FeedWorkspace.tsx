@@ -214,6 +214,11 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
     [reloadOverview],
   );
 
+  const handlePlayAudio = useCallback((article: FeedArticle) => {
+    setSelectedArticle(article);
+    setPlayingArticle(article);
+  }, []);
+
   const handleToggleRead = useCallback(
     async (articleId: string, currentStatus: 'read' | 'unread') => {
       const nextStatus = currentStatus === 'read' ? 'unread' : 'read';
@@ -516,21 +521,32 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
         onChangeSearchQuery={(q) => setSearchQuery(q)}
         onMarkAllRead={handleMarkAllRead}
         onOpenGalaxy={() => setIsGalaxyOpen(true)}
-        onPlayAudio={(art) => setPlayingArticle(art)}
+        onPlayAudio={handlePlayAudio}
       />
 
-      <FeedReaderView
-        article={selectedArticle}
-        hasChannels={(overview?.channels?.length ?? 0) > 0}
-        onToggleRead={handleToggleRead}
-        onToggleStar={handleToggleStar}
-        onGenerateMindmap={handleGenerateMindmap}
-        onAddPreset={handleAddChannel}
-        onAnalyzeArticle={onAnalyzeArticle}
-        onPlayAudio={(art) => setPlayingArticle(art)}
-        onRestoreDefaultFeeds={handleRestoreDefaultFeeds}
-        isRestoring={loadingArticles}
-      />
+      {/* 播放器打开时与阅读区按相同权重上下分屏。 */}
+      <div className="feed-reader-stack">
+        <FeedReaderView
+          article={selectedArticle}
+          hasChannels={(overview?.channels?.length ?? 0) > 0}
+          onToggleRead={handleToggleRead}
+          onToggleStar={handleToggleStar}
+          onGenerateMindmap={handleGenerateMindmap}
+          onAddPreset={handleAddChannel}
+          onAnalyzeArticle={onAnalyzeArticle}
+          onPlayAudio={handlePlayAudio}
+          onRestoreDefaultFeeds={handleRestoreDefaultFeeds}
+          isRestoring={loadingArticles}
+        />
+
+        {playingArticle && (
+          <FeedAudioPlayerBar
+            article={playingArticle}
+            onClose={() => setPlayingArticle(null)}
+            onGenerateMindmap={handleGenerateMindmap}
+          />
+        )}
+      </div>
 
       <FeedAddDialog
         isOpen={isAddOpen}
@@ -578,14 +594,6 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
             setFilterMode('all');
             setIsGalaxyOpen(false);
           }}
-        />
-      )}
-
-      {playingArticle && (
-        <FeedAudioPlayerBar
-          article={playingArticle}
-          onClose={() => setPlayingArticle(null)}
-          onGenerateMindmap={handleGenerateMindmap}
         />
       )}
     </div>

@@ -2,6 +2,12 @@ import { invoke } from '@tauri-apps/api/core';
 import type {
   ImportPlan,
   ImportResult,
+  Habit,
+  HabitCategory,
+  HabitCategoryInput,
+  HabitInput,
+  HabitOccurrenceInput,
+  HabitSnapshot,
   LearningTask,
   PlanInput,
   TaskInput,
@@ -68,6 +74,39 @@ export const taskApi = {
   },
   unarchiveTask: async (id: string) => {
     await invoke<void>('learning_tasks_unarchive_task', { id });
+    tasksChanged();
+  },
+};
+
+export const habitApi = {
+  snapshot: (fromDate: string, toDate: string) =>
+    invoke<HabitSnapshot>('learning_tasks_habits_snapshot', {
+      fromDate,
+      toDate,
+    }),
+  save: async (input: HabitInput) => {
+    const habit = await invoke<Habit>('learning_tasks_habits_save', { input });
+    tasksChanged();
+    return habit;
+  },
+  setActive: async (id: string, active: boolean) => {
+    await invoke<void>('learning_tasks_habits_set_active', { id, active });
+    tasksChanged();
+  },
+  setOccurrence: async (input: HabitOccurrenceInput) => {
+    await invoke<void>('learning_tasks_habits_set_occurrence', { input });
+    tasksChanged();
+  },
+  saveCategory: async (input: HabitCategoryInput) => {
+    const category = await invoke<HabitCategory>(
+      'learning_tasks_habits_save_category',
+      { input },
+    );
+    tasksChanged();
+    return category;
+  },
+  deleteCategory: async (id: string) => {
+    await invoke<void>('learning_tasks_habits_delete_category', { id });
     tasksChanged();
   },
 };

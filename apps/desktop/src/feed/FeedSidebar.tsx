@@ -70,9 +70,6 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
     readCollapsedCategories,
   );
   const categories = overview?.categories ?? [];
-  const allCategoriesCollapsed =
-    categories.length > 0 &&
-    categories.every((category) => collapsedCategories.has(category.name));
 
   useEffect(() => {
     try {
@@ -103,12 +100,23 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
     if (!overview?.channels) return {};
     const grouped: Record<string, FeedChannelWithStats[]> = {};
     for (const ch of overview.channels) {
+      if (currentFilterMode === 'audio' && ch.audioCount === 0) continue;
       const cat = ch.category || '默认分类';
       if (!grouped[cat]) grouped[cat] = [];
       grouped[cat].push(ch);
     }
     return grouped;
-  }, [overview?.channels]);
+  }, [overview?.channels, currentFilterMode]);
+
+  const visibleCategories =
+    currentFilterMode === 'audio'
+      ? categories.filter((category) => category.audioCount > 0)
+      : categories;
+  const allCategoriesCollapsed =
+    visibleCategories.length > 0 &&
+    visibleCategories.every((category) =>
+      collapsedCategories.has(category.name),
+    );
 
   if (sidebarCollapsed) {
     return (
@@ -332,11 +340,13 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
           )}
         </nav>
 
-        {/* 分类订阅源头部 */}
+        {/* 当前阅读视图对应的分类导航 */}
         <div className="feed-section-header is-collapsible">
-          <span className="feed-section-label">分类订阅源</span>
+          <span className="feed-section-label">
+            {currentFilterMode === 'audio' ? '播客分类' : '分类订阅源'}
+          </span>
           <div className="feed-section-controls">
-            {categories.length > 1 && (
+            {visibleCategories.length > 1 && (
               <button
                 type="button"
                 className="feed-mini-btn"
@@ -344,7 +354,9 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
                   setCollapsedCategories(
                     allCategoriesCollapsed
                       ? new Set()
-                      : new Set(categories.map((category) => category.name)),
+                      : new Set(
+                          visibleCategories.map((category) => category.name),
+                        ),
                   )
                 }
                 title={allCategoriesCollapsed ? '展开全部分类' : '收起全部分类'}
@@ -366,7 +378,7 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
           </div>
         </div>
 
-        {(!overview?.categories || overview.categories.length === 0) && (
+        {visibleCategories.length === 0 && (
           <div
             className="feed-empty-tip"
             style={{
@@ -377,8 +389,12 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
               padding: '16px 12px',
             }}
           >
-            <span>暂无分类或订阅源</span>
-            {onRestoreDefaultFeeds && (
+            <span>
+              {currentFilterMode === 'audio'
+                ? '暂无包含可播放节目的分类'
+                : '暂无分类或订阅源'}
+            </span>
+            {currentFilterMode !== 'audio' && onRestoreDefaultFeeds && (
               <button
                 type="button"
                 className="feed-header-btn is-primary"
@@ -397,9 +413,11 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
         <div
           className="feed-category-tree"
           role="tree"
-          aria-label="订阅源分类树"
+          aria-label={
+            currentFilterMode === 'audio' ? '播客分类树' : '订阅源分类树'
+          }
         >
-          {categories.map((category) => {
+          {visibleCategories.map((category) => {
             const channels = channelsByCategory[category.name] ?? [];
             const isCatActive =
               selectedCategory === category.name && !selectedChannelId;
@@ -409,6 +427,8 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
               (sum, ch) => sum + ch.unreadCount,
               0,
             );
+            const categoryCount =
+              currentFilterMode === 'audio' ? category.audioCount : catUnread;
 
             return (
               <div
@@ -478,34 +498,40 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
                     className="feed-category-actions"
                     onClick={(e) => e.stopPropagation()}
                   >
-                    {catUnread > 0 && onMarkCategoryRead && (
-                      <button
-                        type="button"
-                        className="feed-category-action-icon"
-                        onClick={() => onMarkCategoryRead(category.name)}
-                        title={`将「${category.name}」分类下所有文章标记为已读`}
-                        aria-label={`标记「${category.name}」已读`}
-                      >
-                        <svg viewBox="0 0 16 16" width="11" height="11">
-                          <path
-                            d="M2.5 8.5l3.5 3.5 7.5-7.5"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.8"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                        </svg>
-                      </button>
-                    )}
+                    {currentFilterMode !== 'audio' &&
+                      catUnread > 0 &&
+                      onMarkCategoryRead && (
+                        <button
+                          type="button"
+                          className="feed-category-action-icon"
+                          onClick={() => onMarkCategoryRead(category.name)}
+                          title={`将「${category.name}」分类下所有文章标记为已读`}
+                          aria-label={`标记「${category.name}」已读`}
+                        >
+                          <svg viewBox="0 0 16 16" width="11" height="11">
+                            <path
+                              d="M2.5 8.5l3.5 3.5 7.5-7.5"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.8"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          </svg>
+                        </button>
+                      )}
                   </div>
 
                   {/* 等宽未读计数胶囊 */}
                   <span
-                    className={`feed-category-pill ${catUnread > 0 ? 'has-unread' : 'is-zero'}`}
-                    title={`${catUnread} 篇未读`}
+                    className={`feed-category-pill ${categoryCount > 0 ? 'has-unread' : 'is-zero'}`}
+                    title={
+                      currentFilterMode === 'audio'
+                        ? `${categoryCount} 个播客节目`
+                        : `${categoryCount} 篇未读`
+                    }
                   >
-                    {catUnread}
+                    {categoryCount}
                   </span>
                 </div>
 
@@ -583,9 +609,13 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
                               </button>
                             </div>
 
-                            {ch.unreadCount > 0 && (
+                            {(currentFilterMode === 'audio'
+                              ? ch.audioCount
+                              : ch.unreadCount) > 0 && (
                               <span className="feed-channel-pill has-unread">
-                                {ch.unreadCount}
+                                {currentFilterMode === 'audio'
+                                  ? ch.audioCount
+                                  : ch.unreadCount}
                               </span>
                             )}
                           </div>

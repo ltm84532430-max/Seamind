@@ -56,7 +56,10 @@ export default function ResourceTaskLinks({
 
   if (!tasks.length) return null;
   return (
-    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+    <label
+      className="resource-task-links"
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+    >
       <span>关联任务</span>
       <select
         aria-label="查看关联任务"
