@@ -7,6 +7,7 @@ export type Theme = 'light' | 'dark' | 'navy' | 'purple';
 export type ActiveWorkspace =
   | 'mindmap'
   | 'reader'
+  | 'exams'
   | 'player'
   | 'knowledge'
   | 'literature'
@@ -146,10 +147,12 @@ export function readActiveWorkspace(): ActiveWorkspace {
   try {
     const stored = localStorage.getItem(ACTIVE_WORKSPACE_KEY);
     return stored === 'reader' ||
+      stored === 'exams' ||
       stored === 'player' ||
       stored === 'knowledge' ||
       stored === 'literature' ||
-      stored === 'tasks'
+      stored === 'tasks' ||
+      stored === 'feed'
       ? stored
       : 'mindmap';
   } catch {

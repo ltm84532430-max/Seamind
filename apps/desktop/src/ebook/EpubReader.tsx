@@ -26,21 +26,21 @@ import type {
   EpubExam,
   EpubExamDifficulty,
   EpubExamQuestion,
-} from './epub-exams';
-import { extractEpubSectionPlainText } from './epub-exams';
+} from '../exams/epub-exams';
+import { extractEpubSectionPlainText } from '../exams/epub-exams';
 import type { Theme } from '../app/app-storage';
 import {
   defaultExamMix,
   examMixTotal,
   makeExamBatches,
   validateGeneratedExam,
-} from './epub-exam-generation';
-import type { ExamBatch, ExamMix } from './epub-exam-generation';
+} from '../exams/epub-exam-generation';
+import type { ExamBatch, ExamMix } from '../exams/epub-exam-generation';
 import {
   loadExamSourceSegments,
   resolveExamSourcePlan,
-} from './epub-exam-source';
-import type { ExamSourceSegment } from './epub-exam-source';
+} from '../exams/epub-exam-source';
+import type { ExamSourceSegment } from '../exams/epub-exam-source';
 import {
   getChapterTranslation,
   saveChapterTranslation,
@@ -54,7 +54,7 @@ import {
   removeTranslationsFromDoc,
 } from './epub-translation-dom';
 import { translateChapterAll } from './epub-translator';
-import './epub-exam-v2.css';
+import '../exams/epub-exam-v2.css';
 // @ts-expect-error Foliate ships as an untyped JavaScript submodule.
 import { Overlayer } from '../../../../packages/foliate-js/overlayer.js';
 
@@ -1485,7 +1485,7 @@ export default function EpubReader({
       setExamDraft(null);
       setExamDialogOpen(false);
       setNavigationNotice({
-        message: '试卷已生成并保存，返回书架后可继续作答。',
+        message: '试卷已生成并保存，可在试卷页继续作答。',
         kind: 'success',
       });
     } catch (cause) {
@@ -1584,7 +1584,7 @@ export default function EpubReader({
       setUnsavedExam(null);
       setExamDialogOpen(false);
       setNavigationNotice({
-        message: '试卷已保存，返回书架后可继续作答。',
+        message: '试卷已保存，可在试卷页继续作答。',
         kind: 'success',
       });
     } catch (cause) {

@@ -188,6 +188,12 @@ pub struct EpubExamSummary {
     pub partial_count: usize,
     #[serde(default)]
     pub review_count: usize,
+    #[serde(default)]
+    pub last_completed_at: Option<u64>,
+    #[serde(default)]
+    pub review_streak: usize,
+    #[serde(default)]
+    pub last_review_quality: Option<f32>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -543,15 +549,47 @@ pub(crate) fn delete_epub_exams_for_book(app: &AppHandle, book_key: &str) -> Res
 
 impl From<&EpubExam> for EpubExamSummary {
     fn from(exam: &EpubExam) -> Self {
+        let latest = if exam.status == EpubExamStatus::Submitted {
+            Some((&exam.self_reviews, &exam.grades))
+        } else {
+            exam.attempts
+                .last()
+                .map(|attempt| (&attempt.self_reviews, &attempt.grades))
+        };
         let mut mastered_count = 0;
         let mut partial_count = 0;
         let mut review_count = 0;
-        for review in exam.self_reviews.values() {
+        for review in latest
+            .map(|(reviews, _)| reviews.values())
+            .into_iter()
+            .flatten()
+        {
             match review {
                 EpubExamSelfReview::Mastered => mastered_count += 1,
                 EpubExamSelfReview::Partial => partial_count += 1,
                 EpubExamSelfReview::Review => review_count += 1,
             }
+        }
+        // 复习节奏只由已交卷的轮次决定；开始重做但尚未交卷时，沿用上一轮结果。
+        let mut review_streak = 0;
+        for attempt in &exam.attempts {
+            review_streak =
+                if review_quality(&exam.questions, &attempt.self_reviews, &attempt.grades)
+                    .is_some_and(|quality| quality >= 0.8)
+                {
+                    review_streak + 1
+                } else {
+                    0
+                };
+        }
+        if exam.status == EpubExamStatus::Submitted {
+            review_streak = if review_quality(&exam.questions, &exam.self_reviews, &exam.grades)
+                .is_some_and(|quality| quality >= 0.8)
+            {
+                review_streak + 1
+            } else {
+                0
+            };
         }
         Self {
             id: exam.id.clone(),
@@ -567,8 +605,49 @@ impl From<&EpubExam> for EpubExamSummary {
             mastered_count,
             partial_count,
             review_count,
+            last_completed_at: if exam.status == EpubExamStatus::Submitted {
+                exam.submitted_at
+                    .or_else(|| exam.attempts.last().map(|attempt| attempt.completed_at))
+            } else {
+                exam.attempts.last().map(|attempt| attempt.completed_at)
+            },
+            review_streak,
+            last_review_quality: latest
+                .and_then(|(reviews, grades)| review_quality(&exam.questions, reviews, grades)),
         }
     }
+}
+
+fn review_quality(
+    questions: &[EpubExamQuestion],
+    reviews: &HashMap<String, EpubExamSelfReview>,
+    grades: &HashMap<String, ExamGrade>,
+) -> Option<f32> {
+    if questions.is_empty() || (reviews.is_empty() && grades.is_empty()) {
+        return None;
+    }
+    // 未自评且无法评分的题目也计入整卷分母，避免只答对一道题就延长复习间隔。
+    let sum = questions
+        .iter()
+        .map(|question| {
+            let manual = reviews.get(&question.id).map(|review| match review {
+                EpubExamSelfReview::Mastered => 1.0,
+                EpubExamSelfReview::Partial => 0.5,
+                EpubExamSelfReview::Review => 0.0,
+            });
+            let graded = grades
+                .get(&question.id)
+                .filter(|grade| grade.maximum > 0)
+                .map(|grade| (grade.earned / grade.maximum as f32).clamp(0.0, 1.0));
+            match (manual, graded) {
+                (Some(manual), Some(graded)) => (manual + graded) / 2.0,
+                (Some(manual), None) => manual,
+                (None, Some(graded)) => graded,
+                (None, None) => 0.0,
+            }
+        })
+        .sum::<f32>();
+    Some(sum / questions.len() as f32)
 }
 
 fn parse_generated_questions(
@@ -996,6 +1075,9 @@ mod tests {
             mastered_count: 0,
             partial_count: 0,
             review_count: 0,
+            last_completed_at: None,
+            review_streak: 0,
+            last_review_quality: None,
         })
         .unwrap();
         assert_eq!(value["bookKey"], "books/a.epub");
@@ -1046,5 +1128,27 @@ mod tests {
         );
         assert_eq!(exam.attempts.len(), 1);
         assert!(exam.grades.is_empty());
+        let submitted = EpubExamSummary::from(&exam);
+        assert_eq!(submitted.last_completed_at, Some(2));
+        assert_eq!(submitted.last_review_quality, Some(0.0));
+        assert_eq!(submitted.review_streak, 0);
+
+        let mut restarted = exam;
+        restarted.status = EpubExamStatus::InProgress;
+        restarted.submitted_at = None;
+        restarted.self_reviews.clear();
+        let prior_round = EpubExamSummary::from(&restarted);
+        assert_eq!(prior_round.last_completed_at, Some(2));
+        assert_eq!(prior_round.last_review_quality, Some(0.2));
+        assert_eq!(prior_round.review_streak, 0);
+
+        let mut complete_reviews = HashMap::new();
+        for question in &restarted.questions {
+            complete_reviews.insert(question.id.clone(), EpubExamSelfReview::Mastered);
+        }
+        assert_eq!(
+            review_quality(&restarted.questions, &complete_reviews, &HashMap::new()),
+            Some(1.0)
+        );
     }
 }

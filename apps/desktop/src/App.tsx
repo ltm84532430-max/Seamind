@@ -65,6 +65,7 @@ import 'katex/dist/katex.min.css';
 import LibraryPanel from './library/LibraryPanel';
 import EpubReader from './ebook/EpubReader';
 import EbookWorkspace from './ebook/EbookWorkspace';
+import ExamCenterWorkspace from './exams/ExamCenterWorkspace';
 import MindmapMiniTree from './mindmap/MindmapMiniTree';
 import type { MindmapMiniTreeNode } from './mindmap/MindmapMiniTree';
 import './ebook/ebook-workspace.css';
@@ -373,6 +374,8 @@ export default function App() {
   );
   const [activeWorkspace, setActiveWorkspace] =
     useState<ActiveWorkspace>(readActiveWorkspace);
+  const [examBookFilter, setExamBookFilter] = useState('');
+  const [dueExamCount, setDueExamCount] = useState(0);
   // The player page is built the first time it is opened and then kept, so a video can go on
   // playing in the background and the lists keep their place.
   const [playerOpened, setPlayerOpened] = useState(
@@ -5298,6 +5301,25 @@ export default function App() {
           </button>
           <button
             type="button"
+            className={activeWorkspace === 'exams' ? 'is-active' : ''}
+            aria-pressed={activeWorkspace === 'exams'}
+            onClick={() => {
+              setExamBookFilter('');
+              setActiveWorkspace('exams');
+            }}
+          >
+            试卷
+            {dueExamCount > 0 && (
+              <span
+                className="workspace-due-count"
+                aria-label={`${dueExamCount} 份试卷待复习`}
+              >
+                {dueExamCount}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
             className={activeWorkspace === 'player' ? 'is-active' : ''}
             aria-pressed={activeWorkspace === 'player'}
             onClick={() => setActiveWorkspace('player')}
@@ -6375,7 +6397,7 @@ export default function App() {
           />
         ) : (
           <EbookWorkspace
-            provider={providerSettings}
+            active={activeWorkspace === 'reader'}
             snapshot={librarySnapshot}
             busy={libraryBusy}
             onImport={() => void importEpubBook()}
@@ -6384,8 +6406,30 @@ export default function App() {
             onOpenBook={(book) => void openLibraryEpub(book)}
             onCreateTask={(book) => createBookTask(book)}
             onDeleteBook={deleteLibraryEpubBook}
+            onOpenExams={(bookKey) => {
+              setExamBookFilter(bookKey);
+              setActiveWorkspace('exams');
+            }}
           />
         )}
+      </section>
+
+      <section
+        className={`exam-workspace-stage${activeWorkspace !== 'exams' ? ' is-workspace-hidden' : ''}`}
+        aria-label="试卷工作区"
+        aria-hidden={activeWorkspace !== 'exams'}
+      >
+        <ExamCenterWorkspace
+          active={activeWorkspace === 'exams'}
+          provider={providerSettings}
+          books={librarySnapshot?.books ?? []}
+          libraryRoot={librarySnapshot?.rootPath ?? ''}
+          bookFilter={examBookFilter}
+          onBookFilterChange={setExamBookFilter}
+          onOpenShelf={() => setActiveWorkspace('reader')}
+          onOpenBook={(book) => void openLibraryEpub(book)}
+          onDueCountChange={setDueExamCount}
+        />
       </section>
 
       <section

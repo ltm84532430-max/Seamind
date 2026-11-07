@@ -81,6 +81,9 @@ export interface EpubExamSummary {
   masteredCount?: number;
   partialCount?: number;
   reviewCount?: number;
+  lastCompletedAt?: number | null;
+  reviewStreak?: number;
+  lastReviewQuality?: number | null;
 }
 
 export interface EpubExamGenerationResult {

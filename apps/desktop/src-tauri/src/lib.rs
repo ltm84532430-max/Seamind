@@ -4,15 +4,15 @@ mod agent_bridge;
 #[path = "agent/prompts.rs"]
 mod prompts;
 
-#[path = "ebook/c_exam_runner.rs"]
+#[path = "exams/c_exam_runner.rs"]
 mod c_exam_runner;
 #[path = "ebook/epub.rs"]
 mod epub;
-#[path = "ebook/epub_exam.rs"]
+#[path = "exams/epub_exam.rs"]
 mod epub_exam;
-#[path = "ebook/epub_exam_generation.rs"]
+#[path = "exams/epub_exam_generation.rs"]
 mod epub_exam_generation;
-#[path = "ebook/epub_exam_grading.rs"]
+#[path = "exams/epub_exam_grading.rs"]
 mod epub_exam_grading;
 #[path = "ebook/epub_translation.rs"]
 mod epub_translation;

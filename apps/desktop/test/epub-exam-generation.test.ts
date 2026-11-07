@@ -4,8 +4,8 @@ import {
   examMixTotal,
   makeExamBatches,
   validateGeneratedExam,
-} from '../src/ebook/epub-exam-generation';
-import { resolveExamSourcePlan } from '../src/ebook/epub-exam-source';
+} from '../src/exams/epub-exam-generation';
+import { resolveExamSourcePlan } from '../src/exams/epub-exam-source';
 
 const toc = [
   {

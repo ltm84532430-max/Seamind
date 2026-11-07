@@ -1,7 +1,7 @@
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
-import { EpubExamWorkspace } from '../src/ebook/EpubExamWorkspace';
+import { EpubExamWorkspace } from '../src/exams/EpubExamWorkspace';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockImplementation((cmd: string) => {

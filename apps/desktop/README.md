@@ -48,11 +48,11 @@ cargo test --lib
 - `src/app/`：应用级存储与样式工具；`src/library/`：文件库索引和侧栏。
 - `src/workbench/`：Markdown 编辑、预览、代码围栏与文档工作台。
 - `src/knowledge/`：知识库、笔记来源、粘贴和文档媒体。
-- `src/ebook/`：电子书、阅读统计、试卷、翻译和在线找书。
+- `src/ebook/`：电子书、阅读统计、翻译和在线找书；`src/exams/`：试卷、作答和间隔复习页面。
 - `src/player/`：播放器、YouTube 接入、字幕和学习路径。
 - `src/feed/`、`src/literature/`、`src/tasks/`：订阅、论文和任务视图。
 - `src/mindmap/`、`src/agent/`、`src/system/`：导图辅助、AI 面板、终端与安装更新。
-- `src-tauri/src/lib.rs`：Rust 命令注册；后端实现按 `agent/`、`ebook/`、`feed/`、`library/`、`literature/`、`mindmap/`、`player/`、`tasks/`、`system/` 分类。模块名和 Tauri 命令保持原有接口。
+- `src-tauri/src/lib.rs`：Rust 命令注册；后端实现按 `agent/`、`ebook/`、`exams/`、`feed/`、`library/`、`literature/`、`mindmap/`、`player/`、`tasks/`、`system/` 分类。模块名和 Tauri 命令保持原有接口。
 - `src-tauri/resources/plantuml/`：随应用打包的 PlantUML。
 
 ## 环境变量

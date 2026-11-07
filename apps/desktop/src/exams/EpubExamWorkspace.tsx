@@ -71,7 +71,7 @@ export class ExamErrorBoundary extends Component<
                 className="epub-exam-back-btn"
                 onClick={this.props.onBack}
               >
-                ← 返回试卷库
+                ← 返回试卷列表
               </button>
               <h2
                 style={{
@@ -793,7 +793,7 @@ function EpubExamWorkspaceInner({
               className="epub-exam-back-btn"
               onClick={onBack}
             >
-              ← 返回试卷库
+              ← 返回试卷列表
             </button>
             <p role="alert">{error || '找不到这份试卷。'}</p>
           </div>
@@ -805,9 +805,9 @@ function EpubExamWorkspaceInner({
                 className="epub-exam-back-btn"
                 onClick={() => void goBack()}
                 disabled={busy}
-                title="保存并返回试卷库"
+                title="保存并返回试卷列表"
               >
-                ← 返回试卷库
+                ← 返回试卷列表
               </button>
 
               <div className="epub-exam-header-main">

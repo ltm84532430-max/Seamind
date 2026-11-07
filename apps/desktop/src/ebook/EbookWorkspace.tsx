@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { EpubBookDocument, LibrarySnapshot } from '../library/library';
-import { EpubExamLibraryPanel, EpubExamWorkspace } from './EpubExamLibrary';
-import type { EpubExamSummary } from './epub-exams';
-import { listEpubExams } from './epub-exams';
+import type { EpubExamSummary } from '../exams/epub-exams';
+import { listEpubExams } from '../exams/epub-exams';
 import {
   clearEpubReaderData,
   deleteEpubReadingPlan,
@@ -25,7 +24,7 @@ type ShelfSort = 'recent' | 'title' | 'added';
 const NEW_BOOK_CATEGORY = '__new_book_category__';
 
 export default function EbookWorkspace({
-  provider,
+  active,
   snapshot,
   busy,
   onImport,
@@ -34,8 +33,9 @@ export default function EbookWorkspace({
   onOpenBook,
   onCreateTask,
   onDeleteBook,
+  onOpenExams,
 }: {
-  provider: { baseUrl: string; model: string };
+  active: boolean;
   snapshot: LibrarySnapshot | null;
   busy: boolean;
   onImport: () => void;
@@ -44,6 +44,7 @@ export default function EbookWorkspace({
   onOpenBook: (book: EpubBookDocument) => void;
   onCreateTask: (book: EpubBookDocument) => void;
   onDeleteBook: (book: EpubBookDocument) => Promise<void>;
+  onOpenExams: (bookKey: string) => void;
 }) {
   const books = snapshot?.books ?? [];
   const [query, setQuery] = useState('');
@@ -77,41 +78,21 @@ export default function EbookWorkspace({
   });
   const [dashboardRevision, setDashboardRevision] = useState(0);
   const [exams, setExams] = useState<EpubExamSummary[]>([]);
-  const [examsLoading, setExamsLoading] = useState(true);
-  const [examsError, setExamsError] = useState('');
-  const [examLibraryOpen, setExamLibraryOpen] = useState(false);
-  const [examLibraryCollapsed, setExamLibraryCollapsed] = useState(() => {
-    try {
-      return localStorage.getItem('seamind_ebook_exam_collapsed') === 'true';
-    } catch {
-      return false;
-    }
-  });
-  const [filteredExamBookKey, setFilteredExamBookKey] = useState('');
-  const [selectedExam, setSelectedExam] = useState<EpubExamSummary | null>(
-    null,
-  );
   const [zlibDialogOpen, setZlibDialogOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
-    setExamsLoading(true);
-    setExamsError('');
     void listEpubExams()
       .then((items) => {
         if (active) setExams(items);
       })
-      .catch((error) => {
-        if (active)
-          setExamsError(error instanceof Error ? error.message : String(error));
-      })
-      .finally(() => {
-        if (active) setExamsLoading(false);
+      .catch(() => {
+        if (active) setExams([]);
       });
     return () => {
       active = false;
     };
-  }, [snapshot?.books]);
+  }, [snapshot?.books, active]);
 
   useEffect(() => {
     if (!openMenuPath) return;
@@ -364,31 +345,6 @@ export default function EbookWorkspace({
       planEditorMetadata?.currentChapterIndex === undefined &&
       (planEditorMetadata?.progress ?? 0) > 0);
 
-  const returnToExamLibrary = () => {
-    setSelectedExam(null);
-    setExamsLoading(true);
-    void listEpubExams()
-      .then((items) => {
-        setExams(items);
-        setExamsError('');
-      })
-      .catch((error) => {
-        setExamsError(error instanceof Error ? error.message : String(error));
-      })
-      .finally(() => setExamsLoading(false));
-  };
-
-  if (selectedExam) {
-    return (
-      <EpubExamWorkspace
-        provider={provider}
-        examId={selectedExam.id}
-        bookKey={selectedExam.bookKey}
-        onBack={returnToExamLibrary}
-      />
-    );
-  }
-
   const examCounts = new Map<string, number>();
   for (const exam of exams) {
     examCounts.set(exam.bookKey, (examCounts.get(exam.bookKey) ?? 0) + 1);
@@ -399,7 +355,7 @@ export default function EbookWorkspace({
 
   return (
     <main
-      className={`ebook-shelf${dashboardCollapsed ? ' is-dashboard-collapsed' : ''}${examLibraryOpen ? ' is-exam-library-open' : ''}${examLibraryCollapsed ? ' is-exam-collapsed' : ''}`}
+      className={`ebook-shelf${dashboardCollapsed ? ' is-dashboard-collapsed' : ''}`}
       aria-label="电子书书架"
     >
       <EbookReadingDashboard
@@ -497,6 +453,12 @@ export default function EbookWorkspace({
                   title="刷新书架"
                 >
                   刷新书架
+                </button>
+                <button type="button" onClick={() => setZlibDialogOpen(true)}>
+                  在线找书
+                </button>
+                <button type="button" onClick={() => onOpenExams('')}>
+                  试卷与复习
                 </button>
               </div>
             </div>
@@ -636,10 +598,7 @@ export default function EbookWorkspace({
                         <button
                           type="button"
                           className={`ebook-book-exam-count${examCounts.has(book.relativePath) ? ' has-exams' : ''}`}
-                          onClick={() => {
-                            setFilteredExamBookKey(book.relativePath);
-                            setExamLibraryOpen(true);
-                          }}
+                          onClick={() => onOpenExams(book.relativePath)}
                           aria-label={`查看《${title}》的 ${examCounts.get(book.relativePath) ?? 0} 份试卷`}
                         >
                           试卷 {examCounts.get(book.relativePath) ?? 0}
@@ -873,48 +832,6 @@ export default function EbookWorkspace({
           </div>
         )}
       </div>
-
-      <EpubExamLibraryPanel
-        books={books.map((book) => {
-          const meta = loadEpubBookMetadata(epubProgressKey(book));
-          return {
-            relativePath: book.relativePath,
-            title: meta?.title || book.title,
-            coverDataUrl: meta?.coverDataUrl || null,
-          };
-        })}
-        exams={exams}
-        filteredBookKey={filteredExamBookKey}
-        loading={examsLoading}
-        error={examsError}
-        open={examLibraryOpen}
-        collapsed={examLibraryCollapsed}
-        onToggleCollapsed={() =>
-          setExamLibraryCollapsed((collapsed) => {
-            const next = !collapsed;
-            try {
-              localStorage.setItem(
-                'seamind_ebook_exam_collapsed',
-                String(next),
-              );
-            } catch {
-              // ignore
-            }
-            return next;
-          })
-        }
-        onClose={() => setExamLibraryOpen(false)}
-        onFilterBook={setFilteredExamBookKey}
-        onOpenExam={(exam) => setSelectedExam(exam)}
-        hasRoot={Boolean(snapshot?.rootPath)}
-        onBookDownloaded={(doc, openImmediately) => {
-          onRefresh();
-          if (openImmediately) {
-            onOpenBook(doc);
-          }
-        }}
-        onOpenZlibDialog={() => setZlibDialogOpen(true)}
-      />
 
       {planTarget && (
         <div
