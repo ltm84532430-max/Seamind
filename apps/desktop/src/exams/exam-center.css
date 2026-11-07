@@ -165,6 +165,31 @@
   background: var(--exam-surface);
 }
 
+.exam-center-book-list {
+  display: grid;
+  gap: 1px;
+  padding: 0 0 12px;
+}
+.exam-center-filters .exam-center-book-row {
+  min-width: 0;
+  height: 42px;
+  padding-right: 10px;
+  color: var(--exam-ink);
+}
+.exam-center-book-row span {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.exam-center-book-row.is-focused:not(.is-active) {
+  background: var(--exam-subtle);
+}
+.exam-center-book-row small {
+  margin-left: 6px;
+  white-space: nowrap;
+}
+
 .exam-center-list {
   display: flex;
   flex-direction: column;
@@ -196,12 +221,40 @@
   color: var(--exam-muted);
   white-space: nowrap;
 }
+.exam-center-view-switch {
+  display: flex;
+  height: 30px;
+  flex: none;
+  border: 1px solid var(--exam-border);
+}
+.exam-center-view-switch button {
+  min-width: 52px;
+  padding: 0 10px;
+  border: 0;
+  border-right: 1px solid var(--exam-border);
+  color: var(--exam-muted);
+  background: var(--exam-surface);
+  cursor: pointer;
+}
+.exam-center-view-switch button:last-child {
+  border-right: 0;
+}
+.exam-center-view-switch button.is-active {
+  color: var(--exam-ink);
+  background: var(--exam-subtle);
+  font-weight: 700;
+}
+.exam-center-list-surface {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+}
 .exam-center-list-scroll {
   overflow: auto;
   min-height: 0;
+  min-width: 0;
   flex: 1;
-  scrollbar-width: thin;
-  scrollbar-color: var(--scrollbar-slider) transparent;
 }
 .exam-center-row {
   display: block;
@@ -393,6 +446,284 @@
   margin-top: 18px;
   border-top: 1px solid var(--exam-border);
   padding-top: 12px;
+}
+
+.exam-graph {
+  --graph-due: var(--accent);
+  --graph-soon: #bd8b46;
+  --graph-open: #768e9d;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  background: var(--exam-subtle);
+}
+.exam-graph-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  height: 48px;
+  flex: none;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--exam-border);
+  background: var(--exam-surface);
+}
+.exam-graph-kicker {
+  flex: none;
+  font: 10px var(--mono);
+  letter-spacing: 0.06em;
+  color: var(--exam-muted);
+}
+.exam-graph-meta strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.exam-graph-meta > span:last-child {
+  flex: none;
+  margin-left: auto;
+  color: var(--exam-muted);
+  white-space: nowrap;
+  font-size: 11px;
+}
+.exam-graph-canvas {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+}
+.exam-graph-canvas.is-dragging {
+  cursor: grabbing;
+}
+.exam-graph-world {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+}
+.exam-graph-lines {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%);
+  overflow: visible;
+  pointer-events: none;
+}
+.exam-graph-ring {
+  fill: none;
+  stroke: var(--exam-border);
+  stroke-width: 1;
+  stroke-dasharray: 3 6;
+}
+.exam-graph-link {
+  stroke: var(--exam-border);
+  stroke-width: 1;
+}
+.exam-graph-link.is-overdue,
+.exam-graph-link.is-today,
+.exam-graph-link.is-selected {
+  stroke: var(--graph-due);
+  stroke-width: 1.5;
+}
+.exam-graph-link.is-upcoming {
+  stroke: var(--graph-soon);
+}
+.exam-graph-book,
+.exam-graph-node {
+  position: absolute;
+  box-sizing: border-box;
+  transform: translate(-50%, -50%);
+  text-align: left;
+  cursor: pointer;
+  color: var(--exam-ink);
+  background: var(--exam-surface);
+}
+.exam-graph-book {
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 184px;
+  height: 126px;
+  gap: 5px;
+  padding: 10px;
+  border: 2px solid var(--exam-ink);
+  text-align: center;
+}
+.exam-graph-book:disabled {
+  cursor: default;
+  opacity: 1;
+}
+.exam-graph-cover {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 46px;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid var(--exam-border);
+  background: var(--exam-subtle);
+  color: var(--exam-ink);
+  font-size: 18px;
+  font-weight: 700;
+}
+.exam-graph-cover img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.exam-graph-book-title {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 700;
+}
+.exam-graph-book small {
+  color: var(--exam-muted);
+  font-size: 10px;
+}
+.exam-graph-node {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  width: 160px;
+  height: 68px;
+  gap: 5px;
+  padding: 8px 10px;
+  border: 1px solid var(--exam-border);
+  border-left: 3px solid var(--graph-open);
+}
+.exam-graph-node.is-overdue,
+.exam-graph-node.is-today {
+  border-left-color: var(--graph-due);
+}
+.exam-graph-node.is-upcoming {
+  border-left-color: var(--graph-soon);
+}
+.exam-graph-node.is-selected {
+  outline: 2px solid var(--exam-ink);
+  outline-offset: 2px;
+}
+.exam-graph-node-index {
+  color: var(--exam-muted);
+  font: 10px var(--mono);
+}
+.exam-graph-node strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 700;
+}
+.exam-graph-node-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  color: var(--exam-muted);
+  font-size: 10px;
+}
+.exam-graph-node-foot span:last-child {
+  white-space: nowrap;
+}
+.exam-graph-node.is-overdue .exam-graph-node-foot span:last-child,
+.exam-graph-node.is-today .exam-graph-node-foot span:last-child {
+  color: var(--graph-due);
+  font-weight: 700;
+}
+.exam-graph-empty {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 84px);
+  transform: translateX(-50%);
+  color: var(--exam-muted);
+  white-space: nowrap;
+}
+.exam-graph-controls {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  position: absolute;
+  right: 12px;
+  top: 60px;
+  height: 30px;
+  border: 1px solid var(--exam-border);
+  background: var(--exam-surface);
+  z-index: 2;
+}
+.exam-graph-controls button {
+  height: 28px;
+  min-width: 28px;
+  padding: 0 9px;
+  border: 0;
+  border-right: 1px solid var(--exam-border);
+  color: var(--exam-ink);
+  background: var(--exam-surface);
+  cursor: pointer;
+}
+.exam-graph-controls button:last-child {
+  border-right: 0;
+}
+.exam-graph-controls > span {
+  min-width: 42px;
+  text-align: center;
+  color: var(--exam-muted);
+  font: 10px var(--mono);
+}
+.exam-graph-legend {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 36px;
+  flex: none;
+  padding: 0 14px;
+  border-top: 1px solid var(--exam-border);
+  color: var(--exam-muted);
+  background: var(--exam-surface);
+  font-size: 10px;
+}
+.exam-graph-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.exam-graph-legend span:last-child {
+  margin-left: auto;
+}
+.exam-graph-legend i {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  background: var(--graph-open);
+}
+.exam-graph-legend i.is-overdue {
+  background: var(--graph-due);
+}
+.exam-graph-legend i.is-upcoming {
+  background: var(--graph-soon);
+}
+
+@media (max-width: 1250px) {
+  .exam-graph-legend span:last-child {
+    display: none;
+  }
+  .exam-graph-kicker {
+    display: none;
+  }
 }
 
 .app-shell[data-theme='dark'] .exam-center,

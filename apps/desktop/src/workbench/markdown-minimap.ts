@@ -332,3 +332,103 @@ export function createMarkdownPreviewMinimap(
     host,
   );
 }
+
+/** 把普通滚动容器的实际文字位置映射到知识库同款缩略导航。 */
+export function createElementScrollMinimap(
+  scrollElement: HTMLElement,
+  host: HTMLElement,
+): MarkdownMinimapController {
+  const pixelsPerLine = 8;
+  let lines: string[] = [''];
+  const model: MarkdownMinimapModel = {
+    getLineCount: () => lines.length,
+    getLineText: (lineNumber) => lines[lineNumber - 1] ?? '',
+    getActiveLine: () => {
+      const range = Math.max(
+        0,
+        scrollElement.scrollHeight - scrollElement.clientHeight,
+      );
+      return range
+        ? Math.round((scrollElement.scrollTop / range) * (lines.length - 1))
+        : 0;
+    },
+    scrollElement,
+    scrollToLine: (index) => {
+      const range = Math.max(
+        0,
+        scrollElement.scrollHeight - scrollElement.clientHeight,
+      );
+      scrollElement.scrollTo({
+        top: (index / Math.max(1, lines.length - 1)) * range,
+      });
+    },
+  };
+  const minimap = new MarkdownMinimapView(model, host);
+  minimap.update();
+  let refreshFrame = 0;
+
+  const refresh = () => {
+    const next = Array<string>(
+      Math.max(1, Math.ceil(scrollElement.scrollHeight / pixelsPerLine)),
+    ).fill('');
+    const container = scrollElement.getBoundingClientRect();
+    const walker = document.createTreeWalker(
+      scrollElement,
+      NodeFilter.SHOW_TEXT,
+    );
+    let node: Node | null;
+    let measured = 0;
+    while ((node = walker.nextNode()) && measured < 2500) {
+      const value = node.textContent?.trim();
+      const parent = node.parentElement;
+      if (!value || !parent || !parent.getClientRects().length) continue;
+      measured += 1;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const marker = parent.closest('h1, h2, h3')
+        ? '# '
+        : parent.closest('pre, code')
+          ? '``` '
+          : '';
+      for (const rect of range.getClientRects()) {
+        if (!rect.width || !rect.height) continue;
+        const y = rect.top - container.top + scrollElement.scrollTop;
+        const index = Math.max(
+          0,
+          Math.min(next.length - 1, Math.floor(y / pixelsPerLine)),
+        );
+        next[index] = `${next[index]} ${marker}${value.slice(0, 90)}`.trim();
+      }
+    }
+    lines = next;
+    minimap.update();
+  };
+  const scheduleRefresh = () => {
+    if (refreshFrame) return;
+    refreshFrame = window.requestAnimationFrame(() => {
+      refreshFrame = 0;
+      refresh();
+    });
+  };
+  const mutationObserver = new MutationObserver(scheduleRefresh);
+  mutationObserver.observe(scrollElement, {
+    childList: true,
+    characterData: true,
+    subtree: true,
+  });
+  const resizeObserver = new ResizeObserver(scheduleRefresh);
+  resizeObserver.observe(scrollElement);
+  scrollElement.addEventListener('input', scheduleRefresh);
+  scheduleRefresh();
+
+  return {
+    update: scheduleRefresh,
+    destroy: () => {
+      mutationObserver.disconnect();
+      resizeObserver.disconnect();
+      scrollElement.removeEventListener('input', scheduleRefresh);
+      if (refreshFrame) window.cancelAnimationFrame(refreshFrame);
+      minimap.destroy();
+    },
+  };
+}

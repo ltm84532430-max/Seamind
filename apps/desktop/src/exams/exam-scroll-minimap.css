@@ -1,0 +1,171 @@
+.exam-scroll-minimap-host {
+  display: flex;
+  width: 58px;
+  min-width: 58px;
+  min-height: 0;
+  flex: 0 0 58px;
+  overflow: hidden;
+  border-left: 1px solid #dce2e5;
+}
+
+.exam-scroll-minimap-host .markdown-minimap {
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  background: #f8f9fa;
+}
+
+.exam-scroll-minimap-host .markdown-minimap-canvas {
+  opacity: 0.72;
+}
+
+.app-shell[data-theme='dark'] .exam-scroll-minimap-host,
+.app-shell[data-theme='navy'] .exam-scroll-minimap-host,
+.app-shell[data-theme='purple'] .exam-scroll-minimap-host {
+  border-left-color: #34424b;
+}
+
+.app-shell[data-theme='dark'] .exam-scroll-minimap-host .markdown-minimap,
+.app-shell[data-theme='navy'] .exam-scroll-minimap-host .markdown-minimap,
+.app-shell[data-theme='purple'] .exam-scroll-minimap-host .markdown-minimap {
+  background: #1b252d;
+}
+
+/* 缩略导航承担主滚动定位；其余窄栏仅在悬停时显出细滑块。 */
+.exam-center-list-scroll::-webkit-scrollbar,
+.epub-exam-leaf::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+:is(
+  .exam-center-filters,
+  .exam-center-detail,
+  .epub-exam-sidebar-list,
+  .epub-exam-stage,
+  .epub-exam-analytics,
+  .epub-exam-answer-editor,
+  .epub-exam-code-editor
+) {
+  --scrollbar-thumb: transparent;
+  transition: --scrollbar-thumb 800ms linear;
+}
+
+:is(
+    .exam-center-filters,
+    .exam-center-detail,
+    .epub-exam-sidebar-list,
+    .epub-exam-stage,
+    .epub-exam-analytics,
+    .epub-exam-answer-editor,
+    .epub-exam-code-editor
+  ):hover {
+  --scrollbar-thumb: var(--scrollbar-slider);
+  transition-duration: 100ms;
+}
+
+:is(
+    .exam-center-filters,
+    .exam-center-detail,
+    .epub-exam-sidebar-list,
+    .epub-exam-stage,
+    .epub-exam-analytics,
+    .epub-exam-answer-editor,
+    .epub-exam-code-editor
+  )::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+  background: transparent;
+}
+
+:is(
+    .exam-center-filters,
+    .exam-center-detail,
+    .epub-exam-sidebar-list,
+    .epub-exam-stage,
+    .epub-exam-analytics,
+    .epub-exam-answer-editor,
+    .epub-exam-code-editor
+  )::-webkit-scrollbar-thumb {
+  min-height: 20px;
+  background: var(--scrollbar-thumb);
+}
+
+:is(
+    .exam-center-filters,
+    .exam-center-detail,
+    .epub-exam-sidebar-list,
+    .epub-exam-stage,
+    .epub-exam-analytics,
+    .epub-exam-answer-editor,
+    .epub-exam-code-editor
+  )::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-slider-hover);
+}
+
+:is(
+    .exam-center-filters,
+    .exam-center-detail,
+    .epub-exam-sidebar-list,
+    .epub-exam-stage,
+    .epub-exam-analytics,
+    .epub-exam-answer-editor,
+    .epub-exam-code-editor
+  )::-webkit-scrollbar-track,
+:is(
+    .exam-center-filters,
+    .exam-center-detail,
+    .epub-exam-sidebar-list,
+    .epub-exam-stage,
+    .epub-exam-analytics,
+    .epub-exam-answer-editor,
+    .epub-exam-code-editor
+  )::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+:is(
+    .exam-center-filters,
+    .exam-center-detail,
+    .epub-exam-sidebar-list,
+    .epub-exam-stage,
+    .epub-exam-analytics,
+    .epub-exam-answer-editor,
+    .epub-exam-code-editor
+  )::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  .exam-center-list-scroll,
+  .epub-exam-leaf {
+    scrollbar-width: none;
+  }
+
+  :is(
+    .exam-center-filters,
+    .exam-center-detail,
+    .epub-exam-sidebar-list,
+    .epub-exam-stage,
+    .epub-exam-analytics,
+    .epub-exam-answer-editor,
+    .epub-exam-code-editor
+  ) {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  :is(
+      .exam-center-filters,
+      .exam-center-detail,
+      .epub-exam-sidebar-list,
+      .epub-exam-stage,
+      .epub-exam-analytics,
+      .epub-exam-answer-editor,
+      .epub-exam-code-editor
+    ):hover {
+    scrollbar-color: var(--scrollbar-slider) transparent;
+  }
+}

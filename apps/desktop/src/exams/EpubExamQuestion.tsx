@@ -1,9 +1,11 @@
+import { useRef } from 'react';
 import type {
   EpubExamAnswer,
   EpubExamGrade,
   EpubExamQuestion,
   EpubExamSelfReview,
 } from './epub-exams';
+import { ExamScrollMinimap } from './ExamScrollMinimap';
 
 export interface ExamCodeResult {
   evaluation: {
@@ -53,6 +55,7 @@ function typeLabel(type: EpubExamQuestion['type']) {
 }
 
 export default function EpubExamQuestion(props: Props) {
+  const leafRef = useRef<HTMLElement>(null);
   const { question, answer, submitted, busy, grade } = props;
   const choices =
     question.type === 'trueFalse'
@@ -64,8 +67,12 @@ export default function EpubExamQuestion(props: Props) {
     'engineering',
     'cProgramming',
   ].includes(question.type);
-  return (
-    <article className="epub-exam-leaf" id={`exam-question-${question.id}`}>
+  const paper = (
+    <article
+      ref={leafRef}
+      className="epub-exam-leaf"
+      id={`exam-question-${question.id}`}
+    >
       {props.showPrompt && (
         <>
           <header className="epub-exam-leaf-header">
@@ -298,5 +305,11 @@ export default function EpubExamQuestion(props: Props) {
         </div>
       )}
     </article>
+  );
+  return (
+    <div className="epub-exam-leaf-shell">
+      {paper}
+      <ExamScrollMinimap scrollRef={leafRef} label="试卷作答缩略导航" />
+    </div>
   );
 }

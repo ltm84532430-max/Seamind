@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { EpubBookDocument } from '../library/library';
+import { findStoredCoverByBookKey } from '../ebook/ebook-storage';
 import type { EpubExamSummary } from './epub-exams';
 import { listEpubExams } from './epub-exams';
 import { EpubExamWorkspace } from './EpubExamWorkspace';
+import { ExamGraphView } from './ExamGraphView';
+import { ExamScrollMinimap } from './ExamScrollMinimap';
 import {
   reviewCurvePoints,
   reviewUrgencyRank,
@@ -12,6 +15,7 @@ import type { ExamReviewSchedule } from './review-schedule';
 import './exam-center.css';
 
 type ViewFilter = 'all' | 'due' | 'upcoming' | 'inProgress';
+type ViewMode = 'graph' | 'list';
 
 interface Props {
   active: boolean;
@@ -140,6 +144,8 @@ export default function ExamCenterWorkspace({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [filter, setFilter] = useState<ViewFilter>('all');
+  const [viewMode, setViewMode] = useState<ViewMode>('graph');
+  const listScrollRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [openedExam, setOpenedExam] = useState<EpubExamSummary | null>(null);
@@ -217,8 +223,44 @@ export default function ExamCenterWorkspace({
           right.exam.createdAt - left.exam.createdAt,
       );
   }, [entries, bookFilter, filter, query]);
+  const bookGroups = useMemo(() => {
+    const groups = new Map<
+      string,
+      { key: string; title: string; count: number; due: number }
+    >();
+    for (const { exam, schedule } of entries) {
+      const group = groups.get(exam.bookKey) ?? {
+        key: exam.bookKey,
+        title: exam.bookTitle,
+        count: 0,
+        due: 0,
+      };
+      group.count += 1;
+      if (schedule.urgency === 'overdue' || schedule.urgency === 'today')
+        group.due += 1;
+      groups.set(exam.bookKey, group);
+    }
+    return [...groups.values()].sort(
+      (left, right) =>
+        right.due - left.due || left.title.localeCompare(right.title, 'zh-CN'),
+    );
+  }, [entries]);
   const selected =
     visible.find(({ exam }) => exam.id === selectedId) ?? visible[0] ?? null;
+  const graphBookKey =
+    bookFilter || selected?.exam.bookKey || bookGroups[0]?.key || '';
+  const graphBook = books.find((book) => book.relativePath === graphBookKey);
+  const graphBookTitle =
+    bookGroups.find((group) => group.key === graphBookKey)?.title ||
+    graphBook?.title ||
+    '未选择书籍';
+  const graphItems = visible.filter(
+    ({ exam }) => exam.bookKey === graphBookKey,
+  );
+  const graphCover = useMemo(
+    () => findStoredCoverByBookKey(graphBookKey),
+    [graphBookKey],
+  );
   const selectedBook =
     selected &&
     books.find((book) => book.relativePath === selected.exam.bookKey);
@@ -321,22 +363,32 @@ export default function ExamCenterWorkspace({
             </button>
           ))}
           <h2>书籍</h2>
-          <select
-            aria-label="按电子书筛选试卷"
-            value={bookFilter}
-            onChange={(event) => onBookFilterChange(event.target.value)}
-          >
-            <option value="">全部书籍</option>
-            {[
-              ...new Map(
-                exams.map((exam) => [exam.bookKey, exam.bookTitle]),
-              ).entries(),
-            ].map(([key, title]) => (
-              <option key={key} value={key}>
-                {title}
-              </option>
+          <div className="exam-center-book-list" aria-label="按书籍筛选试卷">
+            <button
+              type="button"
+              className={`exam-center-book-row${!bookFilter ? ' is-active' : ''}`}
+              aria-pressed={!bookFilter}
+              onClick={() => onBookFilterChange('')}
+            >
+              <span>全部书籍</span>
+              <small>{exams.length}</small>
+            </button>
+            {bookGroups.map((group) => (
+              <button
+                key={group.key}
+                type="button"
+                className={`exam-center-book-row${graphBookKey === group.key ? ' is-focused' : ''}${bookFilter === group.key ? ' is-active' : ''}`}
+                aria-pressed={bookFilter === group.key}
+                title={group.title}
+                onClick={() => onBookFilterChange(group.key)}
+              >
+                <span>{group.title}</span>
+                <small>
+                  {group.due ? `${group.due} / ${group.count}` : group.count}
+                </small>
+              </button>
             ))}
-          </select>
+          </div>
         </aside>
         <section className="exam-center-list" aria-label="试卷列表">
           <div className="exam-center-list-toolbar">
@@ -348,6 +400,24 @@ export default function ExamCenterWorkspace({
                 placeholder="搜索书名或章节"
               />
             </label>
+            <div className="exam-center-view-switch" aria-label="试卷视图">
+              <button
+                type="button"
+                className={viewMode === 'graph' ? 'is-active' : ''}
+                aria-pressed={viewMode === 'graph'}
+                onClick={() => setViewMode('graph')}
+              >
+                关系图
+              </button>
+              <button
+                type="button"
+                className={viewMode === 'list' ? 'is-active' : ''}
+                aria-pressed={viewMode === 'list'}
+                onClick={() => setViewMode('list')}
+              >
+                列表
+              </button>
+            </div>
             <span>{visible.length} 份</span>
           </div>
           {error && (
@@ -360,6 +430,17 @@ export default function ExamCenterWorkspace({
           )}
           {loading && !exams.length ? (
             <p className="exam-center-empty">正在读取本地试卷…</p>
+          ) : viewMode === 'graph' && bookGroups.length ? (
+            <ExamGraphView
+              bookKey={graphBookKey}
+              bookTitle={graphBookTitle}
+              coverDataUrl={graphCover}
+              items={graphItems}
+              selectedId={selected?.exam.id ?? null}
+              onSelectExam={setSelectedId}
+              onOpenExam={setOpenedExam}
+              onOpenBook={graphBook ? () => onOpenBook(graphBook) : undefined}
+            />
           ) : !visible.length ? (
             <div className="exam-center-empty">
               <h2>{exams.length ? '没有符合条件的试卷' : '尚无试卷'}</h2>
@@ -371,33 +452,43 @@ export default function ExamCenterWorkspace({
               </button>
             </div>
           ) : (
-            <div className="exam-center-list-scroll">
-              {visible.map(({ exam, schedule }) => (
-                <button
-                  type="button"
-                  key={exam.id}
-                  className={`exam-center-row ${selected?.exam.id === exam.id ? 'is-selected' : ''}`}
-                  onClick={() => setSelectedId(exam.id)}
-                  aria-pressed={selected?.exam.id === exam.id}
-                >
-                  <span className="exam-center-row-heading">
-                    <strong>{exam.sourceSectionLabel || exam.bookTitle}</strong>
-                    <em
-                      className={`exam-center-urgency is-${schedule.urgency}`}
-                    >
-                      {urgencyLabel(schedule)}
-                    </em>
-                  </span>
-                  <span className="exam-center-row-book">{exam.bookTitle}</span>
-                  <span className="exam-center-row-meta">
-                    {exam.questionCount} 题 · {schedule.completedRounds} 次交卷
-                    ·{' '}
-                    {schedule.dueAt
-                      ? `建议 ${formatDay(schedule.dueAt)}`
-                      : '待首次交卷'}
-                  </span>
-                </button>
-              ))}
+            <div className="exam-center-list-surface">
+              <div ref={listScrollRef} className="exam-center-list-scroll">
+                {visible.map(({ exam, schedule }) => (
+                  <button
+                    type="button"
+                    key={exam.id}
+                    className={`exam-center-row ${selected?.exam.id === exam.id ? 'is-selected' : ''}`}
+                    onClick={() => setSelectedId(exam.id)}
+                    aria-pressed={selected?.exam.id === exam.id}
+                  >
+                    <span className="exam-center-row-heading">
+                      <strong>
+                        {exam.sourceSectionLabel || exam.bookTitle}
+                      </strong>
+                      <em
+                        className={`exam-center-urgency is-${schedule.urgency}`}
+                      >
+                        {urgencyLabel(schedule)}
+                      </em>
+                    </span>
+                    <span className="exam-center-row-book">
+                      {exam.bookTitle}
+                    </span>
+                    <span className="exam-center-row-meta">
+                      {exam.questionCount} 题 · {schedule.completedRounds}{' '}
+                      次交卷 ·{' '}
+                      {schedule.dueAt
+                        ? `建议 ${formatDay(schedule.dueAt)}`
+                        : '待首次交卷'}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <ExamScrollMinimap
+                scrollRef={listScrollRef}
+                label="试卷列表缩略导航"
+              />
             </div>
           )}
         </section>
