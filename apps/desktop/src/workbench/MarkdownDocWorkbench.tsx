@@ -1,22 +1,33 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
+  preparePastedSvg,
   updateMarkdownCodeFence,
   updateMarkdownCodeFenceAtRange,
-} from '../code-blocks';
-import type { CodeBlockHandlers } from '../code-blocks';
-import MarkdownEditor from '../MarkdownEditor';
-import type { MarkdownEditorHandle } from '../MarkdownEditor';
-import MarkdownPreview from '../MarkdownPreview';
+} from './code-blocks';
+import type { CodeBlockHandlers } from './code-blocks';
+import MarkdownEditor from './MarkdownEditor';
+import type { MarkdownEditorHandle } from './MarkdownEditor';
+import MarkdownPreview from './MarkdownPreview';
 import type { ActiveDocument } from './active-document';
 import { extractMarkdownHeadings } from './markdown-outline';
 import type { MarkdownHeading } from './markdown-outline';
 import { useDebouncedValue } from './use-debounced-value';
 import WorkbenchShell from './WorkbenchShell';
-import type { MapDocument } from '../library';
-import { createKnowledgeEditorExtensions } from '../knowledge-completions';
-import { enhanceKnowledgePreviewHtml } from '../knowledge-markdown';
-import { UNFILED_FOLDER } from '../knowledge-notes';
-import type { Theme } from '../app-storage';
+import type { MapDocument } from '../library/library';
+import { createKnowledgeEditorExtensions } from '../knowledge/knowledge-completions';
+import { enhanceKnowledgePreviewHtml } from '../knowledge/knowledge-markdown';
+import {
+  analyzeKnowledgePaste,
+  needsKnowledgePasteReview,
+  pasteTextWithMedia,
+} from '../knowledge/knowledge-paste';
+import type {
+  ImportedPasteVisual,
+  KnowledgePasteDraft,
+} from '../knowledge/knowledge-paste';
+import { importDocumentMedia } from '../knowledge/document-media';
+import { UNFILED_FOLDER } from '../knowledge/knowledge-notes';
+import type { Theme } from '../app/app-storage';
 
 export type DocViewMode = 'edit' | 'split' | 'read';
 
@@ -70,6 +81,13 @@ export interface MarkdownDocWorkbenchProps {
 const ignoreSelection = () => {};
 const headingSelector = 'h1, h2, h3, h4, h5, h6';
 
+interface PendingKnowledgePaste extends KnowledgePasteDraft {
+  session: number;
+  baseSource: string;
+  from: number;
+  to: number;
+}
+
 /**
  * Clean, distraction-free Markdown document workbench supporting single-pane Edit (default),
  * side-by-side Split, and focused Read modes, with ref-stabilized CodeMirror completions.
@@ -112,6 +130,115 @@ export default function MarkdownDocWorkbench({
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [addingTag, setAddingTag] = useState(false);
   const [tagDraft, setTagDraft] = useState('');
+  const [pendingPaste, setPendingPaste] =
+    useState<PendingKnowledgePaste | null>(null);
+  const [pasteBusy, setPasteBusy] = useState(false);
+  const [pasteError, setPasteError] = useState('');
+
+  const handleKnowledgePaste = useCallback(
+    (event: ClipboardEvent, editor: import('codemirror').EditorView) => {
+      const clipboard = event.clipboardData;
+      if (!clipboard) return false;
+      const analyzed = analyzeKnowledgePaste(clipboard);
+      const shouldPreview = needsKnowledgePasteReview(
+        analyzed,
+        !!clipboard.getData('text/plain'),
+      );
+      if (!shouldPreview) return false;
+      event.preventDefault();
+      setPasteError('');
+      setPendingPaste({
+        ...analyzed,
+        session: document.session,
+        baseSource: sourceRef.current,
+        from: editor.state.selection.main.from,
+        to: editor.state.selection.main.to,
+      });
+      return true;
+    },
+    [document.session],
+  );
+
+  const applyPendingPaste = useCallback(
+    (paste: PendingKnowledgePaste, text: string): boolean => {
+      if (
+        paste.session !== document.session ||
+        paste.baseSource !== sourceRef.current
+      ) {
+        setPasteError('文档已变化。请取消后重新粘贴，以免覆盖刚才的编辑。');
+        return false;
+      }
+      if (!editorRef.current) {
+        setPasteError('编辑器已关闭。请取消后重新进入编辑视图粘贴。');
+        return false;
+      }
+      try {
+        editorRef.current.replaceRange(paste.from, paste.to, text);
+      } catch {
+        setPasteError('粘贴位置已失效。请取消后重新粘贴。');
+        return false;
+      }
+      setPendingPaste(null);
+      setPasteError('');
+      return true;
+    },
+    [document.session],
+  );
+
+  const confirmKnowledgePaste = useCallback(async () => {
+    const paste = pendingPaste;
+    if (!paste || pasteBusy) return;
+    if (
+      paste.baseSource !== sourceRef.current ||
+      paste.session !== document.session
+    ) {
+      setPasteError('文档已变化。请取消后重新粘贴。');
+      return;
+    }
+    const selected = paste.media.filter((candidate) => candidate.selected);
+    if (
+      selected.some((candidate) => candidate.kind !== 'svg') &&
+      !document.relativePath
+    ) {
+      setPasteError('请先保存笔记，再导入图片。也可以仅粘贴文本。');
+      return;
+    }
+    setPasteBusy(true);
+    setPasteError('');
+    const imported: ImportedPasteVisual[] = [];
+    try {
+      for (const candidate of selected) {
+        try {
+          if (candidate.kind === 'svg') {
+            imported.push({
+              candidate,
+              svgSource: preparePastedSvg(String(candidate.value)),
+            });
+            continue;
+          }
+          const result = await importDocumentMedia(
+            document.relativePath,
+            candidate,
+          );
+          imported.push({ candidate, mediaId: result.mediaId });
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          throw new Error(`“${candidate.label}”导入失败：${detail}`);
+        }
+      }
+      applyPendingPaste(paste, pasteTextWithMedia(paste.text, imported));
+    } catch (error) {
+      setPasteError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPasteBusy(false);
+    }
+  }, [
+    pendingPaste,
+    pasteBusy,
+    document.relativePath,
+    document.session,
+    applyPendingPaste,
+  ]);
 
   const switchViewMode = (mode: DocViewMode) => {
     setViewMode(mode);
@@ -392,6 +519,7 @@ export default function MarkdownDocWorkbench({
                 onChange={onSourceChange}
                 onSelectionChange={ignoreSelection}
                 extraExtensions={knowledgeExtensions}
+                onPaste={handleKnowledgePaste}
                 hideMinimap
               />
             </div>
@@ -413,7 +541,8 @@ export default function MarkdownDocWorkbench({
               html={preview.html}
               source={preview.source}
               theme={theme}
-              hideMinimap
+              mediaDocumentPath={document.relativePath}
+              hideMinimap={viewMode !== 'read'}
               onCodeChange={handleCodeChange}
               onOpenWikilink={onOpenWikilink}
               onOpenYouTubeLink={
@@ -460,6 +589,156 @@ export default function MarkdownDocWorkbench({
           </nav>
         )}
       </div>
+      {pendingPaste && (
+        <div className="workbench-paste-overlay">
+          <section
+            className="workbench-paste-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="knowledge-paste-title"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape' && !pasteBusy) setPendingPaste(null);
+            }}
+          >
+            <div className="workbench-paste-heading">
+              <div>
+                <small>CLIPBOARD / 导入检查</small>
+                <h2 id="knowledge-paste-title">粘贴到知识库</h2>
+              </div>
+              <button
+                type="button"
+                disabled={pasteBusy}
+                onClick={() => setPendingPaste(null)}
+                aria-label="关闭粘贴检查"
+              >
+                ×
+              </button>
+            </div>
+            <p className="workbench-paste-summary">
+              文本 {pendingPaste.text.length.toLocaleString()} 字 · 链接{' '}
+              {pendingPaste.linkCount} 条 · 图片{' '}
+              {
+                pendingPaste.media.filter(
+                  (candidate) => candidate.kind !== 'svg',
+                ).length
+              }{' '}
+              张 · SVG{' '}
+              {
+                pendingPaste.media.filter(
+                  (candidate) => candidate.kind === 'svg',
+                ).length
+              }{' '}
+              个
+            </p>
+            {pendingPaste.possibleMissingDiagram && (
+              <p className="workbench-paste-warning">
+                文本提到了图示，但剪贴板没有附带图形本体；图片链接可尝试导入，缺失的图示需单独复制或截图。
+              </p>
+            )}
+            {pendingPaste.richHtml && (
+              <p className="workbench-paste-warning">
+                检测到网页富文本。本次保存为可编辑
+                Markdown；原网页的复杂排版、表格和代码样式可能无法完整保留。
+              </p>
+            )}
+            {pendingPaste.svgCount > 0 && (
+              <p className="workbench-paste-footnote">
+                SVG
+                图形将经安全检查后作为可编辑源码写入笔记，并在阅读视图中渲染。
+              </p>
+            )}
+            {pendingPaste.canvasCount > 0 && (
+              <p className="workbench-paste-warning">
+                检测到 {pendingPaste.canvasCount} 个
+                Canvas。网页剪贴板通常不包含其像素；如列表中没有对应图片，请单独粘贴截图。
+              </p>
+            )}
+            {pendingPaste.unsupportedCount > 0 && (
+              <p className="workbench-paste-warning">
+                另有 {pendingPaste.unsupportedCount} 个图片来源不支持或超过 10
+                MB，未列入导入。
+              </p>
+            )}
+            {pendingPaste.media.length > 0 && (
+              <div className="workbench-paste-media" aria-label="待导入图形">
+                {pendingPaste.media.map((candidate) => (
+                  <label
+                    key={candidate.key}
+                    className="workbench-paste-media-row"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={candidate.selected}
+                      disabled={pasteBusy}
+                      onChange={(event) =>
+                        setPendingPaste((current) =>
+                          current
+                            ? {
+                                ...current,
+                                media: current.media.map((item) =>
+                                  item.key === candidate.key
+                                    ? {
+                                        ...item,
+                                        selected: event.target.checked,
+                                      }
+                                    : item,
+                                ),
+                              }
+                            : null,
+                        )
+                      }
+                    />
+                    <span title={candidate.label}>{candidate.label}</span>
+                    <small>
+                      {candidate.kind === 'svg'
+                        ? '可编辑 SVG'
+                        : candidate.kind === 'remote'
+                          ? '网络图片'
+                          : '剪贴板图片'}
+                    </small>
+                  </label>
+                ))}
+              </div>
+            )}
+            <p className="workbench-paste-footnote">
+              文本中的图片链接和 SVG
+              源码会原位替换；剪贴板单独附带的图形会追加在末尾。普通链接保持为链接。
+            </p>
+            {pasteError && (
+              <p className="workbench-paste-error" role="alert">
+                {pasteError}
+              </p>
+            )}
+            <div className="workbench-paste-actions">
+              <button
+                type="button"
+                disabled={pasteBusy}
+                onClick={() => setPendingPaste(null)}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={pasteBusy}
+                onClick={() =>
+                  applyPendingPaste(pendingPaste, pendingPaste.text)
+                }
+              >
+                仅粘贴文本
+              </button>
+              <button
+                type="button"
+                className="is-primary"
+                disabled={pasteBusy}
+                autoFocus
+                onClick={() => void confirmKnowledgePaste()}
+              >
+                {pasteBusy ? '正在导入…' : '确认粘贴'}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </WorkbenchShell>
   );
 }

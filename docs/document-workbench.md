@@ -40,7 +40,7 @@ AI 栏目前只是折叠占位，展开后说明这类文件暂未接入 AI。
   - `DiagramCanvas.tsx`、`diagram-viewport.ts`：画布与平移缩放的计算。
   - `pele-render.ts`：用 Pele 渲染并过 SVG 安全清理，整理报错。
   - `markdown-outline.ts`、`templates.ts`、`workbench.css`。
-- 后端 `src-tauri/src/library.rs`：`create_text_document`、`open_text_document`、`save_text_document`（带 `title` 时改名）、`delete_text_document`、`create_plantuml_document`；`save_document` 接受 `kind`。索引表 `maps` 新增 `kind` 列，旧库启动时自动补上。
+- 后端 `src-tauri/src/library/library.rs`：`create_text_document`、`open_text_document`、`save_text_document`（带 `title` 时改名）、`delete_text_document`、`create_plantuml_document`；`save_document` 接受 `kind`。索引表 `maps` 新增 `kind` 列，旧库启动时自动补上。
 - 测试：`apps/desktop/test/` 下的 `active-document`、`markdown-outline`、`pele-render`、`diagram-viewport`，以及 `library.rs` 里的 Rust 单元测试。
 
 增加一种新文件类型的步骤：后端认出它并给出 `TextDocument` 一类的列表项，在 `workbench/` 里加一个窗格组件并在 `DocumentWorkbench.tsx` 里按类型分派，在 `LibraryPanel.tsx` 加一种列表行。

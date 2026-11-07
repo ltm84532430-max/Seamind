@@ -1,10 +1,10 @@
-import type { EpubBookDocument } from '../library';
+import type { EpubBookDocument } from '../library/library';
 import {
   epubBookIdentity,
   epubProgressKey,
   loadEpubReadingPlan,
-} from '../ebook-storage';
-import { loadLearningPaths } from '../ebook-learning-path';
+} from '../ebook/ebook-storage';
+import { loadLearningPaths } from '../ebook/ebook-learning-path';
 import type { LearningPathDetail } from '../player/types';
 import type { ImportPlan, TaskInput, TaskResource } from './types';
 

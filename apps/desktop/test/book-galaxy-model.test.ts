@@ -3,8 +3,8 @@ import {
   buildBookGalaxyGraph,
   extractChapterIndex,
   type TocLikeItem,
-} from '../src/book-galaxy-model';
-import type { LibrarySnapshot, MapDocument } from '../src/library';
+} from '../src/ebook/book-galaxy-model';
+import type { LibrarySnapshot, MapDocument } from '../src/library/library';
 
 describe('Book Galaxy Model', () => {
   it('extracts chapter index patterns accurately', () => {

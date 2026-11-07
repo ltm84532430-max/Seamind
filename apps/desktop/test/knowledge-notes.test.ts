@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { groupKnowledgeNotes, UNFILED_FOLDER } from '../src/knowledge-notes';
+import {
+  groupKnowledgeNotes,
+  UNFILED_FOLDER,
+} from '../src/knowledge/knowledge-notes';
 
 const note = (
   overrides: Partial<Parameters<typeof groupKnowledgeNotes>[0][number]>,

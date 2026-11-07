@@ -5,14 +5,14 @@ import {
   toggleBilingualDisplay,
   removeTranslationsFromDoc,
   BILINGUAL_STYLE_ID,
-} from '../src/epub-translation-dom';
+} from '../src/ebook/epub-translation-dom';
 import {
   getChapterTranslation,
   saveChapterTranslation,
   deleteChapterTranslation,
   listBookTranslations,
-} from '../src/epub-translation-store';
-import { translateChapterAll } from '../src/epub-translator';
+} from '../src/ebook/epub-translation-store';
+import { translateChapterAll } from '../src/ebook/epub-translator';
 
 // Mock Tauri invoke
 const mockInvoke = vi.fn();

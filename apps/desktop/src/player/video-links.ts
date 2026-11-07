@@ -1,4 +1,4 @@
-import { parseYouTubeEmbedInput } from '../youtube';
+import { parseYouTubeEmbedInput } from './youtube';
 
 /** What a pasted link, handle or id points at. */
 export type YouTubeTarget =

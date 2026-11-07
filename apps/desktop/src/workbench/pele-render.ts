@@ -1,4 +1,4 @@
-import { sanitizeDiagramSvg } from '../code-blocks';
+import { sanitizeDiagramSvg } from './code-blocks';
 
 /** The same cap a `pele` fence in a Markdown preview has. */
 export const MAX_PELE_SOURCE_CHARS = 50_000;

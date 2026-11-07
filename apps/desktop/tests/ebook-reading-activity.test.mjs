@@ -4,7 +4,7 @@ import {
   clearReadingActivityForDate,
   clearAllReadingActivity,
   loadEpubReadingActivity,
-} from '../src/ebook-storage.ts';
+} from '../src/ebook/ebook-storage.ts';
 
 const entries = new Map();
 globalThis.localStorage = {

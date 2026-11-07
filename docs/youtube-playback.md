@@ -12,7 +12,7 @@
 
 流程：YouTube.js 以 visionOS、iOS、Android VR、Android 客户端依次请求播放信息，取第一个可用的结果，生成 DASH 清单交给 Shaka。直播用 YouTube 提供的 HLS 清单。
 
-- **客户端表**：这几个客户端在 2026 年 10 月的 yt-dlp 客户端表里不要求 PO token（visionOS 和 iOS 也不需要 JavaScript 播放器）。YouTube 每隔几个月就会收紧或下线一个客户端，列表在 `src/youtube-native.ts` 的 `defaultNativeClients`，需要时对照 yt-dlp 的 `INNERTUBE_CLIENTS`（`yt_dlp/extractor/youtube/_base.py`）调整。
+- **客户端表**：这几个客户端在 2026 年 10 月的 yt-dlp 客户端表里不要求 PO token（visionOS 和 iOS 也不需要 JavaScript 播放器）。YouTube 每隔几个月就会收紧或下线一个客户端，列表在 `src/player/youtube-native.ts` 的 `defaultNativeClients`，需要时对照 yt-dlp 的 `INNERTUBE_CLIENTS`（`yt_dlp/extractor/youtube/_base.py`）调整。
 - **签名与 n 参数**：只有格式带 `n` 参数或签名密文时才下载播放器脚本（约 2.6 MB），处理结果缓存在 `%LOCALAPPDATA%\Seamind\cache\youtube-player`，同一个播放器版本只付一次代价。脚本是 Google 的代码，在 Rust 侧的 QuickJS 沙箱里执行：没有文件和网络，内存上限 128 MB，最多运行 8 秒。**目前链里的客户端都用不到这条路径**：visionOS、iOS、Android VR 返回的是不带 `n` 参数的直链，Android 客户端返回的格式连地址都没有（SABR-only 实验，会被判为没有可用流）。它是为 YouTube 以后改策略，或者换用 TV、WEB 客户端准备的；`cargo test` 用真实播放器脚本验证过引擎，应用内也验证过“下载 → 解析 → 缓存 → 执行”的整条链路。
 - **不支持**：只提供 SABR 流的视频、需要 PO token 的客户端、需要登录的视频（年龄限制、会员专享、私享）和 DRM。遇到这些情况窗口会说明原因，并保留其他播放方式。
 - 播放地址有有效期（通常 6 小时），过期时播放器会自动重新解析一次并从当前位置继续。

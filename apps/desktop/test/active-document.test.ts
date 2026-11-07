@@ -12,7 +12,7 @@ import type {
   MapDocument,
   SaveDocumentInput,
   TextDocument,
-} from '../src/library';
+} from '../src/library/library';
 import { NEW_FILE_TEMPLATES } from '../src/workbench/templates';
 
 type Handler = (args: Record<string, unknown>) => unknown;
@@ -189,6 +189,24 @@ describe('opening a document', () => {
 });
 
 describe('saving', () => {
+  it('keeps the video source when editing an exported transcript', async () => {
+    const video = mapDocument({
+      origin: 'player',
+      sourceRef: { videoId: 'abc', channelName: 'Bloomberg Originals' },
+    });
+    const { controller, commandsCalled } = harness({
+      open_document: () => openedDoc(video),
+      save_document: () => video,
+    });
+    await controller.openMarkdown(video);
+    controller.edit('# 修订字幕');
+    expect(await controller.save({ manual: true })).toBe(true);
+    expect(commandsCalled('save_document')[0].args.input).toMatchObject({
+      origin: 'player',
+      sourceRef: { videoId: 'abc', channelName: 'Bloomberg Originals' },
+    });
+  });
+
   it('writes a Markdown document with its metadata and clears the dirty mark', async () => {
     const saved = mapDocument({ updatedAt: 9 });
     const { controller, commandsCalled, snapshot, log } = harness({

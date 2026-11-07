@@ -2320,6 +2320,7 @@ name = "markmap-desktop"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64 0.22.1",
  "bzip2 0.5.2",
  "chrono",
  "keyring",

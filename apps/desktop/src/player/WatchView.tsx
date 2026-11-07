@@ -1,11 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AgentProviderSettings } from '../agent/runtime';
-import YouTubePlayerPanel from '../YouTubePlayerPanel';
-import type {
-  PlayerProgress,
-  YouTubePlayerHandle,
-} from '../YouTubePlayerPanel';
-import type { YouTubePlaybackState } from '../youtube-player';
+import YouTubePlayerPanel from './YouTubePlayerPanel';
+import type { PlayerProgress, YouTubePlayerHandle } from './YouTubePlayerPanel';
+import type { YouTubePlaybackState } from './youtube-player';
 import { formatAgo, formatDuration } from './format';
 import { usePlayerHost } from './host';
 import { BackIcon, CheckIcon, ClockIcon, StarIcon } from './icons';
@@ -28,7 +25,7 @@ import {
   type TranscriptCue,
   type TranscriptKnowledgeExportPayload,
   type TranscriptKnowledgeExportResult,
-} from './transcript';
+} from './transcript/index';
 
 /** The video being played, the list it came from and where it starts. */
 export interface Watching {

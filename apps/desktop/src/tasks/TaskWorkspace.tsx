@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import type { LibrarySnapshot } from '../library';
+import type { LibrarySnapshot } from '../library/library';
 import {
   epubBookIdentity,
   epubProgressKey,
@@ -8,7 +8,7 @@ import {
   loadEpubBookMetadata,
   loadEpubReadingActivity,
   loadEpubReadingPlan,
-} from '../ebook-storage';
+} from '../ebook/ebook-storage';
 import { playerApi } from '../player/player-api';
 import type { WatchState } from '../player/types';
 import { parseYouTubeTarget } from '../player/video-links';

@@ -64,11 +64,17 @@ describe('stylesheet structure', () => {
     ...readdirSync(new URL('player/', sourceDirectory))
       .filter((name) => name.endsWith('.css'))
       .map((name) => `player/${name}`),
+    ...readdirSync(new URL('ebook/', sourceDirectory))
+      .filter((name) => name.endsWith('.css'))
+      .map((name) => `ebook/${name}`),
+    ...readdirSync(new URL('knowledge/', sourceDirectory))
+      .filter((name) => name.endsWith('.css'))
+      .map((name) => `knowledge/${name}`),
   ];
 
   it('finds the stylesheets', () => {
     expect(stylesheets).toContain('styles.css');
-    expect(stylesheets).toContain('ebook-workspace.css');
+    expect(stylesheets).toContain('ebook/ebook-workspace.css');
     expect(stylesheets).toContain('workbench/workbench.css');
     expect(stylesheets).toContain('player/player-workspace.css');
   });

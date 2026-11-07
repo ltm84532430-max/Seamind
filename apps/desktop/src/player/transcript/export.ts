@@ -79,6 +79,8 @@ export interface TranscriptStageChunk {
 
 export interface TranscriptKnowledgeExportPayload {
   title: string;
+  videoId: string;
+  channelName: string;
   category: string;
   tags: string[];
   markdown: string;
@@ -1317,6 +1319,8 @@ export function buildTranscriptKnowledgeExport(
 
   return {
     title,
+    videoId: cleanVideoId,
+    channelName,
     category: DEFAULT_TRANSCRIPT_KNOWLEDGE_CATEGORY,
     tags,
     markdown,

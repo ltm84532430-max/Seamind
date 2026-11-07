@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { buildYouTubeEmbedUrl } from '../src/youtube';
+import { buildYouTubeEmbedUrl } from '../src/player/youtube';
 import {
   canOfferAlternativePlayback,
   youtubePlayerErrorMessage,
-} from '../src/youtube-player';
+} from '../src/player/youtube-player';
 
 describe('YouTube playback integration', () => {
   it('keeps the linked timestamp and enables IFrame API events', () => {

@@ -11,10 +11,10 @@ import {
   parseMarkdownFrontmatter,
   resolveBookChapterKnowledgeTarget,
   resolveBookKnowledgeTarget,
-} from '../src/book-knowledge-target';
+} from '../src/ebook/book-knowledge-target';
 import { executeAgentTool } from '../src/agent/capabilities';
 import type { AgentCapabilities } from '../src/agent/capabilities';
-import type { LibrarySnapshot, MapDocument } from '../src/library';
+import type { LibrarySnapshot, MapDocument } from '../src/library/library';
 
 function capabilities(
   overrides: Partial<AgentCapabilities>,

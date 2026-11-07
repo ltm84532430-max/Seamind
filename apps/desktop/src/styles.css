@@ -1292,6 +1292,10 @@ button {
 .markdown-rendered-preview .seamind-viz-output {
   height: 360px;
 }
+.markdown-rendered-preview .seamind-svg-panel .seamind-viz-output {
+  height: auto;
+  min-height: 120px;
+}
 .markdown-rendered-preview .seamind-pele-panel .seamind-viz-output {
   height: auto;
   min-height: 220px;
@@ -8236,6 +8240,15 @@ button {
   width: 100%;
   max-height: 520px;
   overflow: visible;
+}
+.seamind-svg-panel .seamind-viz-output {
+  height: auto;
+  min-height: 120px;
+  overflow: auto;
+}
+.seamind-svg-panel .seamind-diagram-svg {
+  height: auto;
+  margin: 0 auto;
 }
 .seamind-pele-panel {
   --pele-bg: #fff;

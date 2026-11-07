@@ -19,7 +19,7 @@ import {
   startSecondsFor,
   withWatchState,
 } from '../src/player/watch-state';
-import { buildYouTubeEmbedUrl } from '../src/youtube';
+import { buildYouTubeEmbedUrl } from '../src/player/youtube';
 import type { VideoItem } from '../src/player/types';
 
 const NOW = 1_800_000_000;

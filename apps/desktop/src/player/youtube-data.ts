@@ -1,6 +1,6 @@
-import { loadYouTubeLibrary } from '../youtube-native';
-import type { Library } from '../youtube-native';
-import { proxiedFetch } from '../youtube-proxy';
+import { loadYouTubeLibrary } from './youtube-native';
+import type { Library } from './youtube-native';
+import { proxiedFetch } from './youtube-proxy';
 import { errorText } from './player-api';
 import { withRetries } from './retry-fetch';
 import type { ChannelInput, VideoInput } from './types';

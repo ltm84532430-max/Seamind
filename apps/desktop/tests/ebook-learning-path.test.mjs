@@ -4,7 +4,7 @@ import {
   learningPathBookProgress,
   loadLearningPaths,
   saveLearningPaths,
-} from '../src/ebook-learning-path.ts';
+} from '../src/ebook/ebook-learning-path.ts';
 
 const entries = new Map();
 globalThis.localStorage = {

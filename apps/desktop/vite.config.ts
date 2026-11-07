@@ -97,7 +97,7 @@ export default defineConfig({
       {
         find: '@pdfjs/pdf.min.mjs',
         replacement: fileURLToPath(
-          new URL('./src/epub-only-reader-pdf.ts', import.meta.url),
+          new URL('./src/ebook/epub-only-reader-pdf.ts', import.meta.url),
         ),
       },
       {

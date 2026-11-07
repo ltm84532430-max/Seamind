@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { plantUmlDiagramNames, splitSvgDocuments } from '../src/plantuml-svg';
+import {
+  plantUmlDiagramNames,
+  splitSvgDocuments,
+} from '../src/mindmap/plantuml-svg';
 
 const svg = (label: string) =>
   `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><text>${label}</text></svg>`;

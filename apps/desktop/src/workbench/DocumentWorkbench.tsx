@@ -1,9 +1,9 @@
 import type { ActiveDocument } from './active-document';
 import MarkdownDocWorkbench from './MarkdownDocWorkbench';
 import MermaidWorkbench from './MermaidWorkbench';
-import type { MapDocument } from '../library';
-import type { CodeBlockHandlers } from '../code-blocks';
-import type { Theme } from '../app-storage';
+import type { MapDocument } from '../library/library';
+import type { CodeBlockHandlers } from './code-blocks';
+import type { Theme } from '../app/app-storage';
 
 export interface DocumentWorkbenchProps {
   document: ActiveDocument;

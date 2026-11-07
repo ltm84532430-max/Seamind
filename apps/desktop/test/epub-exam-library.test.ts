@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { findStoredCoverByBookKey } from '../src/ebook-storage';
+import { findStoredCoverByBookKey } from '../src/ebook/ebook-storage';
 
 class MockStorage implements Storage {
   private store = new Map<string, string>();

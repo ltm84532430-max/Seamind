@@ -16,7 +16,7 @@ await build({
     emptyOutDir: false,
     minify: true,
     lib: {
-      entry: path.join(desktopDir, 'src/youtube-botguard-runtime.ts'),
+      entry: path.join(desktopDir, 'src/player/youtube-botguard-runtime.ts'),
       name: 'SeamindYouTubeBotGuard',
       formats: ['iife'],
       fileName: () => 'youtube_botguard_runtime.js',

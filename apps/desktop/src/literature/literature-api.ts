@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { readProviderSettings } from '../app-storage';
+import { readProviderSettings } from '../app/app-storage';
 import type {
   CollectionInput,
   LiteratureOverview,

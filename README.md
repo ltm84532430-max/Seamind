@@ -194,5 +194,5 @@ GitHub Actions 会在 `main` 推送和拉取请求上运行前端工作区检查
 - 本项目以 [MIT 许可证](LICENSE) 发布。
 - `packages/markmap-*` 来自 [markmap](https://github.com/markmap/markmap)，原始版权声明保留在 [LICENSE](LICENSE) 中。
 - `packages/foliate-js` 是 [readest/foliate-js](https://github.com/readest/foliate-js) 的 Git submodule，遵循其 MIT 许可证。
-- `apps/desktop/src/youtube-sabr-shaka-adapter.ts` 改编自 [LuanRT/googlevideo](https://github.com/LuanRT/googlevideo)（MIT），声明见 [NOTICE](apps/desktop/src/youtube-sabr-shaka-adapter.NOTICE.md)。
+- `apps/desktop/src/player/youtube-sabr-shaka-adapter.ts` 改编自 [LuanRT/googlevideo](https://github.com/LuanRT/googlevideo)（MIT），声明见 [NOTICE](apps/desktop/src/player/youtube-sabr-shaka-adapter.NOTICE.md)。
 - PlantUML 随应用打包，许可证见 [LICENSE.txt](apps/desktop/src-tauri/resources/plantuml/LICENSE.txt)。

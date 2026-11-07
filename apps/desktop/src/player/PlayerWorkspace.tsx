@@ -42,7 +42,7 @@ import type { Watching } from './WatchView';
 import type {
   TranscriptKnowledgeExportPayload,
   TranscriptKnowledgeExportResult,
-} from './transcript';
+} from './transcript/index';
 import { describeDataError, resolveChannelId } from './youtube-data';
 import './learning-path.css';
 

@@ -1,4 +1,4 @@
-import type { MapDocument, OpenedDocument } from '../library';
+import type { MapDocument, OpenedDocument } from '../library/library';
 import type { FeedArticle, FeedChannel } from '../feed/types';
 import {
   MAX_AGENT_BRANCH_CHARS,

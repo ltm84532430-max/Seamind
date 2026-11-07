@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { NativePlaybackError } from '../src/youtube-native-errors';
+import { NativePlaybackError } from '../src/player/youtube-native-errors';
 
 const invoke = vi.hoisted(() => vi.fn());
 const resolveNativeTranscriptInfo = vi.hoisted(() => vi.fn());
@@ -7,11 +7,11 @@ const clearCachedNativeTranscriptInfo = vi.hoisted(() => vi.fn());
 const proxiedFetch = vi.hoisted(() => vi.fn());
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
-vi.mock('../src/youtube-native', () => ({
+vi.mock('../src/player/youtube-native', () => ({
   resolveNativeTranscriptInfo,
   clearCachedNativeTranscriptInfo,
 }));
-vi.mock('../src/youtube-proxy', () => ({
+vi.mock('../src/player/youtube-proxy', () => ({
   proxiedFetch,
 }));
 

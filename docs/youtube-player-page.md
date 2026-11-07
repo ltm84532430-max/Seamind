@@ -40,7 +40,7 @@
   - 界面：`PlayerWorkspace.tsx`（状态、导航、播放队列）、`Sidebar.tsx`、`FeedView.tsx`、`CollectionView.tsx`（收藏、稍后看、历史、课程）、`ChannelView.tsx`、`RemotePlaylistView.tsx`、`WatchView.tsx`、`PlayerDialogs.tsx`、`VideoRow.tsx`、`VideoList.tsx`、`player-workspace.css`。
   - 不依赖界面的规则（有单元测试）：`video-links.ts`（识别粘贴的链接）、`import-subscriptions.ts`（四种订阅文件）、`feed-manager.ts`（检查更新的节奏）、`watch-state.ts`、`youtube-mapping.ts`（YouTube.js 的结果转成数据库输入）、`queue.ts`、`format.ts`、`retry-fetch.ts`（失败重试）。
   - 接后端和 YouTube：`player-api.ts`（`player_*` 命令）、`youtube-data.ts`。
-- 播放器本体 `apps/desktop/src/YouTubePlayerPanel.tsx`：从原来的弹窗里拆出，弹窗（`YouTubePlayerDialog.tsx`）和播放页共用，包括官方内嵌、内置播放器和 yt-dlp/mpv 三种方式及回退。播放页里它不带标题栏和关闭按钮，内嵌播放器自动开始，并通过 `onProgress`、`onEnded`、`onHandle`（读写位置和倍速）把播放状态交给页面。
+- 播放器本体 `apps/desktop/src/player/YouTubePlayerPanel.tsx`：从原来的弹窗里拆出，弹窗（`YouTubePlayerDialog.tsx`）和播放页共用，包括官方内嵌、内置播放器和 yt-dlp/mpv 三种方式及回退。播放页里它不带标题栏和关闭按钮，内嵌播放器自动开始，并通过 `onProgress`、`onEnded`、`onHandle`（读写位置和倍速）把播放状态交给页面。
 - 后端 `src-tauri/src/player_store.rs`（数据库和全部规则）、`player.rs`（Tauri 命令、频道 RSS、oEmbed）。
 - 测试：`apps/desktop/test/player-*.test.ts`，以及两个 Rust 模块里的单元测试。
 

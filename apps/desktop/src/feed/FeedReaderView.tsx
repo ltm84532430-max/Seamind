@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { createMarkdownPreviewMinimap } from '../markdown-minimap';
+import { createMarkdownPreviewMinimap } from '../workbench/markdown-minimap';
 import type { FeedArticle } from './types';
 
 interface FeedReaderViewProps {

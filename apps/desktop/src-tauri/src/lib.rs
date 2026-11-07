@@ -1,40 +1,83 @@
-mod bibtex;
-mod c_exam_runner;
-mod c_runner;
-mod epub;
-mod epub_exam;
-mod epub_exam_generation;
-mod epub_exam_grading;
-mod epub_translation;
-mod installer_components;
-mod feed;
-mod feed_asr;
-mod feed_store;
-mod learning_tasks;
-mod java_runtime;
-mod library;
-mod literature;
-mod literature_resolver;
-mod literature_store;
-mod media_resolver;
-mod plantuml;
-mod player;
-mod player_store;
+// 按业务目录存放实现，同时保持 crate 根模块名与 Tauri 命令接口稳定。
+#[path = "agent/agent_bridge.rs"]
+mod agent_bridge;
+#[path = "agent/prompts.rs"]
 mod prompts;
-mod terminal;
-mod transcript_refiner;
-mod youtube;
-mod youtube_botguard;
-mod youtube_embed_transcript;
-mod youtube_eval;
-mod youtube_net;
-mod youtube_proxy;
-mod youtube_transcript;
+
+#[path = "ebook/c_exam_runner.rs"]
+mod c_exam_runner;
+#[path = "ebook/epub.rs"]
+mod epub;
+#[path = "ebook/epub_exam.rs"]
+mod epub_exam;
+#[path = "ebook/epub_exam_generation.rs"]
+mod epub_exam_generation;
+#[path = "ebook/epub_exam_grading.rs"]
+mod epub_exam_grading;
+#[path = "ebook/epub_translation.rs"]
+mod epub_translation;
+#[path = "ebook/zlib_bridge.rs"]
 mod zlib_bridge;
+
+#[path = "feed/feed.rs"]
+mod feed;
+#[path = "feed/feed_asr.rs"]
+mod feed_asr;
+#[path = "feed/feed_store.rs"]
+mod feed_store;
+
+#[path = "library/library.rs"]
+mod library;
+#[path = "library/media_resolver.rs"]
+mod media_resolver;
+
+#[path = "literature/bibtex.rs"]
+mod bibtex;
+#[path = "literature/literature.rs"]
+mod literature;
+#[path = "literature/literature_resolver.rs"]
+mod literature_resolver;
+#[path = "literature/literature_store.rs"]
+mod literature_store;
+
+#[path = "mindmap/java_runtime.rs"]
+mod java_runtime;
+#[path = "mindmap/plantuml.rs"]
+mod plantuml;
+
+#[path = "player/player.rs"]
+mod player;
+#[path = "player/player_store.rs"]
+mod player_store;
+#[path = "player/transcript_refiner.rs"]
+mod transcript_refiner;
+#[path = "player/youtube.rs"]
+mod youtube;
+#[path = "player/youtube_botguard.rs"]
+mod youtube_botguard;
+#[path = "player/youtube_embed_transcript.rs"]
+mod youtube_embed_transcript;
+#[path = "player/youtube_eval.rs"]
+mod youtube_eval;
+#[path = "player/youtube_net.rs"]
+mod youtube_net;
+#[path = "player/youtube_proxy.rs"]
+mod youtube_proxy;
+#[path = "player/youtube_transcript.rs"]
+mod youtube_transcript;
+
+#[path = "tasks/learning_tasks.rs"]
+mod learning_tasks;
+
+#[path = "system/c_runner.rs"]
+mod c_runner;
+#[path = "system/installer_components.rs"]
+mod installer_components;
+#[path = "system/terminal.rs"]
+mod terminal;
 
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
-mod agent_bridge;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -107,6 +150,8 @@ pub fn run() {
             library::save_generated_html_assets,
             library::discard_generated_html_assets,
             library::resolve_html_asset,
+            library::import_document_media,
+            library::resolve_document_media,
             library::delete_document,
             library::delete_epub_book,
             library::delete_plantuml_document,

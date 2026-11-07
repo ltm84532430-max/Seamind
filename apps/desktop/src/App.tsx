@@ -17,8 +17,8 @@ import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
-import InstallerComponentSetup from './InstallerComponentSetup';
-import UpdateManager from './UpdateManager';
+import InstallerComponentSetup from './system/InstallerComponentSetup';
+import UpdateManager from './system/UpdateManager';
 import katex from 'katex';
 import markdownItKatex from '@vscode/markdown-it-katex';
 import { Transformer } from 'markmap-lib';
@@ -30,21 +30,24 @@ import {
   hydrateCodeBlocks,
   updateMarkdownCodeFence,
   updateMarkdownCodeFenceAtRange,
-} from './code-blocks';
-import type { CodeBlockSourceRange } from './code-blocks';
-import MarkdownEditor from './MarkdownEditor';
-import type { MarkdownEditorHandle, MarkdownSelection } from './MarkdownEditor';
-import MarkdownPreview from './MarkdownPreview';
-import KnowledgeWorkspace from './KnowledgeWorkspace';
+} from './workbench/code-blocks';
+import type { CodeBlockSourceRange } from './workbench/code-blocks';
+import MarkdownEditor from './workbench/MarkdownEditor';
+import type {
+  MarkdownEditorHandle,
+  MarkdownSelection,
+} from './workbench/MarkdownEditor';
+import MarkdownPreview from './workbench/MarkdownPreview';
+import KnowledgeWorkspace from './knowledge/KnowledgeWorkspace';
 import {
   findWikilinkTarget,
   type KnowledgeNoteTemplate,
-} from './knowledge-markdown';
+} from './knowledge/knowledge-markdown';
 import PlantUmlWorkspace, {
   openPlantUmlWorkspace,
   plantUmlWorkspaceEventName,
-} from './PlantUmlWorkspace';
-import type { PlantUmlEditorRequest } from './PlantUmlWorkspace';
+} from './mindmap/PlantUmlWorkspace';
+import type { PlantUmlEditorRequest } from './mindmap/PlantUmlWorkspace';
 import DocumentWorkbench from './workbench/DocumentWorkbench';
 import { useActiveDocument } from './workbench/use-active-document';
 import { NEW_FILE_TEMPLATES } from './workbench/templates';
@@ -54,33 +57,33 @@ import {
   nextYouTubeThumbnail,
   parseYouTubeEmbedInput,
   prepareYouTubeCards,
-} from './youtube';
-import YouTubePlayerDialog from './YouTubePlayerDialog';
-import type { YouTubePreviewSelection } from './YouTubePlayerDialog';
-import { installYouTubeDebugHook } from './youtube-debug';
+} from './player/youtube';
+import YouTubePlayerDialog from './player/YouTubePlayerDialog';
+import type { YouTubePreviewSelection } from './player/YouTubePlayerDialog';
+import { installYouTubeDebugHook } from './player/youtube-debug';
 import 'katex/dist/katex.min.css';
-import LibraryPanel from './LibraryPanel';
-import EpubReader from './EpubReader';
-import EbookWorkspace from './EbookWorkspace';
-import MindmapMiniTree from './MindmapMiniTree';
-import type { MindmapMiniTreeNode } from './MindmapMiniTree';
-import './ebook-workspace.css';
+import LibraryPanel from './library/LibraryPanel';
+import EpubReader from './ebook/EpubReader';
+import EbookWorkspace from './ebook/EbookWorkspace';
+import MindmapMiniTree from './mindmap/MindmapMiniTree';
+import type { MindmapMiniTreeNode } from './mindmap/MindmapMiniTree';
+import './ebook/ebook-workspace.css';
 import './player/player-workspace.css';
 import './player/learning-path.css';
-import type { PendingTerminalRawInput } from './TerminalPanel';
+import type { PendingTerminalRawInput } from './system/TerminalPanel';
 import type {
   EpubChapterChangeInfo,
   EpubChapterNavigationRequest,
   EpubReaderAgentBridge,
   EpubReaderSelection,
-} from './EpubReader';
+} from './ebook/EpubReader';
 import {
   epubBookIdentity,
   epubProgressKey,
   findStoredCoverByBookKey,
   loadEpubBookMetadata,
-} from './ebook-storage';
-import AgentPanel from './AgentPanel';
+} from './ebook/ebook-storage';
+import AgentPanel from './agent/AgentPanel';
 import { feedApi } from './feed/feed-api';
 import {
   agentToolCatalog,
@@ -124,7 +127,7 @@ import {
   normalizeMindmapText,
   type MarkdownNodeSource,
 } from './mindmap/commands';
-const TerminalPanel = lazy(() => import('./TerminalPanel'));
+const TerminalPanel = lazy(() => import('./system/TerminalPanel'));
 const PlayerWorkspace = lazy(() => import('./player/PlayerWorkspace'));
 const TaskWorkspace = lazy(() => import('./tasks/TaskWorkspace'));
 import type { TaskCreateRequest } from './tasks/TaskWorkspace';
@@ -143,7 +146,7 @@ import type {
   PlantUmlDocument,
   SaveDocumentInput,
   TextDocument,
-} from './library';
+} from './library/library';
 
 import {
   ACTIVE_WORKSPACE_KEY,
@@ -183,20 +186,23 @@ import {
   type ReaderSplitLayout,
   type RecoverableDraft,
   type Theme,
-} from './app-storage';
+} from './app/app-storage';
 import {
   clonePureNode,
   findNavigationPath,
   findPureNodeBySourcePath,
   prepareMindmapTree,
-} from './app-tree-utils';
+} from './library/app-tree-utils';
 import {
   createBookKnowledgeStarter,
   createChapterKnowledgeStarter,
   resolveBookChapterKnowledgeTarget,
-} from './book-knowledge-target';
-import { BookGalaxyGraphView } from './BookGalaxyGraphView';
-import { buildBookGalaxyGraph, type GalaxyNode } from './book-galaxy-model';
+} from './ebook/book-knowledge-target';
+import { BookGalaxyGraphView } from './ebook/BookGalaxyGraphView';
+import {
+  buildBookGalaxyGraph,
+  type GalaxyNode,
+} from './ebook/book-galaxy-model';
 import {
   addMarkdownNodeNoteCards,
   escapeHtmlText,
@@ -212,7 +218,7 @@ import {
   type HtmlCanvasEmbedding,
   type HtmlCardDefinition,
   type HtmlPreviewSelection,
-} from './app-style-utils';
+} from './app/app-style-utils';
 import {
   addFallbackMindmapTitle,
   buildAgentMindmapTree,
@@ -228,7 +234,7 @@ import {
   normalizeKatexDelimiters,
   prepareGeneratedBranchAssets,
   providerLabel,
-} from './app-mindmap-utils';
+} from './mindmap/app-mindmap-utils';
 import { Icon } from './components/AppIcon';
 
 const THEME_OPTIONS: Record<
@@ -1697,6 +1703,12 @@ export default function App() {
             markdown: nextMarkdown,
             historySource: 'ai',
             kind: 'doc',
+            origin: 'ebook',
+            sourceRef: {
+              bookRelativePath: book.relativePath,
+              chapterHref: chapterQuery?.href,
+              chapterCfi: chapterQuery?.cfi,
+            },
           },
         });
         await loadLibrary(false);
@@ -1707,6 +1719,12 @@ export default function App() {
           title: target.title,
           source: nextMarkdown,
           tags: ['读书笔记', '电子书'],
+          origin: 'ebook',
+          sourceRef: {
+            bookRelativePath: book.relativePath,
+            chapterHref: chapterQuery?.href,
+            chapterCfi: chapterQuery?.cfi,
+          },
         });
         saveEpubKnowledgePath(
           snapshot.rootPath,
@@ -3238,6 +3256,12 @@ export default function App() {
       markdown: payload.markdown,
       historySource: 'manual',
       kind: 'doc',
+      origin: 'player',
+      sourceRef: {
+        videoId: payload.videoId,
+        videoUrl: `https://www.youtube.com/watch?v=${payload.videoId}`,
+        channelName: payload.channelName,
+      },
     };
     let currentDoc = await invoke<MapDocument>('save_document', { input });
     upsertSavedInLibrary(currentDoc);
@@ -3472,6 +3496,8 @@ export default function App() {
             title: target.title,
             source: starter,
             tags: ['读书笔记', '电子书'],
+            origin: 'ebook',
+            sourceRef: { bookRelativePath: book.relativePath },
           });
         }
       } else {
@@ -3497,6 +3523,11 @@ export default function App() {
             title: target.title,
             source: starter,
             tags: ['读书笔记', '电子书'],
+            origin: 'ebook',
+            sourceRef: {
+              bookRelativePath: book.relativePath,
+              chapterHref: node.chapterHref,
+            },
           });
         }
       }
@@ -3570,6 +3601,12 @@ export default function App() {
           title: target.title,
           source: starter,
           tags: ['读书笔记', '电子书'],
+          origin: 'ebook',
+          sourceRef: {
+            bookRelativePath: book.relativePath,
+            chapterHref: chapterQuery?.href,
+            chapterCfi: chapterQuery?.cfi,
+          },
         });
         saveEpubKnowledgePath(
           snapshot.rootPath,
@@ -6445,7 +6482,7 @@ export default function App() {
             onRefresh={() => void loadLibrary(false)}
             onCreateCategory={(category) => createKnowledgeCategory(category)}
             onOpenNote={(note) => void openKnowledgeNote(note)}
-            onCloseNote={() => void workbench.controller.leave()}
+            onCloseNote={() => workbench.controller.leave()}
             onCreateNote={(folder, template) =>
               void createKnowledgeNote(folder, template)
             }

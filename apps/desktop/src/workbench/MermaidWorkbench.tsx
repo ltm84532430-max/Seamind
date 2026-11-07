@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import MarkdownEditor from '../MarkdownEditor';
-import type { MarkdownEditorHandle } from '../MarkdownEditor';
+import MarkdownEditor from './MarkdownEditor';
+import type { MarkdownEditorHandle } from './MarkdownEditor';
 import type { ActiveDocument } from './active-document';
 import DiagramCanvas from './DiagramCanvas';
 import { locatePeleErrorLine, renderPeleDiagram } from './pele-render';

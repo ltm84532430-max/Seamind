@@ -4,7 +4,7 @@ import {
   bookMindmapPath,
   bookMindmapTitle,
   resolveBookMindmapTarget,
-} from '../src/book-mindmap-target.ts';
+} from '../src/ebook/book-mindmap-target.ts';
 
 const book = {
   relativePath: 'books/Linux.epub',

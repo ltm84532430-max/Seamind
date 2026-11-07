@@ -44,14 +44,15 @@ cargo test --lib
 
 ## 代码结构
 
-- `src/App.tsx`：主界面和导图编辑。
-- `src/LibraryPanel.tsx`：文件库面板。
-- `src/workbench/`：文档工作台。
-- `src/player/`、`src/YouTubePlayerPanel.tsx`：播放器页面和播放窗口。
-- `src/EbookWorkspace.tsx`、`src/EpubExamLibrary.tsx`：电子书和试卷库。
-- `src/KnowledgeWorkspace.tsx`：知识库。
-- `src/code-blocks.ts`：代码围栏渲染，包括 Mermaid、Pele 和 PlantUML。
-- `src-tauri/src/`：Rust 后端。`library.rs` 管理文件库和索引，`youtube*.rs` 负责播放、代理和 yt-dlp，`plantuml.rs` 调用 Java 渲染，`player*.rs` 管理播放器数据，`epub_exam.rs` 管理试卷，`terminal.rs` 管理终端。
+- `src/App.tsx`、`src/main.tsx`：前端入口、页面切换和导图编辑。
+- `src/app/`：应用级存储与样式工具；`src/library/`：文件库索引和侧栏。
+- `src/workbench/`：Markdown 编辑、预览、代码围栏与文档工作台。
+- `src/knowledge/`：知识库、笔记来源、粘贴和文档媒体。
+- `src/ebook/`：电子书、阅读统计、试卷、翻译和在线找书。
+- `src/player/`：播放器、YouTube 接入、字幕和学习路径。
+- `src/feed/`、`src/literature/`、`src/tasks/`：订阅、论文和任务视图。
+- `src/mindmap/`、`src/agent/`、`src/system/`：导图辅助、AI 面板、终端与安装更新。
+- `src-tauri/src/lib.rs`：Rust 命令注册；后端实现按 `agent/`、`ebook/`、`feed/`、`library/`、`literature/`、`mindmap/`、`player/`、`tasks/`、`system/` 分类。模块名和 Tauri 命令保持原有接口。
 - `src-tauri/resources/plantuml/`：随应用打包的 PlantUML。
 
 ## 环境变量

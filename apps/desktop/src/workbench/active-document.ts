@@ -1,11 +1,13 @@
 import type {
   LibrarySnapshot,
   MapDocument,
+  DocumentOrigin,
+  DocumentSourceRef,
   OpenedDocument,
   OpenedTextDocument,
   SaveDocumentInput,
   TextDocument,
-} from '../library';
+} from '../library/library';
 import { NEW_FILE_TEMPLATES } from './templates';
 
 /** The file kinds the document workbench edits: Markdown documents and Mermaid diagrams. */
@@ -22,6 +24,8 @@ export interface ActiveDocument {
   /** The mind-map metadata a Markdown document carries, kept so saving does not drop it. */
   mapType: string;
   tags: string[];
+  origin?: DocumentOrigin;
+  sourceRef?: DocumentSourceRef | null;
   source: string;
   /** Counts edits. A save covers the revision it started with, and later edits stay unsaved. */
   revision: number;
@@ -160,6 +164,8 @@ export class ActiveDocumentController {
           markdown: saved.source,
           historySource: manual ? 'manual' : 'autosave',
           kind: 'doc',
+          origin: saved.origin,
+          sourceRef: saved.sourceRef,
         };
         const document = await this.invoke<MapDocument>('save_document', {
           input,
@@ -288,6 +294,8 @@ export class ActiveDocumentController {
         category: opened.document.category || '未分类',
         mapType: opened.document.mapType || DOCUMENT_MAP_TYPE,
         tags: opened.document.tags,
+        origin: opened.document.origin,
+        sourceRef: opened.document.sourceRef,
         source: opened.markdown,
         revision: 0,
         savedRevision: 0,
@@ -347,6 +355,8 @@ export class ActiveDocumentController {
     title: string;
     source: string;
     tags?: string[];
+    origin?: DocumentOrigin;
+    sourceRef?: DocumentSourceRef | null;
   }): Promise<boolean> {
     const kind = options.kind ?? 'doc';
     const category = options.category.trim() || '未分类';
@@ -378,6 +388,8 @@ export class ActiveDocumentController {
         markdown: source,
         historySource: 'manual',
         kind: 'doc',
+        origin: options.origin ?? 'manual',
+        sourceRef: options.sourceRef,
       };
       const created = await this.invoke<MapDocument>('save_document', {
         input,
@@ -392,6 +404,8 @@ export class ActiveDocumentController {
         category: created.category || '未分类',
         mapType: created.mapType || DOCUMENT_MAP_TYPE,
         tags: created.tags,
+        origin: created.origin,
+        sourceRef: created.sourceRef,
         source,
         revision: 0,
         savedRevision: 0,

@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach } from 'vitest';
-import { readTheme, themeStorageKey } from '../src/app-storage';
-import { mapNodeColor } from '../src/app-style-utils';
+import { readTheme, themeStorageKey } from '../src/app/app-storage';
+import { mapNodeColor } from '../src/app/app-style-utils';
 
 const localStorageMock = (() => {
   let store: Record<string, string> = {};

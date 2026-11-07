@@ -6,9 +6,9 @@ import {
   createKnowledgeCompletionSource,
   extractInlineTags,
   formatRelativeDate,
-} from '../src/knowledge-completions';
-import { findWikilinkTarget } from '../src/knowledge-markdown';
-import type { MapDocument } from '../src/library';
+} from '../src/knowledge/knowledge-completions';
+import { findWikilinkTarget } from '../src/knowledge/knowledge-markdown';
+import type { MapDocument } from '../src/library/library';
 
 const sampleDoc = (overrides: Partial<MapDocument> = {}): MapDocument => ({
   id: 'doc-1',

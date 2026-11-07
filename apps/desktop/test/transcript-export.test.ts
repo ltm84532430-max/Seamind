@@ -12,7 +12,7 @@ import {
   splitTextIntoSentences,
 } from '../src/player/transcript/export';
 import type { TranscriptCue } from '../src/player/transcript/types';
-import { parseYouTubeEmbedInput } from '../src/youtube';
+import { parseYouTubeEmbedInput } from '../src/player/youtube';
 
 const SAMPLE_CUES: TranscriptCue[] = [
   {

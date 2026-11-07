@@ -15,7 +15,7 @@ fn main() {
         panic!("YouTube BotGuard runtime bundling failed");
     }
 
-    println!("cargo:rerun-if-changed=../src/youtube-botguard-runtime.ts");
+    println!("cargo:rerun-if-changed=../src/player/youtube-botguard-runtime.ts");
     println!("cargo:rerun-if-changed=../scripts/build-youtube-botguard.mjs");
     println!("cargo:rerun-if-changed=../../pnpm-lock.yaml");
     tauri_build::build()

@@ -7,7 +7,7 @@
 
 | 环节 | FreeTube（本地快照） | Seamind（当前工作树） | 实际差异 |
 |---|---|---|---|
-| YouTube 接口 | `src/renderer/helpers/api/local.js:createInnertube`，使用 `youtubei.js` | `apps/desktop/src/youtube-native.ts`，使用 `youtubei.js` 并按客户端尝试解析 | 基础 InnerTube 库相同，客户端选择和与播放器的衔接不同 |
+| YouTube 接口 | `src/renderer/helpers/api/local.js:createInnertube`，使用 `youtubei.js` | `apps/desktop/src/player/youtube-native.ts`，使用 `youtubei.js` 并按客户端尝试解析 | 基础 InnerTube 库相同，客户端选择和与播放器的衔接不同 |
 | PO token | `src/main/poTokenGenerator.js` 的 `sharedInit`、`generatePoToken`、`internalGeneratePotoken`；Electron 隔离 session 中运行 Chromium，队列化生成并清理 session | `youtube-botguard.ts` 获取页面 attestation、请求 WAA challenge；`src-tauri/src/youtube_botguard.rs` 创建隐身 Tauri WebView；`youtube-botguard-runtime.ts` 调用 `BotGuardClient` 和 `WebPoMinter` | 两边都使用 `bgutils-js` 4.x。FreeTube 用 Electron `executeJavaScript` 加载本地打包脚本；Seamind 单独下载解释器，再在 YouTube 来源的 WebView 中执行，因而受代理白名单和 Trusted Types 约束 |
 | 播放器上下文 | `src/main/poTokenGenerator.js` 给解释器设置代理，并为 InnerTube 和 Google 脚本分别设置 Referer、Origin、Fetch Metadata | Tauri Rust 回环代理集中设置 YouTube Referer/Origin；目标主机需逐项加入白名单 | Seamind 的网络边界更严格；遗漏解释器主机时会在本地被代理以 403 拦下 |
 | SABR/DASH | `src/renderer/helpers/player/SabrSchemePlugin.js` 自己构造 ABR protobuf，维护 SABR context、playback cookie、backoff、重试与播放器 reload | `youtube-native.ts` 和 `youtube-sabr-shaka-adapter.ts` 使用 `googlevideo` SABR/UMP 适配器，再由 Shaka 消费 | Seamind 复用协议库，FreeTube 自己掌握更多协议状态；Seamind 这条路径仍需真实 SABR 视频验证 |

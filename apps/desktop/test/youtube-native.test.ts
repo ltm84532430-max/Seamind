@@ -5,7 +5,7 @@ import {
   isDefinitiveFailure,
   NativePlaybackError,
   pickFailure,
-} from '../src/youtube-native-errors';
+} from '../src/player/youtube-native-errors';
 
 describe('classifying YouTube playability', () => {
   it('recognises the bot check however the client reports it', () => {
@@ -148,7 +148,7 @@ describe('the loopback proxy client', () => {
         token: 'secret',
       })),
     }));
-    return import('../src/youtube-proxy');
+    return import('../src/player/youtube-proxy');
   }
 
   it('proxies only YouTube hosts over https', async () => {

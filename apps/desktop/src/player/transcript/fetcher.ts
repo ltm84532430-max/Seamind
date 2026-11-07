@@ -4,9 +4,9 @@ import {
   resolveNativeTranscriptInfo,
   type NativeClient,
   type NativeTranscriptInfo,
-} from '../../youtube-native';
-import { NativePlaybackError } from '../../youtube-native-errors';
-import { proxiedFetch } from '../../youtube-proxy';
+} from '../youtube-native';
+import { NativePlaybackError } from '../youtube-native-errors';
+import { proxiedFetch } from '../youtube-proxy';
 import { alignBilingualCues, parseYouTubeCaptionResponse } from './parser';
 import type {
   TranscriptCue,
