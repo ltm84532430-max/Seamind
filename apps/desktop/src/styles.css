@@ -184,20 +184,85 @@ select option {
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
 }
-.epub-reader-sidebar-content::-webkit-scrollbar-track {
+.epub-reader-sidebar-content::-webkit-scrollbar-track,
+.epub-reader-selection-quote-text::-webkit-scrollbar-track,
+.epub-reader-ai-footnote::-webkit-scrollbar-track,
+.epub-reader-selection-note textarea::-webkit-scrollbar-track,
+.epub-reader-annotation-editor textarea::-webkit-scrollbar-track {
   background: transparent;
 }
-.epub-reader-sidebar-content::-webkit-scrollbar-button {
+.epub-reader-sidebar-content::-webkit-scrollbar-button,
+.epub-reader-selection-quote-text::-webkit-scrollbar-button,
+.epub-reader-ai-footnote::-webkit-scrollbar-button,
+.epub-reader-selection-note textarea::-webkit-scrollbar-button,
+.epub-reader-annotation-editor textarea::-webkit-scrollbar-button {
   display: none;
   width: 0;
   height: 0;
 }
+.epub-reader-selection-quote-text,
+.epub-reader-ai-footnote,
+.epub-reader-selection-note textarea,
+.epub-reader-annotation-editor textarea {
+  --scrollbar-thumb: transparent;
+  transition: --scrollbar-thumb 800ms linear;
+}
+.epub-reader-selection-toolbar:hover .epub-reader-selection-quote-text,
+.epub-reader-selection-quote-text:hover,
+.epub-reader-ai-footnote:hover,
+.epub-reader-selection-note textarea:hover,
+.epub-reader-annotation-editor textarea:hover {
+  --scrollbar-thumb: var(--scrollbar-slider);
+  transition-duration: 100ms;
+}
+.epub-reader-selection-quote-text::-webkit-scrollbar,
+.epub-reader-ai-footnote::-webkit-scrollbar,
+.epub-reader-selection-note textarea::-webkit-scrollbar,
+.epub-reader-annotation-editor textarea::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.epub-reader-selection-quote-text::-webkit-scrollbar-thumb,
+.epub-reader-ai-footnote::-webkit-scrollbar-thumb,
+.epub-reader-selection-note textarea::-webkit-scrollbar-thumb,
+.epub-reader-annotation-editor textarea::-webkit-scrollbar-thumb {
+  min-width: 20px;
+  min-height: 20px;
+  background: var(--scrollbar-thumb);
+}
+.epub-reader-selection-quote-text::-webkit-scrollbar-thumb:hover,
+.epub-reader-ai-footnote::-webkit-scrollbar-thumb:hover,
+.epub-reader-selection-note textarea::-webkit-scrollbar-thumb:hover,
+.epub-reader-annotation-editor textarea::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-slider-hover);
+}
+.epub-reader-selection-quote-text::-webkit-scrollbar-thumb:active,
+.epub-reader-ai-footnote::-webkit-scrollbar-thumb:active,
+.epub-reader-selection-note textarea::-webkit-scrollbar-thumb:active,
+.epub-reader-annotation-editor textarea::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-slider-active);
+}
+.epub-reader-selection-quote-text::-webkit-scrollbar-corner,
+.epub-reader-ai-footnote::-webkit-scrollbar-corner,
+.epub-reader-selection-note textarea::-webkit-scrollbar-corner,
+.epub-reader-annotation-editor textarea::-webkit-scrollbar-corner {
+  background: transparent;
+}
 @supports not selector(::-webkit-scrollbar) {
-  .epub-reader-sidebar-content {
+  .epub-reader-sidebar-content,
+  .epub-reader-selection-quote-text,
+  .epub-reader-ai-footnote,
+  .epub-reader-selection-note textarea,
+  .epub-reader-annotation-editor textarea {
     scrollbar-width: thin;
     scrollbar-color: transparent transparent;
   }
-  .epub-reader-sidebar-content:hover {
+  .epub-reader-sidebar-content:hover,
+  .epub-reader-selection-toolbar:hover .epub-reader-selection-quote-text,
+  .epub-reader-selection-quote-text:hover,
+  .epub-reader-ai-footnote:hover,
+  .epub-reader-selection-note textarea:hover,
+  .epub-reader-annotation-editor textarea:hover {
     scrollbar-color: var(--scrollbar-slider) transparent;
   }
 }
@@ -7335,15 +7400,18 @@ select option {
 }
 .epub-reader-selection-quote {
   display: grid;
-  gap: 4px;
+  gap: 5px;
   color: #78868e;
-  font-size: 10.5px;
-  line-height: 1.55;
+  font-size: 11px;
+  line-height: 18px;
 }
 .epub-reader-selection-quote-text {
   display: block;
-  max-height: min(220px, 34vh);
+  max-height: 180px;
+  padding-right: 4px;
   overflow-y: auto;
+  font-size: 11px;
+  line-height: 18px;
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
@@ -15281,7 +15349,8 @@ select option {
   padding-bottom: 7px;
   border-bottom: 1px solid #e3e7e9;
   color: #58666e;
-  font-size: 10.5px;
+  font-size: 11px;
+  line-height: 18px;
 }
 .epub-reader-selection-styles button,
 .epub-reader-selection-actions button {
