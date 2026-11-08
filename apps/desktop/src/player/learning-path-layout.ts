@@ -1104,23 +1104,29 @@ function layoutRadialConstellation(
    ========================================================================== */
 
 export const STAGE_STAR_PALETTE = [
-  '#e05638', // Vermilion (Stage 1)
-  '#38bdf8', // Sky Cyan (Stage 2)
-  '#10b981', // Emerald (Stage 3)
-  '#f59e0b', // Solar Amber (Stage 4)
-  '#a855f7', // Cosmic Purple (Stage 5)
-  '#ec4899', // Rose Nebula (Stage 6)
-  '#6366f1', // Indigo Pulsar (Stage 7)
-  '#14b8a6', // Deep Teal (Stage 8)
-  '#eab308', // Gold Star (Stage 9)
-  '#f43f5e', // Crimson Flare (Stage 10)
+  '#f97316', // Solar Orange
+  '#06b6d4', // Cyan Nebula
+  '#a855f7', // Violet Pulsar
+  '#10b981', // Emerald Star
+  '#f43f5e', // Rose Supernova
+  '#eab308', // Amber Gold
+  '#3b82f6', // Cobalt Nova
+  '#ec4899', // Magenta Quasar
+  '#14b8a6', // Teal Horizon
+  '#8b5cf6', // Indigo Cluster
 ];
 
-export type PathStarNodeKind = 'core' | 'stage' | 'video' | 'checkpoint';
+export type PathStarNodeKind =
+  | 'core'
+  | 'stage'
+  | 'video'
+  | 'checkpoint'
+  | 'satellite';
 
 export interface PathStarNode {
   id: string;
   label: string;
+  shortCode?: string;
   kind: PathStarNodeKind;
   stageIndex: number;
   stageTitle: string;
@@ -1130,6 +1136,7 @@ export interface PathStarNode {
   isNextUp: boolean;
   optional: boolean;
   note: string | null;
+  knowledgeTopics: string[];
   video: VideoItem | null;
   positionedNode: PositionedPathNode | null;
   parentId: string | null;
@@ -1158,6 +1165,7 @@ export interface LearningPathStarGraph {
   pathId: string;
   title: string;
   description: string | null;
+  coverThumbnailUrl: string | null;
   nodes: PathStarNode[];
   links: PathStarLink[];
   bounds: {
@@ -1169,10 +1177,90 @@ export interface LearningPathStarGraph {
   stats: {
     totalStages: number;
     totalVideos: number;
+    totalSatellites: number;
     completedVideos: number;
     prerequisiteLinksCount: number;
     optionalCount: number;
   };
+}
+
+const SATELLITE_STOP_PREFIXES = [
+  '对应',
+  '理解',
+  '掌握',
+  '深入',
+  '剖析',
+  '结合',
+  '熟练',
+  '围绕',
+  '建立',
+  '使用',
+  '通过',
+  '支线拓展：',
+  '攻防兼备：',
+  '跨接',
+];
+
+export function extractLessonKnowledgeSatellites(
+  node: LearningPathNode,
+): string[] {
+  const candidates: string[] = [];
+  const cleanPiece = (raw: string): string => {
+    let s = raw
+      .replace(/^【[^】]+】\s*/, '')
+      .replace(/《[^》]+》/g, '')
+      .replace(/第\s*\d+[\s–\-~至]*\d*\s*章/g, '')
+      .trim();
+    for (const prefix of SATELLITE_STOP_PREFIXES) {
+      if (s.startsWith(prefix)) {
+        s = s.slice(prefix.length).trim();
+      }
+    }
+    return s.replace(/^[：:、，,；;·\-\s]+|[：:、，,；;。.\s]+$/g, '').trim();
+  };
+
+  // 1. Extract from title after colon if present
+  const colonSplit = node.title.split(/[：:]/);
+  if (colonSplit.length > 1) {
+    const rhs = colonSplit.slice(1).join(' ');
+    for (const part of rhs.split(/[、，,与及/]/)) {
+      const cleaned = cleanPiece(part);
+      if (cleaned.length >= 2 && cleaned.length <= 18) {
+        candidates.push(cleaned);
+      }
+    }
+  }
+
+  // 2. Extract from note phrases
+  if (node.note) {
+    for (const part of node.note.split(/[、，,；;。与及]/)) {
+      const cleaned = cleanPiece(part);
+      if (
+        cleaned.length >= 2 &&
+        cleaned.length <= 18 &&
+        !candidates.some((c) => c.includes(cleaned) || cleaned.includes(c))
+      ) {
+        candidates.push(cleaned);
+      }
+    }
+  }
+
+  // 3. Fallback facets if title/note was terse
+  if (candidates.length < 3) {
+    const baseTitle = cleanPiece(colonSplit[0] || node.title).slice(0, 10);
+    const fallbacks = [
+      `${baseTitle}原理`,
+      '核心机制剖析',
+      '实战演练与调试',
+      '进阶要领总结',
+    ];
+    for (const fb of fallbacks) {
+      if (candidates.length >= 3) break;
+      if (!candidates.includes(fb)) candidates.push(fb);
+    }
+  }
+
+  return candidates.slice(0, 4);
 }
 
 export function buildLearningPathStarGraph(
@@ -1216,13 +1304,24 @@ export function buildLearningPathStarGraph(
   const totalVideos = layout.orderedPlayableNodes.length;
   const overallRatio = totalVideos > 0 ? completedVideos / totalVideos : 0;
 
+  const firstPlayableVideo =
+    layout.orderedPlayableNodes.find((n) => n.isNextUp)?.video ??
+    layout.orderedPlayableNodes[0]?.video ??
+    null;
+  const coverThumbnailUrl = firstPlayableVideo
+    ? (firstPlayableVideo.thumbnailUrl ??
+      `https://i.ytimg.com/vi/${firstPlayableVideo.videoId}/mqdefault.jpg`)
+    : null;
+
   const starNodes: PathStarNode[] = [];
   const starLinks: PathStarLink[] = [];
+  let totalSatellites = 0;
 
   // 1. Central Course Hub ("core-hub")
   const coreNode: PathStarNode = {
     id: 'core-hub',
     label: detail.summary.title,
+    shortCode: 'CORE',
     kind: 'core',
     stageIndex: -1,
     stageTitle: detail.summary.title,
@@ -1237,15 +1336,16 @@ export function buildLearningPathStarGraph(
     isNextUp: false,
     optional: false,
     note: detail.summary.description,
-    video: null,
-    positionedNode: null,
+    knowledgeTopics: roots.map((r) => r.title),
+    video: firstPlayableVideo,
+    positionedNode: layout.orderedPlayableNodes[0] ?? null,
     parentId: null,
     prerequisiteIds: [],
     dependentIds: roots.map((r) => r.nodeId),
     degree: roots.length,
     x: 0,
     y: 0,
-    radius: 34,
+    radius: 36,
     orbitRadius: 0,
     orbitAngle: 0,
     color: '#e05638',
@@ -1254,8 +1354,10 @@ export function buildLearningPathStarGraph(
 
   const stageCount = Math.max(1, roots.length);
   const getStageOrbit = (idx: number) => {
-    if (stageCount <= 6) return 290;
-    return idx % 2 === 0 ? 270 : 410;
+    if (stageCount <= 5) return 340;
+    if (stageCount <= 12) return idx % 2 === 0 ? 330 : 490;
+    const tier = idx % 3;
+    return tier === 0 ? 330 : tier === 1 ? 480 : 630;
   };
 
   roots.forEach((root, stageIdx) => {
@@ -1265,10 +1367,12 @@ export function buildLearningPathStarGraph(
     const sx = Math.round(stageOrbit * Math.cos(stageAngle));
     const sy = Math.round(stageOrbit * Math.sin(stageAngle));
     const rootPos = posById.get(root.nodeId) ?? null;
+    const stageCode = `阶段 ${stageIdx + 1}`;
 
     starNodes.push({
       id: root.nodeId,
       label: root.title,
+      shortCode: stageCode,
       kind:
         root.kind === 'checkpoint'
           ? 'checkpoint'
@@ -1283,6 +1387,7 @@ export function buildLearningPathStarGraph(
       isNextUp: rootPos?.isNextUp ?? false,
       optional: root.optional,
       note: root.note,
+      knowledgeTopics: [],
       video: rootPos?.video ?? null,
       positionedNode: rootPos,
       parentId: 'core-hub',
@@ -1291,7 +1396,7 @@ export function buildLearningPathStarGraph(
       degree: 1,
       x: sx,
       y: sy,
-      radius: 17,
+      radius: 16,
       orbitRadius: stageOrbit,
       orbitAngle: stageAngle,
       color: stageColor,
@@ -1323,6 +1428,8 @@ export function buildLearningPathStarGraph(
 
     // Subtree lessons under this stage
     const seen = new Set<string>([root.nodeId]);
+    let lessonCounter = 0;
+
     const placeChildren = (
       parent: LearningPathNode,
       parentX: number,
@@ -1336,19 +1443,20 @@ export function buildLearningPathStarGraph(
       if (kids.length === 0) return;
       kids.forEach((c) => seen.add(c.nodeId));
 
-      const itemsPerTier = depth === 1 ? (kids.length <= 4 ? 2 : 3) : 2;
+      const itemsPerTier = depth === 1 ? (kids.length <= 4 ? 3 : 4) : 2;
       kids.forEach((child, idx) => {
+        lessonCounter += 1;
         const tier = Math.floor(idx / itemsPerTier);
         const idxInTier = idx % itemsPerTier;
         const countInTier = Math.min(
           itemsPerTier,
           kids.length - tier * itemsPerTier,
         );
-        const dist = (depth === 1 ? 105 : 68) + tier * 72;
+        const dist = (depth === 1 ? 112 : 74) + tier * 76;
         const arcSpan =
           countInTier === 1
             ? 0
-            : Math.min(1.18, (depth === 1 ? 0.5 : 0.42) * (countInTier - 1));
+            : Math.min(1.18, (depth === 1 ? 0.48 : 0.4) * (countInTier - 1));
         const angle =
           countInTier === 1
             ? parentAngle
@@ -1359,10 +1467,13 @@ export function buildLearningPathStarGraph(
         const cx = Math.round(parentX + dist * Math.cos(angle));
         const cy = Math.round(parentY + dist * Math.sin(angle));
         const childPos = posById.get(child.nodeId) ?? null;
+        const topics = extractLessonKnowledgeSatellites(child);
+        const shortCode = `${stageIdx + 1}.${lessonCounter}`;
 
         starNodes.push({
           id: child.nodeId,
           label: child.title,
+          shortCode,
           kind:
             child.kind === 'checkpoint'
               ? 'checkpoint'
@@ -1377,16 +1488,17 @@ export function buildLearningPathStarGraph(
           isNextUp: childPos?.isNextUp ?? false,
           optional: child.optional,
           note: child.note,
+          knowledgeTopics: topics,
           video: childPos?.video ?? null,
           positionedNode: childPos,
           parentId: parent.nodeId,
           prerequisiteIds: child.prerequisiteIds,
           dependentIds: dependentsMap.get(child.nodeId) ?? [],
-          degree: 1,
+          degree: 1 + topics.length,
           x: cx,
           y: cy,
           radius:
-            child.kind === 'checkpoint' ? 12.5 : child.optional ? 8.5 : 10.5,
+            child.kind === 'checkpoint' ? 11.5 : child.optional ? 8.5 : 10,
           orbitRadius: dist,
           orbitAngle: angle,
           color: stageColor,
@@ -1401,6 +1513,58 @@ export function buildLearningPathStarGraph(
             (posById.get(parent.nodeId)?.status ?? 'ready') === 'completed',
           optional: child.optional,
           color: stageColor,
+        });
+
+        // 3rd-level Knowledge Point Satellites fanning out around this lesson planet (like BookGalaxyGraph subsections)
+        const satDist = 56;
+        const satCount = topics.length;
+        topics.forEach((topicLabel, satIdx) => {
+          totalSatellites += 1;
+          const satAngle =
+            satCount === 1
+              ? angle
+              : angle - 0.4 + (0.8 * satIdx) / Math.max(1, satCount - 1);
+          const satX = Math.round(cx + satDist * Math.cos(satAngle));
+          const satY = Math.round(cy + satDist * Math.sin(satAngle));
+          const satId = `${child.nodeId}::sat-${satIdx}`;
+
+          starNodes.push({
+            id: satId,
+            label: topicLabel,
+            shortCode: `${shortCode}.${satIdx + 1}`,
+            kind: 'satellite',
+            stageIndex: stageIdx,
+            stageTitle: root.title,
+            orderIndex: childPos?.orderIndex ?? null,
+            status: childPos?.status ?? 'ready',
+            progressRatio: childPos?.progressRatio ?? 0,
+            isNextUp: false,
+            optional: child.optional,
+            note: child.note,
+            knowledgeTopics: topics,
+            video: childPos?.video ?? null,
+            positionedNode: childPos,
+            parentId: child.nodeId,
+            prerequisiteIds: [],
+            dependentIds: [],
+            degree: 1,
+            x: satX,
+            y: satY,
+            radius: 6,
+            orbitRadius: satDist,
+            orbitAngle: satAngle,
+            color: stageColor,
+          });
+
+          starLinks.push({
+            id: `${child.nodeId}->${satId}`,
+            source: child.nodeId,
+            target: satId,
+            kind: 'hierarchy',
+            active: (childPos?.status ?? 'ready') === 'completed',
+            optional: child.optional,
+            color: stageColor,
+          });
         });
 
         placeChildren(child, cx, cy, angle, depth + 1);
@@ -1462,6 +1626,7 @@ export function buildLearningPathStarGraph(
     pathId: detail.summary.pathId,
     title: detail.summary.title,
     description: detail.summary.description,
+    coverThumbnailUrl,
     nodes: starNodes,
     links: starLinks,
     bounds: {
@@ -1473,6 +1638,7 @@ export function buildLearningPathStarGraph(
     stats: {
       totalStages: roots.length,
       totalVideos,
+      totalSatellites,
       completedVideos,
       prerequisiteLinksCount,
       optionalCount: sortedNodes.filter((n) => n.optional).length,
@@ -1499,12 +1665,20 @@ export function buildPathStarAdjacencyMap(
     map.get(link.target)?.add(link.source);
   }
 
-  // When hovering a stage cluster, also highlight all lessons belonging to that stage
+  // When hovering a stage cluster, also highlight all lessons & satellites belonging to that stage
   for (const n of graph.nodes) {
     if (n.kind === 'stage') {
       for (const member of graph.nodes) {
         if (member.stageIndex === n.stageIndex && member.kind !== 'core') {
           map.get(n.id)?.add(member.id);
+        }
+      }
+    } else if (n.kind === 'satellite' && n.parentId) {
+      // Hovering a satellite highlights its parent lesson and sibling satellites
+      const parentSet = map.get(n.parentId);
+      if (parentSet) {
+        for (const id of parentSet) {
+          map.get(n.id)?.add(id);
         }
       }
     }

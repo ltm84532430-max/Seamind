@@ -590,8 +590,12 @@ describe('Course Constellation Star-Map & Hacker Learning Path Preset', () => {
     expect(layout.nodes).toHaveLength(detail.nodes.length);
 
     const starGraph = buildLearningPathStarGraph(detail, layout);
-    // 1 core node + all path nodes
-    expect(starGraph.nodes).toHaveLength(detail.nodes.length + 1);
+    // 1 core node + all path nodes + extracted Tier-3 knowledge satellites
+    expect(starGraph.stats.totalSatellites).toBeGreaterThan(60);
+    expect(starGraph.nodes).toHaveLength(
+      detail.nodes.length + 1 + starGraph.stats.totalSatellites,
+    );
+    expect(starGraph.coverThumbnailUrl).toContain('ytimg.com');
     expect(starGraph.stats.totalStages).toBe(7);
     expect(starGraph.stats.totalVideos).toBe(21);
     expect(starGraph.stats.prerequisiteLinksCount).toBeGreaterThan(10);
@@ -599,6 +603,14 @@ describe('Course Constellation Star-Map & Hacker Learning Path Preset', () => {
     const adj = buildPathStarAdjacencyMap(starGraph);
     // core-hub includes itself + 7 stage hubs = 8
     expect(adj.get('core-hub')?.size).toBe(8);
+    // Hovering a satellite dot highlights its parent video lesson and sibling satellites
+    const sampleSatellite = starGraph.nodes.find(
+      (n) => n.kind === 'satellite',
+    )!;
+    expect(sampleSatellite.parentId).toBeTruthy();
+    expect(adj.get(sampleSatellite.id)?.has(sampleSatellite.parentId!)).toBe(
+      true,
+    );
 
     // Run physics simulation steps and verify finite coordinates + pinned node handling
     const physics = createPathStarPhysicsState(starGraph);

@@ -21,13 +21,18 @@ import {
   type PositionedPathNode,
 } from './learning-path-layout';
 import type { LearningPathDetail } from './types';
+import { thumbnailUrl } from './video-links';
 
 export interface LearningPathStarMapViewProps {
   detail: LearningPathDetail;
   layout: LearningPathLayoutResult;
   selectedNodeId: string | null;
+  focusRequest?: { nodeId: string; seq: number } | null;
   onSelectNode: (nodeId: string | null) => void;
   onPlayNode: (node: PositionedPathNode) => void;
+  onEditNode?: (nodeId: string) => void;
+  onAddChildNode?: (parentId: string | null) => void;
+  onDeleteNode?: (nodeId: string) => void;
 }
 
 function formatDurationShort(seconds: number | null | undefined): string {
@@ -46,16 +51,21 @@ export default function LearningPathStarMapView({
   detail,
   layout,
   selectedNodeId,
+  focusRequest,
   onSelectNode,
   onPlayNode,
+  onEditNode,
+  onAddChildNode,
+  onDeleteNode,
 }: LearningPathStarMapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [dimensions, setDimensions] = useState({ width: 900, height: 620 });
-  const [pan, setPan] = useState({ x: 450, y: 310 });
-  const [scale, setScale] = useState(0.72);
+  const [dimensions, setDimensions] = useState({ width: 920, height: 640 });
+  const [pan, setPan] = useState({ x: 460, y: 320 });
+  const [scale, setScale] = useState(0.68);
   const [isPanning, setIsPanning] = useState(false);
   const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
 
+  // Interactive node drag state
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
   const dragInfoRef = useRef<{
     node: PathStarNode;
@@ -71,16 +81,28 @@ export default function LearningPathStarMapView({
     clientY: number;
   } | null>(null);
 
+  // Clicked node that opens the interactive Video Thumbnail Popover Card
+  const [pinnedCardNodeId, setPinnedCardNodeId] = useState<string | null>(
+    selectedNodeId,
+  );
+
+  useEffect(() => {
+    if (selectedNodeId === null) {
+      setPinnedCardNodeId(null);
+    }
+  }, [selectedNodeId]);
+
   const [searchFilter, setSearchFilter] = useState('');
   const [controlsOpen, setControlsOpen] = useState(false);
 
-  // Star-Map Topology & Display Filters
-  const [hideOptional, setHideOptional] = useState(false);
+  // Obsidian-style Graph Filter & Display states (matched to BookGalaxyGraphView)
+  const [onlyPending, setOnlyPending] = useState(false);
+  const [showSatellites, setShowSatellites] = useState(true);
   const [showPrerequisites, setShowPrerequisites] = useState(true);
-  const [showSpineLinks, setShowSpineLinks] = useState(true);
-  const [showOrbitGuides, setShowOrbitGuides] = useState(true);
+  const [showSpineLinks, setShowSpineLinks] = useState(false);
+  const [showOrbitGuides, setShowOrbitGuides] = useState(false);
   const [nodeSizeScale, setNodeSizeScale] = useState(1.0);
-  const [labelFadeThreshold, setLabelFadeThreshold] = useState(0.65);
+  const [labelFadeThreshold, setLabelFadeThreshold] = useState(0.68);
   const [physicsConfig, setPhysicsConfig] = useState<PathStarPhysicsConfig>(
     DEFAULT_PATH_STAR_PHYSICS_CONFIG,
   );
@@ -90,14 +112,48 @@ export default function LearningPathStarMapView({
     [detail, layout],
   );
 
+  const nodeMap = useMemo(() => {
+    const map = new Map<string, PathStarNode>();
+    for (const n of starGraph.nodes) {
+      map.set(n.id, n);
+    }
+    return map;
+  }, [starGraph.nodes]);
+
+  // Visible nodes based on topology filters
   const visibleNodeIds = useMemo(() => {
     const set = new Set<string>();
+    const stagesWithPending = new Set<number>();
+    if (onlyPending) {
+      for (const n of starGraph.nodes) {
+        if (
+          (n.kind === 'video' || n.kind === 'checkpoint') &&
+          n.status !== 'completed'
+        ) {
+          stagesWithPending.add(n.stageIndex);
+        }
+      }
+    }
     for (const n of starGraph.nodes) {
-      if (hideOptional && n.optional) continue;
+      if (n.kind === 'core') {
+        set.add(n.id);
+        continue;
+      }
+      if (!showSatellites && n.kind === 'satellite') {
+        continue;
+      }
+      if (onlyPending) {
+        if (n.kind === 'stage' && stagesWithPending.has(n.stageIndex)) {
+          set.add(n.id);
+        } else if (n.status !== 'completed') {
+          set.add(n.id);
+        }
+        continue;
+      }
       set.add(n.id);
     }
     return set;
-  }, [starGraph.nodes, hideOptional]);
+  }, [starGraph.nodes, onlyPending, showSatellites]);
 
   const visibleIdsRef = useRef<Set<string>>(visibleNodeIds);
   visibleIdsRef.current = visibleNodeIds;
@@ -153,7 +209,7 @@ export default function LearningPathStarMapView({
 
   useEffect(() => {
     const state = createPathStarPhysicsState(starGraph);
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 10; i++) {
       stepPathStarPhysics(
         state,
         physicsConfigRef.current,
@@ -189,14 +245,15 @@ export default function LearningPathStarMapView({
     physicsConfig.linkDistanceScale,
     physicsConfig.linkTension,
     physicsConfig.centerGravity,
-    hideOptional,
+    onlyPending,
+    showSatellites,
     reheatSimulation,
   ]);
 
   const calculateAutoFit = useCallback(
     (width: number, height: number) => {
-      const gw = Math.max(360, starGraph.bounds.maxX - starGraph.bounds.minX);
-      const gh = Math.max(360, starGraph.bounds.maxY - starGraph.bounds.minY);
+      const gw = Math.max(320, starGraph.bounds.maxX - starGraph.bounds.minX);
+      const gh = Math.max(320, starGraph.bounds.maxY - starGraph.bounds.minY);
       const scaleX = (width - 96) / gw;
       const scaleY = (height - 96) / gh;
       const fitScale = Math.min(1.15, Math.max(0.28, Math.min(scaleX, scaleY)));
@@ -230,6 +287,29 @@ export default function LearningPathStarMapView({
     observer.observe(el);
     return () => observer.disconnect();
   }, [calculateAutoFit]);
+
+  const focusStarNode = useCallback(
+    (nodeId: string, targetScale = 0.95) => {
+      const node = nodeMap.get(nodeId);
+      const pos = livePositions[nodeId] ?? node;
+      if (!pos) return;
+      setScale(targetScale);
+      setPan({
+        x: Math.round(dimensions.width / 2 - pos.x * targetScale),
+        y: Math.round(dimensions.height / 2 - pos.y * targetScale),
+      });
+      setPinnedCardNodeId(nodeId);
+      onSelectNode(nodeId === 'core-hub' ? null : nodeId);
+    },
+    [dimensions.height, dimensions.width, livePositions, nodeMap, onSelectNode],
+  );
+
+  const lastFocusSeqRef = useRef<number>(0);
+  useEffect(() => {
+    if (!focusRequest || focusRequest.seq === lastFocusSeqRef.current) return;
+    lastFocusSeqRef.current = focusRequest.seq;
+    focusStarNode(focusRequest.nodeId, 0.92);
+  }, [focusRequest, focusStarNode]);
 
   const clientToWorld = useCallback(
     (clientX: number, clientY: number) => {
@@ -270,7 +350,7 @@ export default function LearningPathStarMapView({
 
     try {
       containerRef.current
-        ?.querySelector('.lp-starmap-canvas')
+        ?.querySelector('.book-galaxy-canvas')
         ?.setPointerCapture(e.pointerId);
     } catch {
       // ignore
@@ -278,10 +358,11 @@ export default function LearningPathStarMapView({
   };
 
   const handlePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if ((e.target as HTMLElement).closest('.lp-star-node-group')) return;
-    if ((e.target as HTMLElement).closest('.lp-starmap-drawer')) return;
-    if ((e.target as HTMLElement).closest('.lp-starmap-subheader')) return;
-    if ((e.target as HTMLElement).closest('.lp-starmap-dock')) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('.galaxy-node-group')) return;
+    if (target.closest('.book-galaxy-controls-drawer')) return;
+    if (target.closest('.lp-star-video-card')) return;
+    if (target.closest('.lp-starmap-dock')) return;
     setIsPanning(true);
     panStartRef.current = {
       x: e.clientX,
@@ -353,28 +434,41 @@ export default function LearningPathStarMapView({
         // ignore
       }
       if (wasClick) {
-        if (clicked.id === 'core-hub') {
-          onSelectNode(null);
-        } else {
-          onSelectNode(selectedNodeId === clicked.id ? null : clicked.id);
-        }
+        const nextId = pinnedCardNodeId === clicked.id ? null : clicked.id;
+        setPinnedCardNodeId(nextId);
+        const realNodeId =
+          clicked.kind === 'satellite'
+            ? clicked.parentId
+            : clicked.id === 'core-hub'
+              ? null
+              : clicked.id;
+        onSelectNode(nextId ? realNodeId : null);
       }
       return;
     }
 
     if (!isPanning) return;
+    const movedDist = Math.hypot(
+      e.clientX - panStartRef.current.x,
+      e.clientY - panStartRef.current.y,
+    );
     setIsPanning(false);
     try {
       (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
     } catch {
       // ignore
     }
+    if (movedDist < 4) {
+      setPinnedCardNodeId(null);
+      onSelectNode(null);
+    }
   };
 
   const handleWheel = (e: ReactWheelEvent<HTMLDivElement>) => {
+    if ((e.target as HTMLElement).closest('.lp-star-video-card')) return;
     e.preventDefault();
     const zoomFactor = e.deltaY < 0 ? 1.12 : 0.89;
-    const nextScale = Math.min(3.2, Math.max(0.2, scale * zoomFactor));
+    const nextScale = Math.min(3.5, Math.max(0.18, scale * zoomFactor));
 
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) {
@@ -393,7 +487,7 @@ export default function LearningPathStarMapView({
 
   const handleResetView = () => {
     const state = createPathStarPhysicsState(starGraph);
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 10; i++) {
       stepPathStarPhysics(
         state,
         physicsConfigRef.current,
@@ -410,24 +504,16 @@ export default function LearningPathStarMapView({
     setSearchFilter('');
   };
 
-  const focusStarNode = (nodeId: string, targetScale = 1.05) => {
-    const pos = livePositions[nodeId];
-    if (!pos) return;
-    setScale(targetScale);
-    setPan({
-      x: Math.round(dimensions.width / 2 - pos.x * targetScale),
-      y: Math.round(dimensions.height / 2 - pos.y * targetScale),
-    });
-    onSelectNode(nodeId);
+  const handleResetPhysicsDefaults = () => {
+    setPhysicsConfig(DEFAULT_PATH_STAR_PHYSICS_CONFIG);
+    setNodeSizeScale(1.0);
+    setLabelFadeThreshold(0.68);
+    setOnlyPending(false);
+    setShowSatellites(true);
+    setShowPrerequisites(true);
+    setShowSpineLinks(false);
+    setShowOrbitGuides(false);
   };
-
-  const nodeMap = useMemo(() => {
-    const map = new Map<string, PathStarNode>();
-    for (const n of starGraph.nodes) {
-      map.set(n.id, n);
-    }
-    return map;
-  }, [starGraph.nodes]);
 
   const adjacencyMap = useMemo(
     () =>
@@ -438,12 +524,12 @@ export default function LearningPathStarMapView({
     [starGraph, showSpineLinks, showPrerequisites],
   );
 
-  const activeFocalId =
-    draggingNodeId ?? hoveredNode?.node.id ?? selectedNodeId ?? null;
+  const activeHoveredId =
+    draggingNodeId ?? hoveredNode?.node.id ?? pinnedCardNodeId ?? null;
   const spotlightNeighborSet = useMemo(() => {
-    if (!activeFocalId) return null;
-    return adjacencyMap.get(activeFocalId) ?? new Set([activeFocalId]);
-  }, [activeFocalId, adjacencyMap]);
+    if (!activeHoveredId) return null;
+    return adjacencyMap.get(activeHoveredId) ?? new Set([activeHoveredId]);
+  }, [activeHoveredId, adjacencyMap]);
 
   const filteredNodeIds = useMemo(() => {
     const q = searchFilter.trim().toLowerCase();
@@ -472,120 +558,206 @@ export default function LearningPathStarMapView({
     return Array.from(set).sort((a, b) => a - b);
   }, [starGraph.nodes, physicsConfig.linkDistanceScale]);
 
-  const stageFontSize = Math.max(
+  const sunRadius = Math.round(32 * nodeSizeScale);
+  const coverUrl = starGraph.coverThumbnailUrl;
+  const completionPct =
+    starGraph.stats.totalVideos > 0
+      ? Math.round(
+          (starGraph.stats.completedVideos / starGraph.stats.totalVideos) * 100,
+        )
+      : 0;
+
+  const clusterFontSize = Math.max(
     9.5,
     Math.min(13.5, 11.2 / Math.pow(scale, 0.28)),
   );
-  const lessonFontSize = Math.max(
+  const planetFontSize = Math.max(
     8.5,
     Math.min(11.5, 9.8 / Math.pow(scale, 0.28)),
   );
 
+  // Resolve the clicked node and its parent lesson/stage for the Video Thumbnail Popover Card
+  const pinnedNode = pinnedCardNodeId
+    ? (nodeMap.get(pinnedCardNodeId) ?? null)
+    : null;
+  const pinnedLessonNode = useMemo(() => {
+    if (!pinnedNode) return null;
+    if (pinnedNode.kind === 'satellite' && pinnedNode.parentId) {
+      return nodeMap.get(pinnedNode.parentId) ?? pinnedNode;
+    }
+    return pinnedNode;
+  }, [nodeMap, pinnedNode]);
+
+  const stageLessonsForCard = useMemo(() => {
+    if (!pinnedLessonNode) return [];
+    if (pinnedLessonNode.kind === 'core') {
+      return starGraph.nodes.filter(
+        (n) =>
+          (n.kind === 'video' || n.kind === 'checkpoint') &&
+          Boolean(n.positionedNode?.video),
+      );
+    }
+    if (pinnedLessonNode.kind === 'stage') {
+      return starGraph.nodes.filter(
+        (n) =>
+          n.stageIndex === pinnedLessonNode.stageIndex &&
+          (n.kind === 'video' || n.kind === 'checkpoint') &&
+          Boolean(n.positionedNode?.video),
+      );
+    }
+    return [];
+  }, [pinnedLessonNode, starGraph.nodes]);
+
+  const pinnedCardScreenPos = useMemo(() => {
+    if (!pinnedNode) return null;
+    const pos = livePositions[pinnedNode.id] ?? pinnedNode;
+    const rawX = pan.x + pos.x * scale;
+    const rawY = pan.y + pos.y * scale;
+    const cardW = 336;
+    const cardH =
+      pinnedLessonNode?.kind === 'stage' || pinnedLessonNode?.kind === 'core'
+        ? 380
+        : 396;
+    const preferRight = rawX + 24 + cardW <= dimensions.width - 14;
+    const left = preferRight
+      ? Math.max(14, rawX + 22)
+      : Math.max(
+          14,
+          Math.min(rawX - cardW - 22, dimensions.width - cardW - 14),
+        );
+    const top = Math.max(
+      54,
+      Math.min(rawY - 60, dimensions.height - cardH - 14),
+    );
+    return { left: Math.round(left), top: Math.round(top) };
+  }, [
+    dimensions.height,
+    dimensions.width,
+    livePositions,
+    pan.x,
+    pan.y,
+    pinnedLessonNode?.kind,
+    pinnedNode,
+    scale,
+  ]);
+
   return (
-    <div className="lp-starmap-container" ref={containerRef}>
-      {/* Top Floating Star-Map Subheader */}
-      <div className="lp-starmap-subheader">
-        <div className="lp-starmap-stats">
-          <span className="lp-starmap-badge">CONSTELLATION · 课程知识星图</span>
-          <span>星域: {starGraph.stats.totalStages}</span>
-          <span>·</span>
-          <span>
-            课程完成: {starGraph.stats.completedVideos}/
-            {starGraph.stats.totalVideos}
-          </span>
-          {starGraph.stats.prerequisiteLinksCount > 0 && (
-            <>
-              <span>·</span>
-              <span>
-                跨阶段先修链: {starGraph.stats.prerequisiteLinksCount}
-              </span>
-            </>
-          )}
+    <div className="book-galaxy-container lp-starmap-root" ref={containerRef}>
+      {/* Top Header Controls — Identical structure to Image 1 (BookGalaxyGraphView) */}
+      <div className="book-galaxy-header">
+        <div className="book-galaxy-title-wrap">
+          <span className="book-galaxy-badge">课程知识星系</span>
+          <span className="book-galaxy-title">《{starGraph.title}》</span>
+          <div className="book-galaxy-stats">
+            <span className="book-galaxy-stat-pill">
+              节点: {visibleNodeIds.size - 1}/{starGraph.nodes.length - 1}
+            </span>
+            <span>·</span>
+            <span className="book-galaxy-stat-pill">
+              已学课程: {starGraph.stats.completedVideos}/
+              {starGraph.stats.totalVideos} ({completionPct}%)
+            </span>
+            {starGraph.stats.prerequisiteLinksCount > 0 && (
+              <>
+                <span>·</span>
+                <span className="book-galaxy-stat-pill">
+                  跨簇联动: {starGraph.stats.prerequisiteLinksCount}
+                </span>
+              </>
+            )}
+          </div>
         </div>
 
-        <div className="lp-starmap-actions">
+        <div className="book-galaxy-actions">
           <input
             type="text"
-            className="lp-starmap-search"
-            placeholder="搜索星图节点、模块或频道…"
+            className="lit-text-input book-galaxy-search-input"
+            placeholder="检索课程或知识节点…"
             value={searchFilter}
             onChange={(e) => setSearchFilter(e.target.value)}
           />
           <button
             type="button"
-            className={`lp-starmap-btn ${hideOptional ? 'is-active' : ''}`}
-            onClick={() => setHideOptional((v) => !v)}
-            title="隐藏选修支线节点，仅聚焦核心主线星系"
+            className={`book-galaxy-btn ${onlyPending ? 'is-active' : ''}`}
+            title="仅显示待学习与学习中的课程节点"
+            onClick={() => setOnlyPending((prev) => !prev)}
           >
-            仅主线
+            仅看待学
           </button>
           <button
             type="button"
-            className={`lp-starmap-btn ${showPrerequisites ? 'is-active' : ''}`}
-            onClick={() => setShowPrerequisites((v) => !v)}
-            title="显示或隐藏跨阶段先修依赖弧线"
+            className={`book-galaxy-btn ${controlsOpen ? 'is-active' : ''}`}
+            title="打开 Obsidian 力导向物理与视图参数控制台"
+            onClick={() => setControlsOpen((prev) => !prev)}
           >
-            先修网
+            图谱参数
           </button>
           <button
             type="button"
-            className={`lp-starmap-btn ${controlsOpen ? 'is-active' : ''}`}
-            onClick={() => setControlsOpen((v) => !v)}
-          >
-            星图参数
-          </button>
-          <button
-            type="button"
-            className="lp-starmap-btn"
+            className="book-galaxy-btn"
+            title="重排力导向布局并自适应居中缩放"
             onClick={handleResetView}
           >
-            重排星系
+            重置视角
           </button>
         </div>
       </div>
 
-      {/* Institutional Obsidian-Style Force & Filter Drawer */}
+      {/* Institutional Obsidian-Style Graph Control Drawer */}
       {controlsOpen && (
-        <aside className="lp-starmap-drawer" aria-label="星图物理与显示参数">
-          <div className="lp-starmap-drawer-head">
-            <span>STAR ENGINE · 星图力场参数</span>
+        <aside
+          className="book-galaxy-controls-drawer"
+          aria-label="图谱物理与显示参数"
+        >
+          <div className="book-galaxy-controls-head">
+            <span>GRAPH ENGINE · 图谱参数</span>
             <button
               type="button"
+              className="book-galaxy-controls-close"
               onClick={() => setControlsOpen(false)}
-              className="lp-starmap-drawer-close"
             >
               关闭
             </button>
           </div>
 
-          <div className="lp-starmap-drawer-section">
-            <div className="lp-starmap-kicker">拓扑图层 · LAYERS</div>
-            <label className="lp-starmap-toggle">
-              <span>仅显示必修主线节点</span>
+          <div className="book-galaxy-controls-section">
+            <div className="book-galaxy-controls-kicker">
+              拓扑过滤 · FILTERS
+            </div>
+            <label className="book-galaxy-toggle-row">
+              <span>仅显示未完成课程节点</span>
               <input
                 type="checkbox"
-                checked={hideOptional}
-                onChange={(e) => setHideOptional(e.target.checked)}
+                checked={onlyPending}
+                onChange={(e) => setOnlyPending(e.target.checked)}
               />
             </label>
-            <label className="lp-starmap-toggle">
-              <span>显示跨模块先修依赖边</span>
+            <label className="book-galaxy-toggle-row">
+              <span>显示三级知识点星点</span>
+              <input
+                type="checkbox"
+                checked={showSatellites}
+                onChange={(e) => setShowSatellites(e.target.checked)}
+              />
+            </label>
+            <label className="book-galaxy-toggle-row">
+              <span>显示跨星域先修关联边</span>
               <input
                 type="checkbox"
                 checked={showPrerequisites}
                 onChange={(e) => setShowPrerequisites(e.target.checked)}
               />
             </label>
-            <label className="lp-starmap-toggle">
-              <span>显示阶段主脉络连线</span>
+            <label className="book-galaxy-toggle-row">
+              <span>显示阶段顺序脉络线</span>
               <input
                 type="checkbox"
                 checked={showSpineLinks}
                 onChange={(e) => setShowSpineLinks(e.target.checked)}
               />
             </label>
-            <label className="lp-starmap-toggle">
-              <span>显示星域轨道辅助环</span>
+            <label className="book-galaxy-toggle-row">
+              <span>显示同心轨道参考环</span>
               <input
                 type="checkbox"
                 checked={showOrbitGuides}
@@ -594,31 +766,33 @@ export default function LearningPathStarMapView({
             </label>
           </div>
 
-          <div className="lp-starmap-drawer-section">
-            <div className="lp-starmap-kicker">视觉与缩放 · DISPLAY</div>
-            <div className="lp-starmap-slider">
-              <div className="lp-starmap-slider-top">
-                <span>星体节点尺寸</span>
+          <div className="book-galaxy-controls-section">
+            <div className="book-galaxy-controls-kicker">
+              视觉表现 · DISPLAY
+            </div>
+            <div className="book-galaxy-slider-row">
+              <div className="book-galaxy-slider-label">
+                <span>节点尺寸比例</span>
                 <strong>{nodeSizeScale.toFixed(2)}x</strong>
               </div>
               <input
                 type="range"
-                min="0.65"
-                max="1.55"
+                min="0.6"
+                max="1.6"
                 step="0.05"
                 value={nodeSizeScale}
                 onChange={(e) => setNodeSizeScale(Number(e.target.value))}
               />
             </div>
-            <div className="lp-starmap-slider">
-              <div className="lp-starmap-slider-top">
-                <span>小节标题渐显阈值 (LOD)</span>
+            <div className="book-galaxy-slider-row">
+              <div className="book-galaxy-slider-label">
+                <span>标签显现缩放阈值 (LOD)</span>
                 <strong>{labelFadeThreshold.toFixed(2)}</strong>
               </div>
               <input
                 type="range"
                 min="0.35"
-                max="1.2"
+                max="1.25"
                 step="0.05"
                 value={labelFadeThreshold}
                 onChange={(e) => setLabelFadeThreshold(Number(e.target.value))}
@@ -626,16 +800,16 @@ export default function LearningPathStarMapView({
             </div>
           </div>
 
-          <div className="lp-starmap-drawer-section">
-            <div className="lp-starmap-kicker">物理引擎 · FORCES</div>
-            <div className="lp-starmap-slider">
-              <div className="lp-starmap-slider-top">
-                <span>电荷排斥力</span>
+          <div className="book-galaxy-controls-section">
+            <div className="book-galaxy-controls-kicker">力场引擎 · FORCES</div>
+            <div className="book-galaxy-slider-row">
+              <div className="book-galaxy-slider-label">
+                <span>节点电荷排斥力</span>
                 <strong>{physicsConfig.repelStrength.toFixed(2)}</strong>
               </div>
               <input
                 type="range"
-                min="0.35"
+                min="0.3"
                 max="2.2"
                 step="0.05"
                 value={physicsConfig.repelStrength}
@@ -647,14 +821,14 @@ export default function LearningPathStarMapView({
                 }
               />
             </div>
-            <div className="lp-starmap-slider">
-              <div className="lp-starmap-slider-top">
-                <span>星域轨道间距</span>
+            <div className="book-galaxy-slider-row">
+              <div className="book-galaxy-slider-label">
+                <span>弹簧连线距离</span>
                 <strong>{physicsConfig.linkDistanceScale.toFixed(2)}x</strong>
               </div>
               <input
                 type="range"
-                min="0.6"
+                min="0.55"
                 max="1.6"
                 step="0.05"
                 value={physicsConfig.linkDistanceScale}
@@ -666,14 +840,14 @@ export default function LearningPathStarMapView({
                 }
               />
             </div>
-            <div className="lp-starmap-slider">
-              <div className="lp-starmap-slider-top">
-                <span>中心引力强度</span>
+            <div className="book-galaxy-slider-row">
+              <div className="book-galaxy-slider-label">
+                <span>中心向心聚拢力</span>
                 <strong>{physicsConfig.centerGravity.toFixed(2)}</strong>
               </div>
               <input
                 type="range"
-                min="0.35"
+                min="0.3"
                 max="1.8"
                 step="0.05"
                 value={physicsConfig.centerGravity}
@@ -687,26 +861,18 @@ export default function LearningPathStarMapView({
             </div>
           </div>
 
-          <div className="lp-starmap-drawer-foot">
+          <div className="book-galaxy-controls-foot">
             <button
               type="button"
-              className="lp-starmap-btn"
+              className="book-galaxy-btn"
               onClick={() => reheatSimulation(0.65)}
             >
-              演化力场
+              重新演化力场
             </button>
             <button
               type="button"
-              className="lp-starmap-btn"
-              onClick={() => {
-                setPhysicsConfig(DEFAULT_PATH_STAR_PHYSICS_CONFIG);
-                setNodeSizeScale(1.0);
-                setLabelFadeThreshold(0.65);
-                setHideOptional(false);
-                setShowPrerequisites(true);
-                setShowSpineLinks(true);
-                setShowOrbitGuides(true);
-              }}
+              className="book-galaxy-btn"
+              onClick={handleResetPhysicsDefaults}
             >
               恢复默认
             </button>
@@ -714,9 +880,9 @@ export default function LearningPathStarMapView({
         </aside>
       )}
 
-      {/* Interactive SVG Star-Map Viewport */}
+      {/* SVG Canvas Viewport */}
       <div
-        className={`lp-starmap-canvas ${isPanning ? 'is-panning' : ''} ${
+        className={`book-galaxy-canvas ${isPanning ? 'is-panning' : ''} ${
           draggingNodeId ? 'is-dragging-node' : ''
         }`}
         onPointerDown={handlePointerDown}
@@ -725,57 +891,56 @@ export default function LearningPathStarMapView({
         onWheel={handleWheel}
       >
         <svg
-          className="lp-starmap-svg"
+          className="book-galaxy-svg"
           width={dimensions.width}
           height={dimensions.height}
         >
           <defs>
-            <radialGradient id="lpCoreSunGrad" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stopColor="#ff8563" />
-              <stop offset="68%" stopColor="#d9573b" />
-              <stop offset="100%" stopColor="#8c2d19" />
+            <clipPath id="lp-star-sun-cover-clip">
+              <circle cx={0} cy={0} r={sunRadius} />
+            </clipPath>
+
+            {coverUrl && (
+              <pattern
+                id="lp-star-sun-cover-pattern"
+                patternUnits="userSpaceOnUse"
+                x={-sunRadius}
+                y={-sunRadius}
+                width={sunRadius * 2}
+                height={sunRadius * 2}
+              >
+                <image
+                  href={coverUrl}
+                  x={0}
+                  y={0}
+                  width={sunRadius * 2}
+                  height={sunRadius * 2}
+                  preserveAspectRatio="xMidYMid slice"
+                />
+              </pattern>
+            )}
+
+            <radialGradient id="lpStarSunGrad" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="#ff7b54" />
+              <stop offset="70%" stopColor="#e05638" />
+              <stop offset="100%" stopColor="#992e18" />
             </radialGradient>
-            <marker
-              id="lp-star-arrow"
-              viewBox="0 0 10 10"
-              refX="9"
-              refY="5"
-              markerWidth="5"
-              markerHeight="5"
-              orient="auto-start-reverse"
-            >
-              <path
-                d="M 0 1.5 L 8.5 5 L 0 8.5 z"
-                fill="rgba(148, 163, 184, 0.65)"
-              />
-            </marker>
-            <marker
-              id="lp-star-arrow-spotlight"
-              viewBox="0 0 10 10"
-              refX="9"
-              refY="5"
-              markerWidth="5.5"
-              markerHeight="5.5"
-              orient="auto-start-reverse"
-            >
-              <path d="M 0 1.5 L 8.5 5 L 0 8.5 z" fill="#f59e0b" />
-            </marker>
           </defs>
 
           <g transform={`translate(${pan.x}, ${pan.y}) scale(${scale})`}>
-            {/* Concentric Orbital Guide Rings */}
+            {/* Optional concentric orbital guide rings */}
             {showOrbitGuides &&
-              orbitGuideRadii.map((r) => (
+              orbitGuideRadii.map((radius) => (
                 <circle
-                  key={`guide-${r}`}
+                  key={`orbit-ring-${radius}`}
                   cx={0}
                   cy={0}
-                  r={r}
-                  className="lp-star-orbit-ring"
+                  r={radius}
+                  className="galaxy-orbit-ring"
                 />
               ))}
 
-            {/* Links */}
+            {/* Topological & Cross-Cluster Links */}
             {starGraph.links.map((link) => {
               if (link.kind === 'spine' && !showSpineLinks) return null;
               if (link.kind === 'prerequisite' && !showPrerequisites) {
@@ -796,46 +961,56 @@ export default function LearningPathStarMapView({
               const tgtPos = livePositions[link.target] ?? tgtNode;
 
               const isSpotlightLink = spotlightNeighborSet
-                ? (link.source === activeFocalId &&
+                ? (link.source === activeHoveredId &&
                     spotlightNeighborSet.has(link.target)) ||
-                  (link.target === activeFocalId &&
+                  (link.target === activeHoveredId &&
                     spotlightNeighborSet.has(link.source)) ||
-                  (nodeMap.get(activeFocalId || '')?.kind === 'stage' &&
+                  (nodeMap.get(activeHoveredId || '')?.kind === 'stage' &&
                     spotlightNeighborSet.has(link.source) &&
                     spotlightNeighborSet.has(link.target))
                 : false;
 
-              const isDimmed =
-                (Boolean(spotlightNeighborSet) && !isSpotlightLink) ||
-                (Boolean(filteredNodeIds) &&
-                  !filteredNodeIds?.has(link.source) &&
-                  !filteredNodeIds?.has(link.target));
+              const isDimmedBySpotlight =
+                Boolean(spotlightNeighborSet) && !isSpotlightLink;
 
-              if (link.kind === 'prerequisite' || link.kind === 'spine') {
+              const isSearchDimmed =
+                Boolean(filteredNodeIds) &&
+                !filteredNodeIds?.has(link.source) &&
+                !filteredNodeIds?.has(link.target);
+
+              if (link.kind === 'spine') {
+                return (
+                  <path
+                    key={link.id}
+                    d={`M ${srcPos.x} ${srcPos.y} Q ${(srcPos.x + tgtPos.x) / 2} ${(srcPos.y + tgtPos.y) / 2} ${tgtPos.x} ${tgtPos.y}`}
+                    className={`galaxy-link-sequence ${
+                      isSpotlightLink ? 'is-spotlight' : ''
+                    } ${isDimmedBySpotlight || isSearchDimmed ? 'is-dimmed' : ''}`}
+                  />
+                );
+              }
+
+              if (link.kind === 'prerequisite') {
                 const mx = (srcPos.x + tgtPos.x) / 2;
-                const my =
-                  (srcPos.y + tgtPos.y) / 2 -
-                  (link.kind === 'prerequisite' ? 36 : 18);
+                const my = (srcPos.y + tgtPos.y) / 2 - 28;
                 return (
                   <path
                     key={link.id}
                     d={`M ${srcPos.x} ${srcPos.y} Q ${mx} ${my} ${tgtPos.x} ${tgtPos.y}`}
-                    className={`lp-star-link is-${link.kind} ${
-                      link.active ? 'is-completed' : ''
-                    } ${isSpotlightLink ? 'is-spotlight' : ''} ${
-                      isDimmed ? 'is-dimmed' : ''
-                    }`}
-                    style={{ '--star-color': link.color } as CSSProperties}
-                    markerEnd={
-                      link.kind === 'prerequisite'
-                        ? isSpotlightLink
-                          ? 'url(#lp-star-arrow-spotlight)'
-                          : 'url(#lp-star-arrow)'
+                    className={`galaxy-link-cross ${
+                      isSpotlightLink ? 'is-spotlight' : ''
+                    } ${isDimmedBySpotlight || isSearchDimmed ? 'is-dimmed' : ''}`}
+                    style={
+                      link.color
+                        ? ({ '--link-color': link.color } as CSSProperties)
                         : undefined
                     }
                   />
                 );
               }
+
+              const isIntraCluster = link.kind !== 'core_spoke';
+              const strokeColor = link.color || tgtNode.color;
 
               return (
                 <line
@@ -844,100 +1019,113 @@ export default function LearningPathStarMapView({
                   y1={srcPos.y}
                   x2={tgtPos.x}
                   y2={tgtPos.y}
-                  className={`lp-star-link is-${link.kind} ${
-                    link.active ? 'is-completed' : ''
-                  } ${link.optional ? 'is-optional' : ''} ${
-                    isSpotlightLink ? 'is-spotlight' : ''
-                  } ${isDimmed ? 'is-dimmed' : ''}`}
-                  style={{ '--star-color': link.color } as CSSProperties}
+                  className={`galaxy-link-orbit ${
+                    isIntraCluster ? 'is-intra' : 'is-root-spoke'
+                  } ${isSpotlightLink ? 'is-spotlight' : ''} ${
+                    isDimmedBySpotlight || isSearchDimmed ? 'is-dimmed' : ''
+                  }`}
+                  style={
+                    strokeColor
+                      ? ({ '--link-color': strokeColor } as CSSProperties)
+                      : undefined
+                  }
                 />
               );
             })}
 
-            {/* Star Nodes */}
+            {/* Star Dot Nodes — Matching BookGalaxyGraphView (Image 1) */}
             {starGraph.nodes.map((node) => {
               if (!visibleNodeIds.has(node.id)) return null;
 
               const pos = livePositions[node.id] ?? node;
-              const isCore = node.kind === 'core';
-              const isStage = node.kind === 'stage';
-              const isCheckpoint = node.kind === 'checkpoint';
-              const isSelected = selectedNodeId === node.id;
-              const isFocalSelf = activeFocalId === node.id;
-              const isNeighbor = spotlightNeighborSet
-                ? spotlightNeighborSet.has(node.id)
-                : false;
-              const isSearchMatch = filteredNodeIds
+              const isMatch = filteredNodeIds
                 ? filteredNodeIds.has(node.id)
                 : true;
+              const isSun = node.kind === 'core';
+              const isCluster = node.kind === 'stage';
+              const isPlanet =
+                node.kind === 'video' || node.kind === 'checkpoint';
+              const isSatellite = node.kind === 'satellite';
 
+              const isHoveredSelf = activeHoveredId === node.id;
+              const isPinnedSelf = pinnedCardNodeId === node.id;
+              const isSpotlightNeighbor = spotlightNeighborSet
+                ? spotlightNeighborSet.has(node.id)
+                : false;
               const isDimmed =
-                (Boolean(spotlightNeighborSet) && !isNeighbor) ||
-                (Boolean(filteredNodeIds) && !isSearchMatch);
+                (Boolean(spotlightNeighborSet) && !isSpotlightNeighbor) ||
+                (Boolean(filteredNodeIds) && !isMatch);
 
-              const degreeBoost = Math.min(3.5, node.degree * 0.28);
-              const r = isCore
-                ? 28 * nodeSizeScale
-                : isStage
-                  ? (12.5 + degreeBoost) * nodeSizeScale
-                  : isCheckpoint
-                    ? (8.8 + degreeBoost * 0.35) * nodeSizeScale
-                    : (node.optional ? 5.2 : 6.8 + degreeBoost * 0.25) *
-                      nodeSizeScale;
-
-              // Semantic Zoom (LOD) label opacity
-              const t1 = labelFadeThreshold * 0.52;
-              const t2 = labelFadeThreshold;
-              const forceLabel =
-                isCore ||
-                isStage ||
-                isFocalSelf ||
-                isNeighbor ||
-                isSelected ||
+              const hasVideoOrDone =
+                node.status === 'completed' ||
                 node.isNextUp ||
-                isCheckpoint ||
-                (Boolean(filteredNodeIds) && isSearchMatch);
+                node.kind === 'checkpoint';
+              const degreeBoost = Math.min(3.5, (node.degree ?? 0) * 0.22);
+              const displayRadius = isSun
+                ? sunRadius
+                : isCluster
+                  ? (9.5 + degreeBoost) * nodeSizeScale
+                  : isPlanet
+                    ? ((hasVideoOrDone ? 6.2 : 4.8) + degreeBoost * 0.3) *
+                      nodeSizeScale
+                    : 3.1 * nodeSizeScale;
 
-              let labelOpacity = 0;
-              if (forceLabel) {
-                labelOpacity = 1;
+              // Semantic Zoom (LOD) label visibility calculation
+              const t1 = labelFadeThreshold * 0.55;
+              const t2 = labelFadeThreshold;
+              const forceShowLabel =
+                isHoveredSelf ||
+                isPinnedSelf ||
+                isSpotlightNeighbor ||
+                node.isNextUp ||
+                node.status === 'completed' ||
+                node.kind === 'checkpoint' ||
+                (Boolean(filteredNodeIds) && isMatch);
+
+              let planetLabelOpacity = 0;
+              if (forceShowLabel) {
+                planetLabelOpacity = 1;
               } else if (scale >= t2) {
-                labelOpacity = 0.9;
+                planetLabelOpacity = 0.88;
               } else if (scale > t1) {
-                labelOpacity = ((scale - t1) / (t2 - t1)) * 0.85;
+                planetLabelOpacity = ((scale - t1) / (t2 - t1)) * 0.85;
               }
 
-              const shortText =
-                scale >= 0.92 || isFocalSelf || isNeighbor || isSelected
-                  ? node.label.length > 22
-                    ? `${node.label.slice(0, 22)}…`
+              const showSatelliteLabel =
+                isHoveredSelf ||
+                isPinnedSelf ||
+                isSpotlightNeighbor ||
+                scale >= labelFadeThreshold * 1.15;
+
+              const cleanPlanetText =
+                scale >= 0.88 ||
+                isHoveredSelf ||
+                isPinnedSelf ||
+                isSpotlightNeighbor
+                  ? node.label.length > 20
+                    ? `${node.label.slice(0, 20)}…`
                     : node.label
-                  : node.orderIndex !== null
-                    ? `#${String(node.orderIndex).padStart(2, '0')} ${
-                        node.label.length > 10
-                          ? `${node.label.slice(0, 10)}…`
-                          : node.label
-                      }`
-                    : node.label.length > 12
-                      ? `${node.label.slice(0, 12)}…`
-                      : node.label;
+                  : node.shortCode ||
+                    (node.label.length > 10
+                      ? `${node.label.slice(0, 10)}…`
+                      : node.label);
 
               return (
                 <g
                   key={node.id}
-                  className={[
-                    'lp-star-node-group',
-                    `is-${node.kind}`,
-                    `status-${node.status}`,
-                    node.optional ? 'is-optional' : '',
-                    node.isNextUp ? 'is-next-up' : '',
-                    isSelected ? 'is-selected' : '',
-                    isFocalSelf ? 'is-hovered' : '',
-                    isNeighbor ? 'is-neighbor' : '',
-                    isDimmed ? 'is-dimmed' : '',
-                  ]
-                    .filter(Boolean)
-                    .join(' ')}
+                  className={`galaxy-node-group is-${
+                    isSun
+                      ? 'sun'
+                      : isCluster
+                        ? 'cluster'
+                        : isPlanet
+                          ? 'planet'
+                          : 'satellite'
+                  } ${
+                    hasVideoOrDone || isPinnedSelf ? 'has-note' : 'no-note'
+                  } ${isHoveredSelf || isPinnedSelf ? 'is-hovered' : ''} ${
+                    isSpotlightNeighbor ? 'is-neighbor' : ''
+                  } ${isDimmed ? 'is-dimmed' : ''}`}
                   transform={`translate(${pos.x}, ${pos.y})`}
                   onPointerDown={(e) => handleNodePointerDown(e, node)}
                   onDoubleClick={(e) => {
@@ -960,100 +1148,132 @@ export default function LearningPathStarMapView({
                     setHoveredNode(null);
                   }}
                 >
-                  {/* Generous invisible hit circle for effortless dragging/clicking */}
+                  {/* Invisible hit area */}
                   <circle
                     cx={0}
                     cy={0}
-                    r={Math.max(15, r + 6)}
+                    r={Math.max(14, displayRadius + 6)}
                     fill="transparent"
                   />
 
-                  {/* Active Next-Up Beacon Pulse */}
+                  {/* Active Next-Up pulse */}
                   {node.isNextUp && (
-                    <circle cx={0} cy={0} className="lp-star-next-pulse" />
+                    <circle cx={0} cy={0} className="galaxy-current-pulse" />
                   )}
 
-                  {/* Selected / Completed / Stage Progress Ring */}
-                  {(node.status === 'completed' || isStage || isSelected) &&
-                    !isCore && (
-                      <circle
-                        cx={0}
-                        cy={0}
-                        r={r + 4}
-                        className={`lp-star-halo ${
-                          node.status === 'completed' ? 'is-completed' : ''
-                        } ${isSelected ? 'is-selected' : ''}`}
-                        style={{ '--star-color': node.color } as CSSProperties}
-                      />
-                    )}
+                  {/* Completed / Checkpoint / Pinned outer halo */}
+                  {(hasVideoOrDone || isPinnedSelf) && !isSun && (
+                    <circle
+                      cx={0}
+                      cy={0}
+                      r={displayRadius + 3.5}
+                      className="galaxy-note-halo"
+                      style={
+                        {
+                          '--node-color': node.color,
+                        } as CSSProperties
+                      }
+                    />
+                  )}
 
-                  {isCore ? (
+                  {/* Central Course Sun Node with Circular Cover Cutout */}
+                  {isSun ? (
                     <>
-                      <circle
-                        cx={0}
-                        cy={0}
-                        r={r + 5}
-                        className="lp-star-core-ring"
-                      />
-                      <circle
-                        cx={0}
-                        cy={0}
-                        r={r}
-                        fill="url(#lpCoreSunGrad)"
-                        className="lp-star-core-circle"
-                      />
-                      <text x={0} y={4} className="lp-star-core-pct">
-                        {Math.round(node.progressRatio * 100)}%
-                      </text>
-                      <text x={0} y={r + 18} className="lp-star-core-title">
-                        {node.label.length > 18
-                          ? `${node.label.slice(0, 18)}…`
-                          : node.label}
+                      {coverUrl ? (
+                        <circle
+                          cx={0}
+                          cy={0}
+                          r={sunRadius}
+                          fill="url(#lp-star-sun-cover-pattern)"
+                          clipPath="url(#lp-star-sun-cover-clip)"
+                          className="galaxy-sun-circle"
+                        />
+                      ) : (
+                        <>
+                          <circle
+                            cx={0}
+                            cy={0}
+                            r={sunRadius}
+                            fill="url(#lpStarSunGrad)"
+                            className="galaxy-node-circle"
+                          />
+                          <text x={0} y={5} className="galaxy-sun-monogram">
+                            {starGraph.title.slice(0, 2).toUpperCase()}
+                          </text>
+                        </>
+                      )}
+                      <text
+                        x={0}
+                        y={sunRadius + 18}
+                        className="galaxy-sun-title"
+                      >
+                        《{starGraph.title}》
                       </text>
                     </>
                   ) : (
                     <>
-                      {isCheckpoint ? (
-                        <polygon
-                          points={`0,${-r * 1.25} ${r * 1.25},0 0,${r * 1.25} ${-r * 1.25},0`}
-                          fill={node.color}
-                          className="lp-star-node-shape is-diamond"
-                          style={
-                            { '--star-color': node.color } as CSSProperties
-                          }
-                        />
-                      ) : (
-                        <circle
-                          cx={0}
-                          cy={0}
-                          r={r}
-                          fill={node.color}
-                          className="lp-star-node-shape"
-                          style={
-                            { '--star-color': node.color } as CSSProperties
-                          }
-                        />
-                      )}
+                      <circle
+                        cx={0}
+                        cy={0}
+                        r={displayRadius}
+                        fill={node.color}
+                        className="galaxy-node-circle"
+                        style={
+                          {
+                            '--node-color': node.color,
+                          } as CSSProperties
+                        }
+                      />
 
-                      {labelOpacity > 0.04 && (
+                      {/* Stage Cluster Label */}
+                      {isCluster && (
                         <text
                           x={0}
-                          y={r + (isStage ? 15 : 12)}
-                          className={`lp-star-label ${
-                            isStage ? 'is-stage-label' : 'is-lesson-label'
-                          } ${
-                            node.isNextUp || isFocalSelf || isSelected
+                          y={displayRadius + 14}
+                          className="galaxy-node-label"
+                          style={{ fontSize: `${clusterFontSize}px` }}
+                        >
+                          {scale >= 0.65 ||
+                          isHoveredSelf ||
+                          isPinnedSelf ||
+                          isSpotlightNeighbor
+                            ? node.label.length > 18
+                              ? `${node.label.slice(0, 18)}…`
+                              : node.label
+                            : node.shortCode || node.label.slice(0, 8)}
+                        </text>
+                      )}
+
+                      {/* Video / Checkpoint Planet Label */}
+                      {isPlanet && planetLabelOpacity > 0.04 && (
+                        <text
+                          x={0}
+                          y={displayRadius + 11}
+                          className={`galaxy-planet-badge ${
+                            hasVideoOrDone || isHoveredSelf || isPinnedSelf
                               ? 'is-prominent'
                               : ''
                           }`}
                           style={{
-                            fontSize: `${
-                              isStage ? stageFontSize : lessonFontSize
-                            }px`,
-                            opacity: labelOpacity,
+                            fontSize: `${planetFontSize}px`,
+                            opacity: planetLabelOpacity,
                           }}
                         >
-                          {shortText}
+                          {cleanPlanetText}
+                        </text>
+                      )}
+
+                      {/* 3rd-level Knowledge Point Satellite Label */}
+                      {isSatellite && showSatelliteLabel && (
+                        <text
+                          x={0}
+                          y={displayRadius + 10}
+                          className="galaxy-node-sublabel"
+                          style={{ fontSize: `${planetFontSize * 0.9}px` }}
+                        >
+                          {node.label.length > 14
+                            ? `${node.label.slice(0, 14)}…`
+                            : node.label}
                         </text>
                       )}
                     </>
@@ -1064,22 +1284,35 @@ export default function LearningPathStarMapView({
           </g>
         </svg>
 
-        {/* Bottom-left Star-Map Dock */}
-        <div className="lp-starmap-dock">
+        {/* Bottom-left subtle Obsidian interaction legend */}
+        <div className="book-galaxy-hud-hint">
+          <span>单击星点：弹出视频缩略图与选集</span>
+          <span>·</span>
+          <span>双击星点：立即播放</span>
+          <span>·</span>
+          <span>拖拽：物理牵引星簇</span>
+          <span>·</span>
+          <span>滚轮：缩放 ({Math.round(scale * 100)}%)</span>
+        </div>
+
+        {/* Bottom-right quick zoom & next-up dock */}
+        <div className="lp-starmap-dock lp-starmap-dock-right">
           <button
             type="button"
             onClick={() =>
-              setScale((s) => Math.max(0.22, Number((s - 0.12).toFixed(2))))
+              setScale((s) => Math.max(0.2, Number((s - 0.12).toFixed(2))))
             }
             title="缩小星图"
           >
             −
           </button>
-          <span className="lp-zoom-readout">{Math.round(scale * 100)}%</span>
+          <span className="lp-starmap-zoom-readout">
+            {Math.round(scale * 100)}%
+          </span>
           <button
             type="button"
             onClick={() =>
-              setScale((s) => Math.min(2.8, Number((s + 0.12).toFixed(2))))
+              setScale((s) => Math.min(3.2, Number((s + 0.12).toFixed(2))))
             }
             title="放大星图"
           >
@@ -1091,104 +1324,419 @@ export default function LearningPathStarMapView({
           {layout.nextUpNodeId && (
             <button
               type="button"
-              onClick={() => focusStarNode(layout.nextUpNodeId!, 1.1)}
+              onClick={() => focusStarNode(layout.nextUpNodeId!, 1.0)}
             >
               定位下一课
             </button>
           )}
         </div>
 
-        {/* Bottom-right Legend */}
-        <div className="lp-starmap-legend">
-          <span>拖拽星体：弹性牵引簇群</span>
-          <span>·</span>
-          <span>悬停：高亮先修与后续依赖链</span>
-          <span>·</span>
-          <span>单击：检视详情 / 双击：立即播放</span>
-        </div>
+        {/* Lightweight Hover Tooltip (only when no card is pinned or hovering a different node) */}
+        {hoveredNode &&
+          !draggingNodeId &&
+          hoveredNode.node.id !== pinnedCardNodeId && (
+            <div
+              className="book-galaxy-tooltip"
+              style={{
+                left: Math.min(hoveredNode.clientX, dimensions.width - 300),
+                top: Math.min(hoveredNode.clientY, dimensions.height - 175),
+              }}
+            >
+              <div className="book-galaxy-tooltip-head">
+                <span>
+                  {hoveredNode.node.kind === 'core'
+                    ? `《${starGraph.title}》`
+                    : hoveredNode.node.label}
+                </span>
+                <span className="book-galaxy-badge">
+                  {hoveredNode.node.kind === 'core'
+                    ? '课程核心'
+                    : hoveredNode.node.kind === 'stage'
+                      ? `星域 ${hoveredNode.node.stageIndex + 1}`
+                      : hoveredNode.node.kind === 'satellite'
+                        ? '知识要领'
+                        : hoveredNode.node.shortCode || '视频课'}
+                </span>
+              </div>
 
-        {/* Institutional Floating Hover Card */}
-        {hoveredNode && !draggingNodeId && (
-          <div
-            className="lp-starmap-tooltip"
-            style={{
-              left: Math.min(hoveredNode.clientX, dimensions.width - 310),
-              top: Math.min(hoveredNode.clientY, dimensions.height - 210),
-            }}
-          >
-            <div className="lp-starmap-tooltip-head">
-              <span className="lp-starmap-tooltip-kind">
-                {hoveredNode.node.kind === 'core'
-                  ? '课程核心恒星'
-                  : hoveredNode.node.kind === 'stage'
-                    ? `星域 ${hoveredNode.node.stageIndex + 1}`
-                    : hoveredNode.node.kind === 'checkpoint'
-                      ? '里程碑节点'
-                      : hoveredNode.node.orderIndex !== null
-                        ? `#${String(hoveredNode.node.orderIndex).padStart(2, '0')} 视频课`
-                        : '知识节点'}
-              </span>
-              <span
-                className={`lp-starmap-tooltip-status status-${hoveredNode.node.status}`}
-              >
-                {hoveredNode.node.isNextUp
-                  ? '★ 下一课'
-                  : hoveredNode.node.status === 'completed'
-                    ? '● 已学完'
-                    : hoveredNode.node.status === 'in_progress'
-                      ? '◐ 学习中'
-                      : hoveredNode.node.status === 'locked'
-                        ? '○ 待解锁'
-                        : '○ 可学习'}
-              </span>
-            </div>
-
-            <strong className="lp-starmap-tooltip-title">
-              {hoveredNode.node.label}
-            </strong>
-
-            {hoveredNode.node.video && (
-              <div className="lp-starmap-tooltip-video">
-                {hoveredNode.node.video.thumbnailUrl && (
-                  <img
-                    src={hoveredNode.node.video.thumbnailUrl}
-                    alt=""
-                    loading="lazy"
-                  />
-                )}
-                <div>
-                  <div>
-                    {hoveredNode.node.video.channelName ||
-                      hoveredNode.node.video.videoId}
+              {hoveredNode.node.stageTitle &&
+                hoveredNode.node.kind !== 'core' &&
+                hoveredNode.node.kind !== 'stage' && (
+                  <div className="book-galaxy-tooltip-meta">
+                    所属星域：{hoveredNode.node.stageTitle}
                   </div>
-                  {hoveredNode.node.video.durationSeconds && (
-                    <div className="lp-starmap-tooltip-duration">
-                      时长:{' '}
-                      {formatDurationShort(
+                )}
+
+              {hoveredNode.node.video && (
+                <div className="book-galaxy-tooltip-meta">
+                  频道：{hoveredNode.node.video.channelName || 'YouTube'} ·{' '}
+                  {hoveredNode.node.video.durationSeconds
+                    ? formatDurationShort(
                         hoveredNode.node.video.durationSeconds,
+                      )
+                    : '视频课程'}
+                </div>
+              )}
+
+              <div
+                className={`book-galaxy-tooltip-status ${
+                  hoveredNode.node.status === 'completed'
+                    ? 'is-has-note'
+                    : 'is-no-note'
+                }`}
+              >
+                <span>
+                  {hoveredNode.node.isNextUp
+                    ? '★ 当前推荐下一课（单击展开视频缩略图）'
+                    : hoveredNode.node.status === 'completed'
+                      ? '● 已学完该课程节点'
+                      : '○ 单击星点查看视频缩略图与课程操作'}
+                </span>
+              </div>
+            </div>
+          )}
+
+        {/* Clicked Star Dot -> Interactive Video Thumbnail Popover Card */}
+        {pinnedNode && pinnedLessonNode && pinnedCardScreenPos && (
+          <aside
+            className="lp-star-video-card"
+            style={
+              {
+                left: pinnedCardScreenPos.left,
+                top: pinnedCardScreenPos.top,
+                '--star-accent': pinnedNode.color,
+              } as CSSProperties
+            }
+            aria-label="星点视频预览卡片"
+          >
+            {pinnedLessonNode.kind === 'stage' ||
+            pinnedLessonNode.kind === 'core' ? (
+              /* Stage Cluster / Core Hub Video Playlist Thumbnail Card */
+              <>
+                <div className="lp-star-vcard-stage-head">
+                  <div>
+                    <span className="lp-star-vcard-pill">
+                      {pinnedLessonNode.kind === 'core'
+                        ? '课程全星系总览'
+                        : `星域 ${pinnedLessonNode.stageIndex + 1}`}
+                    </span>
+                    <h4>{pinnedLessonNode.label}</h4>
+                  </div>
+                  <button
+                    type="button"
+                    className="lp-star-vcard-close"
+                    onClick={() => {
+                      setPinnedCardNodeId(null);
+                      onSelectNode(null);
+                    }}
+                    title="关闭卡片"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {pinnedLessonNode.note && (
+                  <p className="lp-star-vcard-note">{pinnedLessonNode.note}</p>
+                )}
+
+                <div className="lp-star-vcard-playlist">
+                  {stageLessonsForCard.map((lesson) => {
+                    const vid = lesson.video;
+                    if (!vid || !lesson.positionedNode) return null;
+                    const thumb =
+                      vid.thumbnailUrl ?? thumbnailUrl(vid.videoId, 'mq');
+                    return (
+                      <div
+                        key={lesson.id}
+                        className={`lp-star-vcard-playitem ${
+                          lesson.isNextUp ? 'is-next' : ''
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          className="lp-star-vcard-playitem-thumb"
+                          onClick={() => onPlayNode(lesson.positionedNode!)}
+                          title={`立即播放：${lesson.label}`}
+                        >
+                          <img src={thumb} alt="" loading="lazy" />
+                          {vid.durationSeconds && (
+                            <span className="lp-star-vcard-duration">
+                              {formatDurationShort(vid.durationSeconds)}
+                            </span>
+                          )}
+                          <span className="lp-star-vcard-miniplay">▶</span>
+                        </button>
+                        <div
+                          className="lp-star-vcard-playitem-info"
+                          onClick={() => focusStarNode(lesson.id, 1.05)}
+                        >
+                          <strong>
+                            {lesson.shortCode ? `${lesson.shortCode} · ` : ''}
+                            {lesson.label}
+                          </strong>
+                          <span>
+                            {vid.channelName || vid.videoId}
+                            {lesson.status === 'completed'
+                              ? ' · 已学完'
+                              : lesson.isNextUp
+                                ? ' · 下一课'
+                                : ''}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="lp-star-vcard-actions">
+                  {stageLessonsForCard[0]?.positionedNode && (
+                    <button
+                      type="button"
+                      className="book-galaxy-btn is-primary"
+                      onClick={() => {
+                        const nextInStage =
+                          stageLessonsForCard.find(
+                            (l) => l.status !== 'completed',
+                          ) ?? stageLessonsForCard[0];
+                        if (nextInStage?.positionedNode) {
+                          onPlayNode(nextInStage.positionedNode);
+                        }
+                      }}
+                    >
+                      ▶ 播放本星域课程
+                    </button>
+                  )}
+                  {pinnedLessonNode.kind === 'stage' && onAddChildNode && (
+                    <button
+                      type="button"
+                      className="book-galaxy-btn"
+                      onClick={() => onAddChildNode(pinnedLessonNode.id)}
+                    >
+                      + 添加视频
+                    </button>
+                  )}
+                  {pinnedLessonNode.kind === 'stage' && onEditNode && (
+                    <button
+                      type="button"
+                      className="book-galaxy-btn"
+                      onClick={() => onEditNode(pinnedLessonNode.id)}
+                    >
+                      编辑星域
+                    </button>
+                  )}
+                </div>
+              </>
+            ) : (
+              /* Single Video / Checkpoint / Satellite Thumbnail Card */
+              <>
+                <div className="lp-star-vcard-media">
+                  {pinnedLessonNode.video ? (
+                    <button
+                      type="button"
+                      className="lp-star-vcard-thumb-btn"
+                      onClick={() => {
+                        if (pinnedLessonNode.positionedNode) {
+                          onPlayNode(pinnedLessonNode.positionedNode);
+                        }
+                      }}
+                      title={`点击立即播放：${pinnedLessonNode.label}`}
+                    >
+                      <img
+                        src={
+                          pinnedLessonNode.video.thumbnailUrl ??
+                          thumbnailUrl(pinnedLessonNode.video.videoId, 'mq')
+                        }
+                        alt={pinnedLessonNode.label}
+                      />
+                      <div className="lp-star-vcard-thumb-overlay">
+                        <span className="lp-star-vcard-play-pill">
+                          ▶ 立即播放课程
+                        </span>
+                      </div>
+                      {pinnedLessonNode.video.durationSeconds && (
+                        <span className="lp-star-vcard-duration">
+                          {formatDurationShort(
+                            pinnedLessonNode.video.durationSeconds,
+                          )}
+                        </span>
                       )}
+                      <div className="lp-star-vcard-progress">
+                        <div
+                          style={{
+                            width: `${Math.round(
+                              pinnedLessonNode.progressRatio * 100,
+                            )}%`,
+                          }}
+                        />
+                      </div>
+                    </button>
+                  ) : (
+                    <div className="lp-star-vcard-no-video">
+                      <span>阶段里程碑节点</span>
+                    </div>
+                  )}
+
+                  <div className="lp-star-vcard-top-badges">
+                    <span className="lp-star-vcard-pill">
+                      {pinnedLessonNode.shortCode ||
+                        `#${pinnedLessonNode.orderIndex ?? 1}`}
+                    </span>
+                    <span className="lp-star-vcard-status">
+                      {pinnedLessonNode.isNextUp
+                        ? '下一课'
+                        : pinnedLessonNode.status === 'completed'
+                          ? '已完成'
+                          : pinnedLessonNode.kind === 'checkpoint'
+                            ? '里程碑'
+                            : pinnedLessonNode.optional
+                              ? '选修'
+                              : '待学习'}
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="lp-star-vcard-close is-floating"
+                    onClick={() => {
+                      setPinnedCardNodeId(null);
+                      onSelectNode(null);
+                    }}
+                    title="关闭缩略图卡片"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div className="lp-star-vcard-body">
+                  {pinnedNode.kind === 'satellite' && (
+                    <div className="lp-star-vcard-sat-focus">
+                      当前点击知识星点：<strong>{pinnedNode.label}</strong>
+                    </div>
+                  )}
+
+                  <h4 className="lp-star-vcard-title">
+                    {pinnedLessonNode.label}
+                  </h4>
+
+                  <div className="lp-star-vcard-submeta">
+                    <span>{pinnedLessonNode.stageTitle}</span>
+                    {pinnedLessonNode.video?.channelName && (
+                      <>
+                        <span>·</span>
+                        <span>{pinnedLessonNode.video.channelName}</span>
+                      </>
+                    )}
+                  </div>
+
+                  {pinnedLessonNode.note && (
+                    <p className="lp-star-vcard-note">
+                      {pinnedLessonNode.note}
+                    </p>
+                  )}
+
+                  {pinnedLessonNode.knowledgeTopics.length > 0 && (
+                    <div className="lp-star-vcard-topics">
+                      {pinnedLessonNode.knowledgeTopics.map((topic, idx) => {
+                        const satId = `${pinnedLessonNode.id}::sat-${idx}`;
+                        const isTopicActive = pinnedNode.id === satId;
+                        return (
+                          <button
+                            key={satId}
+                            type="button"
+                            className={`lp-star-vcard-topic-chip ${
+                              isTopicActive ? 'is-active' : ''
+                            }`}
+                            onClick={() =>
+                              setPinnedCardNodeId(
+                                isTopicActive ? pinnedLessonNode.id : satId,
+                              )
+                            }
+                          >
+                            {topic}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {(pinnedLessonNode.prerequisiteIds.length > 0 ||
+                    pinnedLessonNode.dependentIds.length > 0) && (
+                    <div className="lp-star-vcard-deps">
+                      {pinnedLessonNode.prerequisiteIds.map((reqId) => {
+                        const req = nodeMap.get(reqId);
+                        if (!req) return null;
+                        return (
+                          <button
+                            key={`req-${reqId}`}
+                            type="button"
+                            onClick={() => focusStarNode(reqId, 1.0)}
+                            title={`跳转到先修节点：${req.label}`}
+                          >
+                            先修: {req.shortCode || req.label.slice(0, 8)}
+                          </button>
+                        );
+                      })}
+                      {pinnedLessonNode.dependentIds.map((depId) => {
+                        const dep = nodeMap.get(depId);
+                        if (!dep) return null;
+                        return (
+                          <button
+                            key={`dep-${depId}`}
+                            type="button"
+                            onClick={() => focusStarNode(depId, 1.0)}
+                            title={`跳转到后续解锁节点：${dep.label}`}
+                          >
+                            解锁: {dep.shortCode || dep.label.slice(0, 8)}
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
-              </div>
+
+                <div className="lp-star-vcard-actions">
+                  {pinnedLessonNode.positionedNode?.video && (
+                    <button
+                      type="button"
+                      className="book-galaxy-btn is-primary"
+                      onClick={() =>
+                        onPlayNode(pinnedLessonNode.positionedNode!)
+                      }
+                    >
+                      ▶ 立即播放
+                    </button>
+                  )}
+                  {onEditNode && (
+                    <button
+                      type="button"
+                      className="book-galaxy-btn"
+                      onClick={() => onEditNode(pinnedLessonNode.id)}
+                    >
+                      编辑节点
+                    </button>
+                  )}
+                  {onAddChildNode && (
+                    <button
+                      type="button"
+                      className="book-galaxy-btn"
+                      onClick={() => onAddChildNode(pinnedLessonNode.id)}
+                    >
+                      + 子课
+                    </button>
+                  )}
+                  {onDeleteNode && (
+                    <button
+                      type="button"
+                      className="book-galaxy-btn"
+                      onClick={() => onDeleteNode(pinnedLessonNode.id)}
+                    >
+                      删除
+                    </button>
+                  )}
+                </div>
+              </>
             )}
-
-            {hoveredNode.node.note && (
-              <p className="lp-starmap-tooltip-note">{hoveredNode.node.note}</p>
-            )}
-
-            <div className="lp-starmap-tooltip-deps">
-              <span>前置先修: {hoveredNode.node.prerequisiteIds.length}</span>
-              <span>·</span>
-              <span>解锁后续: {hoveredNode.node.dependentIds.length}</span>
-            </div>
-
-            <div className="lp-starmap-tooltip-hint">
-              {hoveredNode.node.video
-                ? '单击在右侧打开节点详情 · 双击直接播放视频'
-                : '单击检视模块详情 · 按住拖拽可调整星簇布局'}
-            </div>
-          </div>
+          </aside>
         )}
       </div>
     </div>

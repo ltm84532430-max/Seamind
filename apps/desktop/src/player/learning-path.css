@@ -2361,551 +2361,496 @@
   padding: 0;
   overflow: hidden;
   cursor: default;
+  background: #0d1016;
 }
 
-.lp-starmap-container {
+.lp-starmap-root {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.lp-starmap-dock-right {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 12;
+}
+
+.lp-starmap-next-btn {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid #f59e0b;
+  border-radius: 3px;
+  background: rgba(245, 158, 11, 0.16);
+  color: #fde68a;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.lp-starmap-next-btn:hover {
+  background: rgba(245, 158, 11, 0.28);
+  color: #fff;
+}
+
+.lp-starmap-zoom-badge {
+  height: 26px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 3px;
+  background: rgba(15, 20, 29, 0.88);
+  color: #94a3b8;
+  font-family: var(--lp-mono);
+  font-size: 11px;
+}
+
+/* =========================================================================
+   Floating Interactive Video Thumbnail Popover Card (.lp-star-video-card)
+   Pops up beside the clicked Star Dot on the Constellation Canvas
+   ========================================================================= */
+
+.lp-star-video-card {
+  position: absolute;
+  width: 348px;
+  max-height: calc(100% - 68px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 4px;
+  background: rgba(14, 19, 28, 0.96);
+  color: #e6edf3;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.65);
+  z-index: 25;
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+.lp-star-vcard-media {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #090d14;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.lp-star-vcard-thumb-btn {
   position: relative;
   width: 100%;
   height: 100%;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  user-select: none;
-  background: var(--lp-bg);
+  padding: 0;
+  border: none;
+  background: #090d14;
+  cursor: pointer;
+  display: block;
 }
 
-.lp-starmap-subheader {
-  flex-shrink: 0;
-  min-height: 36px;
-  padding: 4px 14px;
+.lp-star-vcard-thumb-btn img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition:
+    transform 180ms ease,
+    filter 180ms ease;
+}
+
+.lp-star-vcard-thumb-btn:hover img {
+  transform: scale(1.03);
+  filter: brightness(0.84);
+}
+
+.lp-star-vcard-thumb-overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(9, 13, 20, 0.55) 0%,
+    rgba(9, 13, 20, 0.12) 45%,
+    rgba(9, 13, 20, 0.72) 100%
+  );
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  border-bottom: 1px solid var(--lp-border);
-  background: var(--lp-card);
-  z-index: 6;
+  justify-content: center;
+  pointer-events: none;
 }
 
-.lp-starmap-subheader-left,
-.lp-starmap-subheader-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
+.lp-star-vcard-play-pill {
+  padding: 6px 14px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  background: rgba(15, 23, 42, 0.86);
+  color: #f8fafc;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease;
 }
 
-.lp-starmap-mode-pill {
-  flex-shrink: 0;
-  height: 20px;
-  padding: 0 7px;
+.lp-star-vcard-thumb-btn:hover .lp-star-vcard-play-pill {
+  background: #df735b;
+  border-color: #f59e0b;
+  color: #fff;
+}
+
+.lp-star-vcard-duration {
+  position: absolute;
+  right: 8px;
+  bottom: 10px;
+  padding: 2px 6px;
+  border-radius: 2px;
+  background: rgba(9, 13, 20, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #e2e8f0;
+  font-family: var(--lp-mono);
+  font-size: 10.5px;
+  pointer-events: none;
+}
+
+.lp-star-vcard-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.16);
+  pointer-events: none;
+}
+
+.lp-star-vcard-progress > span {
+  display: block;
+  height: 100%;
+  background: #10b981;
+}
+
+.lp-star-vcard-top-badges {
+  position: absolute;
+  top: 8px;
+  left: 8px;
   display: inline-flex;
   align-items: center;
-  border-radius: 2px;
-  border: 1px solid var(--lp-accent);
-  background: var(--lp-accent-soft);
-  color: var(--lp-accent);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  gap: 5px;
+  pointer-events: none;
 }
 
-.lp-starmap-stats {
-  color: var(--lp-muted);
+.lp-star-vcard-pill,
+.lp-star-vcard-status {
+  padding: 2px 6px;
+  border-radius: 2px;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.lp-star-vcard-pill {
+  background: rgba(15, 23, 42, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  color: #f8fafc;
+  font-family: var(--lp-mono);
+}
+
+.lp-star-vcard-status {
+  background: rgba(15, 23, 42, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #cbd5e1;
+}
+
+.lp-star-vcard-status.is-completed {
+  border-color: rgba(16, 185, 129, 0.55);
+  color: #6ee7b7;
+}
+
+.lp-star-vcard-status.is-ready,
+.lp-star-vcard-status.is-in_progress {
+  border-color: rgba(245, 158, 11, 0.55);
+  color: #fde68a;
+}
+
+.lp-star-vcard-close {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(9, 13, 20, 0.84);
+  color: #cbd5e1;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lp-star-vcard-close:hover {
+  border-color: #f87171;
+  color: #fff;
+  background: rgba(239, 68, 68, 0.35);
+}
+
+.lp-star-vcard-body {
+  padding: 11px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  overflow-y: auto;
+}
+
+.lp-star-vcard-sat-focus {
+  padding: 4px 8px;
+  border-radius: 2px;
+  border: 1px solid rgba(56, 189, 248, 0.38);
+  background: rgba(56, 189, 248, 0.12);
+  color: #bae6fd;
+  font-size: 11px;
+}
+
+.lp-star-vcard-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.4;
+  color: #f8fafc;
+}
+
+.lp-star-vcard-submeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.lp-star-vcard-note {
+  margin: 0;
   font-size: 11.5px;
+  line-height: 1.48;
+  color: #cbd5e1;
+}
+
+.lp-star-vcard-topics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.lp-star-vcard-topic-chip {
+  padding: 2px 7px;
+  border-radius: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  color: #cbd5e1;
+  font-size: 10.5px;
+}
+
+.lp-star-vcard-topic-chip.is-active {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.18);
+  color: #fde68a;
+  font-weight: 600;
+}
+
+.lp-star-vcard-deps {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 5px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.lp-star-vcard-dep-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.lp-star-vcard-dep-label {
+  font-size: 10.5px;
+  color: #94a3b8;
+  margin-right: 2px;
+}
+
+.lp-star-vcard-dep-chip {
+  padding: 1px 6px;
+  border-radius: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.05);
+  color: #e2e8f0;
+  font-family: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+  max-width: 136px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.lp-starmap-search {
-  width: 196px;
-  height: 24px;
-  padding: 0 8px;
-  border: 1px solid var(--lp-border-strong);
-  border-radius: 2px;
-  background: var(--lp-card-stage);
-  color: var(--lp-ink);
-  font-family: inherit;
-  font-size: 11.5px;
-  outline: none;
+.lp-star-vcard-dep-chip:hover {
+  border-color: #38bdf8;
+  color: #38bdf8;
 }
 
-.lp-starmap-search:focus {
-  border-color: var(--lp-accent);
+.lp-star-vcard-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.lp-starmap-btn {
-  height: 24px;
+.lp-star-vcard-btn {
+  height: 26px;
   padding: 0 9px;
-  border: 1px solid var(--lp-border-strong);
-  border-radius: 2px;
-  background: var(--lp-card-stage);
-  color: var(--lp-ink);
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: #e2e8f0;
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 600;
   cursor: pointer;
 }
 
-.lp-starmap-btn:hover {
-  border-color: var(--lp-accent);
-  color: var(--lp-accent);
+.lp-star-vcard-btn:hover {
+  border-color: rgba(255, 255, 255, 0.36);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
 }
 
-.lp-starmap-btn.is-active {
-  border-color: var(--lp-accent);
-  background: var(--lp-accent-soft);
-  color: var(--lp-accent);
-}
-
-/* ---- Star-Map Control Drawer ---- */
-
-.lp-starmap-drawer {
-  position: absolute;
-  top: 44px;
-  right: 14px;
-  width: 246px;
-  padding: 10px 12px 12px;
-  border: 1px solid var(--lp-border-strong);
-  border-radius: 3px;
-  background: var(--lp-card);
-  box-shadow: var(--lp-shadow);
-  z-index: 12;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.lp-starmap-drawer-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--lp-border);
-  font-size: 11.5px;
-}
-
-.lp-starmap-drawer-reset {
-  height: 20px;
-  padding: 0 6px;
-  border: 1px solid var(--lp-border);
-  border-radius: 2px;
-  background: var(--lp-card-stage);
-  color: var(--lp-muted);
-  font-family: inherit;
-  font-size: 10.5px;
-  cursor: pointer;
-}
-
-.lp-starmap-drawer-reset:hover {
-  border-color: var(--lp-accent);
-  color: var(--lp-accent);
-}
-
-.lp-starmap-control-item {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  font-size: 11px;
-  color: var(--lp-muted);
-}
-
-.lp-starmap-control-item > div {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.lp-starmap-control-item strong {
-  color: var(--lp-ink);
-  font-family: var(--lp-mono);
-  font-size: 10.5px;
-}
-
-.lp-starmap-control-item input[type='range'] {
-  width: 100%;
-  margin: 0;
-  accent-color: var(--lp-accent);
-  cursor: pointer;
-}
-
-.lp-starmap-toggles {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  padding-top: 6px;
-  border-top: 1px solid var(--lp-border);
-  font-size: 11px;
-  color: var(--lp-ink);
-}
-
-.lp-starmap-toggles label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-}
-
-/* ---- Interactive SVG Canvas & Links/Nodes ---- */
-
-.lp-starmap-canvas {
+.lp-star-vcard-btn.is-primary {
   flex: 1;
-  width: 100%;
-  height: 100%;
+  border-color: #df735b;
+  background: #df735b;
+  color: #fff;
+}
+
+.lp-star-vcard-btn.is-primary:hover {
+  background: #e8826b;
+}
+
+.lp-star-vcard-btn.is-danger:hover {
+  border-color: #f87171;
+  color: #fca5a5;
+}
+
+/* Stage / Core Playlist Popover Variant */
+.lp-star-vcard-stage-head {
   position: relative;
+  padding: 11px 36px 9px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.lp-star-vcard-stage-head h4 {
+  margin: 4px 0 0;
+  font-size: 13px;
+  font-weight: 650;
+  color: #f8fafc;
+}
+
+.lp-star-vcard-playlist {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 210px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.lp-star-vcard-playitem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.lp-star-vcard-playitem:hover {
+  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.lp-star-vcard-playitem-thumb {
+  position: relative;
+  width: 82px;
+  height: 46px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 2px;
+  background: #090d14;
   overflow: hidden;
-  cursor: grab;
-  background-color: var(--lp-bg);
-  background-image: radial-gradient(
-    circle,
-    var(--lp-grid-dot) 1px,
-    transparent 1px
-  );
-  background-size: 24px 24px;
+  flex-shrink: 0;
+  cursor: pointer;
 }
 
-.lp-starmap-canvas.is-panning {
-  cursor: grabbing;
-}
-
-.lp-starmap-svg {
+.lp-star-vcard-playitem-thumb img {
   width: 100%;
   height: 100%;
+  object-fit: cover;
   display: block;
 }
 
-.lp-star-orbit-ring {
-  fill: none;
-  stroke: var(--lp-border);
-  stroke-width: 1;
-  stroke-dasharray: 4 7;
-  opacity: 0.45;
-  pointer-events: none;
-}
-
-.lp-star-link {
-  stroke: var(--lp-edge);
-  stroke-width: 1.25;
-  opacity: 0.46;
-  transition:
-    opacity 150ms ease,
-    stroke-width 150ms ease;
-  pointer-events: none;
-}
-
-.lp-star-link-core-stage {
-  stroke-width: 1.5;
-  opacity: 0.42;
-}
-
-.lp-star-link-prerequisite {
-  stroke: var(--lp-accent);
-  stroke-width: 1.4;
-  stroke-dasharray: 4 4;
-  opacity: 0.68;
-}
-
-.lp-star-link.is-optional {
-  stroke-dasharray: 3 5;
-  opacity: 0.34;
-}
-
-.lp-star-link.is-dimmed {
-  opacity: 0.08 !important;
-}
-
-.lp-star-link.is-spotlight {
-  opacity: 0.94 !important;
-  stroke-width: 2.15 !important;
-}
-
-.lp-star-node-group {
-  cursor: pointer;
-  transition: opacity 160ms ease;
-}
-
-.lp-star-node-group.is-dimmed {
-  opacity: 0.14;
-}
-
-.lp-star-node-halo {
-  fill: none;
-  stroke-width: 1.4;
-  opacity: 0.25;
-  pointer-events: none;
-}
-
-.lp-star-node-group.is-hovered .lp-star-node-halo,
-.lp-star-node-group.is-selected .lp-star-node-halo {
-  opacity: 0.72;
-  stroke-width: 2;
-}
-
-.lp-star-next-pulse {
-  fill: none;
-  stroke: var(--lp-accent);
-  stroke-width: 1.8;
-  stroke-dasharray: 3 3;
-  opacity: 0.88;
-  pointer-events: none;
-}
-
-.lp-star-node-circle {
-  stroke: var(--lp-card);
-  stroke-width: 1.6;
-  transition: transform 140ms ease;
-}
-
-.lp-star-node-group.is-locked .lp-star-node-circle {
-  opacity: 0.45;
-  stroke-dasharray: 2 2;
-}
-
-.lp-star-node-group.is-selected .lp-star-node-circle {
-  stroke: var(--lp-ink);
-  stroke-width: 2.4;
-}
-
-.lp-star-core-glyph {
-  fill: #fff;
-  font-family: var(--lp-mono);
-  font-size: 9.5px;
-  font-weight: 700;
-  pointer-events: none;
-}
-
-.lp-star-completed-dot {
-  fill: #fff;
-  opacity: 0.92;
-  pointer-events: none;
-}
-
-.lp-star-checkpoint-ring {
-  fill: none;
-  stroke: #fff;
-  stroke-width: 1.3;
-  opacity: 0.85;
-  pointer-events: none;
-}
-
-.lp-star-node-label {
-  fill: var(--lp-ink);
-  font-size: 11px;
-  font-weight: 500;
-  paint-order: stroke;
-  stroke: var(--lp-bg);
-  stroke-width: 3px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  pointer-events: none;
-  transition: opacity 150ms ease;
-}
-
-.lp-star-node-label.is-core {
-  font-size: 12.5px;
-  font-weight: 700;
-}
-
-.lp-star-node-label.is-stage {
-  font-size: 11.5px;
-  font-weight: 650;
-}
-
-.lp-star-node-sublabel {
-  fill: var(--lp-muted);
-  font-family: var(--lp-mono);
-  font-size: 9.5px;
-  paint-order: stroke;
-  stroke: var(--lp-bg);
-  stroke-width: 2.5px;
-  pointer-events: none;
-}
-
-/* ---- Bottom-Left Dock & Bottom-Right Legend ---- */
-
-.lp-starmap-dock {
+.lp-star-vcard-playitem-play {
   position: absolute;
-  left: 14px;
-  bottom: 14px;
-  display: inline-flex;
+  inset: 0;
+  display: flex;
   align-items: center;
-  gap: 3px;
-  padding: 3px;
-  border: 1px solid var(--lp-border-strong);
-  border-radius: 2px;
-  background: var(--lp-card);
-  box-shadow: var(--lp-shadow);
-  z-index: 8;
+  justify-content: center;
+  background: rgba(9, 13, 20, 0.45);
+  color: #fff;
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity 140ms ease;
 }
 
-.lp-starmap-dock button {
-  height: 24px;
-  min-width: 24px;
-  padding: 0 6px;
-  border: 1px solid transparent;
-  border-radius: 2px;
+.lp-star-vcard-playitem-thumb:hover .lp-star-vcard-playitem-play {
+  opacity: 1;
+}
+
+.lp-star-vcard-playitem-info {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: none;
   background: transparent;
-  color: var(--lp-ink);
-  font-family: inherit;
-  font-size: 11.5px;
+  color: inherit;
+  text-align: left;
   cursor: pointer;
-}
-
-.lp-starmap-dock button:hover {
-  background: var(--lp-card-stage);
-  border-color: var(--lp-border);
-}
-
-.lp-starmap-zoom-readout {
-  padding: 0 6px;
-  font-family: var(--lp-mono);
-  font-size: 11px;
-  color: var(--lp-muted);
-}
-
-.lp-starmap-legend {
-  position: absolute;
-  right: 14px;
-  bottom: 14px;
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  padding: 5px 10px;
-  border: 1px solid var(--lp-border);
-  border-radius: 2px;
-  background: var(--lp-card);
-  color: var(--lp-muted);
-  font-size: 11px;
-  z-index: 8;
-}
-
-.lp-starmap-legend > span {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.lp-legend-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  display: inline-block;
-}
-
-.lp-legend-dot.is-stage {
-  background: #38bdf8;
-}
-
-.lp-legend-dot.is-video {
-  background: #10b981;
-}
-
-.lp-legend-dot.is-next {
-  background: var(--lp-accent);
-}
-
-.lp-legend-line.is-prereq {
-  width: 14px;
-  height: 0;
-  border-top: 2px dashed var(--lp-accent);
-  display: inline-block;
-}
-
-.lp-starmap-legend-hint {
-  padding-left: 6px;
-  border-left: 1px solid var(--lp-border);
-  opacity: 0.85;
-}
-
-/* ---- Floating Hover Preview Card ---- */
-
-.lp-starmap-tooltip {
-  position: absolute;
-  top: 46px;
-  left: 14px;
-  width: 284px;
-  padding: 10px 12px;
-  border: 1px solid var(--lp-border-strong);
-  border-radius: 3px;
-  background: var(--lp-card);
-  box-shadow: var(--lp-shadow);
-  z-index: 10;
-  pointer-events: none;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.lp-starmap-tooltip-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-
-.lp-starmap-tooltip-badge {
-  padding: 1px 6px;
-  border-radius: 2px;
-  background: var(--lp-card-stage);
-  border: 1px solid var(--lp-border);
-  color: var(--lp-ink);
-  font-size: 10px;
-  font-weight: 600;
-}
-
-.lp-starmap-tooltip-status {
-  color: var(--lp-accent);
-  font-size: 10.5px;
-  font-weight: 600;
-}
-
-.lp-starmap-tooltip-title {
-  font-size: 12.5px;
-  line-height: 1.4;
-  color: var(--lp-ink);
-}
-
-.lp-starmap-tooltip-video {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-top: 4px;
-}
-
-.lp-starmap-tooltip-video img {
-  width: 76px;
-  height: 44px;
-  object-fit: cover;
-  border-radius: 2px;
-  border: 1px solid var(--lp-border);
-  flex-shrink: 0;
-}
-
-.lp-starmap-tooltip-video > div {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  min-width: 0;
-  font-size: 11px;
-  color: var(--lp-muted);
 }
 
-.lp-starmap-tooltip-note {
-  margin: 0;
-  font-size: 11px;
-  line-height: 1.45;
-  color: var(--lp-muted);
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
+.lp-star-vcard-playitem-info strong {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #f1f5f9;
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.lp-starmap-tooltip-prereq {
-  padding-top: 4px;
-  border-top: 1px solid var(--lp-border);
+.lp-star-vcard-playitem-info span {
   font-size: 10.5px;
-  color: var(--lp-accent);
+  color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
