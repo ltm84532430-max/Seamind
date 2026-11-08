@@ -164,6 +164,7 @@ pub fn run() {
             library::rename_library_folder,
             library::rebuild_library_index,
             terminal::terminal_start,
+            terminal::terminal_detect_shells,
             terminal::terminal_write,
             terminal::terminal_stage_script,
             terminal::terminal_remove_script,

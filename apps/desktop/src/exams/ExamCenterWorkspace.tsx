@@ -464,7 +464,6 @@ export default function ExamCenterWorkspace({
               }}
               title="直接开始作答今天最紧迫的试卷"
             >
-              <span className="exam-sprint-icon">⚡</span>
               <span>开启今日冲刺 ({dueCount})</span>
             </button>
           )}
@@ -834,7 +833,6 @@ export default function ExamCenterWorkspace({
                   className="is-primary exam-btn-primary"
                   onClick={() => setOpenedExam(selected.exam)}
                 >
-                  <span>⚡</span>
                   <span>
                     {selected.exam.status === 'inProgress'
                       ? '继续作答试卷'
@@ -847,7 +845,7 @@ export default function ExamCenterWorkspace({
                   disabled={!selectedBook}
                   onClick={() => selectedBook && onOpenBook(selectedBook)}
                 >
-                  <span>📖 打开原书对应章节</span>
+                  <span>打开原书对应章节</span>
                 </button>
               </div>
 

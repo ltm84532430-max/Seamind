@@ -137,6 +137,7 @@ const LiteratureWorkspace = lazy(
   () => import('./literature/LiteratureWorkspace'),
 );
 const FeedWorkspace = lazy(() => import('./feed/FeedWorkspace'));
+const TerminalWorkspace = lazy(() => import('./terminal/TerminalWorkspace'));
 import type {
   DocumentVersion,
   DocumentVersionSnapshot,
@@ -5336,6 +5337,14 @@ export default function App() {
           </button>
           <button
             type="button"
+            className={activeWorkspace === 'terminal' ? 'is-active' : ''}
+            aria-pressed={activeWorkspace === 'terminal'}
+            onClick={() => setActiveWorkspace('terminal')}
+          >
+            终端
+          </button>
+          <button
+            type="button"
             className={activeWorkspace === 'tasks' ? 'is-active' : ''}
             aria-pressed={activeWorkspace === 'tasks'}
             onClick={() => setActiveWorkspace('tasks')}
@@ -6551,6 +6560,28 @@ export default function App() {
           />
         </section>
       )}
+
+      <section
+        className={`terminal-workspace-stage${activeWorkspace !== 'terminal' ? ' is-workspace-hidden' : ''}`}
+        aria-label="终端与系统实验工作区"
+        aria-hidden={activeWorkspace !== 'terminal'}
+      >
+        <Suspense
+          fallback={
+            <div className="terminal-workspace-loading">
+              正在载入终端实验室…
+            </div>
+          }
+        >
+          <TerminalWorkspace
+            active={activeWorkspace === 'terminal'}
+            cwd={librarySnapshot?.rootPath ?? ''}
+            theme={theme}
+            books={librarySnapshot?.books ?? []}
+            onOpenBook={(book) => void openLibraryEpub(book)}
+          />
+        </Suspense>
+      </section>
 
       {activeWorkspace === 'tasks' && (
         <section

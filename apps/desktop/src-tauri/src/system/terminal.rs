@@ -1,6 +1,6 @@
 use crate::agent_bridge::AgentBridgeState;
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
@@ -94,6 +94,79 @@ fn terminal_size(cols: u16, rows: u16) -> PtySize {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TerminalShellOption {
+    pub id: String,
+    pub name: String,
+    pub badge: String,
+    pub description: String,
+    pub available: bool,
+}
+
+#[tauri::command]
+pub fn terminal_detect_shells() -> Vec<TerminalShellOption> {
+    let mut list = Vec::new();
+    list.push(TerminalShellOption {
+        id: "powershell".to_string(),
+        name: "PowerShell".to_string(),
+        badge: "PWSH".to_string(),
+        description: "Windows 宿主终端，已预注入 Seamind MCP 智能体环境".to_string(),
+        available: true,
+    });
+
+    #[cfg(windows)]
+    {
+        let git_bash_exists = PathBuf::from(r"C:\Program Files\Git\bin\bash.exe").exists()
+            || PathBuf::from(r"C:\Program Files (x86)\Git\bin\bash.exe").exists();
+        list.push(TerminalShellOption {
+            id: "bash".to_string(),
+            name: "Git Bash".to_string(),
+            badge: "BASH".to_string(),
+            description: if git_bash_exists {
+                "GNU Bash 环境，内置 Linux 常用工具链".to_string()
+            } else {
+                "未检测到 Git for Windows 安装路径".to_string()
+            },
+            available: git_bash_exists,
+        });
+
+        let wsl_path = PathBuf::from(r"C:\Windows\System32\wsl.exe");
+        let wsl_exists = wsl_path.exists();
+        list.push(TerminalShellOption {
+            id: "wsl".to_string(),
+            name: "WSL Linux".to_string(),
+            badge: "WSL".to_string(),
+            description: if wsl_exists {
+                "Windows Subsystem for Linux 原生 Linux 内核环境".to_string()
+            } else {
+                "未开启或未安装 WSL".to_string()
+            },
+            available: wsl_exists,
+        });
+
+        list.push(TerminalShellOption {
+            id: "cmd".to_string(),
+            name: "Command Prompt".to_string(),
+            badge: "CMD".to_string(),
+            description: "Windows 经典命令行外壳".to_string(),
+            available: true,
+        });
+    }
+
+    #[cfg(not(windows))]
+    {
+        list.push(TerminalShellOption {
+            id: "bash".to_string(),
+            name: "Bash / Zsh".to_string(),
+            badge: "UNIX".to_string(),
+            description: "原生 Unix 命令行".to_string(),
+            available: true,
+        });
+    }
+
+    list
+}
+
 #[tauri::command]
 pub fn terminal_start(
     app: AppHandle,
@@ -102,6 +175,7 @@ pub fn terminal_start(
     cwd: String,
     cols: u16,
     rows: u16,
+    shell: Option<String>,
 ) -> Result<String, String> {
     let requested_path = if cwd.trim().is_empty() {
         std::env::current_dir().map_err(|_| "无法读取当前工作目录。".to_string())?
@@ -127,22 +201,45 @@ pub fn terminal_start(
     let cleanup_paths = vec![mcp_config_path.clone(), agy_workspace_dir.clone()];
 
     #[cfg(windows)]
-    let mut command = {
-        let mut command = CommandBuilder::new("powershell.exe");
-        command.arg("-NoLogo");
-        command.arg("-NoExit");
-        command.arg("-Command");
-        command.arg(create_powershell_bootstrap(
-            &mcp_config_path,
-            &agy_workspace_dir,
-            &cli_session.endpoint,
-        ));
-        command
+    let mut command = match shell.as_deref() {
+        Some("wsl") => {
+            let mut cmd = CommandBuilder::new("wsl.exe");
+            cmd.arg("--cd");
+            cmd.arg(&working_directory);
+            cmd
+        }
+        Some("bash") => {
+            let git_bash = PathBuf::from(r"C:\Program Files\Git\bin\bash.exe");
+            let bash_bin = if git_bash.exists() {
+                git_bash
+            } else {
+                PathBuf::from("bash.exe")
+            };
+            let mut cmd = CommandBuilder::new(bash_bin);
+            cmd.arg("-l");
+            cmd
+        }
+        Some("cmd") => {
+            let cmd = CommandBuilder::new("cmd.exe");
+            cmd
+        }
+        _ => {
+            let mut command = CommandBuilder::new("powershell.exe");
+            command.arg("-NoLogo");
+            command.arg("-NoExit");
+            command.arg("-Command");
+            command.arg(create_powershell_bootstrap(
+                &mcp_config_path,
+                &agy_workspace_dir,
+                &cli_session.endpoint,
+            ));
+            command
+        }
     };
     #[cfg(not(windows))]
     let mut command = {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-        let mut command = CommandBuilder::new(shell);
+        let shell_bin = shell.unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()));
+        let mut command = CommandBuilder::new(shell_bin);
         command.arg("-l");
         command
     };

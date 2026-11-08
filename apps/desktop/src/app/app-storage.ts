@@ -12,7 +12,8 @@ export type ActiveWorkspace =
   | 'knowledge'
   | 'literature'
   | 'tasks'
-  | 'feed';
+  | 'feed'
+  | 'terminal';
 export type MindmapStyle =
   | 'gray'
   | 'roots'
@@ -152,7 +153,8 @@ export function readActiveWorkspace(): ActiveWorkspace {
       stored === 'knowledge' ||
       stored === 'literature' ||
       stored === 'tasks' ||
-      stored === 'feed'
+      stored === 'feed' ||
+      stored === 'terminal'
       ? stored
       : 'mindmap';
   } catch {
