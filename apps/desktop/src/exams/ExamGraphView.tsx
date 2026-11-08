@@ -174,15 +174,21 @@ export function ExamGraphView({
             viewBox={`-${layout.extent} -${layout.extent} ${canvasSize} ${canvasSize}`}
             aria-hidden="true"
           >
-            {rings.map((ring) => (
-              <circle
-                key={ring}
-                className="exam-graph-ring"
-                cx="0"
-                cy="0"
-                r={230 + (ring - 1) * 170}
-              />
-            ))}
+            {rings.map((ring) => {
+              const nodeOnRing = layout.nodes.find((n) => n.ring === ring);
+              const ringRadius = nodeOnRing
+                ? Math.round(Math.hypot(nodeOnRing.x, nodeOnRing.y))
+                : 165 + (ring - 1) * 150;
+              return (
+                <circle
+                  key={ring}
+                  className="exam-graph-ring"
+                  cx="0"
+                  cy="0"
+                  r={ringRadius}
+                />
+              );
+            })}
             {layout.nodes.map((node) => {
               const urgency =
                 itemById.get(node.id)?.schedule.urgency ?? 'notStarted';
