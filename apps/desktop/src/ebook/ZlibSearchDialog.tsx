@@ -1,95 +1,142 @@
 import { useEffect, useState } from 'react';
+import type { FormEvent } from 'react';
 import type { EpubBookDocument } from '../library/library';
 import { zlibApi } from './zlib-api';
 import type { ZlibBook, ZlibEnvironment } from './zlib-api';
 import './zlib-search.css';
 
+function errorMessage(caught: unknown, fallback: string): string {
+  return typeof caught === 'string'
+    ? caught
+    : (caught as Error)?.message || fallback;
+}
+
+function isExpiredSession(message: string): boolean {
+  return /not logged in|session expired|请先登录/i.test(message);
+}
+
 export default function ZlibSearchDialog({
-  open,
-  onClose,
-  onBookDownloaded,
+  active,
   hasRoot,
+  onBookDownloaded,
 }: {
-  open: boolean;
-  onClose(): void;
-  onBookDownloaded(book: EpubBookDocument, openImmediately: boolean): void;
+  active: boolean;
   hasRoot: boolean;
+  onBookDownloaded(book: EpubBookDocument, openImmediately: boolean): void;
 }) {
+  const [env, setEnv] = useState<ZlibEnvironment | null>(null);
+  const [environmentError, setEnvironmentError] = useState('');
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loggingIn, setLoggingIn] = useState(false);
+  const [loginError, setLoginError] = useState('');
   const [query, setQuery] = useState('');
   const [format, setFormat] = useState('epub');
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<ZlibBook[]>([]);
-  const [error, setError] = useState('');
-  const [env, setEnv] = useState<ZlibEnvironment | null>(null);
+  const [searched, setSearched] = useState(false);
+  const [searchError, setSearchError] = useState('');
+  const [downloadError, setDownloadError] = useState('');
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [downloadedBooks, setDownloadedBooks] = useState<
     Map<string, EpubBookDocument>
   >(new Map());
-  const [downloadError, setDownloadError] = useState('');
-  const [showGuide, setShowGuide] = useState(false);
 
   useEffect(() => {
-    if (!open) return;
+    if (!active) return;
+    let cancelled = false;
+    setEnvironmentError('');
     void zlibApi
       .checkEnvironment()
-      .then((data) => setEnv(data))
-      .catch(() => {});
-  }, [open]);
+      .then((next) => {
+        if (!cancelled) setEnv(next);
+      })
+      .catch(() => {
+        if (!cancelled) setEnvironmentError('无法检测本机找书组件。');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [active]);
 
-  if (!open) return null;
+  const closeLogin = () => {
+    setLoginOpen(false);
+    setPassword('');
+    setLoginError('');
+  };
 
-  const handleSearch = async () => {
-    const q = query.trim();
-    if (!q || searching) return;
+  const searchBooks = async (authenticated = false) => {
+    const term = query.trim();
+    if (!term || searching) return;
+    if (!authenticated && !env?.hasLogin) {
+      setLoginOpen(true);
+      return;
+    }
     setSearching(true);
-    setError('');
+    setSearched(true);
+    setSearchError('');
     setDownloadError('');
     try {
-      const res = await zlibApi.search(q, format, 24);
-      setResults(res.books);
-      if (res.books.length === 0) {
-        setError('未找到匹配的电子书，建议尝试更换关键词或作者名。');
-      }
+      const response = await zlibApi.search(term, format, 24);
+      setResults(response.books);
     } catch (caught) {
-      setError(
-        typeof caught === 'string'
-          ? caught
-          : (caught as Error)?.message || '搜索失败，请稍后重试',
-      );
+      const message = errorMessage(caught, '搜索失败，请稍后重试。');
+      if (isExpiredSession(message)) {
+        setEnv((current) =>
+          current ? { ...current, hasLogin: false } : current,
+        );
+        setLoginError('登录会话已失效，请重新登录。');
+        setLoginOpen(true);
+      } else {
+        setSearchError(message);
+      }
     } finally {
       setSearching(false);
     }
   };
 
-  const handleDownload = async (
-    book: ZlibBook,
-    openImmediately: boolean = false,
-  ) => {
+  const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (loggingIn || !email.trim() || !password) return;
+    setLoggingIn(true);
+    setLoginError('');
+    try {
+      await zlibApi.login(email.trim(), password);
+      setEnv((current) => (current ? { ...current, hasLogin: true } : current));
+      closeLogin();
+      // 用户先输入关键词再登录时，认证完成后直接继续该次检索。
+      if (query.trim()) void searchBooks(true);
+    } catch (caught) {
+      setLoginError(errorMessage(caught, '登录失败，请稍后重试。'));
+    } finally {
+      setPassword('');
+      setLoggingIn(false);
+    }
+  };
+
+  const downloadBook = async (book: ZlibBook) => {
     if (!hasRoot) {
-      setDownloadError('请先在应用中选择书架保存目录（文件库位置）。');
+      setDownloadError('请先选择文件库位置，再下载到书架。');
       return;
     }
-
     const idHash = `${book.id}:${book.hash}`;
     setDownloadingId(idHash);
     setDownloadError('');
-
     try {
-      const doc = await zlibApi.downloadBook(idHash, book.title);
-      setDownloadedBooks((prev) => {
-        const next = new Map(prev);
-        next.set(idHash, doc);
-        return next;
-      });
-      onBookDownloaded(doc, openImmediately);
+      const document = await zlibApi.downloadBook(idHash, book.title);
+      setDownloadedBooks((current) => new Map(current).set(idHash, document));
+      onBookDownloaded(document, false);
     } catch (caught) {
-      const msg =
-        typeof caught === 'string'
-          ? caught
-          : (caught as Error)?.message || '下载失败';
-      setDownloadError(msg);
-      if (!env?.installed) {
-        setShowGuide(true);
+      const message = errorMessage(caught, '下载失败。');
+      if (isExpiredSession(message)) {
+        setEnv((current) =>
+          current ? { ...current, hasLogin: false } : current,
+        );
+        setLoginError('登录会话已失效，请重新登录。');
+        setLoginOpen(true);
+      } else {
+        setDownloadError(message);
       }
     } finally {
       setDownloadingId(null);
@@ -97,200 +144,154 @@ export default function ZlibSearchDialog({
   };
 
   return (
-    <div className="zlib-modal-backdrop" onClick={onClose}>
-      <div
-        className="zlib-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="zlib-modal-title"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="zlib-modal-header">
-          <div className="zlib-header-left">
-            <h2 id="zlib-modal-title">Z-Library 在线找书</h2>
-            <div className="zlib-env-pill">
-              {env?.installed ? (
-                <span
-                  className="zlib-dot is-online"
-                  title="已连接 Z-Library CLI"
-                >
-                  ● 已连接 CLI {env.version ? `(${env.version})` : ''}
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  className="zlib-guide-link"
-                  onClick={() => setShowGuide((prev) => !prev)}
-                  title="点击查看安装指南"
-                >
-                  <span className="zlib-dot is-warn">
-                    ● 在线检索模式 (点击配置)
-                  </span>
-                </button>
-              )}
-            </div>
+    <>
+      <aside className="zlib-side-panel" aria-label="在线找书">
+        <header className="zlib-side-header">
+          <div>
+            <span className="zlib-side-kicker">ONLINE CATALOG</span>
+            <h2>在线找书</h2>
           </div>
-          <button
-            type="button"
-            className="zlib-close-btn"
-            onClick={onClose}
-            aria-label="关闭"
+          <span
+            className={`zlib-side-status${env?.hasLogin ? ' is-connected' : ''}`}
           >
-            ✕
-          </button>
+            {env?.hasLogin ? '已登录' : env?.installed ? '未登录' : '未配置'}
+          </span>
         </header>
 
-        {showGuide && (
-          <div className="zlib-guide-banner">
-            <div className="zlib-guide-text">
-              <strong>💡 接入 heartleo/zlib CLI 提示：</strong>
-              <p>
-                当前处于免安装在线预览模式。安装 <code>heartleo/zlib</code>{' '}
-                后即可享受全速多线程下载与账号免流配额。 Windows 用户可执行：
-                <code>winget install --id heartleo.zlib --exact</code>
-              </p>
+        <div className="zlib-side-controls">
+          <form
+            className="zlib-side-search"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void searchBooks();
+            }}
+          >
+            <input
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="书名、作者或 ISBN"
+              aria-label="在线搜索书籍"
+            />
+            <div className="zlib-side-search-actions">
+              <select
+                value={format}
+                onChange={(event) => setFormat(event.target.value)}
+                aria-label="书籍格式"
+              >
+                <option value="epub">EPUB</option>
+                <option value="">全部格式</option>
+                <option value="pdf">PDF</option>
+              </select>
+              <button
+                type="submit"
+                disabled={!query.trim() || searching || !env?.installed}
+              >
+                {searching ? '检索中…' : '查找'}
+              </button>
             </div>
+          </form>
+          {env?.installed && !env.hasLogin && (
             <button
               type="button"
-              className="zlib-guide-close"
-              onClick={() => setShowGuide(false)}
+              className="zlib-side-login"
+              onClick={() => setLoginOpen(true)}
             >
-              我知道了
+              登录账号以检索和下载
             </button>
-          </div>
-        )}
-
-        <div className="zlib-search-bar">
-          <input
-            type="search"
-            autoFocus
-            className="zlib-search-input"
-            placeholder="输入书名、作者或 ISBN（如：深入理解计算机系统 / 纳瓦尔宝典 / Dune）..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void handleSearch();
-            }}
-          />
-          <select
-            className="zlib-format-select"
-            value={format}
-            onChange={(e) => setFormat(e.target.value)}
-            aria-label="格式筛选"
-          >
-            <option value="epub">EPUB</option>
-            <option value="">全部格式</option>
-            <option value="pdf">PDF</option>
-          </select>
-          <button
-            type="button"
-            className="zlib-search-btn"
-            disabled={searching || !query.trim()}
-            onClick={() => void handleSearch()}
-          >
-            {searching ? '正在检索…' : '搜索书籍'}
-          </button>
+          )}
+          {!env && !environmentError && (
+            <p className="zlib-side-hint">正在检查找书组件…</p>
+          )}
+          {environmentError && (
+            <p className="zlib-side-error" role="alert">
+              {environmentError}
+            </p>
+          )}
+          {env && !env.installed && (
+            <p className="zlib-side-hint">
+              在终端运行 <code>winget install --id heartleo.zlib --exact</code>
+              ，安装后重新进入电子书页。
+            </p>
+          )}
+          {downloadError && (
+            <p className="zlib-side-error" role="alert">
+              {downloadError}
+            </p>
+          )}
         </div>
 
-        {downloadError && (
-          <div className="zlib-alert-error" role="alert">
-            <span>⚠ {downloadError}</span>
-          </div>
-        )}
-
-        <main className="zlib-modal-body">
-          {searching && (
-            <div className="zlib-state-box">
-              <div className="zlib-spinner" />
-              <p>正在连接 Z-Library 检索海量书目…</p>
-            </div>
-          )}
-
-          {!searching && error && (
-            <div className="zlib-state-box is-error">
-              <p>{error}</p>
-            </div>
-          )}
-
-          {!searching && !error && results.length === 0 && (
-            <div className="zlib-state-box is-empty">
-              <div className="zlib-empty-icon">📖</div>
-              <h3>开始发现你的下一本好书</h3>
-              <p>
-                支持搜索数百万册全球书籍。搜索后可一键下载并自动加入当前 Seamind
-                书架，立即研读并生成导图。
-              </p>
-            </div>
-          )}
-
-          {!searching && results.length > 0 && (
+        <div className="zlib-side-results">
+          {searching ? (
+            <p className="zlib-side-empty" role="status">
+              正在检索书目…
+            </p>
+          ) : searchError ? (
+            <p className="zlib-side-error" role="alert">
+              {searchError}
+            </p>
+          ) : !searched ? (
+            <p className="zlib-side-empty">
+              输入书名、作者或 ISBN，结果将在这里展示。
+            </p>
+          ) : results.length === 0 ? (
+            <p className="zlib-side-empty">
+              没有找到匹配的书籍。请换一个关键词再试。
+            </p>
+          ) : (
             <div className="zlib-results-grid">
               {results.map((book) => {
                 const idHash = `${book.id}:${book.hash}`;
-                const isDownloading = downloadingId === idHash;
-                const downloadedDoc = downloadedBooks.get(idHash);
-
+                const document = downloadedBooks.get(idHash);
                 return (
-                  <article key={idHash} className="zlib-book-card">
+                  <article className="zlib-book-card" key={idHash}>
                     <div className="zlib-book-cover-wrap">
                       {book.cover ? (
                         <img
-                          src={book.cover}
-                          alt={book.title}
-                          loading="lazy"
                           className="zlib-book-cover"
+                          src={book.cover}
+                          alt=""
+                          loading="lazy"
                         />
                       ) : (
                         <div className="zlib-cover-placeholder">
-                          <span>{book.extension?.toUpperCase() || 'EPUB'}</span>
+                          {book.extension?.toUpperCase() || 'BOOK'}
                         </div>
                       )}
-                      {book.extension && (
-                        <span className="zlib-ext-badge">
-                          {book.extension.toUpperCase()}
-                        </span>
-                      )}
                     </div>
-
                     <div className="zlib-book-info">
-                      <h4 className="zlib-book-title" title={book.title}>
+                      <h3 className="zlib-book-title" title={book.title}>
                         {book.title}
-                      </h4>
+                      </h3>
                       {book.author && (
                         <p className="zlib-book-author" title={book.author}>
                           {book.author}
                         </p>
                       )}
-
                       <div className="zlib-book-meta">
-                        {book.year && <span>{book.year} 年</span>}
-                        {book.language && <span>· {book.language}</span>}
-                        {book.filesize && <span>· {book.filesize}</span>}
+                        {[book.year, book.language, book.filesize]
+                          .filter(Boolean)
+                          .join(' · ')}
                       </div>
-
                       <div className="zlib-book-actions">
-                        {downloadedDoc ? (
-                          <div className="zlib-downloaded-group">
-                            <span className="zlib-done-tag">✓ 已入库</span>
-                            <button
-                              type="button"
-                              className="zlib-read-btn"
-                              onClick={() => {
-                                onBookDownloaded(downloadedDoc, true);
-                                onClose();
-                              }}
-                            >
-                              立即阅读
-                            </button>
-                          </div>
+                        {document ? (
+                          <button
+                            type="button"
+                            className="zlib-read-btn"
+                            onClick={() => onBookDownloaded(document, true)}
+                          >
+                            打开阅读
+                          </button>
                         ) : (
                           <button
                             type="button"
                             className="zlib-download-btn"
-                            disabled={isDownloading || Boolean(downloadingId)}
-                            onClick={() => void handleDownload(book, false)}
+                            disabled={Boolean(downloadingId)}
+                            onClick={() => void downloadBook(book)}
                           >
-                            {isDownloading ? '正在下载…' : '下载到书架'}
+                            {downloadingId === idHash
+                              ? '下载中…'
+                              : '下载到书架'}
                           </button>
                         )}
                       </div>
@@ -300,8 +301,96 @@ export default function ZlibSearchDialog({
               })}
             </div>
           )}
-        </main>
-      </div>
-    </div>
+        </div>
+      </aside>
+
+      {loginOpen && (
+        <div
+          className="zlib-modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeLogin();
+          }}
+        >
+          <div
+            className="zlib-modal zlib-modal-auth"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="zlib-login-title"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') closeLogin();
+            }}
+          >
+            <header className="zlib-modal-header">
+              <div className="zlib-header-left">
+                <span className="zlib-login-kicker">ACCOUNT / 本机登录</span>
+                <h2 id="zlib-login-title">登录找书账号</h2>
+              </div>
+              <button
+                type="button"
+                className="zlib-close-btn"
+                onClick={closeLogin}
+                aria-label="关闭登录窗口"
+              >
+                ×
+              </button>
+            </header>
+            <form
+              className="zlib-login-panel"
+              onSubmit={(event) => void handleLogin(event)}
+            >
+              <p>
+                登录会话只保存在本机 zlib 配置目录；密码不会写入文件或命令行。
+              </p>
+              <label>
+                邮箱
+                <input
+                  type="email"
+                  autoComplete="username"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  autoFocus
+                  required
+                />
+              </label>
+              <label>
+                密码
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  required
+                />
+              </label>
+              {loginError && (
+                <p className="zlib-login-error" role="alert">
+                  {loginError}
+                </p>
+              )}
+              <div className="zlib-login-actions">
+                <button type="submit" disabled={loggingIn}>
+                  {loggingIn ? '正在登录…' : '登录'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoginError('');
+                    void zlibApi
+                      .checkEnvironment()
+                      .then((next) => {
+                        setEnv(next);
+                        if (next.hasLogin) closeLogin();
+                      })
+                      .catch(() => setLoginError('重新检测登录状态失败。'));
+                  }}
+                >
+                  已在终端登录？刷新状态
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

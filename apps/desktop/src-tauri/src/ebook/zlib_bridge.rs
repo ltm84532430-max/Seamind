@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 use tauri::AppHandle;
 
 use crate::library::{path_to_relative_string, require_root, safe_file_stem, EpubBookDocument};
@@ -44,6 +45,49 @@ pub struct ZlibSearchResult {
     pub total: usize,
     pub query: String,
     pub source: String, // "cli" or "eapi"
+}
+
+fn json_text(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(text) if !text.trim().is_empty() => Some(text.trim().to_string()),
+        serde_json::Value::Number(number) => Some(number.to_string()),
+        _ => None,
+    }
+}
+
+fn first_text(item: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| item.get(*key).and_then(json_text))
+}
+
+/// CLI 使用 name/authors/size，直连接口使用 title/author/filesizeString。
+fn parse_zlib_book(item: &serde_json::Value) -> Option<ZlibBook> {
+    let id = first_text(item, &["id"])?;
+    let hash = first_text(item, &["hash"])?;
+    let author = first_text(item, &["author"]).or_else(|| {
+        item.get("authors").and_then(|value| match value {
+            serde_json::Value::Array(values) => {
+                let names = values.iter().filter_map(json_text).collect::<Vec<_>>();
+                (!names.is_empty()).then(|| names.join(", "))
+            }
+            other => json_text(other),
+        })
+    });
+
+    Some(ZlibBook {
+        id,
+        hash,
+        title: first_text(item, &["title", "name"]).unwrap_or_else(|| "未知书名".to_string()),
+        author,
+        publisher: first_text(item, &["publisher"]),
+        year: first_text(item, &["year"]),
+        language: first_text(item, &["language"]),
+        extension: first_text(item, &["extension"]),
+        filesize: first_text(item, &["filesizeString", "filesize", "size"]),
+        cover: first_text(item, &["cover"]),
+        rating: first_text(item, &["rating", "interestScore"]),
+        pages: first_text(item, &["pages"]),
+    })
 }
 
 /// Locates the `zlib` or `zlib.exe` binary on the host system.
@@ -199,6 +243,88 @@ pub fn zlib_get_profile(custom_path: Option<String>) -> Result<ZlibProfile, Stri
     })
 }
 
+/// 直接通过 HTTPS 登录，避免把密码放进 zlib 子进程的命令行参数。
+#[tauri::command]
+pub async fn zlib_login(email: String, password: String) -> Result<(), String> {
+    if find_zlib_binary(None).is_none() {
+        return Err("请先安装 zlib 命令行程序，安装后重新打开找书窗口。".to_string());
+    }
+    let email = email.trim();
+    if email.is_empty() || password.is_empty() {
+        return Err("请输入邮箱和密码。".to_string());
+    }
+
+    // 固定官方 CLI 的默认 EAPI 域名，不允许界面输入任意地址接收凭据。
+    const DOMAIN: &str = "https://z-lib.gd";
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "无法初始化登录连接。".to_string())?;
+    let response = client
+        .post(format!("{DOMAIN}/eapi/user/login"))
+        .header(reqwest::header::ACCEPT, "application/json")
+        .form(&[("email", email), ("password", password.as_str())])
+        .send()
+        .await
+        .map_err(|_| "连接登录服务失败，请检查网络后重试。".to_string())?;
+    if response.status().is_redirection() {
+        return Err("当前登录节点发生跳转。请在终端运行 zlib doctor 检查可用节点。".to_string());
+    }
+    let value: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|_| "登录服务没有返回有效数据。".to_string())?;
+    if value.get("success").and_then(|v| v.as_i64()) != Some(1) {
+        return Err(value
+            .get("error")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("登录失败，请核对邮箱、密码或账号状态。")
+            .to_string());
+    }
+    let user = value
+        .get("user")
+        .ok_or_else(|| "登录响应缺少用户信息。".to_string())?;
+    let user_id = user
+        .get("id")
+        .and_then(|v| {
+            v.as_str()
+                .map(str::to_string)
+                .or_else(|| v.as_u64().map(|n| n.to_string()))
+        })
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "登录响应缺少用户编号。".to_string())?;
+    let user_key = user
+        .get("remix_userkey")
+        .or_else(|| user.get("remix_user_key"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "登录响应缺少会话凭据。".to_string())?;
+
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .ok_or_else(|| "无法定位当前用户目录。".to_string())?;
+    let directory = PathBuf::from(home).join(".config").join("zlib");
+    std::fs::create_dir_all(&directory).map_err(|_| "无法创建本地登录目录。".to_string())?;
+    let session = serde_json::json!({
+        "cookies": { "remix_userid": user_id, "remix_userkey": user_key },
+        "domain": DOMAIN,
+        "mode": "eapi"
+    });
+    let session_bytes =
+        serde_json::to_vec_pretty(&session).map_err(|_| "无法保存登录会话。".to_string())?;
+    let session_path = directory.join("session.json");
+    std::fs::write(&session_path, session_bytes)
+        .map_err(|_| "无法写入本地登录会话。".to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&session_path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|_| "无法设置登录会话文件权限。".to_string())?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn zlib_search(
     query: String,
@@ -233,82 +359,14 @@ pub async fn zlib_search(
         ];
 
         let val = run_zlib_json(bin_path, &args)?;
-        let mut books = Vec::new();
-
-        let items = if let Some(arr) = val.as_array() {
-            arr.clone()
-        } else if let Some(arr) = val.get("books").and_then(|b| b.as_array()) {
-            arr.clone()
-        } else {
-            Vec::new()
-        };
-
-        for item in items {
-            let id = item
-                .get("id")
-                .map(|v| v.to_string().trim_matches('"').to_string())
-                .unwrap_or_default();
-            let hash = item
-                .get("hash")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
-            let title = item
-                .get("title")
-                .and_then(|v| v.as_str())
-                .unwrap_or("未知书名")
-                .to_string();
-            let author = item
-                .get("author")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let publisher = item
-                .get("publisher")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let year = item
-                .get("year")
-                .map(|v| v.to_string().trim_matches('"').to_string());
-            let language = item
-                .get("language")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let item_ext = item
-                .get("extension")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let filesize = item
-                .get("filesizeString")
-                .or_else(|| item.get("filesize"))
-                .map(|v| v.to_string().trim_matches('"').to_string());
-            let cover = item
-                .get("cover")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-            let rating = item
-                .get("rating")
-                .map(|v| v.to_string().trim_matches('"').to_string());
-            let pages = item
-                .get("pages")
-                .map(|v| v.to_string().trim_matches('"').to_string());
-
-            if !id.is_empty() && !hash.is_empty() {
-                books.push(ZlibBook {
-                    id,
-                    hash,
-                    title,
-                    author,
-                    publisher,
-                    year,
-                    language,
-                    extension: item_ext,
-                    filesize,
-                    cover,
-                    rating,
-                    pages,
-                });
-            }
-        }
+        let items = val
+            .as_array()
+            .or_else(|| val.get("books").and_then(|books| books.as_array()));
+        let books = items
+            .into_iter()
+            .flatten()
+            .filter_map(parse_zlib_book)
+            .collect::<Vec<_>>();
 
         let total = books.len();
         return Ok(ZlibSearchResult {
@@ -349,75 +407,13 @@ pub async fn zlib_search(
         {
             Ok(resp) if resp.status().is_success() => {
                 if let Ok(val) = resp.json::<serde_json::Value>().await {
-                    let mut books = Vec::new();
-                    if let Some(arr) = val.get("books").and_then(|b| b.as_array()) {
-                        for item in arr {
-                            let id = item
-                                .get("id")
-                                .map(|v| v.to_string().trim_matches('"').to_string())
-                                .unwrap_or_default();
-                            let hash = item
-                                .get("hash")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or_default()
-                                .to_string();
-                            let title = item
-                                .get("title")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("未知书名")
-                                .to_string();
-                            let author = item
-                                .get("author")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string());
-                            let publisher = item
-                                .get("publisher")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string());
-                            let year = item
-                                .get("year")
-                                .map(|v| v.to_string().trim_matches('"').to_string());
-                            let language = item
-                                .get("language")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string());
-                            let item_ext = item
-                                .get("extension")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string());
-                            let filesize = item
-                                .get("filesizeString")
-                                .or_else(|| item.get("filesize"))
-                                .map(|v| v.to_string().trim_matches('"').to_string());
-                            let cover = item
-                                .get("cover")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string());
-                            let rating = item
-                                .get("rating")
-                                .map(|v| v.to_string().trim_matches('"').to_string());
-                            let pages = item
-                                .get("pages")
-                                .map(|v| v.to_string().trim_matches('"').to_string());
-
-                            if !id.is_empty() && !hash.is_empty() {
-                                books.push(ZlibBook {
-                                    id,
-                                    hash,
-                                    title,
-                                    author,
-                                    publisher,
-                                    year,
-                                    language,
-                                    extension: item_ext,
-                                    filesize,
-                                    cover,
-                                    rating,
-                                    pages,
-                                });
-                            }
-                        }
-                    }
+                    let books = val
+                        .get("books")
+                        .and_then(|items| items.as_array())
+                        .into_iter()
+                        .flatten()
+                        .filter_map(parse_zlib_book)
+                        .collect::<Vec<_>>();
                     let total = books.len();
                     return Ok(ZlibSearchResult {
                         books,
@@ -549,4 +545,42 @@ pub async fn zlib_download_book(
             .map(|duration| duration.as_secs())
             .unwrap_or_default(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_zlib_book;
+    use serde_json::json;
+
+    #[test]
+    fn cli_book_uses_name_authors_and_size() {
+        let book = parse_zlib_book(&json!({
+            "id": 123,
+            "hash": "abc",
+            "name": "热力学导论",
+            "authors": ["作者甲", "作者乙"],
+            "size": "2 MB",
+            "year": 2024
+        }))
+        .unwrap();
+        assert_eq!(book.title, "热力学导论");
+        assert_eq!(book.author.as_deref(), Some("作者甲, 作者乙"));
+        assert_eq!(book.filesize.as_deref(), Some("2 MB"));
+        assert_eq!(book.year.as_deref(), Some("2024"));
+    }
+
+    #[test]
+    fn eapi_book_still_uses_title_and_author() {
+        let book = parse_zlib_book(&json!({
+            "id": "456",
+            "hash": "def",
+            "title": "物理学概论",
+            "author": "作者丙",
+            "filesizeString": "3 MB"
+        }))
+        .unwrap();
+        assert_eq!(book.title, "物理学概论");
+        assert_eq!(book.author.as_deref(), Some("作者丙"));
+        assert_eq!(book.filesize.as_deref(), Some("3 MB"));
+    }
 }

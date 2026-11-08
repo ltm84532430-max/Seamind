@@ -247,6 +247,7 @@ pub fn run() {
             learning_tasks::learning_tasks_unarchive_task,
             zlib_bridge::zlib_check_environment,
             zlib_bridge::zlib_get_profile,
+            zlib_bridge::zlib_login,
             zlib_bridge::zlib_search,
             zlib_bridge::zlib_download_book,
             literature::literature_overview,

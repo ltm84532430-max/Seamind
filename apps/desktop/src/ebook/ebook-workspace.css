@@ -3433,6 +3433,8 @@
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
+  margin-left: auto;
 }
 
 .ebook-shelf-refresh-button {

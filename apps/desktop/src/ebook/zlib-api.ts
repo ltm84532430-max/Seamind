@@ -51,6 +51,10 @@ export const zlibApi = {
     });
   },
 
+  login(email: string, password: string): Promise<void> {
+    return invoke<void>('zlib_login', { email, password });
+  },
+
   search(
     query: string,
     ext = 'epub',

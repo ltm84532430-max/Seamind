@@ -78,7 +78,6 @@ export default function EbookWorkspace({
   });
   const [dashboardRevision, setDashboardRevision] = useState(0);
   const [exams, setExams] = useState<EpubExamSummary[]>([]);
-  const [zlibDialogOpen, setZlibDialogOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -453,12 +452,6 @@ export default function EbookWorkspace({
                   title="刷新书架"
                 >
                   刷新书架
-                </button>
-                <button type="button" onClick={() => setZlibDialogOpen(true)}>
-                  在线找书
-                </button>
-                <button type="button" onClick={() => onOpenExams('')}>
-                  试卷与复习
                 </button>
               </div>
             </div>
@@ -921,8 +914,7 @@ export default function EbookWorkspace({
       )}
 
       <ZlibSearchDialog
-        open={zlibDialogOpen}
-        onClose={() => setZlibDialogOpen(false)}
+        active={active}
         hasRoot={Boolean(snapshot?.rootPath)}
         onBookDownloaded={(doc, openImmediately) => {
           onRefresh();

@@ -18,12 +18,18 @@
   max-height: 90vh;
   display: flex;
   flex-direction: column;
-  border-radius: 8px;
+  border-radius: 0;
   background: var(--player-panel, #ffffff);
   color: var(--player-ink, #253039);
   border: 1px solid var(--player-line-strong, #cfd7db);
-  box-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.45);
+  box-shadow: none;
   overflow: hidden;
+}
+
+.zlib-modal-auth {
+  max-width: 520px;
+  height: auto;
+  min-height: 220px;
 }
 
 .app-shell[data-theme='dark'] .zlib-modal {
@@ -168,6 +174,343 @@
   padding: 12px 18px;
   border-bottom: 1px solid var(--player-line, #e1e6e9);
   background: var(--player-panel, #ffffff);
+}
+
+.zlib-login-panel {
+  box-sizing: border-box;
+  width: min(100% - 40px, 440px);
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  margin: 28px auto;
+  padding: 22px 24px;
+  border: 1px solid var(--player-line-strong, #cfd7db);
+  background: var(--player-panel-alt, #f7f9fa);
+}
+
+.zlib-login-kicker {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--player-muted, #6b7882);
+  font: 10px var(--mono, monospace);
+  letter-spacing: 0.08em;
+}
+
+.zlib-login-panel h3 {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.3;
+}
+
+.zlib-login-panel p {
+  margin: 7px 0 0;
+  color: var(--player-muted, #6b7882);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.zlib-login-panel label {
+  display: grid;
+  gap: 6px;
+  color: var(--player-ink, #253039);
+  font-size: 12px;
+}
+
+.zlib-login-panel input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--player-line-strong, #cfd7db);
+  border-radius: 0;
+  outline: none;
+  color: var(--player-ink, #253039);
+  background: var(--player-panel, #ffffff);
+  font: inherit;
+}
+
+.zlib-login-panel input:focus-visible {
+  border-color: var(--player-accent, #df735b);
+}
+
+.zlib-login-panel .zlib-login-error {
+  margin: 0;
+  color: var(--player-danger, #df5042);
+}
+
+.zlib-login-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.zlib-login-actions button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--player-line-strong, #cfd7db);
+  border-radius: 0;
+  color: var(--player-ink, #253039);
+  background: var(--player-panel, #ffffff);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.zlib-login-actions button[type='submit'] {
+  border-color: var(--player-accent, #df735b);
+  color: #fff;
+  background: var(--player-accent, #df735b);
+}
+
+.zlib-login-actions button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.zlib-install-panel code {
+  padding: 2px 4px;
+  background: var(--player-panel, #ffffff);
+  user-select: all;
+}
+
+.app-shell[data-theme='dark'] .zlib-login-panel {
+  border-color: var(--player-line-strong, #3b454c);
+  background: var(--player-panel-alt, #1c2327);
+}
+
+.app-shell[data-theme='dark'] .zlib-login-panel input,
+.app-shell[data-theme='dark'] .zlib-login-actions button,
+.app-shell[data-theme='dark'] .zlib-install-panel code {
+  border-color: var(--player-line-strong, #3b454c);
+  color: var(--player-ink, #dce3e8);
+  background: var(--player-panel, #20282d);
+}
+
+.app-shell[data-theme='dark'] .zlib-login-actions button[type='submit'] {
+  border-color: var(--player-accent, #df735b);
+  color: #fff;
+  background: var(--player-accent, #df735b);
+}
+
+/* 右侧目录占用书架原本预留的第三列，边界与左侧阅读计划对齐。 */
+.zlib-side-panel {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: max(340px, calc(100vh - 142px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid #d8dfe3;
+  color: #253039;
+  background: #f7f8f9;
+}
+
+.zlib-side-header {
+  height: 52px;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 12px;
+  border-bottom: 1px solid #d8dfe3;
+}
+
+.zlib-side-kicker {
+  display: block;
+  color: #8b979e;
+  font: 9px var(--mono, monospace);
+  letter-spacing: 0.08em;
+}
+
+.zlib-side-header h2 {
+  margin: 2px 0 0;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.zlib-side-status {
+  flex: 0 0 auto;
+  color: #8b979e;
+  font-size: 10px;
+}
+
+.zlib-side-status.is-connected {
+  color: #3e8267;
+}
+
+.zlib-side-controls {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid #d8dfe3;
+}
+
+.zlib-side-search {
+  display: grid;
+  gap: 7px;
+}
+
+.zlib-side-search input,
+.zlib-side-search select {
+  box-sizing: border-box;
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid #d8dfe3;
+  border-radius: 0;
+  outline: none;
+  color: #344149;
+  background: #fff;
+  font: inherit;
+  font-size: 11px;
+}
+
+.zlib-side-search input:focus-visible,
+.zlib-side-search select:focus-visible {
+  border-color: #c45d42;
+}
+
+.zlib-side-search-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 70px;
+  gap: 7px;
+}
+
+.zlib-side-search-actions button,
+.zlib-side-login {
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid #c45d42;
+  border-radius: 0;
+  color: #fff;
+  background: #c45d42;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+
+.zlib-side-search-actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.zlib-side-login {
+  width: 100%;
+  border-color: #d8dfe3;
+  color: #ad503a;
+  background: transparent;
+}
+
+.zlib-side-hint,
+.zlib-side-error {
+  margin: 0;
+  color: #7e8a92;
+  font-size: 10px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.zlib-side-error {
+  color: #b94d34;
+}
+
+.zlib-side-results {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #c5cdd1 transparent;
+}
+
+.zlib-side-empty {
+  margin: 0;
+  padding: 18px 12px;
+  color: #8b979e;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.zlib-side-panel .zlib-results-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+
+.zlib-side-panel .zlib-book-card {
+  min-width: 0;
+  gap: 9px;
+  padding: 11px 12px;
+  border: 0;
+  border-bottom: 1px solid #dfe4e7;
+  border-radius: 0;
+  background: transparent;
+}
+
+.zlib-side-panel .zlib-book-card:hover {
+  background: #eef2f3;
+}
+
+.zlib-side-panel .zlib-book-cover-wrap {
+  width: 44px;
+  min-width: 44px;
+  height: 62px;
+  border: 1px solid #d8dfe3;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.zlib-side-panel .zlib-book-title {
+  font-size: 11px;
+}
+
+.zlib-side-panel .zlib-book-author,
+.zlib-side-panel .zlib-book-meta {
+  font-size: 10px;
+}
+
+.zlib-side-panel .zlib-book-actions {
+  padding-top: 8px;
+}
+
+.zlib-side-panel .zlib-download-btn,
+.zlib-side-panel .zlib-read-btn {
+  height: 25px;
+  border-radius: 0;
+  font-size: 10px;
+}
+
+.app-shell[data-theme='dark'] .zlib-side-panel {
+  border-color: #303b42;
+  color: #dce3e8;
+  background: #182127;
+}
+
+.app-shell[data-theme='dark'] .zlib-side-header,
+.app-shell[data-theme='dark'] .zlib-side-controls,
+.app-shell[data-theme='dark'] .zlib-side-panel .zlib-book-card {
+  border-color: #303b42;
+}
+
+.app-shell[data-theme='dark'] .zlib-side-search input,
+.app-shell[data-theme='dark'] .zlib-side-search select {
+  border-color: #3b454c;
+  color: #dce3e8;
+  background: #20282d;
+}
+
+.app-shell[data-theme='dark'] .zlib-side-panel .zlib-book-card {
+  background: transparent;
+}
+
+.app-shell[data-theme='dark'] .zlib-side-panel .zlib-book-card:hover {
+  background: #202b31;
 }
 
 .app-shell[data-theme='dark'] .zlib-search-bar {
