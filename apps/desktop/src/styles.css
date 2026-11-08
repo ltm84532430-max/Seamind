@@ -187,6 +187,7 @@ select option {
 .epub-reader-sidebar-content::-webkit-scrollbar-track,
 .epub-reader-selection-quote-text::-webkit-scrollbar-track,
 .epub-reader-ai-footnote::-webkit-scrollbar-track,
+.epub-reader-ai-footnote-body::-webkit-scrollbar-track,
 .epub-reader-selection-note textarea::-webkit-scrollbar-track,
 .epub-reader-annotation-editor textarea::-webkit-scrollbar-track {
   background: transparent;
@@ -194,6 +195,7 @@ select option {
 .epub-reader-sidebar-content::-webkit-scrollbar-button,
 .epub-reader-selection-quote-text::-webkit-scrollbar-button,
 .epub-reader-ai-footnote::-webkit-scrollbar-button,
+.epub-reader-ai-footnote-body::-webkit-scrollbar-button,
 .epub-reader-selection-note textarea::-webkit-scrollbar-button,
 .epub-reader-annotation-editor textarea::-webkit-scrollbar-button {
   display: none;
@@ -202,6 +204,7 @@ select option {
 }
 .epub-reader-selection-quote-text,
 .epub-reader-ai-footnote,
+.epub-reader-ai-footnote-body,
 .epub-reader-selection-note textarea,
 .epub-reader-annotation-editor textarea {
   --scrollbar-thumb: transparent;
@@ -210,6 +213,8 @@ select option {
 .epub-reader-selection-toolbar:hover .epub-reader-selection-quote-text,
 .epub-reader-selection-quote-text:hover,
 .epub-reader-ai-footnote:hover,
+.epub-reader-ai-footnote:hover .epub-reader-ai-footnote-body,
+.epub-reader-ai-footnote-body:hover,
 .epub-reader-selection-note textarea:hover,
 .epub-reader-annotation-editor textarea:hover {
   --scrollbar-thumb: var(--scrollbar-slider);
@@ -217,6 +222,7 @@ select option {
 }
 .epub-reader-selection-quote-text::-webkit-scrollbar,
 .epub-reader-ai-footnote::-webkit-scrollbar,
+.epub-reader-ai-footnote-body::-webkit-scrollbar,
 .epub-reader-selection-note textarea::-webkit-scrollbar,
 .epub-reader-annotation-editor textarea::-webkit-scrollbar {
   width: 6px;
@@ -224,6 +230,7 @@ select option {
 }
 .epub-reader-selection-quote-text::-webkit-scrollbar-thumb,
 .epub-reader-ai-footnote::-webkit-scrollbar-thumb,
+.epub-reader-ai-footnote-body::-webkit-scrollbar-thumb,
 .epub-reader-selection-note textarea::-webkit-scrollbar-thumb,
 .epub-reader-annotation-editor textarea::-webkit-scrollbar-thumb {
   min-width: 20px;
@@ -232,18 +239,21 @@ select option {
 }
 .epub-reader-selection-quote-text::-webkit-scrollbar-thumb:hover,
 .epub-reader-ai-footnote::-webkit-scrollbar-thumb:hover,
+.epub-reader-ai-footnote-body::-webkit-scrollbar-thumb:hover,
 .epub-reader-selection-note textarea::-webkit-scrollbar-thumb:hover,
 .epub-reader-annotation-editor textarea::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-slider-hover);
 }
 .epub-reader-selection-quote-text::-webkit-scrollbar-thumb:active,
 .epub-reader-ai-footnote::-webkit-scrollbar-thumb:active,
+.epub-reader-ai-footnote-body::-webkit-scrollbar-thumb:active,
 .epub-reader-selection-note textarea::-webkit-scrollbar-thumb:active,
 .epub-reader-annotation-editor textarea::-webkit-scrollbar-thumb:active {
   background: var(--scrollbar-slider-active);
 }
 .epub-reader-selection-quote-text::-webkit-scrollbar-corner,
 .epub-reader-ai-footnote::-webkit-scrollbar-corner,
+.epub-reader-ai-footnote-body::-webkit-scrollbar-corner,
 .epub-reader-selection-note textarea::-webkit-scrollbar-corner,
 .epub-reader-annotation-editor textarea::-webkit-scrollbar-corner {
   background: transparent;
@@ -252,6 +262,7 @@ select option {
   .epub-reader-sidebar-content,
   .epub-reader-selection-quote-text,
   .epub-reader-ai-footnote,
+  .epub-reader-ai-footnote-body,
   .epub-reader-selection-note textarea,
   .epub-reader-annotation-editor textarea {
     scrollbar-width: thin;
@@ -261,6 +272,8 @@ select option {
   .epub-reader-selection-toolbar:hover .epub-reader-selection-quote-text,
   .epub-reader-selection-quote-text:hover,
   .epub-reader-ai-footnote:hover,
+  .epub-reader-ai-footnote:hover .epub-reader-ai-footnote-body,
+  .epub-reader-ai-footnote-body:hover,
   .epub-reader-selection-note textarea:hover,
   .epub-reader-annotation-editor textarea:hover {
     scrollbar-color: var(--scrollbar-slider) transparent;
@@ -15407,6 +15420,213 @@ select option {
 }
 .epub-reader-selection-colors button {
   border-color: #8f9a9f;
+}
+.epub-reader-ai-format-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding-top: 2px;
+}
+.epub-reader-ai-format-bar.is-in-footnote {
+  margin-top: 6px;
+  padding: 4px 0;
+  border-bottom: 1px solid #e5e9eb;
+}
+.epub-reader-ai-format-label {
+  margin-right: 2px;
+  color: #78868e;
+  font-size: 9.5px;
+}
+.epub-reader-ai-format-bar button {
+  min-height: 22px;
+  padding: 0 6px;
+  border: 1px solid #dce2e4;
+  border-radius: 0;
+  color: #4b5d67;
+  background: #fff;
+  font: inherit;
+  font-size: 9.5px;
+  cursor: pointer;
+}
+.epub-reader-ai-format-bar button:hover:not(:disabled),
+.epub-reader-ai-format-bar button.is-active {
+  border-color: #c45d42;
+  color: #b94e35;
+  background: #fbf3f0;
+}
+.epub-reader-ai-format-bar button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.epub-reader-ai-prompt-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px;
+  align-items: center;
+}
+.epub-reader-ai-prompt-bar.is-in-footnote {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid #e5e9eb;
+}
+.epub-reader-ai-prompt-bar input {
+  min-width: 0;
+  height: 26px;
+  padding: 0 7px;
+  border: 1px solid #d8dfe2;
+  border-radius: 0;
+  color: #2b3a42;
+  background: #fff;
+  font: inherit;
+  font-size: 10px;
+  outline: none;
+}
+.epub-reader-ai-prompt-bar input:focus {
+  border-color: #71858f;
+}
+.epub-reader-ai-prompt-bar button {
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid #52636c;
+  border-radius: 0;
+  color: #fff;
+  background: #52636c;
+  font: inherit;
+  font-size: 10px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.epub-reader-ai-prompt-bar button:hover:not(:disabled) {
+  border-color: #3f4f57;
+  background: #3f4f57;
+}
+.epub-reader-ai-prompt-bar button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.epub-reader-ai-mode-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border: 1px solid #d5dfe3;
+  color: #526670;
+  background: #f2f6f8;
+  font-size: 9.5px;
+  font-weight: 500;
+}
+.epub-reader-ai-question-echo {
+  margin-top: 6px;
+  padding: 4px 7px;
+  border-left: 2px solid #71858f;
+  color: #4c5d66;
+  background: #f3f7f9;
+  font-size: 10px;
+  line-height: 1.45;
+}
+.epub-reader-ai-question-echo strong {
+  color: #2b3a42;
+  font-weight: 600;
+}
+.epub-reader-ai-footnote-body {
+  max-height: 216px;
+  margin: 7px 0;
+  padding-right: 4px;
+  overflow-y: auto;
+  font-size: 11px;
+  line-height: 18px;
+}
+.epub-reader-ai-structured {
+  display: grid;
+  gap: 5px;
+}
+.epub-reader-ai-section-line {
+  line-height: 18px;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.epub-reader-ai-tag {
+  margin-right: 3px;
+  color: #b84d35;
+  font-weight: 600;
+}
+.epub-reader-ai-bullet {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr);
+  gap: 4px;
+  line-height: 18px;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.epub-reader-ai-bullet-dot {
+  color: #71858f;
+  font-weight: 700;
+}
+.epub-reader-ai-paragraph {
+  margin: 0;
+  line-height: 18px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.epub-reader[data-theme='dark']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-ai-format-bar
+  button {
+  border-color: #3c484f;
+  color: #c2cbd0;
+  background: #202a30;
+}
+.epub-reader[data-theme='dark']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-ai-format-bar
+  button:hover:not(:disabled),
+.epub-reader[data-theme='dark']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-ai-format-bar
+  button.is-active {
+  border-color: #d36a4e;
+  color: #f3c1b2;
+  background: #362521;
+}
+.epub-reader[data-theme='dark']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-ai-prompt-bar
+  input {
+  border-color: #3c484f;
+  color: #dde6e9;
+  background: #171f24;
+}
+.epub-reader[data-theme='dark']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-ai-prompt-bar
+  input:focus {
+  border-color: #7996a4;
+}
+.app-shell[data-theme='dark'] .epub-reader-ai-format-bar.is-in-footnote,
+.app-shell[data-theme='dark'] .epub-reader-ai-prompt-bar.is-in-footnote {
+  border-color: #344149;
+}
+.app-shell[data-theme='dark'] .epub-reader-ai-mode-badge {
+  border-color: #3c4b54;
+  color: #b8c9d1;
+  background: #172026;
+}
+.app-shell[data-theme='dark'] .epub-reader-ai-question-echo {
+  border-left-color: #7996a4;
+  color: #b8c6ce;
+  background: #182127;
+}
+.app-shell[data-theme='dark'] .epub-reader-ai-question-echo strong {
+  color: #e3ecef;
+}
+.app-shell[data-theme='dark'] .epub-reader-ai-tag {
+  color: #e89b84;
 }
 .epub-reader-ai-footnote.is-preview,
 .epub-reader-ai-footnote.is-saved {

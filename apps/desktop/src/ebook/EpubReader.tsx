@@ -204,12 +204,95 @@ type ReaderSelection = {
   anchorTop: number;
 };
 
+export type EpubAiResponseFormat =
+  | 'structured'
+  | 'concise'
+  | 'example'
+  | 'pitfalls'
+  | 'qa';
+
+const AI_RESPONSE_FORMATS: Array<{
+  value: EpubAiResponseFormat;
+  label: string;
+  hint: string;
+}> = [
+  {
+    value: 'structured',
+    label: '要点精析',
+    hint: '核心结论 + 关键要点分点拆解',
+  },
+  {
+    value: 'concise',
+    label: '极简总结',
+    hint: '1~2 句话浓缩核心含义',
+  },
+  {
+    value: 'example',
+    label: '通俗举例',
+    hint: '结合代码示例或直观类比讲解',
+  },
+  {
+    value: 'pitfalls',
+    label: '考点易错',
+    hint: '提炼核心考点、边界条件与易错陷阱',
+  },
+  {
+    value: 'qa',
+    label: '深度答疑',
+    hint: '针对难点或自定义问题循序渐进详尽推导',
+  },
+];
+
+function renderAiFootnoteContent(text: string): ReactNode {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length <= 1) {
+    return <p className="epub-reader-ai-paragraph">{text}</p>;
+  }
+  return (
+    <div className="epub-reader-ai-structured">
+      {lines.map((line, index) => {
+        const tagMatch = line.match(/^(【[^】]+】)\s*(.*)$/);
+        if (tagMatch) {
+          const [, tag, rest] = tagMatch;
+          return (
+            <div key={index} className="epub-reader-ai-section-line">
+              <strong className="epub-reader-ai-tag">{tag}</strong>
+              {rest ? <span>{rest}</span> : null}
+            </div>
+          );
+        }
+        const bulletMatch = line.match(/^(?:[-•*]|\d+[.)、])\s+(.*)$/);
+        if (bulletMatch) {
+          return (
+            <div key={index} className="epub-reader-ai-bullet">
+              <span className="epub-reader-ai-bullet-dot" aria-hidden="true">
+                •
+              </span>
+              <span>{bulletMatch[1]}</span>
+            </div>
+          );
+        }
+        return (
+          <p key={index} className="epub-reader-ai-paragraph">
+            {line}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
 type AiAnalysisPreview = {
   cfi: string;
   text: string;
   left: number;
   top: number;
   source?: 'cli';
+  format?: EpubAiResponseFormat;
+  question?: string;
 };
 
 type AiFootnoteAnchor = {
@@ -227,7 +310,7 @@ export interface EpubReaderProviderSettings {
 }
 
 const MAX_EPUB_AI_CONTEXT_CHARS = 6_000;
-const MAX_EPUB_AI_ANALYSIS_CHARS = 800;
+const MAX_EPUB_AI_ANALYSIS_CHARS = 1_600;
 const EPUB_CONTEXT_BLOCK_SELECTOR =
   'p, li, blockquote, pre, h1, h2, h3, h4, h5, h6';
 
@@ -748,6 +831,12 @@ export default function EpubReader({
   } | null>(null);
   const [aiAnalysisBusy, setAiAnalysisBusy] = useState(false);
   const [aiAnalysisError, setAiAnalysisError] = useState('');
+  const [aiResponseFormat, setAiResponseFormat] =
+    useState<EpubAiResponseFormat>('structured');
+  const [aiCustomQuestion, setAiCustomQuestion] = useState('');
+  const [savedFootnoteQuestion, setSavedFootnoteQuestion] = useState('');
+  const [savedFootnoteBusy, setSavedFootnoteBusy] = useState(false);
+  const [savedFootnoteError, setSavedFootnoteError] = useState('');
   const [examDialogOpen, setExamDialogOpen] = useState(false);
   const [examQuestionCount, setExamQuestionCount] = useState('10');
   const [examScope, setExamScope] = useState<'section' | 'chapter'>('section');
@@ -993,15 +1082,18 @@ export default function EpubReader({
 
   const notePositionForPoint = (left: number, top: number) => {
     const main = stageRef.current?.parentElement;
-    if (!main) return { left, top, width: 320 };
+    if (!main) return { left, top, width: 380 };
     const width = main.clientWidth;
     const height = main.clientHeight;
-    const cardWidth = Math.min(320, Math.max(0, Math.floor((width - 40) / 2)));
+    const cardWidth = Math.min(
+      380,
+      Math.max(280, Math.floor((width - 40) / 2)),
+    );
     const gap = 14;
     let x = left + gap;
     if (x + cardWidth > width - 8) x = left - cardWidth - gap;
     x = Math.max(8, Math.min(width - cardWidth - 8, x));
-    const estimatedCardHeight = Math.min(320, Math.max(0, height * 0.48));
+    const estimatedCardHeight = Math.min(380, Math.max(0, height * 0.54));
     let y = top + 10;
     if (y + estimatedCardHeight > height - 8) {
       y = top - estimatedCardHeight - 10;
@@ -1414,13 +1506,20 @@ export default function EpubReader({
     return annotation;
   };
 
-  const analyzeSelectedText = async () => {
-    const selected = selectionDraft;
+  const analyzeSelectedText = async (
+    formatOverride?: EpubAiResponseFormat,
+    questionOverride?: string,
+  ) => {
+    const selected = selectionDraftRef.current ?? selectionDraft;
     if (!selected || aiAnalysisBusy || pendingCliFootnoteRef.current) return;
+    const format = formatOverride ?? aiResponseFormat;
+    const question = (questionOverride ?? aiCustomQuestion).trim();
+    if (formatOverride) {
+      setAiResponseFormat(formatOverride);
+    }
     const requestId = ++aiAnalysisRequestRef.current;
     setAiAnalysisBusy(true);
     setAiAnalysisError('');
-    setAiAnalysisPreview(null);
     try {
       const result = await invoke<string>('analyze_epub_highlight', {
         baseUrl: provider.baseUrl,
@@ -1428,6 +1527,8 @@ export default function EpubReader({
         chapterLabel: selected.label.slice(0, 200),
         selectionText: selected.text,
         context: selected.context,
+        responseFormat: format,
+        userQuestion: question,
       });
       if (
         requestId !== aiAnalysisRequestRef.current ||
@@ -1445,6 +1546,8 @@ export default function EpubReader({
         text,
         left: selected.anchorLeft,
         top: selected.anchorTop,
+        format,
+        question: question || undefined,
       });
     } catch (cause) {
       if (requestId === aiAnalysisRequestRef.current) {
@@ -1456,6 +1559,51 @@ export default function EpubReader({
       if (requestId === aiAnalysisRequestRef.current) {
         setAiAnalysisBusy(false);
       }
+    }
+  };
+
+  const reanalyzeSavedFootnote = async (
+    annotation: EpubAnnotation,
+    formatOverride?: EpubAiResponseFormat,
+    questionOverride?: string,
+  ) => {
+    if (savedFootnoteBusy) return;
+    const format = formatOverride ?? aiResponseFormat;
+    const question = (questionOverride ?? savedFootnoteQuestion).trim();
+    if (formatOverride) {
+      setAiResponseFormat(formatOverride);
+    }
+    setSavedFootnoteBusy(true);
+    setSavedFootnoteError('');
+    try {
+      const result = await invoke<string>('analyze_epub_highlight', {
+        baseUrl: provider.baseUrl,
+        model: provider.model,
+        chapterLabel: annotation.label.slice(0, 200),
+        selectionText: annotation.text,
+        context: '',
+        responseFormat: format,
+        userQuestion: question,
+      });
+      const text = Array.from(result.trim())
+        .slice(0, MAX_EPUB_AI_ANALYSIS_CHARS)
+        .join('');
+      if (!text) throw new Error('AI 服务没有返回可用的分析内容。');
+      const updated: EpubAnnotation = {
+        ...annotation,
+        aiAnalysis: text,
+        updatedAt: Date.now(),
+      };
+      updateAnnotations((previous) =>
+        previous.map((item) => (item.id === annotation.id ? updated : item)),
+      );
+      notifyResourceProgress();
+    } catch (cause) {
+      setSavedFootnoteError(
+        cause instanceof Error ? cause.message : String(cause),
+      );
+    } finally {
+      setSavedFootnoteBusy(false);
     }
   };
 
@@ -3431,8 +3579,57 @@ export default function EpubReader({
                   ×
                 </button>
               </div>
+              <div
+                className="epub-reader-ai-format-bar"
+                role="group"
+                aria-label="AI 分析返回形式"
+              >
+                <span className="epub-reader-ai-format-label">形式</span>
+                {AI_RESPONSE_FORMATS.map((option) => (
+                  <button
+                    type="button"
+                    key={option.value}
+                    className={
+                      aiResponseFormat === option.value ? 'is-active' : ''
+                    }
+                    aria-pressed={aiResponseFormat === option.value}
+                    title={option.hint}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => setAiResponseFormat(option.value)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <form
+                className="epub-reader-ai-prompt-bar"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void analyzeSelectedText(aiResponseFormat, aiCustomQuestion);
+                }}
+              >
+                <input
+                  type="text"
+                  value={aiCustomQuestion}
+                  maxLength={500}
+                  placeholder="输入想提问的内容（留空则按所选形式直接分析）…"
+                  aria-label="自定义 AI 分析提问内容"
+                  onChange={(event) => setAiCustomQuestion(event.target.value)}
+                />
+                <button
+                  type="submit"
+                  disabled={aiAnalysisBusy}
+                  onMouseDown={(event) => event.preventDefault()}
+                >
+                  {aiAnalysisBusy
+                    ? '生成中…'
+                    : aiCustomQuestion.trim()
+                      ? '提问'
+                      : '分析'}
+                </button>
+              </form>
               <small className="epub-reader-ai-disclosure">
-                AI 分析会发送选区与附近段落
+                AI 分析会发送选区与附近段落 · 可切换返回形式或输入具体问题
               </small>
               {noteComposerOpen && (
                 <form
@@ -3483,7 +3680,18 @@ export default function EpubReader({
                 aria-label="AI 分析预览"
               >
                 <div className="epub-reader-ai-footnote-heading">
-                  <strong>AI 分析预览</strong>
+                  <strong>
+                    AI 分析预览
+                    {aiAnalysisPreview.format ? (
+                      <span className="epub-reader-ai-mode-badge">
+                        {
+                          AI_RESPONSE_FORMATS.find(
+                            (item) => item.value === aiAnalysisPreview.format,
+                          )?.label
+                        }
+                      </span>
+                    ) : null}
+                  </strong>
                   <button
                     type="button"
                     aria-label="关闭 AI 分析预览"
@@ -3493,7 +3701,76 @@ export default function EpubReader({
                     ×
                   </button>
                 </div>
-                <p>{aiAnalysisPreview.text}</p>
+                {aiAnalysisPreview.source !== 'cli' && (
+                  <div
+                    className="epub-reader-ai-format-bar is-in-footnote"
+                    role="group"
+                    aria-label="切换脚注返回形式"
+                  >
+                    {AI_RESPONSE_FORMATS.map((option) => (
+                      <button
+                        type="button"
+                        key={option.value}
+                        disabled={aiAnalysisBusy}
+                        className={
+                          (aiAnalysisPreview.format ?? aiResponseFormat) ===
+                          option.value
+                            ? 'is-active'
+                            : ''
+                        }
+                        title={`切换为「${option.label}」并重新生成：${option.hint}`}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() =>
+                          void analyzeSelectedText(
+                            option.value,
+                            aiCustomQuestion,
+                          )
+                        }
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {aiAnalysisPreview.question && (
+                  <div className="epub-reader-ai-question-echo">
+                    <span>提问：</span>
+                    <strong>{aiAnalysisPreview.question}</strong>
+                  </div>
+                )}
+                <div className="epub-reader-ai-footnote-body">
+                  {renderAiFootnoteContent(aiAnalysisPreview.text)}
+                </div>
+                {aiAnalysisPreview.source !== 'cli' && (
+                  <form
+                    className="epub-reader-ai-prompt-bar is-in-footnote"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void analyzeSelectedText(
+                        aiResponseFormat,
+                        aiCustomQuestion,
+                      );
+                    }}
+                  >
+                    <input
+                      type="text"
+                      value={aiCustomQuestion}
+                      maxLength={500}
+                      placeholder="更改提问内容或继续追问（按 Enter 重新生成）…"
+                      aria-label="在脚注内更改提问内容"
+                      onChange={(event) =>
+                        setAiCustomQuestion(event.target.value)
+                      }
+                    />
+                    <button
+                      type="submit"
+                      disabled={aiAnalysisBusy}
+                      onMouseDown={(event) => event.preventDefault()}
+                    >
+                      {aiAnalysisBusy ? '生成中…' : '重新提问'}
+                    </button>
+                  </form>
+                )}
                 <small>
                   {aiAnalysisPreview.source === 'cli'
                     ? '来自终端 AI 的脚注提案；确认后写入本书标注。'
@@ -3538,7 +3815,65 @@ export default function EpubReader({
                   ×
                 </button>
               </div>
-              <p>{visibleAiAnnotation.aiAnalysis}</p>
+              <div
+                className="epub-reader-ai-format-bar is-in-footnote"
+                role="group"
+                aria-label="切换已保存脚注返回形式"
+              >
+                {AI_RESPONSE_FORMATS.map((option) => (
+                  <button
+                    type="button"
+                    key={option.value}
+                    disabled={savedFootnoteBusy}
+                    className={
+                      aiResponseFormat === option.value ? 'is-active' : ''
+                    }
+                    title={`按「${option.label}」重新生成并更新脚注：${option.hint}`}
+                    onClick={() =>
+                      void reanalyzeSavedFootnote(
+                        visibleAiAnnotation,
+                        option.value,
+                        savedFootnoteQuestion,
+                      )
+                    }
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <div className="epub-reader-ai-footnote-body">
+                {renderAiFootnoteContent(visibleAiAnnotation.aiAnalysis)}
+              </div>
+              <form
+                className="epub-reader-ai-prompt-bar is-in-footnote"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void reanalyzeSavedFootnote(
+                    visibleAiAnnotation,
+                    aiResponseFormat,
+                    savedFootnoteQuestion,
+                  );
+                }}
+              >
+                <input
+                  type="text"
+                  value={savedFootnoteQuestion}
+                  maxLength={500}
+                  placeholder="更改提问内容并重新生成脚注…"
+                  aria-label="在已保存脚注内更改提问内容"
+                  onChange={(event) =>
+                    setSavedFootnoteQuestion(event.target.value)
+                  }
+                />
+                <button type="submit" disabled={savedFootnoteBusy}>
+                  {savedFootnoteBusy ? '更新中…' : '提问更新'}
+                </button>
+              </form>
+              {savedFootnoteError && (
+                <p className="epub-reader-ai-error" role="alert">
+                  {savedFootnoteError}
+                </p>
+              )}
             </aside>
           )}
           {loading && (

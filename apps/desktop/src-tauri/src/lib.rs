@@ -324,7 +324,7 @@ const MAX_AGENT_TOOLS_BYTES: usize = 48_000;
 const MAX_EPUB_SUMMARY_PROMPT_CHARS: usize = 60_000;
 const MAX_EPUB_HIGHLIGHT_PROMPT_CHARS: usize = 10_000;
 const MAX_EPUB_HIGHLIGHT_INPUT_CHARS: usize = 6_000;
-const MAX_EPUB_HIGHLIGHT_OUTPUT_CHARS: usize = 800;
+const MAX_EPUB_HIGHLIGHT_OUTPUT_CHARS: usize = 1_600;
 const EPUB_SUMMARY_BATCH_SIZE: usize = 8;
 
 #[derive(Deserialize)]
@@ -715,6 +715,8 @@ async fn analyze_epub_highlight(
     chapter_label: String,
     selection_text: String,
     context: String,
+    response_format: Option<String>,
+    user_question: Option<String>,
 ) -> Result<String, String> {
     let model = model.trim();
     if model.is_empty() || model.len() > 200 {
@@ -727,10 +729,27 @@ async fn analyze_epub_highlight(
     if selection_text.chars().count() > 2_000 {
         return Err("选中文字超过 2,000 字，请缩小选区后重试。".to_string());
     }
-    let input_chars =
-        selection_text.chars().count() + context.chars().count() + chapter_label.chars().count();
-    if input_chars > MAX_EPUB_HIGHLIGHT_INPUT_CHARS {
-        return Err("选区和附近上下文超过 6,000 字，未发送到 AI 服务。".to_string());
+    let response_format = response_format
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("structured")
+        .chars()
+        .take(32)
+        .collect::<String>();
+    let user_question = user_question
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("")
+        .chars()
+        .take(500)
+        .collect::<String>();
+    let input_chars = selection_text.chars().count()
+        + context.chars().count()
+        + chapter_label.chars().count()
+        + user_question.chars().count();
+    if input_chars > MAX_EPUB_HIGHLIGHT_INPUT_CHARS + 500 {
+        return Err("选区和附近上下文超过长度上限，未发送到 AI 服务。".to_string());
     }
 
     const SYSTEM_PROMPT: &str = prompts::EPUB_HIGHLIGHT_ANALYSIS_PROMPT;
@@ -738,6 +757,8 @@ async fn analyze_epub_highlight(
         "chapter": chapter_label.chars().take(200).collect::<String>(),
         "selection": selection_text,
         "nearby_context": context,
+        "response_format": response_format,
+        "user_question": user_question,
     }))
     .map_err(|_| "选区内容无法序列化，未发送到 AI 服务。".to_string())?;
     let content = request_chat_completion(

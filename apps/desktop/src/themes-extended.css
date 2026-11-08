@@ -1567,6 +1567,89 @@
   background: #081324;
 }
 
+.epub-reader[data-theme='navy']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-ai-footnote,
+.epub-reader[data-theme='navy']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-note-editor {
+  border-color: #20456e;
+  color: #e0f0fe;
+  background: #0a172c;
+}
+
+.epub-reader[data-theme='navy']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-ai-format-bar
+  span {
+  color: #7293b8;
+}
+
+.epub-reader[data-theme='navy']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-ai-format-bar
+  button {
+  border-color: #1a3658;
+  color: #9ec0e6;
+  background: #081324;
+}
+
+.epub-reader[data-theme='navy']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-ai-format-bar
+  button.is-active {
+  border-color: #38bdf8;
+  color: #7dd3fc;
+  background: rgba(56, 189, 248, 0.14);
+}
+
+.epub-reader[data-theme='navy']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-ai-prompt-bar
+  input {
+  border-color: #1a3658;
+  color: #e0f0fe;
+  background: #06101e;
+}
+
+.epub-reader[data-theme='navy']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-ai-prompt-bar
+  button {
+  border-color: #20456e;
+  color: #cde0f5;
+  background: #0d1f3a;
+}
+
+.epub-reader[data-theme='navy']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-ai-question-echo {
+  border-left-color: #38bdf8;
+  color: #9ec0e6;
+  background: #06101e;
+}
+
+.epub-reader[data-theme='navy']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-ai-mode-badge,
+.epub-reader[data-theme='navy']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-ai-tag {
+  border-color: rgba(56, 189, 248, 0.35);
+  color: #7dd3fc;
+  background: rgba(56, 189, 248, 0.12);
+}
+
 .epub-reader[data-theme='navy'] .epub-reader-search-form input,
 .epub-reader[data-theme='navy'] .epub-reader-bookmark-editor input,
 .epub-reader[data-theme='navy'] .epub-reader-setting-row select {
@@ -1685,6 +1768,89 @@
   border-color: #331e50;
   color: #e5d7f7;
   background: #0d0818;
+}
+
+.epub-reader[data-theme='purple']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-ai-footnote,
+.epub-reader[data-theme='purple']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-note-editor {
+  border-color: #462b6e;
+  color: #f6effe;
+  background: #140d24;
+}
+
+.epub-reader[data-theme='purple']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-ai-format-bar
+  span {
+  color: #a48fbe;
+}
+
+.epub-reader[data-theme='purple']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-ai-format-bar
+  button {
+  border-color: #331e50;
+  color: #c8b6e2;
+  background: #0d0818;
+}
+
+.epub-reader[data-theme='purple']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-ai-format-bar
+  button.is-active {
+  border-color: #c084fc;
+  color: #d8b4fe;
+  background: rgba(192, 132, 252, 0.14);
+}
+
+.epub-reader[data-theme='purple']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-ai-prompt-bar
+  input {
+  border-color: #331e50;
+  color: #f6effe;
+  background: #0a0612;
+}
+
+.epub-reader[data-theme='purple']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-ai-prompt-bar
+  button {
+  border-color: #462b6e;
+  color: #e5d7f7;
+  background: #1e1236;
+}
+
+.epub-reader[data-theme='purple']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-ai-question-echo {
+  border-left-color: #c084fc;
+  color: #c8b6e2;
+  background: #0a0612;
+}
+
+.epub-reader[data-theme='purple']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-ai-mode-badge,
+.epub-reader[data-theme='purple']:not([data-palette='light']):not(
+    [data-palette='sepia']
+  )
+  .epub-reader-ai-tag {
+  border-color: rgba(192, 132, 252, 0.35);
+  color: #d8b4fe;
+  background: rgba(192, 132, 252, 0.12);
 }
 
 .epub-reader[data-theme='purple'] .epub-reader-search-form input,
