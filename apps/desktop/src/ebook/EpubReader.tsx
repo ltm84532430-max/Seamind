@@ -741,6 +741,11 @@ export default function EpubReader({
   const [selectionDraft, setSelectionDraft] = useState<ReaderSelection | null>(
     null,
   );
+  const selectionToolbarRef = useRef<HTMLDivElement | null>(null);
+  const [selectionToolbarPosition, setSelectionToolbarPosition] = useState<{
+    left: number;
+    top: number;
+  } | null>(null);
   const [aiAnalysisBusy, setAiAnalysisBusy] = useState(false);
   const [aiAnalysisError, setAiAnalysisError] = useState('');
   const [examDialogOpen, setExamDialogOpen] = useState(false);
@@ -1291,9 +1296,59 @@ export default function EpubReader({
     selectionDocumentRef.current?.getSelection()?.removeAllRanges();
     selectionDocumentRef.current = null;
     setSelectionDraft(null);
+    setSelectionToolbarPosition(null);
     setNoteComposerOpen(false);
     setNoteDraft('');
   };
+
+  useEffect(() => {
+    if (!selectionDraft || loading) {
+      setSelectionToolbarPosition(null);
+      return;
+    }
+    const toolbarEl = selectionToolbarRef.current;
+    const mainEl = stageRef.current?.parentElement;
+    if (!toolbarEl || !mainEl) {
+      setSelectionToolbarPosition({
+        left: selectionDraft.left,
+        top: selectionDraft.top,
+      });
+      return;
+    }
+    const updatePosition = () => {
+      const mainWidth = mainEl.clientWidth;
+      const mainHeight = mainEl.clientHeight;
+      const toolbarWidth = toolbarEl.offsetWidth;
+      const toolbarHeight = toolbarEl.offsetHeight;
+      if (!mainWidth || !mainHeight || !toolbarWidth || !toolbarHeight) return;
+      const margin = 12;
+      const halfWidth = toolbarWidth / 2;
+      const minLeft = Math.min(halfWidth + margin, mainWidth / 2);
+      const maxLeft = Math.max(minLeft, mainWidth - halfWidth - margin);
+      const clampedLeft = Math.min(
+        Math.max(selectionDraft.left, minLeft),
+        maxLeft,
+      );
+
+      const minTop = Math.min(toolbarHeight + margin, mainHeight - margin);
+      const maxTop = Math.max(minTop, mainHeight - margin);
+      const clampedTop = Math.min(Math.max(selectionDraft.top, minTop), maxTop);
+
+      setSelectionToolbarPosition((prev) =>
+        prev &&
+        Math.abs(prev.left - clampedLeft) < 0.5 &&
+        Math.abs(prev.top - clampedTop) < 0.5
+          ? prev
+          : { left: clampedLeft, top: clampedTop },
+      );
+    };
+    updatePosition();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(updatePosition);
+    observer.observe(toolbarEl);
+    observer.observe(mainEl);
+    return () => observer.disconnect();
+  }, [selectionDraft, loading, noteComposerOpen, aiAnalysisError]);
 
   const wakeAi = () => {
     agentSelectionPinnedRef.current = Boolean(selectionDraftRef.current);
@@ -3261,17 +3316,29 @@ export default function EpubReader({
           <div className="epub-reader-stage" ref={stageRef} />
           {selectionDraft && !loading && (
             <div
+              ref={selectionToolbarRef}
               className={`epub-reader-selection-toolbar${noteComposerOpen ? ' is-composing' : ''}`}
+              data-quote-size={
+                selectionDraft.text.length > 180
+                  ? 'lg'
+                  : selectionDraft.text.length > 72
+                    ? 'md'
+                    : 'sm'
+              }
               style={{
-                left: `${selectionDraft.left}px`,
-                top: `${selectionDraft.top}px`,
+                left: `${selectionToolbarPosition?.left ?? selectionDraft.left}px`,
+                top: `${selectionToolbarPosition?.top ?? selectionDraft.top}px`,
               }}
               role="toolbar"
               aria-label="文字标注工具"
             >
               <span className="epub-reader-selection-quote">
-                {selectionDraft.text.slice(0, 110)}
-                {selectionDraft.text.length > 110 ? '…' : ''}
+                <span className="epub-reader-selection-quote-text">
+                  {selectionDraft.text}
+                </span>
+                <small className="epub-reader-selection-quote-count">
+                  已选 {selectionDraft.text.length} 字
+                </small>
               </span>
               <div
                 className="epub-reader-selection-styles"
