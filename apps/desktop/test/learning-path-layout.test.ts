@@ -6,14 +6,22 @@ import {
 import type { AgentCapabilities } from '../src/agent/capabilities';
 import {
   buildConnectorPath,
+  buildLearningPathStarGraph,
+  buildPathStarAdjacencyMap,
   computeLearningPathLayout,
+  createPathStarPhysicsState,
   learningPathToMarkdown,
+  stepPathStarPhysics,
 } from '../src/player/learning-path-layout';
 import type {
   LearningPathConnectorStyle,
   LearningPathLayoutMode,
   PositionedPathNode,
 } from '../src/player/learning-path-layout';
+import {
+  HACKER_CONSTELLATION_PATH_ID,
+  HACKER_LEARNING_PATH_PRESET,
+} from '../src/player/learning-path-presets';
 import type { Overlay } from '../src/player/queue';
 import type {
   LearningPathDetail,
@@ -172,14 +180,20 @@ function boxesOverlap(a: PositionedPathNode, b: PositionedPathNode): boolean {
 }
 
 describe('computeLearningPathLayout', () => {
-  const modes: LearningPathLayoutMode[] = ['tree', 'metro', 'dag', 'lanes'];
+  const modes: LearningPathLayoutMode[] = [
+    'tree',
+    'metro',
+    'dag',
+    'lanes',
+    'radial',
+  ];
   const connectors: LearningPathConnectorStyle[] = [
     'curve',
     'orthogonal',
     'metro',
   ];
 
-  it('lays out all 4 layout modes and 3 connector styles without overlapping cards', () => {
+  it('lays out all 5 layout modes and 3 connector styles without overlapping cards', () => {
     const detail = makeDiamondDetail();
 
     for (const mode of modes) {
@@ -514,5 +528,91 @@ describe('buildValidatedLearningPathNodes & learningPathToMarkdown', () => {
     expect(proposeTrace.learningPathProposal?.input.title).toBe(
       'Rust 快速入门',
     );
+  });
+});
+
+describe('Course Constellation Star-Map & Hacker Learning Path Preset', () => {
+  it('validates the Hacker Constellation learning path preset with 7 domain clusters, 21 videos, and cross-stage prerequisites', () => {
+    expect(HACKER_LEARNING_PATH_PRESET.pathId).toBe(
+      HACKER_CONSTELLATION_PATH_ID,
+    );
+    const stageNodes = HACKER_LEARNING_PATH_PRESET.nodes.filter(
+      (n) => n.kind === 'stage',
+    );
+    const playableNodes = HACKER_LEARNING_PATH_PRESET.nodes.filter((n) =>
+      Boolean(n.videoId),
+    );
+    const checkpointNodes = HACKER_LEARNING_PATH_PRESET.nodes.filter(
+      (n) => n.kind === 'checkpoint',
+    );
+    expect(stageNodes).toHaveLength(7);
+    expect(playableNodes).toHaveLength(21);
+    expect(checkpointNodes).toHaveLength(3);
+    expect(HACKER_LEARNING_PATH_PRESET.videos).toHaveLength(21);
+
+    // Hydrate into a LearningPathDetail and run layout + star graph
+    const videoById = new Map(
+      (HACKER_LEARNING_PATH_PRESET.videos ?? []).map((v) => [
+        v.videoId,
+        makeVideo(v.videoId, v.title, {
+          channelId: v.channelId ?? 'UC_HACK',
+          channelName: v.channelName ?? 'Security Lab',
+          durationSeconds: v.durationSeconds ?? 1200,
+        }),
+      ]),
+    );
+    const detail: LearningPathDetail = {
+      summary: {
+        pathId: HACKER_CONSTELLATION_PATH_ID,
+        title: HACKER_LEARNING_PATH_PRESET.title,
+        description: HACKER_LEARNING_PATH_PRESET.description ?? null,
+        nodeCount: HACKER_LEARNING_PATH_PRESET.nodes.length,
+        videoCount: playableNodes.length,
+        finishedCount: 0,
+        updatedAt: 1_760_000_000,
+      },
+      nodes: HACKER_LEARNING_PATH_PRESET.nodes.map((n, index) => ({
+        nodeId: n.nodeId ?? `n-${index}`,
+        parentId: n.parentId ?? null,
+        position: n.position ?? index,
+        kind: n.kind ?? 'video',
+        title: n.title,
+        note: n.note ?? null,
+        videoId: n.videoId ?? null,
+        startSeconds: n.startSeconds ?? 0,
+        optional: Boolean(n.optional),
+        prerequisiteIds: n.prerequisiteIds ?? [],
+        video: n.videoId ? (videoById.get(n.videoId) ?? null) : null,
+      })),
+    };
+
+    const layout = computeLearningPathLayout(detail, {}, 'radial', 'curve');
+    expect(layout.nodes).toHaveLength(detail.nodes.length);
+
+    const starGraph = buildLearningPathStarGraph(detail, layout);
+    // 1 core node + all path nodes
+    expect(starGraph.nodes).toHaveLength(detail.nodes.length + 1);
+    expect(starGraph.stats.totalStages).toBe(7);
+    expect(starGraph.stats.totalVideos).toBe(21);
+    expect(starGraph.stats.prerequisiteLinksCount).toBeGreaterThan(10);
+
+    const adj = buildPathStarAdjacencyMap(starGraph);
+    // core-hub includes itself + 7 stage hubs = 8
+    expect(adj.get('core-hub')?.size).toBe(8);
+
+    // Run physics simulation steps and verify finite coordinates + pinned node handling
+    const physics = createPathStarPhysicsState(starGraph);
+    const firstStage = physics.bodyList.find((n) => n.kind === 'stage')!;
+    firstStage.fx = firstStage.x + 60;
+    firstStage.fy = firstStage.y - 40;
+    for (let i = 0; i < 15; i += 1) {
+      stepPathStarPhysics(physics);
+    }
+    expect(firstStage.x).toBe(firstStage.fx);
+    expect(firstStage.y).toBe(firstStage.fy);
+    for (const node of physics.bodyList) {
+      expect(Number.isFinite(node.x)).toBe(true);
+      expect(Number.isFinite(node.y)).toBe(true);
+    }
   });
 });

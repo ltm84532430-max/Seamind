@@ -3,7 +3,12 @@ import type { Overlay } from './queue';
 import type { LearningPathDetail, LearningPathNode, VideoItem } from './types';
 import { videoWatchUrl } from './video-links';
 
-export type LearningPathLayoutMode = 'tree' | 'metro' | 'dag' | 'lanes';
+export type LearningPathLayoutMode =
+  | 'tree'
+  | 'metro'
+  | 'dag'
+  | 'lanes'
+  | 'radial';
 
 export type LearningPathTheme =
   | 'terracotta'
@@ -363,6 +368,14 @@ export function computeLearningPathLayout(
     layoutMetroTrack(roots, childrenMap, traversalOrder, coords, rawEdges);
   } else if (mode === 'dag') {
     layoutSkillDag(roots, childrenMap, sortedNodes, coords, rawEdges);
+  } else if (mode === 'radial') {
+    layoutRadialConstellation(
+      roots,
+      childrenMap,
+      sortedNodes,
+      coords,
+      rawEdges,
+    );
   } else {
     layoutStageLanes(
       roots,
@@ -445,9 +458,13 @@ export function computeLearningPathLayout(
     if (!source || !target) continue;
     seenEdgeKeys.add(key);
 
-    const x1 = source.x + source.width;
+    const x1 =
+      mode === 'radial'
+        ? source.x + Math.round(source.width / 2)
+        : source.x + source.width;
     const y1 = source.y + Math.round(source.height / 2);
-    const x2 = target.x;
+    const x2 =
+      mode === 'radial' ? target.x + Math.round(target.width / 2) : target.x;
     const y2 = target.y + Math.round(target.height / 2);
 
     positionedEdges.push({
@@ -457,7 +474,10 @@ export function computeLearningPathLayout(
       kind: spec.kind,
       active: source.status === 'completed',
       optional: target.node.optional,
-      pathD: buildConnectorPath(x1, y1, x2, y2, effectiveConnector),
+      pathD:
+        mode === 'radial'
+          ? `M ${x1} ${y1} Q ${Math.round((x1 + x2) / 2)} ${Math.round((y1 + y2) / 2 - 28)} ${x2} ${y2}`
+          : buildConnectorPath(x1, y1, x2, y2, effectiveConnector),
     });
   }
 
@@ -982,4 +1002,760 @@ export function learningPathToMarkdown(detail: LearningPathDetail): string {
     emitNode(root, 0);
   }
   return `${lines.join('\n')}\n`;
+}
+
+function layoutRadialConstellation(
+  roots: LearningPathNode[],
+  childrenMap: Map<string, LearningPathNode[]>,
+  allNodes: LearningPathNode[],
+  coords: Map<string, { x: number; y: number; column: number; row: number }>,
+  edges: { fromId: string; toId: string; kind: PositionedPathEdge['kind'] }[],
+) {
+  const N = Math.max(1, roots.length);
+  const stageOrbitRadius = N <= 4 ? 460 : N <= 7 ? 580 : 720;
+
+  roots.forEach((root, rootIdx) => {
+    const baseAngle = (2 * Math.PI * rootIdx) / N - Math.PI / 2;
+    const { width: rw, height: rh } = nodeDimensions(root);
+    const rx = Math.round(stageOrbitRadius * Math.cos(baseAngle) - rw / 2);
+    const ry = Math.round(stageOrbitRadius * Math.sin(baseAngle) - rh / 2);
+    coords.set(root.nodeId, {
+      x: rx,
+      y: ry,
+      column: rootIdx,
+      row: 0,
+    });
+
+    if (rootIdx > 0) {
+      edges.push({
+        fromId: roots[rootIdx - 1].nodeId,
+        toId: root.nodeId,
+        kind: 'spine',
+      });
+    }
+
+    // Collect descendants of this stage root
+    const descendants: {
+      node: LearningPathNode;
+      parentId: string;
+      depth: number;
+    }[] = [];
+    const seen = new Set<string>([root.nodeId]);
+    const walk = (parent: LearningPathNode, depth: number) => {
+      for (const child of childrenMap.get(parent.nodeId) ?? []) {
+        if (seen.has(child.nodeId)) continue;
+        seen.add(child.nodeId);
+        descendants.push({ node: child, parentId: parent.nodeId, depth });
+        edges.push({
+          fromId: parent.nodeId,
+          toId: child.nodeId,
+          kind: child.optional ? 'siding' : 'hierarchy',
+        });
+        walk(child, depth + 1);
+      }
+    };
+    walk(root, 1);
+
+    const sectorSpan = Math.min(
+      Math.PI * 0.72,
+      ((2 * Math.PI) / Math.max(2, N)) * 0.84,
+    );
+    const perRing = Math.max(2, Math.min(4, Math.ceil(descendants.length / 2)));
+
+    descendants.forEach((entry, idx) => {
+      const ringIdx = Math.floor(idx / perRing);
+      const idxInRing = idx % perRing;
+      const countInRing = Math.min(
+        perRing,
+        descendants.length - ringIdx * perRing,
+      );
+      const ringRadius = stageOrbitRadius + 380 + ringIdx * 340;
+      const angle =
+        countInRing === 1
+          ? baseAngle
+          : baseAngle -
+            sectorSpan / 2 +
+            (idxInRing / (countInRing - 1)) * sectorSpan;
+      const { width, height } = nodeDimensions(entry.node);
+      coords.set(entry.node.nodeId, {
+        x: Math.round(ringRadius * Math.cos(angle) - width / 2),
+        y: Math.round(ringRadius * Math.sin(angle) - height / 2),
+        column: rootIdx,
+        row: idx + 1,
+      });
+    });
+  });
+
+  for (const node of allNodes) {
+    for (const reqId of node.prerequisiteIds) {
+      if (reqId !== node.parentId) {
+        edges.push({
+          fromId: reqId,
+          toId: node.nodeId,
+          kind: 'prerequisite',
+        });
+      }
+    }
+  }
+}
+
+/* ==========================================================================
+   Learning Path Star-Map (Obsidian-Style Force-Directed Course Constellation)
+   ========================================================================== */
+
+export const STAGE_STAR_PALETTE = [
+  '#e05638', // Vermilion (Stage 1)
+  '#38bdf8', // Sky Cyan (Stage 2)
+  '#10b981', // Emerald (Stage 3)
+  '#f59e0b', // Solar Amber (Stage 4)
+  '#a855f7', // Cosmic Purple (Stage 5)
+  '#ec4899', // Rose Nebula (Stage 6)
+  '#6366f1', // Indigo Pulsar (Stage 7)
+  '#14b8a6', // Deep Teal (Stage 8)
+  '#eab308', // Gold Star (Stage 9)
+  '#f43f5e', // Crimson Flare (Stage 10)
+];
+
+export type PathStarNodeKind = 'core' | 'stage' | 'video' | 'checkpoint';
+
+export interface PathStarNode {
+  id: string;
+  label: string;
+  kind: PathStarNodeKind;
+  stageIndex: number;
+  stageTitle: string;
+  orderIndex: number | null;
+  status: NodeUnlockStatus;
+  progressRatio: number;
+  isNextUp: boolean;
+  optional: boolean;
+  note: string | null;
+  video: VideoItem | null;
+  positionedNode: PositionedPathNode | null;
+  parentId: string | null;
+  prerequisiteIds: string[];
+  dependentIds: string[];
+  degree: number;
+  x: number;
+  y: number;
+  radius: number;
+  orbitRadius: number;
+  orbitAngle: number;
+  color: string;
+}
+
+export interface PathStarLink {
+  id: string;
+  source: string;
+  target: string;
+  kind: 'core_spoke' | 'hierarchy' | 'prerequisite' | 'spine' | 'siding';
+  active: boolean;
+  optional: boolean;
+  color: string;
+}
+
+export interface LearningPathStarGraph {
+  pathId: string;
+  title: string;
+  description: string | null;
+  nodes: PathStarNode[];
+  links: PathStarLink[];
+  bounds: {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+  };
+  stats: {
+    totalStages: number;
+    totalVideos: number;
+    completedVideos: number;
+    prerequisiteLinksCount: number;
+    optionalCount: number;
+  };
+}
+
+export function buildLearningPathStarGraph(
+  detail: LearningPathDetail,
+  layout: LearningPathLayoutResult,
+): LearningPathStarGraph {
+  const posById = new Map<string, PositionedPathNode>();
+  for (const item of layout.nodes) {
+    posById.set(item.node.nodeId, item);
+  }
+
+  const sortedNodes = [...detail.nodes].sort(
+    (a, b) => a.position - b.position || a.nodeId.localeCompare(b.nodeId),
+  );
+  const idSet = new Set(sortedNodes.map((n) => n.nodeId));
+  const childrenMap = new Map<string, LearningPathNode[]>();
+  const dependentsMap = new Map<string, string[]>();
+
+  for (const n of sortedNodes) {
+    childrenMap.set(n.nodeId, []);
+    dependentsMap.set(n.nodeId, []);
+  }
+
+  const roots: LearningPathNode[] = [];
+  for (const n of sortedNodes) {
+    if (n.parentId && idSet.has(n.parentId)) {
+      childrenMap.get(n.parentId)!.push(n);
+    } else {
+      roots.push(n);
+    }
+    for (const reqId of n.prerequisiteIds) {
+      if (idSet.has(reqId)) {
+        dependentsMap.get(reqId)!.push(n.nodeId);
+      }
+    }
+  }
+
+  const completedVideos = layout.orderedPlayableNodes.filter(
+    (n) => n.status === 'completed',
+  ).length;
+  const totalVideos = layout.orderedPlayableNodes.length;
+  const overallRatio = totalVideos > 0 ? completedVideos / totalVideos : 0;
+
+  const starNodes: PathStarNode[] = [];
+  const starLinks: PathStarLink[] = [];
+
+  // 1. Central Course Hub ("core-hub")
+  const coreNode: PathStarNode = {
+    id: 'core-hub',
+    label: detail.summary.title,
+    kind: 'core',
+    stageIndex: -1,
+    stageTitle: detail.summary.title,
+    orderIndex: null,
+    status:
+      overallRatio >= 1 && totalVideos > 0
+        ? 'completed'
+        : overallRatio > 0
+          ? 'in_progress'
+          : 'ready',
+    progressRatio: overallRatio,
+    isNextUp: false,
+    optional: false,
+    note: detail.summary.description,
+    video: null,
+    positionedNode: null,
+    parentId: null,
+    prerequisiteIds: [],
+    dependentIds: roots.map((r) => r.nodeId),
+    degree: roots.length,
+    x: 0,
+    y: 0,
+    radius: 34,
+    orbitRadius: 0,
+    orbitAngle: 0,
+    color: '#e05638',
+  };
+  starNodes.push(coreNode);
+
+  const stageCount = Math.max(1, roots.length);
+  const getStageOrbit = (idx: number) => {
+    if (stageCount <= 6) return 290;
+    return idx % 2 === 0 ? 270 : 410;
+  };
+
+  roots.forEach((root, stageIdx) => {
+    const stageColor = STAGE_STAR_PALETTE[stageIdx % STAGE_STAR_PALETTE.length];
+    const stageAngle = (2 * Math.PI * stageIdx) / stageCount - Math.PI / 2;
+    const stageOrbit = getStageOrbit(stageIdx);
+    const sx = Math.round(stageOrbit * Math.cos(stageAngle));
+    const sy = Math.round(stageOrbit * Math.sin(stageAngle));
+    const rootPos = posById.get(root.nodeId) ?? null;
+
+    starNodes.push({
+      id: root.nodeId,
+      label: root.title,
+      kind:
+        root.kind === 'checkpoint'
+          ? 'checkpoint'
+          : root.videoId
+            ? 'video'
+            : 'stage',
+      stageIndex: stageIdx,
+      stageTitle: root.title,
+      orderIndex: rootPos?.orderIndex ?? null,
+      status: rootPos?.status ?? 'ready',
+      progressRatio: rootPos?.progressRatio ?? 0,
+      isNextUp: rootPos?.isNextUp ?? false,
+      optional: root.optional,
+      note: root.note,
+      video: rootPos?.video ?? null,
+      positionedNode: rootPos,
+      parentId: 'core-hub',
+      prerequisiteIds: root.prerequisiteIds,
+      dependentIds: dependentsMap.get(root.nodeId) ?? [],
+      degree: 1,
+      x: sx,
+      y: sy,
+      radius: 17,
+      orbitRadius: stageOrbit,
+      orbitAngle: stageAngle,
+      color: stageColor,
+    });
+
+    starLinks.push({
+      id: `core->${root.nodeId}`,
+      source: 'core-hub',
+      target: root.nodeId,
+      kind: 'core_spoke',
+      active: (rootPos?.status ?? 'ready') === 'completed',
+      optional: false,
+      color: stageColor,
+    });
+
+    if (stageIdx > 0) {
+      starLinks.push({
+        id: `spine:${roots[stageIdx - 1].nodeId}->${root.nodeId}`,
+        source: roots[stageIdx - 1].nodeId,
+        target: root.nodeId,
+        kind: 'spine',
+        active:
+          (posById.get(roots[stageIdx - 1].nodeId)?.status ?? 'ready') ===
+          'completed',
+        optional: false,
+        color: stageColor,
+      });
+    }
+
+    // Subtree lessons under this stage
+    const seen = new Set<string>([root.nodeId]);
+    const placeChildren = (
+      parent: LearningPathNode,
+      parentX: number,
+      parentY: number,
+      parentAngle: number,
+      depth: number,
+    ) => {
+      const kids = (childrenMap.get(parent.nodeId) ?? []).filter(
+        (c) => !seen.has(c.nodeId),
+      );
+      if (kids.length === 0) return;
+      kids.forEach((c) => seen.add(c.nodeId));
+
+      const itemsPerTier = depth === 1 ? (kids.length <= 4 ? 2 : 3) : 2;
+      kids.forEach((child, idx) => {
+        const tier = Math.floor(idx / itemsPerTier);
+        const idxInTier = idx % itemsPerTier;
+        const countInTier = Math.min(
+          itemsPerTier,
+          kids.length - tier * itemsPerTier,
+        );
+        const dist = (depth === 1 ? 105 : 68) + tier * 72;
+        const arcSpan =
+          countInTier === 1
+            ? 0
+            : Math.min(1.18, (depth === 1 ? 0.5 : 0.42) * (countInTier - 1));
+        const angle =
+          countInTier === 1
+            ? parentAngle
+            : parentAngle -
+              arcSpan / 2 +
+              (idxInTier / (countInTier - 1)) * arcSpan;
+
+        const cx = Math.round(parentX + dist * Math.cos(angle));
+        const cy = Math.round(parentY + dist * Math.sin(angle));
+        const childPos = posById.get(child.nodeId) ?? null;
+
+        starNodes.push({
+          id: child.nodeId,
+          label: child.title,
+          kind:
+            child.kind === 'checkpoint'
+              ? 'checkpoint'
+              : child.videoId
+                ? 'video'
+                : 'stage',
+          stageIndex: stageIdx,
+          stageTitle: root.title,
+          orderIndex: childPos?.orderIndex ?? null,
+          status: childPos?.status ?? 'ready',
+          progressRatio: childPos?.progressRatio ?? 0,
+          isNextUp: childPos?.isNextUp ?? false,
+          optional: child.optional,
+          note: child.note,
+          video: childPos?.video ?? null,
+          positionedNode: childPos,
+          parentId: parent.nodeId,
+          prerequisiteIds: child.prerequisiteIds,
+          dependentIds: dependentsMap.get(child.nodeId) ?? [],
+          degree: 1,
+          x: cx,
+          y: cy,
+          radius:
+            child.kind === 'checkpoint' ? 12.5 : child.optional ? 8.5 : 10.5,
+          orbitRadius: dist,
+          orbitAngle: angle,
+          color: stageColor,
+        });
+
+        starLinks.push({
+          id: `${parent.nodeId}->${child.nodeId}`,
+          source: parent.nodeId,
+          target: child.nodeId,
+          kind: child.optional ? 'siding' : 'hierarchy',
+          active:
+            (posById.get(parent.nodeId)?.status ?? 'ready') === 'completed',
+          optional: child.optional,
+          color: stageColor,
+        });
+
+        placeChildren(child, cx, cy, angle, depth + 1);
+      });
+    };
+
+    placeChildren(root, sx, sy, stageAngle, 1);
+  });
+
+  // 2. Add explicit cross-node prerequisite links
+  const existingLinkKeys = new Set(
+    starLinks.map((l) => `${l.source}->${l.target}`),
+  );
+  let prerequisiteLinksCount = 0;
+
+  for (const node of sortedNodes) {
+    for (const reqId of node.prerequisiteIds) {
+      if (!idSet.has(reqId) || reqId === node.parentId) continue;
+      const key = `${reqId}->${node.nodeId}`;
+      if (existingLinkKeys.has(key)) continue;
+      existingLinkKeys.add(key);
+      prerequisiteLinksCount += 1;
+      const targetStageIdx = posById.get(node.nodeId)?.stageIndex ?? 0;
+      starLinks.push({
+        id: `prereq:${key}`,
+        source: reqId,
+        target: node.nodeId,
+        kind: 'prerequisite',
+        active: (posById.get(reqId)?.status ?? 'ready') === 'completed',
+        optional: node.optional,
+        color: STAGE_STAR_PALETTE[targetStageIdx % STAGE_STAR_PALETTE.length],
+      });
+    }
+  }
+
+  // Compute node degrees
+  const degreeMap = new Map<string, number>();
+  for (const l of starLinks) {
+    if (l.kind === 'spine') continue;
+    degreeMap.set(l.source, (degreeMap.get(l.source) ?? 0) + 1);
+    degreeMap.set(l.target, (degreeMap.get(l.target) ?? 0) + 1);
+  }
+  for (const n of starNodes) {
+    n.degree = degreeMap.get(n.id) ?? 1;
+  }
+
+  let minX = -200;
+  let maxX = 200;
+  let minY = -200;
+  let maxY = 200;
+  for (const n of starNodes) {
+    if (n.x - n.radius < minX) minX = n.x - n.radius;
+    if (n.x + n.radius > maxX) maxX = n.x + n.radius;
+    if (n.y - n.radius < minY) minY = n.y - n.radius;
+    if (n.y + n.radius > maxY) maxY = n.y + n.radius;
+  }
+
+  return {
+    pathId: detail.summary.pathId,
+    title: detail.summary.title,
+    description: detail.summary.description,
+    nodes: starNodes,
+    links: starLinks,
+    bounds: {
+      minX: Math.floor(minX - 90),
+      maxX: Math.ceil(maxX + 90),
+      minY: Math.floor(minY - 90),
+      maxY: Math.ceil(maxY + 90),
+    },
+    stats: {
+      totalStages: roots.length,
+      totalVideos,
+      completedVideos,
+      prerequisiteLinksCount,
+      optionalCount: sortedNodes.filter((n) => n.optional).length,
+    },
+  };
+}
+
+export function buildPathStarAdjacencyMap(
+  graph: LearningPathStarGraph,
+  options?: { includeSpine?: boolean; includePrerequisites?: boolean },
+): Map<string, Set<string>> {
+  const includeSpine = options?.includeSpine ?? false;
+  const includePrereqs = options?.includePrerequisites ?? true;
+  const map = new Map<string, Set<string>>();
+
+  for (const n of graph.nodes) {
+    map.set(n.id, new Set([n.id]));
+  }
+
+  for (const link of graph.links) {
+    if (link.kind === 'spine' && !includeSpine) continue;
+    if (link.kind === 'prerequisite' && !includePrereqs) continue;
+    map.get(link.source)?.add(link.target);
+    map.get(link.target)?.add(link.source);
+  }
+
+  // When hovering a stage cluster, also highlight all lessons belonging to that stage
+  for (const n of graph.nodes) {
+    if (n.kind === 'stage') {
+      for (const member of graph.nodes) {
+        if (member.stageIndex === n.stageIndex && member.kind !== 'core') {
+          map.get(n.id)?.add(member.id);
+        }
+      }
+    }
+  }
+
+  return map;
+}
+
+export interface PathStarPhysicsConfig {
+  repelStrength: number;
+  linkDistanceScale: number;
+  linkTension: number;
+  centerGravity: number;
+}
+
+export const DEFAULT_PATH_STAR_PHYSICS_CONFIG: PathStarPhysicsConfig = {
+  repelStrength: 1.0,
+  linkDistanceScale: 1.0,
+  linkTension: 1.0,
+  centerGravity: 1.0,
+};
+
+export interface PathStarSimBody {
+  id: string;
+  kind: PathStarNodeKind;
+  parentId: string | null;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  anchorX: number;
+  anchorY: number;
+  fx: number | null;
+  fy: number | null;
+  radius: number;
+  orbitRadius: number;
+  orbitAngle: number;
+}
+
+export interface PathStarPhysicsState {
+  bodies: Map<string, PathStarSimBody>;
+  bodyList: PathStarSimBody[];
+  links: PathStarLink[];
+  alpha: number;
+}
+
+export function createPathStarPhysicsState(
+  graph: LearningPathStarGraph,
+): PathStarPhysicsState {
+  const bodies = new Map<string, PathStarSimBody>();
+  const bodyList: PathStarSimBody[] = [];
+
+  for (const n of graph.nodes) {
+    const body: PathStarSimBody = {
+      id: n.id,
+      kind: n.kind,
+      parentId: n.parentId,
+      x: n.x,
+      y: n.y,
+      vx: 0,
+      vy: 0,
+      anchorX: n.x,
+      anchorY: n.y,
+      fx: null,
+      fy: null,
+      radius: n.radius,
+      orbitRadius: n.orbitRadius,
+      orbitAngle: n.orbitAngle,
+    };
+    bodies.set(n.id, body);
+    bodyList.push(body);
+  }
+
+  return {
+    bodies,
+    bodyList,
+    links: graph.links,
+    alpha: 0.45,
+  };
+}
+
+export function stepPathStarPhysics(
+  state: PathStarPhysicsState,
+  config: PathStarPhysicsConfig = DEFAULT_PATH_STAR_PHYSICS_CONFIG,
+  visibleIds?: Set<string>,
+): boolean {
+  const { bodies, bodyList, links } = state;
+  const hasPinned = bodyList.some((b) => b.fx !== null || b.fy !== null);
+  if (state.alpha < 0.002 && !hasPinned) {
+    return false;
+  }
+
+  const activeAlpha = hasPinned ? Math.max(state.alpha, 0.3) : state.alpha;
+  const distScale = config.linkDistanceScale;
+  const tension = config.linkTension;
+  const repel = config.repelStrength;
+  const gravity = config.centerGravity;
+
+  const activeBodies = visibleIds
+    ? bodyList.filter((b) => visibleIds.has(b.id))
+    : bodyList;
+  const n = activeBodies.length;
+
+  // 1. Many-Body Charge Repulsion
+  const maxRepelDist = 220;
+  const maxRepelDistSq = maxRepelDist * maxRepelDist;
+
+  for (let i = 0; i < n; i++) {
+    const a = activeBodies[i];
+    for (let j = i + 1; j < n; j++) {
+      const b = activeBodies[j];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      if (Math.abs(dx) > maxRepelDist || Math.abs(dy) > maxRepelDist) continue;
+      const dSq = dx * dx + dy * dy;
+      if (dSq > maxRepelDistSq) continue;
+
+      const dist = Math.max(8, Math.sqrt(dSq));
+      const minGap = (a.radius + b.radius + 24) * Math.sqrt(repel);
+      const charge =
+        a.kind === 'core' || b.kind === 'core'
+          ? 2600 * repel
+          : a.kind === 'stage' && b.kind === 'stage'
+            ? 1600 * repel
+            : 520 * repel;
+
+      let force = (charge / (dSq + 110)) * activeAlpha;
+      if (dist < minGap) {
+        force += (minGap - dist) * 0.24 * activeAlpha;
+      }
+
+      const fx = (dx / dist) * force;
+      const fy = (dy / dist) * force;
+
+      if (a.fx === null && a.kind !== 'core') {
+        a.vx -= fx;
+        a.vy -= fy;
+      }
+      if (b.fx === null && b.kind !== 'core') {
+        b.vx += fx;
+        b.vy += fy;
+      }
+    }
+  }
+
+  // 2. Hookean Spring Forces along Links
+  for (const link of links) {
+    if (
+      visibleIds &&
+      (!visibleIds.has(link.source) || !visibleIds.has(link.target))
+    ) {
+      continue;
+    }
+    const src = bodies.get(link.source);
+    const tgt = bodies.get(link.target);
+    if (!src || !tgt) continue;
+
+    const dx = tgt.x - src.x;
+    const dy = tgt.y - src.y;
+    const dist = Math.max(1, Math.hypot(dx, dy));
+
+    if (
+      link.kind === 'core_spoke' ||
+      link.kind === 'hierarchy' ||
+      link.kind === 'siding'
+    ) {
+      const restLength = (tgt.orbitRadius || 105) * distScale;
+      const k =
+        (link.kind === 'core_spoke' ? 0.065 : 0.14) * tension * activeAlpha;
+      const delta = (dist - restLength) * k;
+      const fx = (dx / dist) * delta;
+      const fy = (dy / dist) * delta;
+
+      if (src.fx === null && src.kind !== 'core') {
+        const parentWeight = tgt.fx !== null ? 0.55 : 0.22;
+        src.vx += fx * parentWeight;
+        src.vy += fy * parentWeight;
+      }
+      if (tgt.fx === null) {
+        const childWeight = src.fx !== null ? 0.92 : 0.78;
+        tgt.vx -= fx * childWeight;
+        tgt.vy -= fy * childWeight;
+      }
+    } else if (link.kind === 'prerequisite') {
+      const restLength = 210 * distScale;
+      const k = 0.02 * tension * activeAlpha;
+      const delta = (dist - restLength) * k;
+      const fx = (dx / dist) * delta;
+      const fy = (dy / dist) * delta;
+      if (src.fx === null && src.kind !== 'core') {
+        src.vx += fx;
+        src.vy += fy;
+      }
+      if (tgt.fx === null && tgt.kind !== 'core') {
+        tgt.vx -= fx;
+        tgt.vy -= fy;
+      }
+    }
+  }
+
+  // 3. Soft Anchor & Radial Restoring Gravity
+  const core = bodies.get('core-hub');
+  if (core && core.fx === null) {
+    core.vx += (0 - core.x) * 0.2 * gravity;
+    core.vy += (0 - core.y) * 0.2 * gravity;
+  }
+
+  for (let i = 0; i < n; i++) {
+    const body = activeBodies[i];
+    if (body.fx !== null && body.fy !== null) {
+      body.x = body.fx;
+      body.y = body.fy;
+      body.vx = 0;
+      body.vy = 0;
+      continue;
+    }
+
+    if (body.kind === 'stage' && core) {
+      const targetX = core.x + body.anchorX * distScale;
+      const targetY = core.y + body.anchorY * distScale;
+      body.vx += (targetX - body.x) * 0.045 * gravity * activeAlpha;
+      body.vy += (targetY - body.y) * 0.045 * gravity * activeAlpha;
+    } else if (body.parentId && body.parentId !== 'core-hub') {
+      const parent = bodies.get(body.parentId);
+      if (parent) {
+        const relX = Math.cos(body.orbitAngle) * body.orbitRadius * distScale;
+        const relY = Math.sin(body.orbitAngle) * body.orbitRadius * distScale;
+        const targetX = parent.x + relX;
+        const targetY = parent.y + relY;
+        const pull = parent.fx !== null ? 0.18 : 0.06 * gravity * activeAlpha;
+        body.vx += (targetX - body.x) * pull;
+        body.vy += (targetY - body.y) * pull;
+      }
+    }
+
+    body.vx *= 0.76;
+    body.vy *= 0.76;
+
+    const speed = Math.hypot(body.vx, body.vy);
+    if (speed > 28) {
+      body.vx = (body.vx / speed) * 28;
+      body.vy = (body.vy / speed) * 28;
+    }
+
+    body.x += body.vx;
+    body.y += body.vy;
+  }
+
+  if (!hasPinned) {
+    state.alpha *= 0.965;
+  }
+
+  return true;
 }

@@ -2303,3 +2303,609 @@
     flex-basis: 276px;
   }
 }
+
+/* =========================================================================
+   Multi-Modal Constellation Star-Map View & Topology Mode Controls
+   ========================================================================= */
+
+.lp-topology-mode-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.lp-topology-mode-bar h4 {
+  margin: 0;
+}
+
+.lp-topology-mode-pills {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--player-line-strong);
+  border-radius: 3px;
+  background: var(--player-panel);
+  overflow: hidden;
+}
+
+.lp-topology-mode-pills button {
+  height: 24px;
+  padding: 0 9px;
+  border: none;
+  border-right: 1px solid var(--player-line);
+  background: transparent;
+  color: var(--player-muted);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.lp-topology-mode-pills button:last-child {
+  border-right: none;
+}
+
+.lp-topology-mode-pills button:hover {
+  color: var(--player-ink);
+  background: var(--player-panel-alt);
+}
+
+.lp-topology-mode-pills button.is-active {
+  background: var(--player-accent);
+  color: #fff;
+}
+
+.lp-viewport.is-constellation {
+  padding: 0;
+  overflow: hidden;
+  cursor: default;
+}
+
+.lp-starmap-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  user-select: none;
+  background: var(--lp-bg);
+}
+
+.lp-starmap-subheader {
+  flex-shrink: 0;
+  min-height: 36px;
+  padding: 4px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--lp-border);
+  background: var(--lp-card);
+  z-index: 6;
+}
+
+.lp-starmap-subheader-left,
+.lp-starmap-subheader-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.lp-starmap-mode-pill {
+  flex-shrink: 0;
+  height: 20px;
+  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 2px;
+  border: 1px solid var(--lp-accent);
+  background: var(--lp-accent-soft);
+  color: var(--lp-accent);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.lp-starmap-stats {
+  color: var(--lp-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lp-starmap-search {
+  width: 196px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--lp-border-strong);
+  border-radius: 2px;
+  background: var(--lp-card-stage);
+  color: var(--lp-ink);
+  font-family: inherit;
+  font-size: 11.5px;
+  outline: none;
+}
+
+.lp-starmap-search:focus {
+  border-color: var(--lp-accent);
+}
+
+.lp-starmap-btn {
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--lp-border-strong);
+  border-radius: 2px;
+  background: var(--lp-card-stage);
+  color: var(--lp-ink);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.lp-starmap-btn:hover {
+  border-color: var(--lp-accent);
+  color: var(--lp-accent);
+}
+
+.lp-starmap-btn.is-active {
+  border-color: var(--lp-accent);
+  background: var(--lp-accent-soft);
+  color: var(--lp-accent);
+}
+
+/* ---- Star-Map Control Drawer ---- */
+
+.lp-starmap-drawer {
+  position: absolute;
+  top: 44px;
+  right: 14px;
+  width: 246px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--lp-border-strong);
+  border-radius: 3px;
+  background: var(--lp-card);
+  box-shadow: var(--lp-shadow);
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lp-starmap-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--lp-border);
+  font-size: 11.5px;
+}
+
+.lp-starmap-drawer-reset {
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--lp-border);
+  border-radius: 2px;
+  background: var(--lp-card-stage);
+  color: var(--lp-muted);
+  font-family: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.lp-starmap-drawer-reset:hover {
+  border-color: var(--lp-accent);
+  color: var(--lp-accent);
+}
+
+.lp-starmap-control-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--lp-muted);
+}
+
+.lp-starmap-control-item > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.lp-starmap-control-item strong {
+  color: var(--lp-ink);
+  font-family: var(--lp-mono);
+  font-size: 10.5px;
+}
+
+.lp-starmap-control-item input[type='range'] {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--lp-accent);
+  cursor: pointer;
+}
+
+.lp-starmap-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 6px;
+  border-top: 1px solid var(--lp-border);
+  font-size: 11px;
+  color: var(--lp-ink);
+}
+
+.lp-starmap-toggles label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+/* ---- Interactive SVG Canvas & Links/Nodes ---- */
+
+.lp-starmap-canvas {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+  cursor: grab;
+  background-color: var(--lp-bg);
+  background-image: radial-gradient(
+    circle,
+    var(--lp-grid-dot) 1px,
+    transparent 1px
+  );
+  background-size: 24px 24px;
+}
+
+.lp-starmap-canvas.is-panning {
+  cursor: grabbing;
+}
+
+.lp-starmap-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.lp-star-orbit-ring {
+  fill: none;
+  stroke: var(--lp-border);
+  stroke-width: 1;
+  stroke-dasharray: 4 7;
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.lp-star-link {
+  stroke: var(--lp-edge);
+  stroke-width: 1.25;
+  opacity: 0.46;
+  transition:
+    opacity 150ms ease,
+    stroke-width 150ms ease;
+  pointer-events: none;
+}
+
+.lp-star-link-core-stage {
+  stroke-width: 1.5;
+  opacity: 0.42;
+}
+
+.lp-star-link-prerequisite {
+  stroke: var(--lp-accent);
+  stroke-width: 1.4;
+  stroke-dasharray: 4 4;
+  opacity: 0.68;
+}
+
+.lp-star-link.is-optional {
+  stroke-dasharray: 3 5;
+  opacity: 0.34;
+}
+
+.lp-star-link.is-dimmed {
+  opacity: 0.08 !important;
+}
+
+.lp-star-link.is-spotlight {
+  opacity: 0.94 !important;
+  stroke-width: 2.15 !important;
+}
+
+.lp-star-node-group {
+  cursor: pointer;
+  transition: opacity 160ms ease;
+}
+
+.lp-star-node-group.is-dimmed {
+  opacity: 0.14;
+}
+
+.lp-star-node-halo {
+  fill: none;
+  stroke-width: 1.4;
+  opacity: 0.25;
+  pointer-events: none;
+}
+
+.lp-star-node-group.is-hovered .lp-star-node-halo,
+.lp-star-node-group.is-selected .lp-star-node-halo {
+  opacity: 0.72;
+  stroke-width: 2;
+}
+
+.lp-star-next-pulse {
+  fill: none;
+  stroke: var(--lp-accent);
+  stroke-width: 1.8;
+  stroke-dasharray: 3 3;
+  opacity: 0.88;
+  pointer-events: none;
+}
+
+.lp-star-node-circle {
+  stroke: var(--lp-card);
+  stroke-width: 1.6;
+  transition: transform 140ms ease;
+}
+
+.lp-star-node-group.is-locked .lp-star-node-circle {
+  opacity: 0.45;
+  stroke-dasharray: 2 2;
+}
+
+.lp-star-node-group.is-selected .lp-star-node-circle {
+  stroke: var(--lp-ink);
+  stroke-width: 2.4;
+}
+
+.lp-star-core-glyph {
+  fill: #fff;
+  font-family: var(--lp-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.lp-star-completed-dot {
+  fill: #fff;
+  opacity: 0.92;
+  pointer-events: none;
+}
+
+.lp-star-checkpoint-ring {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1.3;
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+.lp-star-node-label {
+  fill: var(--lp-ink);
+  font-size: 11px;
+  font-weight: 500;
+  paint-order: stroke;
+  stroke: var(--lp-bg);
+  stroke-width: 3px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+  transition: opacity 150ms ease;
+}
+
+.lp-star-node-label.is-core {
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.lp-star-node-label.is-stage {
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.lp-star-node-sublabel {
+  fill: var(--lp-muted);
+  font-family: var(--lp-mono);
+  font-size: 9.5px;
+  paint-order: stroke;
+  stroke: var(--lp-bg);
+  stroke-width: 2.5px;
+  pointer-events: none;
+}
+
+/* ---- Bottom-Left Dock & Bottom-Right Legend ---- */
+
+.lp-starmap-dock {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--lp-border-strong);
+  border-radius: 2px;
+  background: var(--lp-card);
+  box-shadow: var(--lp-shadow);
+  z-index: 8;
+}
+
+.lp-starmap-dock button {
+  height: 24px;
+  min-width: 24px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--lp-ink);
+  font-family: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.lp-starmap-dock button:hover {
+  background: var(--lp-card-stage);
+  border-color: var(--lp-border);
+}
+
+.lp-starmap-zoom-readout {
+  padding: 0 6px;
+  font-family: var(--lp-mono);
+  font-size: 11px;
+  color: var(--lp-muted);
+}
+
+.lp-starmap-legend {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 10px;
+  border: 1px solid var(--lp-border);
+  border-radius: 2px;
+  background: var(--lp-card);
+  color: var(--lp-muted);
+  font-size: 11px;
+  z-index: 8;
+}
+
+.lp-starmap-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.lp-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.lp-legend-dot.is-stage {
+  background: #38bdf8;
+}
+
+.lp-legend-dot.is-video {
+  background: #10b981;
+}
+
+.lp-legend-dot.is-next {
+  background: var(--lp-accent);
+}
+
+.lp-legend-line.is-prereq {
+  width: 14px;
+  height: 0;
+  border-top: 2px dashed var(--lp-accent);
+  display: inline-block;
+}
+
+.lp-starmap-legend-hint {
+  padding-left: 6px;
+  border-left: 1px solid var(--lp-border);
+  opacity: 0.85;
+}
+
+/* ---- Floating Hover Preview Card ---- */
+
+.lp-starmap-tooltip {
+  position: absolute;
+  top: 46px;
+  left: 14px;
+  width: 284px;
+  padding: 10px 12px;
+  border: 1px solid var(--lp-border-strong);
+  border-radius: 3px;
+  background: var(--lp-card);
+  box-shadow: var(--lp-shadow);
+  z-index: 10;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.lp-starmap-tooltip-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.lp-starmap-tooltip-badge {
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: var(--lp-card-stage);
+  border: 1px solid var(--lp-border);
+  color: var(--lp-ink);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.lp-starmap-tooltip-status {
+  color: var(--lp-accent);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.lp-starmap-tooltip-title {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--lp-ink);
+}
+
+.lp-starmap-tooltip-video {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.lp-starmap-tooltip-video img {
+  width: 76px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 2px;
+  border: 1px solid var(--lp-border);
+  flex-shrink: 0;
+}
+
+.lp-starmap-tooltip-video > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--lp-muted);
+}
+
+.lp-starmap-tooltip-note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--lp-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.lp-starmap-tooltip-prereq {
+  padding-top: 4px;
+  border-top: 1px solid var(--lp-border);
+  font-size: 10.5px;
+  color: var(--lp-accent);
+}

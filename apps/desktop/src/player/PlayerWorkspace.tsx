@@ -19,6 +19,10 @@ import type { PlayerHost, PlayerView } from './host';
 import LearningPathProposalDialog from './LearningPathProposalDialog';
 import LearningPathView, { LearningPathsHomeView } from './LearningPathView';
 import type { LearningPathExternalBridges } from './LearningPathView';
+import {
+  HACKER_CONSTELLATION_PATH_ID,
+  HACKER_LEARNING_PATH_PRESET,
+} from './learning-path-presets';
 import { ImportDialog, SettingsDialog } from './PlayerDialogs';
 import { errorText, playerApi } from './player-api';
 import { inputFromItem, patchOverlay } from './queue';
@@ -202,7 +206,27 @@ export default function PlayerWorkspace({
 
   const reloadOverview = useCallback(async () => {
     try {
-      setOverview(await playerApi.overview());
+      let loaded = await playerApi.overview();
+      const hasHackerPath = loaded.learningPaths.some(
+        (p) => p.pathId === HACKER_CONSTELLATION_PATH_ID,
+      );
+      let alreadySeeded = false;
+      try {
+        alreadySeeded =
+          localStorage.getItem('seamind:seeded-hacker-path:v1') === 'true';
+      } catch {
+        // ignore
+      }
+      if (!hasHackerPath && !alreadySeeded) {
+        try {
+          await playerApi.learningPathSave(HACKER_LEARNING_PATH_PRESET);
+          localStorage.setItem('seamind:seeded-hacker-path:v1', 'true');
+          loaded = await playerApi.overview();
+        } catch {
+          // ignore if mock test environment doesn't implement learningPathSave
+        }
+      }
+      setOverview(loaded);
       setLoadError('');
     } catch (error) {
       setLoadError(errorText(error, '无法读取播放器数据'));
