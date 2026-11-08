@@ -1662,34 +1662,46 @@ export default function LearningPathStarMapView({
                   {(pinnedLessonNode.prerequisiteIds.length > 0 ||
                     pinnedLessonNode.dependentIds.length > 0) && (
                     <div className="lp-star-vcard-deps">
-                      {pinnedLessonNode.prerequisiteIds.map((reqId) => {
-                        const req = nodeMap.get(reqId);
-                        if (!req) return null;
-                        return (
-                          <button
-                            key={`req-${reqId}`}
-                            type="button"
-                            onClick={() => focusStarNode(reqId, 1.0)}
-                            title={`跳转到先修节点：${req.label}`}
-                          >
-                            先修: {req.shortCode || req.label.slice(0, 8)}
-                          </button>
-                        );
-                      })}
-                      {pinnedLessonNode.dependentIds.map((depId) => {
-                        const dep = nodeMap.get(depId);
-                        if (!dep) return null;
-                        return (
-                          <button
-                            key={`dep-${depId}`}
-                            type="button"
-                            onClick={() => focusStarNode(depId, 1.0)}
-                            title={`跳转到后续解锁节点：${dep.label}`}
-                          >
-                            解锁: {dep.shortCode || dep.label.slice(0, 8)}
-                          </button>
-                        );
-                      })}
+                      {pinnedLessonNode.prerequisiteIds.length > 0 && (
+                        <div className="lp-star-vcard-dep-row">
+                          <span className="lp-star-vcard-dep-label">先修</span>
+                          {pinnedLessonNode.prerequisiteIds.map((reqId) => {
+                            const req = nodeMap.get(reqId);
+                            if (!req) return null;
+                            return (
+                              <button
+                                key={`req-${reqId}`}
+                                type="button"
+                                className="lp-star-vcard-dep-chip is-prereq"
+                                onClick={() => focusStarNode(reqId, 1.0)}
+                                title={`跳转到先修节点：${req.label}`}
+                              >
+                                ← {req.shortCode || req.label.slice(0, 8)}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {pinnedLessonNode.dependentIds.length > 0 && (
+                        <div className="lp-star-vcard-dep-row">
+                          <span className="lp-star-vcard-dep-label">后续</span>
+                          {pinnedLessonNode.dependentIds.map((depId) => {
+                            const dep = nodeMap.get(depId);
+                            if (!dep) return null;
+                            return (
+                              <button
+                                key={`dep-${depId}`}
+                                type="button"
+                                className="lp-star-vcard-dep-chip is-unlock"
+                                onClick={() => focusStarNode(depId, 1.0)}
+                                title={`跳转到后续课程：${dep.label}`}
+                              >
+                                {dep.shortCode || dep.label.slice(0, 8)} →
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

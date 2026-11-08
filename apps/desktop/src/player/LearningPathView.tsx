@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { FormEvent } from 'react';
+import type { FormEvent, KeyboardEvent, MouseEvent, WheelEvent } from 'react';
 import '../ebook/book-galaxy-view.css';
 import type { AgentCapabilities } from '../agent/capabilities';
 import { runLearningPathAgentTurn } from '../agent/runtime';
@@ -8,6 +8,7 @@ import type {
   AgentChatMessage,
   LearningPathProposal,
 } from '../agent/types';
+import { formatDuration } from './format';
 import { usePlayerHost } from './host';
 import { CloseIcon, PathTreeIcon } from './icons';
 import {
@@ -54,6 +55,19 @@ const DEFAULT_STYLE: StoredPathStyle = {
   connectorStyle: 'curve',
 };
 
+const NODE_STATUS_LABEL: Record<PositionedPathNode['status'], string> = {
+  completed: '已完成',
+  in_progress: '进行中',
+  ready: '待学习',
+  locked: '待解锁',
+};
+
+const NODE_KIND_LABEL: Record<LearningPathNodeKind, string> = {
+  stage: '阶段',
+  video: '课程',
+  checkpoint: '里程碑',
+};
+
 function readStoredStyle(): StoredPathStyle {
   try {
     const raw = window.localStorage.getItem(STYLE_STORAGE_KEY);
@@ -64,8 +78,7 @@ function readStoredStyle(): StoredPathStyle {
         parsed.layoutMode === 'tree' ||
         parsed.layoutMode === 'metro' ||
         parsed.layoutMode === 'dag' ||
-        parsed.layoutMode === 'lanes' ||
-        parsed.layoutMode === 'radial'
+        parsed.layoutMode === 'lanes'
           ? parsed.layoutMode
           : 'tree',
       theme:
@@ -87,6 +100,26 @@ function readStoredStyle(): StoredPathStyle {
     return DEFAULT_STYLE;
   }
 }
+
+function saveStoredStyle(style: StoredPathStyle) {
+  try {
+    window.localStorage.setItem(STYLE_STORAGE_KEY, JSON.stringify(style));
+  } catch {
+    // Ignore storage write errors
+  }
+}
+
+const THEME_OPTIONS: {
+  id: LearningPathTheme;
+  label: string;
+  swatch: string;
+}[] = [
+  { id: 'terracotta', label: '赤陶工坊', swatch: '#c8563b' },
+  { id: 'blueprint', label: '工程蓝图', swatch: '#3d9cf0' },
+  { id: 'cyber', label: '极光拓扑', swatch: '#14b8a6' },
+  { id: 'botanical', label: '森系书院', swatch: '#3a6b4c' },
+  { id: 'minimal', label: '极简墨线', swatch: '#262626' },
+];
 
 export interface LearningPathExternalBridges {
   aiProvider?: { baseUrl: string; model: string } | null;
@@ -739,16 +772,26 @@ export default function LearningPathView({
   const [detail, setDetail] = useState<LearningPathDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [style] = useState<StoredPathStyle>(readStoredStyle);
+  const [style, setStyle] = useState<StoredPathStyle>(readStoredStyle);
 
-  const [canvasMode, setCanvasMode] = useState<'constellation' | 'overview'>(
-    'constellation',
-  );
+  const [pan, setPan] = useState({ x: 36, y: 36 });
+  const [scale, setScale] = useState(1);
+  const [panning, setPanning] = useState(false);
+  const [canvasMode, setCanvasMode] = useState<
+    'constellation' | 'course' | 'overview'
+  >('constellation');
+  const lastGraphModeRef = useRef<'constellation' | 'course'>('constellation');
   const [starFocusRequest, setStarFocusRequest] = useState<{
     nodeId: string;
     seq: number;
   } | null>(null);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  const dragStartRef = useRef<{
+    x: number;
+    y: number;
+    panX: number;
+    panY: number;
+  } | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
 
@@ -778,9 +821,20 @@ export default function LearningPathView({
   const [activeAiCandidate, setActiveAiCandidate] =
     useState<LearningPathProposal | null>(null);
 
+  const updateStyle = (patch: Partial<StoredPathStyle>) => {
+    setStyle((prev) => {
+      const next = { ...prev, ...patch };
+      saveStoredStyle(next);
+      return next;
+    });
+  };
+
   useEffect(() => {
+    setPan({ x: 36, y: 36 });
+    setScale(1);
     setSelectedNodeId(null);
     setCanvasMode('constellation');
+    lastGraphModeRef.current = 'constellation';
   }, [pathId]);
 
   useEffect(() => {
@@ -792,7 +846,7 @@ export default function LearningPathView({
           if (!menu.contains(event.target as Node)) menu.open = false;
         });
     };
-    const closeWithEscape = (event: KeyboardEvent) => {
+    const closeWithEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       toolbarRef.current
         ?.querySelectorAll<HTMLDetailsElement>('.lp-menu[open]')
@@ -851,14 +905,128 @@ export default function LearningPathView({
     [detail, layout],
   );
 
-  const focusNode = useCallback((targetNodeId: string) => {
-    setCanvasMode('constellation');
-    setSelectedNodeId(targetNodeId);
-    setStarFocusRequest({
-      nodeId: targetNodeId,
-      seq: Date.now(),
+  const fitCanvas = useCallback(() => {
+    const el = viewportRef.current;
+    if (!el || !layout) return;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+    const fitX = (rect.width - 72) / layout.width;
+    const fitY = (rect.height - 72) / layout.height;
+    const nextScale = Math.max(0.45, Math.min(1, Math.min(fitX, fitY)));
+    setScale(Number(nextScale.toFixed(2)));
+    setPan({
+      x: Math.max(24, Math.round((rect.width - layout.width * nextScale) / 2)),
+      y: Math.max(
+        24,
+        Math.round((rect.height - layout.height * nextScale) / 2),
+      ),
     });
-  }, []);
+  }, [layout]);
+
+  const focusNode = useCallback(
+    (targetNodeId: string, targetScale = scale) => {
+      const targetMode =
+        canvasMode === 'overview' ? lastGraphModeRef.current : canvasMode;
+      if (targetMode === 'constellation') {
+        lastGraphModeRef.current = 'constellation';
+        setCanvasMode('constellation');
+        setSelectedNodeId(targetNodeId);
+        setStarFocusRequest({
+          nodeId: targetNodeId,
+          seq: Date.now(),
+        });
+        return;
+      }
+      const el = viewportRef.current;
+      const target = layout?.nodes.find((n) => n.node.nodeId === targetNodeId);
+      if (!el || !target) return;
+      const rect = el.getBoundingClientRect();
+      const nextScale = Math.max(0.65, Math.min(1.15, targetScale));
+      const centerX = target.x + target.width / 2;
+      const centerY = target.y + target.height / 2;
+      lastGraphModeRef.current = 'course';
+      setCanvasMode('course');
+      setScale(Number(nextScale.toFixed(2)));
+      setPan({
+        x: Math.round(rect.width * 0.42 - centerX * nextScale),
+        y: Math.round(rect.height * 0.46 - centerY * nextScale),
+      });
+    },
+    [canvasMode, layout, scale],
+  );
+
+  const selectNode = (targetNodeId: string) => {
+    setCopilotOpen(false);
+    setSelectedNodeId((prev) => (prev === targetNodeId ? null : targetNodeId));
+  };
+
+  const handleNodeKeyDown = (
+    event: KeyboardEvent<HTMLElement>,
+    targetNodeId: string,
+  ) => {
+    if (event.target !== event.currentTarget) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      selectNode(targetNodeId);
+    }
+  };
+
+  const handleMouseDown = (event: MouseEvent<HTMLDivElement>) => {
+    if (canvasMode !== 'course') return;
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement;
+    if (
+      target.closest('.lp-node-card') ||
+      target.closest('button') ||
+      target.closest('.lp-canvas-dock')
+    )
+      return;
+    setPanning(true);
+    dragStartRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+      panX: pan.x,
+      panY: pan.y,
+    };
+  };
+
+  useEffect(() => {
+    if (!panning) return;
+    const onMove = (event: globalThis.MouseEvent) => {
+      const start = dragStartRef.current;
+      if (!start) return;
+      setPan({
+        x: start.panX + (event.clientX - start.x),
+        y: start.panY + (event.clientY - start.y),
+      });
+    };
+    const onUp = () => {
+      setPanning(false);
+      dragStartRef.current = null;
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [panning]);
+
+  const handleWheel = (event: WheelEvent<HTMLDivElement>) => {
+    if (canvasMode !== 'course') return;
+    if (event.ctrlKey || event.metaKey) {
+      event.preventDefault();
+      const delta = event.deltaY < 0 ? 0.08 : -0.08;
+      setScale((prev) =>
+        Number(Math.max(0.4, Math.min(1.8, prev + delta)).toFixed(2)),
+      );
+    } else {
+      setPan((prev) => ({
+        x: prev.x - event.deltaX,
+        y: prev.y - event.deltaY,
+      }));
+    }
+  };
 
   const queueSource = useMemo(() => {
     if (!detail || !layout) return { title: '学习路径', items: [] };
@@ -1334,6 +1502,14 @@ export default function LearningPathView({
   const nextUp = layout.nextUpNodeId
     ? (layout.nodes.find((n) => n.node.nodeId === layout.nextUpNodeId) ?? null)
     : null;
+  const selectedNode = selectedNodeId
+    ? (layout.nodes.find((n) => n.node.nodeId === selectedNodeId) ?? null)
+    : null;
+  const selectedStage = selectedNode
+    ? (stageOverview.find((stage) => stage.index === selectedNode.stageIndex) ??
+      null)
+    : null;
+
   return (
     <section
       className="lp-workspace"
@@ -1405,9 +1581,23 @@ export default function LearningPathView({
             type="button"
             className={canvasMode === 'constellation' ? 'is-active' : ''}
             aria-pressed={canvasMode === 'constellation'}
-            onClick={() => setCanvasMode('constellation')}
+            onClick={() => {
+              lastGraphModeRef.current = 'constellation';
+              setCanvasMode('constellation');
+            }}
           >
-            课程星图
+            星图视图
+          </button>
+          <button
+            type="button"
+            className={canvasMode === 'course' ? 'is-active' : ''}
+            aria-pressed={canvasMode === 'course'}
+            onClick={() => {
+              lastGraphModeRef.current = 'course';
+              setCanvasMode('course');
+            }}
+          >
+            线性视图
           </button>
           <button
             type="button"
@@ -1452,7 +1642,7 @@ export default function LearningPathView({
               onClick={() =>
                 setVideoPickerState({
                   isOpen: true,
-                  title: '选取课程视频加入知识星图',
+                  title: '选取课程视频加入知识树',
                   subtitle: '从收藏、播放历史、关注频道或 YouTube 搜索中选取',
                   multiple: true,
                   parentId: null,
@@ -1473,6 +1663,104 @@ export default function LearningPathView({
             >
               从收藏导入
             </button>
+          </div>
+        </details>
+        <details className="lp-menu">
+          <summary className="lp-btn">显示设置</summary>
+          <div className="lp-menu-panel lp-display-menu-panel">
+            <div className="lp-menu-section">
+              <span>视图模式</span>
+              <div className="lp-menu-choice-row">
+                <button
+                  type="button"
+                  className={canvasMode === 'constellation' ? 'is-active' : ''}
+                  onClick={() => {
+                    lastGraphModeRef.current = 'constellation';
+                    setCanvasMode('constellation');
+                  }}
+                >
+                  Obsidian 知识星图
+                </button>
+                <button
+                  type="button"
+                  className={canvasMode === 'course' ? 'is-active' : ''}
+                  onClick={() => {
+                    lastGraphModeRef.current = 'course';
+                    setCanvasMode('course');
+                  }}
+                >
+                  线性课程图谱
+                </button>
+              </div>
+            </div>
+            <div className="lp-menu-section">
+              <span>线性视图布局</span>
+              <div className="lp-menu-choice-row">
+                {(
+                  [
+                    ['tree', '横向树状流'],
+                    ['metro', '地铁轨道流'],
+                    ['lanes', '阶段泳道栏'],
+                    ['dag', '技能拓扑图'],
+                  ] as const
+                ).map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={
+                      canvasMode === 'course' && style.layoutMode === mode
+                        ? 'is-active'
+                        : ''
+                    }
+                    onClick={() => {
+                      lastGraphModeRef.current = 'course';
+                      setCanvasMode('course');
+                      updateStyle({ layoutMode: mode });
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="lp-menu-section">
+              <span>线性连线样式</span>
+              <div className="lp-menu-choice-row">
+                {(
+                  [
+                    ['curve', '平滑曲线'],
+                    ['orthogonal', '正交折线'],
+                    ['metro', '地铁倒角'],
+                  ] as const
+                ).map(([connectorStyle, label]) => (
+                  <button
+                    key={connectorStyle}
+                    type="button"
+                    className={
+                      style.connectorStyle === connectorStyle ? 'is-active' : ''
+                    }
+                    onClick={() => updateStyle({ connectorStyle })}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="lp-menu-section">
+              <span>色彩主题</span>
+              <div className="lp-menu-choice-row">
+                {THEME_OPTIONS.map((theme) => (
+                  <button
+                    key={theme.id}
+                    type="button"
+                    className={style.theme === theme.id ? 'is-active' : ''}
+                    onClick={() => updateStyle({ theme: theme.id })}
+                  >
+                    {theme.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         </details>
         <details className="lp-menu lp-more-menu">
@@ -1526,7 +1814,9 @@ export default function LearningPathView({
       <div className="lp-body">
         <div
           ref={viewportRef}
-          className={`lp-viewport${canvasMode === 'overview' ? ' is-overview' : ' is-constellation'}`}
+          className={`lp-viewport${panning ? ' is-panning' : ''}${canvasMode === 'overview' ? ' is-overview' : canvasMode === 'constellation' ? ' is-constellation' : ''}`}
+          onMouseDown={handleMouseDown}
+          onWheel={handleWheel}
         >
           {canvasMode === 'constellation' ? (
             <LearningPathStarMapView
@@ -1546,7 +1836,7 @@ export default function LearningPathView({
               onAddChildNode={(parentId) => openAddNodeModal(parentId, 'video')}
               onDeleteNode={(nodeId) => void deleteNode(nodeId)}
             />
-          ) : (
+          ) : canvasMode === 'overview' ? (
             <div className="lp-overview" aria-label="路径阶段总览">
               <div className="lp-overview-heading">
                 <div>
@@ -1604,8 +1894,397 @@ export default function LearningPathView({
                 })}
               </div>
             </div>
+          ) : (
+            <>
+              <div
+                className="lp-stage"
+                style={{
+                  width: layout.width,
+                  height: layout.height,
+                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+                }}
+              >
+                <svg
+                  className="lp-edges-svg"
+                  width={layout.width}
+                  height={layout.height}
+                >
+                  <defs>
+                    <marker
+                      id="lp-arrow-active"
+                      viewBox="0 0 10 10"
+                      refX="8"
+                      refY="5"
+                      markerWidth="5"
+                      markerHeight="5"
+                      orient="auto-start-reverse"
+                    >
+                      <path d="M 0 1 L 9 5 L 0 9 z" fill="var(--lp-accent)" />
+                    </marker>
+                    <marker
+                      id="lp-arrow-muted"
+                      viewBox="0 0 10 10"
+                      refX="8"
+                      refY="5"
+                      markerWidth="5"
+                      markerHeight="5"
+                      orient="auto-start-reverse"
+                    >
+                      <path
+                        d="M 0 1 L 9 5 L 0 9 z"
+                        fill="var(--lp-line-strong)"
+                      />
+                    </marker>
+                  </defs>
+                  {layout.edges.map((edge) => (
+                    <path
+                      key={edge.id}
+                      d={edge.pathD}
+                      className={`lp-edge is-${edge.kind}${edge.active ? ' is-completed' : ''}`}
+                      markerEnd={
+                        edge.active
+                          ? 'url(#lp-arrow-active)'
+                          : 'url(#lp-arrow-muted)'
+                      }
+                    />
+                  ))}
+                </svg>
+
+                {layout.laneHeaders &&
+                  layout.laneHeaders.map((lh) => (
+                    <div
+                      key={`lane-${lh.stageNodeId}`}
+                      className="lp-lane-backdrop"
+                      style={{
+                        left: lh.x,
+                        top: lh.y,
+                        width: lh.width,
+                        height: lh.height,
+                      }}
+                    >
+                      <div className="lp-lane-header">
+                        <span className="lp-lane-badge">STAGE</span>
+                        <strong>{lh.title}</strong>
+                        <span>
+                          {lh.completedCount}/{lh.totalCount} 已学
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+
+                {layout.nodes.map((item) => {
+                  const { node, video, status } = item;
+                  const isNextUp = layout.nextUpNodeId === node.nodeId;
+                  const isSelected = selectedNodeId === node.nodeId;
+                  const statusClass = `is-${status}`;
+                  const kindClass = `is-${node.kind}`;
+                  const progressPercent =
+                    video &&
+                    video.durationSeconds &&
+                    video.durationSeconds > 0 &&
+                    video.progressSeconds
+                      ? Math.min(
+                          100,
+                          Math.round(
+                            (video.progressSeconds / video.durationSeconds) *
+                              100,
+                          ),
+                        )
+                      : status === 'completed'
+                        ? 100
+                        : 0;
+
+                  return (
+                    <article
+                      key={node.nodeId}
+                      tabIndex={0}
+                      aria-expanded={isSelected}
+                      aria-controls="lp-node-inspector"
+                      className={`lp-node-card ${kindClass} ${statusClass}${isNextUp ? ' is-next-up' : ''}${isSelected ? ' is-selected' : ''}`}
+                      style={{
+                        left: item.x,
+                        top: item.y,
+                        width: item.width,
+                        minHeight: item.height,
+                      }}
+                      onClick={() => selectNode(node.nodeId)}
+                      onDoubleClick={() => {
+                        if (video) playNode(item);
+                      }}
+                      onKeyDown={(event) =>
+                        handleNodeKeyDown(event, node.nodeId)
+                      }
+                    >
+                      <div className="lp-node-top">
+                        <div className="lp-node-badges">
+                          <span className="lp-node-badge is-order">
+                            #
+                            {String(
+                              item.orderIndex ?? item.stageIndex + 1,
+                            ).padStart(2, '0')}
+                          </span>
+                          {node.kind === 'stage' && (
+                            <span className="lp-node-badge is-stage">
+                              阶段主干
+                            </span>
+                          )}
+                          {node.kind === 'checkpoint' && (
+                            <span className="lp-node-badge is-checkpoint">
+                              里程碑
+                            </span>
+                          )}
+                          {node.optional && (
+                            <span className="lp-node-badge is-optional">
+                              选修
+                            </span>
+                          )}
+                          {isNextUp && (
+                            <span className="lp-node-badge is-next">
+                              下一课
+                            </span>
+                          )}
+                          <span className="lp-node-badge">
+                            {NODE_STATUS_LABEL[status]}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="lp-node-main">
+                        <div className="lp-node-info">
+                          <h4 className="lp-node-title" title={node.title}>
+                            {node.title}
+                          </h4>
+                        </div>
+                      </div>
+
+                      {video && progressPercent > 0 && (
+                        <div className="lp-node-progress">
+                          <div style={{ width: `${progressPercent}%` }} />
+                        </div>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+              <div
+                className="lp-canvas-dock"
+                role="toolbar"
+                aria-label="画布视图控制"
+              >
+                <button
+                  type="button"
+                  className="lp-dock-btn"
+                  onClick={() =>
+                    setScale((s) => Number(Math.max(0.45, s - 0.1).toFixed(2)))
+                  }
+                  title="缩小"
+                >
+                  −
+                </button>
+                <span className="lp-zoom-label">
+                  {Math.round(scale * 100)}%
+                </span>
+                <button
+                  type="button"
+                  className="lp-dock-btn"
+                  onClick={() =>
+                    setScale((s) => Number(Math.min(1.8, s + 0.1).toFixed(2)))
+                  }
+                  title="放大"
+                >
+                  +
+                </button>
+                <button
+                  type="button"
+                  className="lp-dock-btn"
+                  onClick={() => {
+                    setPan({ x: 36, y: 36 });
+                    setScale(1);
+                  }}
+                >
+                  1:1
+                </button>
+                <button
+                  type="button"
+                  className="lp-dock-btn"
+                  onClick={fitCanvas}
+                >
+                  适配画布
+                </button>
+                {nextUp && (
+                  <button
+                    type="button"
+                    className="lp-dock-btn"
+                    onClick={() => focusNode(nextUp.node.nodeId, 1)}
+                  >
+                    定位下一课
+                  </button>
+                )}
+              </div>
+            </>
           )}
         </div>
+
+        {canvasMode === 'course' && selectedNode && (
+          <aside
+            id="lp-node-inspector"
+            className="lp-inspector-drawer"
+            aria-label="节点详情面板"
+          >
+            <header className="lp-inspector-header">
+              <div>
+                <span className="lp-inspector-eyebrow">
+                  #
+                  {String(
+                    selectedNode.orderIndex ?? selectedNode.stageIndex + 1,
+                  ).padStart(2, '0')}{' '}
+                  · {NODE_KIND_LABEL[selectedNode.node.kind]}
+                </span>
+                <strong>{NODE_STATUS_LABEL[selectedNode.status]}</strong>
+              </div>
+              <button
+                type="button"
+                className="lp-icon-btn"
+                aria-label="关闭节点详情"
+                onClick={() => setSelectedNodeId(null)}
+              >
+                <CloseIcon />
+              </button>
+            </header>
+            <div className="lp-inspector-body">
+              {selectedNode.video && (
+                <div className="lp-inspector-thumb">
+                  <img
+                    src={
+                      selectedNode.video.thumbnailUrl ||
+                      thumbnailUrl(selectedNode.video.videoId, 'mq')
+                    }
+                    alt=""
+                    loading="lazy"
+                  />
+                  {selectedNode.video.durationSeconds ? (
+                    <span className="lp-node-duration">
+                      {formatDuration(selectedNode.video.durationSeconds)}
+                    </span>
+                  ) : null}
+                </div>
+              )}
+              <div className="lp-inspector-badges">
+                {selectedStage && (
+                  <span className="lp-node-badge">
+                    阶段 {String(selectedStage.index + 1).padStart(2, '0')} ·{' '}
+                    {selectedStage.title}
+                  </span>
+                )}
+                {selectedNode.node.optional && (
+                  <span className="lp-node-badge is-optional">选修</span>
+                )}
+                {layout.nextUpNodeId === selectedNode.node.nodeId && (
+                  <span className="lp-node-badge is-next">下一课</span>
+                )}
+              </div>
+              <h3 className="lp-inspector-title">{selectedNode.node.title}</h3>
+              <div className="lp-inspector-meta">
+                <span>
+                  {selectedNode.video?.channelName ||
+                    (selectedNode.node.kind === 'stage'
+                      ? '阶段主干节点'
+                      : '课程节点')}
+                </span>
+                {selectedNode.node.startSeconds > 0 && (
+                  <span>
+                    起始 {formatDuration(selectedNode.node.startSeconds)}
+                  </span>
+                )}
+              </div>
+              {selectedNode.node.note && (
+                <div className="lp-inspector-section">
+                  <h4>学习要点</h4>
+                  <p>{selectedNode.node.note}</p>
+                </div>
+              )}
+              {selectedNode.node.prerequisiteIds.length > 0 && (
+                <div className="lp-inspector-section">
+                  <h4>前置节点</h4>
+                  <div className="lp-inspector-prereq-list">
+                    {selectedNode.node.prerequisiteIds.map((prereqId) => {
+                      const prereq = detail.nodes.find(
+                        (item) => item.nodeId === prereqId,
+                      );
+                      return (
+                        <button
+                          key={prereqId}
+                          type="button"
+                          className="lp-btn"
+                          onClick={() => {
+                            setSelectedNodeId(prereqId);
+                            focusNode(prereqId);
+                          }}
+                        >
+                          {prereq?.title || prereqId}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              <div className="lp-inspector-actions">
+                {selectedNode.video && (
+                  <button
+                    type="button"
+                    className="lp-btn is-primary"
+                    onClick={() => playNode(selectedNode)}
+                  >
+                    ▶{' '}
+                    {selectedNode.status === 'in_progress'
+                      ? '继续观看'
+                      : '播放课程'}
+                  </button>
+                )}
+                {selectedNode.node.kind === 'stage' && (
+                  <button
+                    type="button"
+                    className="lp-btn is-primary"
+                    onClick={() =>
+                      setVideoPickerState({
+                        isOpen: true,
+                        title: `向「${selectedNode.node.title}」添加课程视频`,
+                        subtitle: '勾选要归入该阶段的课程视频',
+                        multiple: true,
+                        parentId: selectedNode.node.nodeId,
+                      })
+                    }
+                  >
+                    选取视频加入本阶段
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="lp-btn"
+                  onClick={() => openEditNodeModal(selectedNode)}
+                >
+                  编辑节点
+                </button>
+                <button
+                  type="button"
+                  className="lp-btn"
+                  onClick={() =>
+                    openAddNodeModal(selectedNode.node.nodeId, 'video')
+                  }
+                >
+                  新增子节点
+                </button>
+                <button
+                  type="button"
+                  className="lp-btn is-danger"
+                  onClick={() => void deleteNode(selectedNode.node.nodeId)}
+                >
+                  删除节点
+                </button>
+              </div>
+            </div>
+          </aside>
+        )}
 
         {copilotOpen && (
           <aside className="lp-copilot-drawer" aria-label="CLI 与 AI 路径助手">
