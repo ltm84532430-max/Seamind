@@ -1527,61 +1527,18 @@ export default function LearningPathStarMapView({
                 </div>
               </>
             ) : (
-              /* Single Video / Checkpoint / Satellite Thumbnail Card */
+              /* Single Video / Checkpoint / Satellite Institutional Dossier Card */
               <>
-                <div className="lp-star-vcard-media">
-                  {pinnedLessonNode.video ? (
-                    <button
-                      type="button"
-                      className="lp-star-vcard-thumb-btn"
-                      onClick={() => {
-                        if (pinnedLessonNode.positionedNode) {
-                          onPlayNode(pinnedLessonNode.positionedNode);
-                        }
-                      }}
-                      title={`点击立即播放：${pinnedLessonNode.label}`}
-                    >
-                      <img
-                        src={
-                          pinnedLessonNode.video.thumbnailUrl ??
-                          thumbnailUrl(pinnedLessonNode.video.videoId, 'mq')
-                        }
-                        alt={pinnedLessonNode.label}
-                      />
-                      <div className="lp-star-vcard-thumb-overlay">
-                        <span className="lp-star-vcard-play-pill">
-                          ▶ 立即播放课程
-                        </span>
-                      </div>
-                      {pinnedLessonNode.video.durationSeconds && (
-                        <span className="lp-star-vcard-duration">
-                          {formatDurationShort(
-                            pinnedLessonNode.video.durationSeconds,
-                          )}
-                        </span>
-                      )}
-                      <div className="lp-star-vcard-progress">
-                        <div
-                          style={{
-                            width: `${Math.round(
-                              pinnedLessonNode.progressRatio * 100,
-                            )}%`,
-                          }}
-                        />
-                      </div>
-                    </button>
-                  ) : (
-                    <div className="lp-star-vcard-no-video">
-                      <span>阶段里程碑节点</span>
-                    </div>
-                  )}
-
+                <header className="lp-star-vcard-inst-head">
                   <div className="lp-star-vcard-top-badges">
                     <span className="lp-star-vcard-pill">
+                      NODE{' '}
                       {pinnedLessonNode.shortCode ||
                         `#${pinnedLessonNode.orderIndex ?? 1}`}
                     </span>
-                    <span className="lp-star-vcard-status">
+                    <span
+                      className={`lp-star-vcard-status is-${pinnedLessonNode.status}`}
+                    >
                       {pinnedLessonNode.isNextUp
                         ? '下一课'
                         : pinnedLessonNode.status === 'completed'
@@ -1593,19 +1550,18 @@ export default function LearningPathStarMapView({
                               : '待学习'}
                     </span>
                   </div>
-
                   <button
                     type="button"
-                    className="lp-star-vcard-close is-floating"
+                    className="lp-star-vcard-close"
                     onClick={() => {
                       setPinnedCardNodeId(null);
                       onSelectNode(null);
                     }}
-                    title="关闭缩略图卡片"
+                    title="关闭节点卡片"
                   >
                     ✕
                   </button>
-                </div>
+                </header>
 
                 <div className="lp-star-vcard-body">
                   {pinnedNode.kind === 'satellite' && (
@@ -1614,18 +1570,63 @@ export default function LearningPathStarMapView({
                     </div>
                   )}
 
-                  <h4 className="lp-star-vcard-title">
-                    {pinnedLessonNode.label}
-                  </h4>
-
-                  <div className="lp-star-vcard-submeta">
-                    <span>{pinnedLessonNode.stageTitle}</span>
-                    {pinnedLessonNode.video?.channelName && (
-                      <>
-                        <span>·</span>
-                        <span>{pinnedLessonNode.video.channelName}</span>
-                      </>
+                  <div className="lp-star-vcard-media-row">
+                    {pinnedLessonNode.video ? (
+                      <button
+                        type="button"
+                        className="lp-star-vcard-thumb-compact"
+                        onClick={() => {
+                          if (pinnedLessonNode.positionedNode) {
+                            onPlayNode(pinnedLessonNode.positionedNode);
+                          }
+                        }}
+                        title={`点击立即播放：${pinnedLessonNode.label}`}
+                      >
+                        <img
+                          src={
+                            pinnedLessonNode.video.thumbnailUrl ??
+                            thumbnailUrl(pinnedLessonNode.video.videoId, 'mq')
+                          }
+                          alt={pinnedLessonNode.label}
+                        />
+                        <span className="lp-star-vcard-miniplay">▶</span>
+                        {pinnedLessonNode.video.durationSeconds && (
+                          <span className="lp-star-vcard-duration">
+                            {formatDurationShort(
+                              pinnedLessonNode.video.durationSeconds,
+                            )}
+                          </span>
+                        )}
+                        <div className="lp-star-vcard-progress">
+                          <div
+                            style={{
+                              width: `${Math.round(
+                                pinnedLessonNode.progressRatio * 100,
+                              )}%`,
+                            }}
+                          />
+                        </div>
+                      </button>
+                    ) : (
+                      <div className="lp-star-vcard-no-video">
+                        <span>STAGE // CHECKPOINT</span>
+                      </div>
                     )}
+
+                    <div className="lp-star-vcard-media-info">
+                      <h4 className="lp-star-vcard-title">
+                        {pinnedLessonNode.label}
+                      </h4>
+                      <div className="lp-star-vcard-submeta">
+                        <span>{pinnedLessonNode.stageTitle}</span>
+                        {pinnedLessonNode.video?.channelName && (
+                          <>
+                            <span>·</span>
+                            <span>{pinnedLessonNode.video.channelName}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
                   </div>
 
                   {pinnedLessonNode.note && (
