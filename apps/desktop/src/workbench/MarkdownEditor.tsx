@@ -1,7 +1,12 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { undo, redo } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
-import { Annotation, Extension, Transaction } from '@codemirror/state';
+import {
+  Annotation,
+  EditorState,
+  Extension,
+  Transaction,
+} from '@codemirror/state';
 import { basicSetup, EditorView } from 'codemirror';
 import { createMarkdownMinimap } from './markdown-minimap';
 import type { MarkdownMinimapController } from './markdown-minimap';
@@ -39,6 +44,7 @@ interface MarkdownEditorProps {
   ariaLabel?: string;
   extraExtensions?: Extension[];
   hideMinimap?: boolean;
+  readOnly?: boolean;
   onPaste?: (event: ClipboardEvent, view: EditorView) => boolean;
 }
 
@@ -93,6 +99,7 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
       ariaLabel = 'Markdown 源文本',
       extraExtensions,
       hideMinimap = false,
+      readOnly = false,
       onPaste,
     },
     ref,
@@ -117,6 +124,8 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
         doc: normalizeLineEndings(valueRef.current),
         extensions: [
           basicSetup,
+          EditorState.readOnly.of(readOnly),
+          EditorView.editable.of(!readOnly),
           ...(language === 'markdown' ? [markdown()] : []),
           ...(extraExtensionsRef.current ?? []),
           EditorView.lineWrapping,
@@ -159,7 +168,7 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
         view.destroy();
         viewRef.current = null;
       };
-    }, [id, language, ariaLabel, hideMinimap]);
+    }, [id, language, ariaLabel, hideMinimap, readOnly]);
 
     useEffect(() => {
       const view = viewRef.current;

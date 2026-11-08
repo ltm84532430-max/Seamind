@@ -38,7 +38,10 @@ import type {
   MarkdownSelection,
 } from './workbench/MarkdownEditor';
 import MarkdownPreview from './workbench/MarkdownPreview';
-import KnowledgeWorkspace from './knowledge/KnowledgeWorkspace';
+import KnowledgeWorkspace, {
+  readKnowledgeSidebarCollapsed,
+  readKnowledgeSidebarWidth,
+} from './knowledge/KnowledgeWorkspace';
 import {
   findWikilinkTarget,
   type KnowledgeNoteTemplate,
@@ -375,6 +378,9 @@ export default function App() {
   );
   const [activeWorkspace, setActiveWorkspace] =
     useState<ActiveWorkspace>(readActiveWorkspace);
+  const lastKnowledgePageRef = useRef<'knowledge' | 'mindmap'>(
+    activeWorkspace === 'mindmap' ? 'mindmap' : 'knowledge',
+  );
   const [examBookFilter, setExamBookFilter] = useState('');
   const [dueExamCount, setDueExamCount] = useState(0);
   // The player page is built the first time it is opened and then kept, so a video can go on
@@ -397,6 +403,19 @@ export default function App() {
   );
   const [markdownFullscreen, setMarkdownFullscreen] = useState(false);
   const [libraryCollapsed, setLibraryCollapsed] = useState(false);
+  const [knowledgeSidebarWidth, setKnowledgeSidebarWidth] = useState(
+    readKnowledgeSidebarWidth,
+  );
+  const [knowledgeSidebarCollapsed, setKnowledgeSidebarCollapsed] = useState(
+    readKnowledgeSidebarCollapsed,
+  );
+  const onKnowledgeSidebarLayoutChange = useCallback(
+    (width: number, collapsed: boolean) => {
+      setKnowledgeSidebarWidth(width);
+      setKnowledgeSidebarCollapsed(collapsed);
+    },
+    [],
+  );
   const [terminalOpen, setTerminalOpen] = useState(false);
   const feedSelectedArticleIdRef = useRef<string | null>(null);
   const [feedExternalRevision, setFeedExternalRevision] = useState(0);
@@ -462,7 +481,10 @@ export default function App() {
   const [aiCollapsed, setAiCollapsed] = useState<boolean>(readAiCollapsed);
   const [librarySnapshot, setLibrarySnapshot] =
     useState<LibrarySnapshot | null>(null);
-  const [libraryDocuments, setLibraryDocuments] = useState<MapDocument[]>([]);
+  const [mindmapDocuments, setMindmapDocuments] = useState<MapDocument[]>([]);
+  const [previewDocumentPath, setPreviewDocumentPath] = useState<string | null>(
+    null,
+  );
   const [libraryQuery, setLibraryQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [libraryBusy, setLibraryBusy] = useState(false);
@@ -673,8 +695,11 @@ export default function App() {
     confirmDiscard: (message) => window.confirm(message),
   });
   const activeDocument = workbench.active;
+  const catalogDocuments = librarySnapshot?.documents ?? [];
 
   useEffect(() => {
+    if (activeWorkspace === 'knowledge' || activeWorkspace === 'mindmap')
+      lastKnowledgePageRef.current = activeWorkspace;
     try {
       localStorage.setItem(ACTIVE_WORKSPACE_KEY, activeWorkspace);
     } catch {
@@ -955,6 +980,11 @@ export default function App() {
   };
 
   const patchDraft = (patch: Partial<EditorDraft>) => {
+    if (
+      previewDocumentPath !== null &&
+      previewDocumentPath === draftRef.current.relativePath
+    )
+      return;
     const next = {
       ...draftRef.current,
       ...patch,
@@ -2394,20 +2424,31 @@ export default function App() {
   );
 
   const installLibrarySnapshot = (snapshot: LibrarySnapshot) => {
+    const rootChanged =
+      librarySnapshotRef.current?.rootPath !== snapshot.rootPath;
     librarySnapshotRef.current = snapshot;
     setLibrarySnapshot(snapshot);
-    setLibraryDocuments(snapshot.documents);
+    if (
+      rootChanged ||
+      (!libraryQueryRef.current && !categoryFilterRef.current)
+    ) {
+      setMindmapDocuments(
+        snapshot.documents.filter((document) => document.kind === 'mindmap'),
+      );
+    }
   };
 
   const searchLibrary = async (
     query = libraryQuery,
     category = categoryFilter,
   ) => {
+    const sequence = ++searchRequestRef.current;
     const documents = await invoke<MapDocument[]>('search_library', {
       query,
       category: category || null,
+      kind: 'mindmap',
     });
-    setLibraryDocuments(documents);
+    if (sequence === searchRequestRef.current) setMindmapDocuments(documents);
   };
 
   const loadHistoryVersion = async (versionId: string) => {
@@ -2558,6 +2599,11 @@ export default function App() {
   };
 
   const saveDraft = async (force = false): Promise<boolean> => {
+    if (
+      previewDocumentPath !== null &&
+      previewDocumentPath === draftRef.current.relativePath
+    )
+      return true;
     const activeSave = activeSaveRef.current;
     if (activeSave) {
       const saved = await activeSave;
@@ -2742,15 +2788,18 @@ export default function App() {
     document: Pick<MapDocument, 'relativePath' | 'kind'>,
     options: { asMindmap?: boolean } = {},
   ) => {
-    if (!leavePlantUmlSession()) return;
+    if (!leavePlantUmlSession()) return false;
     if (document.kind === 'doc' && !options.asMindmap) {
-      if (!(await canLeaveMindmapDraft())) return;
-      if (await workbench.controller.openMarkdown(document))
-        setActiveWorkspace('mindmap');
-      return;
+      if (!(await canLeaveMindmapDraft())) return false;
+      if (await workbench.controller.openMarkdown(document)) {
+        setPreviewDocumentPath(null);
+        setActiveWorkspace('knowledge');
+        return true;
+      }
+      return false;
     }
-    if (!(await workbench.controller.leave())) return;
-    if (!(await canLeaveMindmapDraft())) return;
+    if (!(await workbench.controller.leave())) return false;
+    if (!(await canLeaveMindmapDraft())) return false;
     setSaveMessage('正在打开思维导图…');
     try {
       const opened = await invoke<OpenedDocument>('open_document', {
@@ -2766,11 +2815,34 @@ export default function App() {
         markdown: opened.markdown,
       });
       installDraft(next);
-      setSaveMessage('已打开');
+      setPreviewDocumentPath(
+        options.asMindmap && opened.document.kind === 'doc'
+          ? opened.document.relativePath
+          : null,
+      );
+      setSaveMessage(options.asMindmap ? '文档导图预览 · 只读' : '已打开');
       setLibraryError('');
+      return true;
     } catch (error) {
       setLibraryError(errorMessage(error, '打开思维导图失败'));
       setSaveMessage('打开失败');
+      return false;
+    }
+  };
+
+  const showKnowledgeDocuments = async () => {
+    if (activeWorkspace === 'knowledge') return;
+    if (workbench.controller.getState()?.kind === 'doc') {
+      setActiveWorkspace('knowledge');
+      return;
+    }
+    const recent = librarySnapshotRef.current?.documents
+      .filter((document) => document.kind === 'doc')
+      .sort((left, right) => right.updatedAt - left.updatedAt)[0];
+    if (recent) {
+      await openMap(recent);
+    } else {
+      setActiveWorkspace('knowledge');
     }
   };
 
@@ -2781,8 +2853,14 @@ export default function App() {
       installLibrarySnapshot(snapshot);
       setLibraryError('');
       setSaveMessage(snapshot.rootPath ? '文件库已就绪' : '请选择文件库目录');
-      if (openRecent && snapshot.documents[0])
-        await openMap(snapshot.documents[0]);
+      if (openRecent) {
+        const recent = snapshot.documents.find(
+          (document) =>
+            document.kind ===
+            (activeWorkspace === 'knowledge' ? 'doc' : 'mindmap'),
+        );
+        if (recent) await openMap(recent);
+      }
     } catch (error) {
       setLibraryError(errorMessage(error, '无法读取文件库'));
       setSaveMessage('文件库不可用');
@@ -2797,7 +2875,7 @@ export default function App() {
       const selected = await openDialog({
         directory: true,
         multiple: false,
-        title: '选择 Markmap 思维导图库',
+        title: '选择 Seamind 知识库目录',
       });
       if (typeof selected !== 'string') return;
       if (!leavePlantUmlSession()) return;
@@ -2815,8 +2893,11 @@ export default function App() {
         const firstNote = snapshot.documents.find((doc) => doc.kind === 'doc');
         if (firstNote) await workbench.controller.openMarkdown(firstNote);
         setSaveMessage('文件库已设置');
-      } else if (snapshot.documents[0]) {
-        await openMap(snapshot.documents[0]);
+      } else if (snapshot.documents.some((doc) => doc.kind === 'mindmap')) {
+        const firstMindmap = snapshot.documents.find(
+          (doc) => doc.kind === 'mindmap',
+        );
+        if (firstMindmap) await openMap(firstMindmap);
       } else {
         installDraft(
           createDraft({
@@ -3335,6 +3416,7 @@ export default function App() {
     try {
       const snapshot = await invoke<LibrarySnapshot>('create_category', {
         category: clean,
+        kind: 'doc',
       });
       installLibrarySnapshot(snapshot);
       setLibraryError('');
@@ -3349,7 +3431,10 @@ export default function App() {
   const openWikilinkTarget = async (rawTarget: string) => {
     const cleanTarget = rawTarget.trim();
     if (!cleanTarget) return;
-    const found = findWikilinkTarget(cleanTarget, libraryDocuments);
+    const found = findWikilinkTarget(
+      cleanTarget,
+      librarySnapshotRef.current?.documents ?? [],
+    );
     if (found?.kind === 'doc') {
       if (activeWorkspace === 'knowledge') {
         await openKnowledgeNote(found);
@@ -3382,7 +3467,6 @@ export default function App() {
   // Opening a note as a mind map from the knowledge page shows the mind map on its own workspace.
   const openKnowledgeNoteAsMindmap = async () => {
     await openActiveDocumentAsMindmap();
-    setActiveWorkspace('mindmap');
   };
 
   const deleteLibraryTextDocument = async (file: TextDocument) => {
@@ -3443,17 +3527,19 @@ export default function App() {
       return;
     }
     if (await workbench.controller.createDocument(kind, category))
-      setActiveWorkspace('mindmap');
+      setActiveWorkspace(kind === 'doc' ? 'knowledge' : 'mindmap');
   };
 
   const openActiveDocumentAsMindmap = async () => {
     const current = workbench.controller.getState();
-    if (current?.kind !== 'doc') return;
-    if (!(await workbench.controller.leave())) return;
-    await openMap(
+    if (current?.kind !== 'doc') return false;
+    if (!(await workbench.controller.leave())) return false;
+    const opened = await openMap(
       { relativePath: current.relativePath, kind: 'doc' },
       { asMindmap: true },
     );
+    if (opened) setActiveWorkspace('mindmap');
+    return opened;
   };
 
   const convertActiveDocumentToMindmap = async () => {
@@ -3464,7 +3550,10 @@ export default function App() {
     )
       return;
     const converted = await workbench.controller.convertToMindmap();
-    if (converted) await openMap(converted);
+    if (converted) {
+      await openMap(converted);
+      setActiveWorkspace('mindmap');
+    }
   };
 
   const handleGalaxySelectNode = async (node: GalaxyNode) => {
@@ -3872,6 +3961,7 @@ export default function App() {
         .join('/');
       const snapshot = await invoke<LibrarySnapshot>('create_category', {
         category: categoryDraft.trim(),
+        kind: 'mindmap',
       });
       installLibrarySnapshot(snapshot);
       setCategoryFilter(normalizedCategory);
@@ -3885,6 +3975,20 @@ export default function App() {
 
   const renameLibraryFolder = async (relativePath: string, newName: string) => {
     try {
+      const folder = relativePath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+      const containsDocuments = librarySnapshotRef.current?.documents.some(
+        (document) =>
+          document.kind === 'doc' &&
+          (document.category === folder ||
+            document.category.startsWith(`${folder}/`)),
+      );
+      if (
+        containsDocuments &&
+        !window.confirm(
+          '这个文件夹也包含知识库文档。重命名会同时移动其中的文档和导图，继续吗？',
+        )
+      )
+        return false;
       const activeSave = activeSaveRef.current;
       if (activeSave && !(await activeSave)) {
         throw new Error('当前导图保存失败，请处理保存错误后再重命名文件夹。');
@@ -3977,6 +4081,7 @@ export default function App() {
         setPlantUmlSession(nextPlantUml);
       }
       setLibraryError('');
+      return true;
     } catch (error) {
       const message = errorMessage(error, '重命名文件夹失败');
       setLibraryError(message);
@@ -4247,16 +4352,7 @@ export default function App() {
     let alive = true;
     let unlisten: (() => void) | undefined;
     void listen<LibrarySnapshot>('library-changed', (event) => {
-      librarySnapshotRef.current = event.payload;
-      setLibrarySnapshot(event.payload);
-      void invoke<MapDocument[]>('search_library', {
-        query: libraryQueryRef.current,
-        category: categoryFilterRef.current || null,
-      })
-        .then(setLibraryDocuments)
-        .catch((error) =>
-          setLibraryError(errorMessage(error, '更新文件库索引失败')),
-        );
+      installLibrarySnapshot(event.payload);
     })
       .then((stop) => {
         if (alive) unlisten = stop;
@@ -4320,10 +4416,11 @@ export default function App() {
       void invoke<MapDocument[]>('search_library', {
         query: libraryQuery,
         category: categoryFilter || null,
+        kind: 'mindmap',
       })
         .then((documents) => {
           if (sequence === searchRequestRef.current)
-            setLibraryDocuments(documents);
+            setMindmapDocuments(documents);
         })
         .catch((error) =>
           setLibraryError(errorMessage(error, '搜索文件库失败')),
@@ -4333,7 +4430,7 @@ export default function App() {
       window.clearTimeout(timer);
       searchRequestRef.current += 1;
     };
-  }, [librarySnapshot?.rootPath, libraryQuery, categoryFilter]);
+  }, [librarySnapshot, libraryQuery, categoryFilter]);
 
   useEffect(() => {
     if (!svgRef.current) return;
@@ -4730,6 +4827,7 @@ export default function App() {
   }, [htmlPreview]);
 
   useEffect(() => {
+    if (activeWorkspace !== 'mindmap' && !readerSplitActive) return;
     let visibilityRecoveryTimer = 0;
     const timer = window.setTimeout(async () => {
       const map = markmapRef.current;
@@ -4876,10 +4974,12 @@ export default function App() {
       codeBlocksCleanupRef.current = null;
     };
   }, [
+    activeWorkspace,
     editorDraft.markdown,
     editorDraft.relativePath,
     focusedMapPath,
     htmlCanvasEmbed,
+    readerSplitActive,
     theme,
     transformer,
   ]);
@@ -5266,10 +5366,14 @@ export default function App() {
     ? findNavigationPath(mindmapNavigationTree, focusedMapPath)
     : [];
 
+  const isDocumentMapPreview =
+    previewDocumentPath !== null &&
+    previewDocumentPath === editorDraft.relativePath;
+
   return (
     <main
       ref={appShellRef}
-      className={`app-shell${readerSplitActive ? ' is-reader-split' : ''}${readerKnowledgeActive ? ' is-reader-knowledge' : ''}${readerKnowledgeActive && galaxyViewActive ? ' is-reader-knowledge-wide' : ''}${isTerminalDrawerOpen ? ' is-terminal-open' : ''}${terminalRightActive ? ' is-terminal-right' : ''}`}
+      className={`app-shell${readerSplitActive ? ' is-reader-split' : ''}${readerKnowledgeActive ? ' is-reader-knowledge' : ''}${readerKnowledgeActive && galaxyViewActive ? ' is-reader-knowledge-wide' : ''}${isTerminalDrawerOpen ? ' is-terminal-open' : ''}${terminalRightActive ? ' is-terminal-right' : ''}${activeWorkspace === 'knowledge' || activeWorkspace === 'mindmap' ? ' is-knowledge-surface' : ''}`}
       data-theme={theme}
       data-map-style={mindmapStyle}
       style={
@@ -5278,20 +5382,13 @@ export default function App() {
           '--terminal-height': `${terminalHeight}px`,
           '--terminal-width': `${terminalWidth}px`,
           '--terminal-side-width': `${terminalSideWidth}px`,
+          '--knowledge-sidebar-column': `${activeWorkspace === 'mindmap' ? (libraryCollapsed ? 42 : knowledgeSidebarWidth) : knowledgeSidebarCollapsed ? 42 : knowledgeSidebarWidth}px`,
         } as CSSProperties
       }
     >
       <InstallerComponentSetup />
       <header className="topbar">
         <nav className="workspace-switcher" aria-label="工作区">
-          <button
-            type="button"
-            className={activeWorkspace === 'mindmap' ? 'is-active' : ''}
-            aria-pressed={activeWorkspace === 'mindmap'}
-            onClick={() => setActiveWorkspace('mindmap')}
-          >
-            导图
-          </button>
           <button
             type="button"
             className={activeWorkspace === 'reader' ? 'is-active' : ''}
@@ -5329,9 +5426,15 @@ export default function App() {
           </button>
           <button
             type="button"
-            className={activeWorkspace === 'knowledge' ? 'is-active' : ''}
-            aria-pressed={activeWorkspace === 'knowledge'}
-            onClick={() => setActiveWorkspace('knowledge')}
+            className={
+              activeWorkspace === 'knowledge' || activeWorkspace === 'mindmap'
+                ? 'is-active'
+                : ''
+            }
+            aria-pressed={
+              activeWorkspace === 'knowledge' || activeWorkspace === 'mindmap'
+            }
+            onClick={() => setActiveWorkspace(lastKnowledgePageRef.current)}
           >
             知识库
           </button>
@@ -5390,7 +5493,7 @@ export default function App() {
                   void workbench.controller.save({ manual: true });
                 else void saveDraft(true);
               }}
-              disabled={saveMessage === '正在保存…'}
+              disabled={saveMessage === '正在保存…' || isDocumentMapPreview}
             >
               保存
             </button>
@@ -5423,23 +5526,56 @@ export default function App() {
         </div>
       </header>
 
+      {(activeWorkspace === 'knowledge' || activeWorkspace === 'mindmap') && (
+        <nav className="knowledge-workspace-tabs" aria-label="知识库页面">
+          <span className="knowledge-workspace-tabs-label">知识库</span>
+          <div
+            className="knowledge-page-tabs"
+            role="group"
+            aria-label="内容类型"
+          >
+            <button
+              type="button"
+              aria-pressed={activeWorkspace === 'knowledge'}
+              className={activeWorkspace === 'knowledge' ? 'is-active' : ''}
+              onClick={() => void showKnowledgeDocuments()}
+            >
+              文档{' '}
+              <small>
+                {catalogDocuments.filter((item) => item.kind === 'doc').length}
+              </small>
+            </button>
+            <button
+              type="button"
+              aria-pressed={activeWorkspace === 'mindmap'}
+              className={activeWorkspace === 'mindmap' ? 'is-active' : ''}
+              onClick={() => setActiveWorkspace('mindmap')}
+            >
+              导图{' '}
+              <small>
+                {
+                  catalogDocuments.filter((item) => item.kind === 'mindmap')
+                    .length
+                }
+              </small>
+            </button>
+          </div>
+        </nav>
+      )}
+
       <section
-        className={`workspace${sourceCollapsed ? ' is-source-collapsed' : ''}${libraryCollapsed ? ' is-library-collapsed' : ''}${aiCollapsed ? ' is-ai-collapsed' : ''}${markdownFullscreen ? ' is-markdown-fullscreen' : ''}${activeDocument ? ' is-document-open' : ''}${activeWorkspace !== 'mindmap' && !readerSplitActive ? ' is-workspace-hidden' : ''}`}
+        className={`workspace${sourceCollapsed ? ' is-source-collapsed' : ''}${libraryCollapsed ? ' is-library-collapsed' : ''}${aiCollapsed ? ' is-ai-collapsed' : ''}${markdownFullscreen ? ' is-markdown-fullscreen' : ''}${activeDocument?.kind === 'mermaid' ? ' is-document-open' : ''}${activeWorkspace === 'mindmap' ? ' is-knowledge-map' : ''}${activeWorkspace !== 'mindmap' && !readerSplitActive ? ' is-workspace-hidden' : ''}`}
         aria-label="Markdown 思维导图编辑器"
         aria-hidden={activeWorkspace !== 'mindmap' && !readerSplitActive}
       >
         <LibraryPanel
           snapshot={librarySnapshot}
-          documents={libraryDocuments}
+          documents={mindmapDocuments}
           currentMarkdown={editorDraft.markdown}
           selectedPath={
-            activeDocument
-              ? activeDocument.kind === 'doc'
-                ? activeDocument.relativePath
-                : null
-              : openPlantUmlPath
-                ? null
-                : editorDraft.relativePath
+            activeDocument?.kind === 'mermaid' || openPlantUmlPath
+              ? null
+              : editorDraft.relativePath
           }
           selectedPlantUmlPath={openPlantUmlPath}
           selectedTextPath={
@@ -5451,6 +5587,8 @@ export default function App() {
           categoryFilter={categoryFilter}
           query={libraryQuery}
           busy={libraryBusy}
+          showBooks={false}
+          showDocumentCreation={false}
           summarizeEpubOnImport={summarizeEpubOnImport}
           onSearch={setLibraryQuery}
           onChooseRoot={() => void chooseLibraryRoot()}
@@ -5493,7 +5631,47 @@ export default function App() {
           }}
         />
 
-        {activeDocument &&
+        {activeWorkspace === 'mindmap' &&
+          activeDocument?.kind !== 'mermaid' && (
+            <div className="knowledge-file-header" aria-label="当前导图文件">
+              <span className="knowledge-file-kind">
+                {isStandalonePlantUml
+                  ? 'PUML'
+                  : isDocumentMapPreview
+                    ? 'DOC'
+                    : 'MAP'}
+              </span>
+              <input
+                className="knowledge-file-title"
+                value={
+                  isStandalonePlantUml
+                    ? (plantUmlSession?.request.documentTitle ?? 'PlantUML')
+                    : editorDraft.title
+                }
+                onChange={(event) => patchDraft({ title: event.target.value })}
+                disabled={isStandalonePlantUml || isDocumentMapPreview}
+                aria-label="当前导图标题"
+                maxLength={120}
+              />
+              <span
+                className="knowledge-file-path"
+                title={
+                  isStandalonePlantUml
+                    ? (openPlantUmlPath ?? '')
+                    : (editorDraft.relativePath ?? '')
+                }
+              >
+                {isStandalonePlantUml
+                  ? (openPlantUmlPath ?? '独立图表')
+                  : (editorDraft.relativePath ?? '未保存草稿')}
+              </span>
+              <span className="knowledge-file-save-state" role="status">
+                {saveMessage}
+              </span>
+            </div>
+          )}
+
+        {activeDocument?.kind === 'mermaid' &&
           activeWorkspace !== 'knowledge' &&
           activeWorkspace !== 'reader' && (
             <DocumentWorkbench
@@ -5501,8 +5679,8 @@ export default function App() {
               dirty={workbench.dirty}
               statusText={saveMessage}
               theme={theme}
-              documents={libraryDocuments}
-              categories={librarySnapshot?.categories ?? []}
+              documents={catalogDocuments}
+              categories={librarySnapshot?.documentCategories ?? []}
               renderMarkdownPreview={renderDocumentPreview}
               onSourceChange={(source) => workbench.controller.edit(source)}
               onSave={() => void workbench.controller.save({ manual: true })}
@@ -5561,7 +5739,11 @@ export default function App() {
                   className="source-history-button"
                   title="查看并恢复历史版本"
                   aria-label="查看历史版本"
-                  disabled={!editorDraft.id || !editorDraft.relativePath}
+                  disabled={
+                    !editorDraft.id ||
+                    !editorDraft.relativePath ||
+                    isDocumentMapPreview
+                  }
                   onClick={() => void openDocumentHistory()}
                 >
                   历史
@@ -5572,6 +5754,7 @@ export default function App() {
                     type="button"
                     aria-label="插入 SVG 模板"
                     title="在 Markdown 末尾插入 SVG 模板"
+                    disabled={isDocumentMapPreview}
                     onClick={insertSvgTemplate}
                   >
                     SVG
@@ -5580,7 +5763,7 @@ export default function App() {
                     type="button"
                     aria-label="导入 HTML 文件"
                     title="导入 HTML 文件并插入本地交互卡片"
-                    disabled={htmlImportBusy}
+                    disabled={htmlImportBusy || isDocumentMapPreview}
                     onClick={() => void importHtmlAsset()}
                   >
                     {htmlImportBusy ? '…' : 'HTML'}
@@ -5625,10 +5808,27 @@ export default function App() {
             </button>
           </div>
           <div className="document-metadata" hidden={isStandalonePlantUml}>
+            {isDocumentMapPreview && (
+              <div className="document-map-preview-notice" role="status">
+                文档导图预览 · 只读
+                <button
+                  type="button"
+                  onClick={() =>
+                    void openMap({
+                      relativePath: editorDraft.relativePath!,
+                      kind: 'doc',
+                    })
+                  }
+                >
+                  返回文档
+                </button>
+              </div>
+            )}
             <label className="metadata-title-field">
               标题
               <input
                 value={editorDraft.title}
+                disabled={isDocumentMapPreview}
                 onChange={(event) => patchDraft({ title: event.target.value })}
                 aria-label="思维导图标题"
                 maxLength={120}
@@ -5640,6 +5840,7 @@ export default function App() {
                 <input
                   list="library-category-options"
                   value={editorDraft.category}
+                  disabled={isDocumentMapPreview}
                   onChange={(event) =>
                     patchDraft({ category: event.target.value })
                   }
@@ -5647,7 +5848,7 @@ export default function App() {
                   aria-label="思维导图分类文件夹"
                 />
                 <datalist id="library-category-options">
-                  {librarySnapshot?.categories.map((category) => (
+                  {librarySnapshot?.mindmapCategories.map((category) => (
                     <option value={category} key={category} />
                   ))}
                 </datalist>
@@ -5656,6 +5857,7 @@ export default function App() {
                 类型
                 <input
                   value={editorDraft.mapType}
+                  disabled={isDocumentMapPreview}
                   onChange={(event) =>
                     patchDraft({ mapType: event.target.value })
                   }
@@ -5669,6 +5871,7 @@ export default function App() {
               标签
               <input
                 value={editorDraft.tags}
+                disabled={isDocumentMapPreview}
                 onChange={(event) => patchDraft({ tags: event.target.value })}
                 placeholder="用逗号分隔，例如：AI, 入门"
                 aria-label="思维导图标签"
@@ -5713,6 +5916,7 @@ export default function App() {
                 ref={markdownEditorRef}
                 id="markdown-editor"
                 value={editorDraft.markdown}
+                readOnly={isDocumentMapPreview}
                 onChange={handleMarkdownEditorChange}
                 onSelectionChange={handleMarkdownSelectionChange}
               />
@@ -6526,9 +6730,11 @@ export default function App() {
         >
           <KnowledgeWorkspace
             rootPath={librarySnapshot?.rootPath ?? null}
-            documents={libraryDocuments}
-            categories={librarySnapshot?.categories ?? []}
-            activeDocument={activeDocument}
+            documents={catalogDocuments}
+            categories={librarySnapshot?.documentCategories ?? []}
+            activeDocument={
+              activeDocument?.kind === 'doc' ? activeDocument : null
+            }
             errorMessage={libraryError}
             busy={libraryBusy}
             onChooseRoot={() => void chooseLibraryRoot()}
@@ -6540,6 +6746,7 @@ export default function App() {
               void createKnowledgeNote(folder, template)
             }
             onDeleteNote={(note) => void deleteMap(note, { skipConfirm: true })}
+            onSidebarLayoutChange={onKnowledgeSidebarLayoutChange}
             workbench={{
               dirty: workbench.dirty,
               statusText: saveMessage,
@@ -7051,8 +7258,8 @@ export default function App() {
               dirty={workbench.dirty}
               statusText={saveMessage}
               theme={theme}
-              documents={libraryDocuments}
-              categories={librarySnapshot?.categories ?? []}
+              documents={catalogDocuments}
+              categories={librarySnapshot?.documentCategories ?? []}
               renderMarkdownPreview={renderDocumentPreview}
               onSourceChange={(source) => workbench.controller.edit(source)}
               onSave={() => void workbench.controller.save({ manual: true })}

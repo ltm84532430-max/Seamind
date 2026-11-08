@@ -37,9 +37,9 @@ function readStoredViewMode(): DocViewMode {
   try {
     const raw = localStorage.getItem(VIEW_MODE_STORAGE_KEY);
     if (raw === 'edit' || raw === 'split' || raw === 'read') return raw;
-    return 'edit';
+    return 'split';
   } catch {
-    return 'edit';
+    return 'split';
   }
 }
 

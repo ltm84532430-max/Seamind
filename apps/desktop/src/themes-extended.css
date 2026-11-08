@@ -162,6 +162,23 @@
   background: #081324;
 }
 
+.app-shell[data-theme='navy'] .workbench-folder-chip {
+  border-color: #1a3658;
+  color: #7293b8;
+  background: #081324;
+}
+
+.app-shell[data-theme='navy'] .workbench-folder-chip:hover {
+  border-color: #22436d;
+  color: #e0f0fe;
+  background: #0d1b32;
+}
+
+.app-shell[data-theme='navy'] select option {
+  background-color: #0b172a;
+  color: #e0f0fe;
+}
+
 .app-shell[data-theme='navy'] .prompt-input-wrap textarea:focus,
 .app-shell[data-theme='navy'] .document-metadata input:focus,
 .app-shell[data-theme='navy'] .settings-field input:focus,
@@ -586,6 +603,23 @@
   border-color: #331e50;
   color: #f8f4ff;
   background: #0d0818;
+}
+
+.app-shell[data-theme='purple'] .workbench-folder-chip {
+  border-color: #331e50;
+  color: #a48fbe;
+  background: #0d0818;
+}
+
+.app-shell[data-theme='purple'] .workbench-folder-chip:hover {
+  border-color: #3e265f;
+  color: #f6effe;
+  background: #19102c;
+}
+
+.app-shell[data-theme='purple'] select option {
+  background-color: #140d24;
+  color: #f6effe;
 }
 
 .app-shell[data-theme='purple'] .prompt-input-wrap textarea:focus,

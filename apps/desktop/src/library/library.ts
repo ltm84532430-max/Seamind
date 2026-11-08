@@ -68,6 +68,8 @@ export interface LibrarySnapshot {
   plantumlFiles: PlantUmlDocument[];
   textDocuments: TextDocument[];
   categories: string[];
+  documentCategories: string[];
+  mindmapCategories: string[];
 }
 
 export interface OpenedDocument {

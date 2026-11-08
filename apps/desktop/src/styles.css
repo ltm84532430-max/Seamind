@@ -32,11 +32,19 @@ body {
   overflow: hidden;
 }
 button,
-textarea {
+textarea,
+select {
   font: inherit;
 }
 button {
   color: inherit;
+}
+select {
+  color-scheme: inherit;
+}
+select option {
+  background-color: var(--panel-elevated, var(--panel, #ffffff));
+  color: var(--ink, #20252b);
 }
 
 /* VS Code style scrollbars: flat slider without arrow buttons or track that
@@ -3013,6 +3021,17 @@ button {
   overflow-y: auto;
   padding: 4px 8px;
 }
+.tree-section-title {
+  padding: 7px 8px 4px;
+  color: var(--muted, #64748b);
+  font-size: 10px;
+  font-weight: 600;
+}
+.library-diagram-group {
+  margin-top: 12px;
+  padding-top: 5px;
+  border-top: 1px solid var(--line);
+}
 .library-folder-group {
   margin-bottom: 3px;
 }
@@ -4361,6 +4380,20 @@ button {
   border-color: #3a444c;
   color: #e1e7eb;
   background: #151a1e;
+}
+.app-shell[data-theme='dark'] .workbench-folder-chip {
+  border-color: #30383f;
+  color: #9aa6ae;
+  background: #151a1e;
+}
+.app-shell[data-theme='dark'] .workbench-folder-chip:hover {
+  border-color: #4a5560;
+  color: #e6ebef;
+  background: #1c2227;
+}
+.app-shell[data-theme='dark'] select option {
+  background-color: #1c2227;
+  color: #e6ebef;
 }
 .app-shell[data-theme='dark'] .prompt-input-wrap textarea:focus,
 .app-shell[data-theme='dark'] .settings-field input:focus {
@@ -9888,6 +9921,38 @@ button {
   background: #fff;
   font-weight: 600;
 }
+.knowledge-page-tabs {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 1px;
+  height: 28px;
+  box-sizing: border-box;
+  padding: 2px;
+  border: 1px solid #dce2e5;
+  background: #f5f7f8;
+}
+.knowledge-page-tabs button {
+  min-width: 42px;
+  height: 22px;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: 0;
+  color: #68747c;
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.knowledge-page-tabs button:hover {
+  color: var(--accent);
+}
+.knowledge-page-tabs button.is-active {
+  border-color: #cfd8dd;
+  color: var(--accent);
+  background: #fff;
+  font-weight: 600;
+}
 .ebook-workspace-stage {
   grid-row: 2;
   min-width: 0;
@@ -10201,6 +10266,21 @@ button {
   color: #f0a18a;
   background: #252e34;
 }
+.app-shell[data-theme='dark'] .knowledge-page-tabs {
+  border-color: #30383f;
+  background: #1b2227;
+}
+.app-shell[data-theme='dark'] .knowledge-page-tabs button {
+  color: #aab5bb;
+}
+.app-shell[data-theme='dark'] .knowledge-page-tabs button:hover,
+.app-shell[data-theme='dark'] .knowledge-page-tabs button.is-active {
+  color: #f0a18a;
+}
+.app-shell[data-theme='dark'] .knowledge-page-tabs button.is-active {
+  border-color: #3b454c;
+  background: #252e34;
+}
 .app-shell[data-theme='dark'] .ebook-workspace-stage,
 .app-shell[data-theme='dark'] .ebook-shelf {
   color: #dce3e8;
@@ -10253,7 +10333,7 @@ button {
     width: min(930px, 100%);
     min-width: 0;
     margin: 0;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
+    grid-template-columns: repeat(8, minmax(0, 1fr));
   }
   .workspace-switcher button {
     min-width: 0;
@@ -16341,5 +16421,278 @@ button {
   .app-shell[data-theme='dark'] .epub-exam-library {
     border-color: #303b42;
     background: #182127;
+  }
+}
+.document-map-preview-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 10px;
+  border: 1px solid var(--line, #d6d9df);
+  font-size: 12px;
+}
+
+.document-map-preview-notice button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+/* Knowledge pages share one frame; the editor and canvas keep their own tools. */
+.app-shell.is-knowledge-surface {
+  grid-template-rows: 52px 40px minmax(0, 1fr) 29px;
+}
+.app-shell.is-knowledge-surface > .knowledge-workspace-tabs {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+.app-shell.is-knowledge-surface > .workspace,
+.app-shell.is-knowledge-surface > .knowledge-workspace-stage {
+  grid-row: 3;
+}
+.app-shell.is-knowledge-surface > .statusbar {
+  grid-row: 4;
+}
+.app-shell.is-knowledge-surface.is-terminal-open:not(.is-terminal-right) {
+  grid-template-rows:
+    52px 40px minmax(0, 1fr)
+    minmax(160px, var(--terminal-height, 280px)) 29px;
+}
+.app-shell.is-knowledge-surface.is-terminal-open:not(.is-terminal-right)
+  > .seamind-terminal-drawer {
+  grid-row: 4;
+}
+.app-shell.is-knowledge-surface.is-terminal-open:not(.is-terminal-right)
+  > .statusbar {
+  grid-row: 5;
+}
+.app-shell.is-knowledge-surface.is-terminal-right {
+  grid-template-rows: 52px 40px minmax(0, 1fr) 29px;
+}
+.app-shell.is-knowledge-surface.is-terminal-right > .workspace,
+.app-shell.is-knowledge-surface.is-terminal-right > .knowledge-workspace-stage,
+.app-shell.is-knowledge-surface.is-terminal-right > .seamind-terminal-drawer {
+  grid-row: 3;
+}
+.app-shell.is-knowledge-surface.is-terminal-right > .workspace,
+.app-shell.is-knowledge-surface.is-terminal-right > .knowledge-workspace-stage {
+  grid-column: 1;
+}
+.app-shell.is-knowledge-surface.is-terminal-right > .statusbar {
+  grid-row: 4;
+}
+.knowledge-workspace-tabs {
+  display: grid;
+  grid-template-columns: var(--knowledge-sidebar-column, 264px) minmax(0, 1fr);
+  height: 40px;
+  min-width: 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+  background: var(--panel);
+}
+.knowledge-workspace-tabs-label {
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  border-right: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.knowledge-page-tabs {
+  display: flex;
+  height: 100%;
+  align-items: stretch;
+  gap: 0;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+}
+.knowledge-page-tabs button {
+  min-width: 70px;
+  height: 100%;
+  padding: 0 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+}
+.knowledge-page-tabs button:hover,
+.knowledge-page-tabs button.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: transparent;
+}
+.knowledge-page-tabs small {
+  margin-left: 5px;
+  color: var(--muted);
+  font: 10px var(--mono);
+}
+.knowledge-page-tabs button:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -3px;
+}
+.app-shell.is-knowledge-surface .workspace.is-knowledge-map {
+  --col-library: var(--knowledge-sidebar-column, 264px);
+  --col-source: minmax(300px, 29%);
+  grid-template-rows: 44px minmax(0, 1fr);
+}
+.workspace.is-knowledge-map > .library-sidebar {
+  grid-column: 1;
+  grid-row: 1 / 3;
+}
+.workspace.is-knowledge-map > .knowledge-file-header {
+  grid-column: 2 / -1;
+  grid-row: 1;
+}
+.workspace.is-knowledge-map > .editor-pane {
+  grid-column: 2;
+  grid-row: 2;
+}
+.workspace.is-knowledge-map > .preview-pane {
+  grid-column: 3;
+  grid-row: 2;
+}
+.workspace.is-knowledge-map > .ai-sidebar {
+  grid-column: 4;
+  grid-row: 2;
+}
+.workspace.is-knowledge-map.is-document-open {
+  grid-template-rows: minmax(0, 1fr);
+}
+.workspace.is-knowledge-map.is-document-open > .library-sidebar,
+.workspace.is-knowledge-map.is-document-open > .document-workbench {
+  grid-row: 1;
+}
+.knowledge-file-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.knowledge-file-kind {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font: 10px var(--mono);
+}
+.knowledge-file-title {
+  width: min(380px, 36%);
+  min-width: 150px;
+  padding: 4px 2px;
+  border: 1px solid transparent;
+  color: var(--ink);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+}
+.knowledge-file-title:not(:disabled):hover,
+.knowledge-file-title:not(:disabled):focus {
+  border-color: var(--line);
+  outline: none;
+}
+.knowledge-file-title:disabled {
+  opacity: 1;
+}
+.knowledge-file-path {
+  min-width: 0;
+  flex: 1 1 0;
+  overflow: hidden;
+  color: var(--muted);
+  font: 10px var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.knowledge-file-save-state {
+  max-width: 150px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace.is-knowledge-map .pane-heading {
+  height: 40px;
+  padding-right: 8px;
+  padding-left: 12px;
+}
+.workspace.is-knowledge-map .pane-kicker {
+  display: none;
+}
+.workspace.is-knowledge-map .pane-heading h1 {
+  font-size: 12px;
+}
+.workspace.is-knowledge-map .document-metadata .metadata-title-field {
+  display: none;
+}
+.workspace.is-knowledge-map.is-markdown-fullscreen
+  .document-metadata
+  .metadata-title-field {
+  display: flex;
+}
+.workspace.is-knowledge-map .document-metadata {
+  padding: 6px 10px;
+  gap: 5px;
+}
+.workspace.is-knowledge-map .document-metadata label {
+  font-size: 9px;
+}
+.workspace.is-knowledge-map .document-metadata input {
+  height: 24px;
+  font-size: 10px;
+}
+.workspace.is-knowledge-map .source-header-actions {
+  gap: 4px;
+  margin-right: 2px;
+}
+.workspace.is-knowledge-map .markdown-mode-switch button {
+  padding: 0 9px;
+}
+.app-shell.is-knowledge-surface .library-tabs {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.app-shell.is-knowledge-surface .library-tab,
+.app-shell.is-knowledge-surface .library-tab.is-active {
+  height: 34px;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.app-shell.is-knowledge-surface .library-tab.is-active {
+  border-bottom: 2px solid var(--accent);
+  color: var(--accent);
+}
+.app-shell.is-knowledge-surface .library-new-btn-group,
+.app-shell.is-knowledge-surface .library-btn-primary,
+.app-shell.is-knowledge-surface .library-btn-trigger,
+.app-shell.is-knowledge-surface .library-search-input-wrap {
+  border-radius: 0;
+  box-shadow: none;
+}
+@media (max-width: 1100px) {
+  .app-shell.is-knowledge-surface .workspace.is-knowledge-map {
+    --col-source: minmax(260px, 35%);
+  }
+  .knowledge-file-path {
+    display: none;
+  }
+}
+@media (max-width: 820px) {
+  .app-shell.is-knowledge-surface .workspace.is-knowledge-map {
+    --col-source: minmax(230px, 40%);
+  }
+  .knowledge-file-save-state {
+    display: none;
   }
 }

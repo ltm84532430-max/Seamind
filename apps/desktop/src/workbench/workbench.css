@@ -253,19 +253,24 @@
   border: 1px solid var(--line);
   border-radius: 4px;
   color: var(--muted);
-  background: color-mix(in srgb, var(--ink) 2%, var(--panel));
+  background: var(--input-bg, color-mix(in srgb, var(--ink) 2%, var(--panel)));
   font-size: 11.5px;
   cursor: pointer;
   transition:
     border-color 0.15s ease,
-    color 0.15s ease;
+    color 0.15s ease,
+    background-color 0.15s ease;
 }
 .workbench-folder-chip:hover {
-  border-color: color-mix(in srgb, var(--ink) 22%, var(--line));
+  border-color: var(
+    --line-strong,
+    color-mix(in srgb, var(--ink) 22%, var(--line))
+  );
   color: var(--ink);
+  background: var(--hover-bg, color-mix(in srgb, var(--ink) 5%, var(--panel)));
 }
 .workbench-folder-chip select {
-  max-width: 120px;
+  max-width: 140px;
   padding: 0;
   border: 0;
   outline: none;
@@ -273,6 +278,11 @@
   background: transparent;
   font: inherit;
   cursor: pointer;
+  color-scheme: inherit;
+}
+.workbench-folder-chip select option {
+  background-color: var(--panel-elevated, var(--panel, #ffffff));
+  color: var(--ink, #20252b);
 }
 .workbench-folder-static {
   flex: 0 0 auto;

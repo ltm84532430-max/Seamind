@@ -40,6 +40,7 @@ export interface KnowledgeWorkspaceProps {
   onCloseNote?(): Promise<boolean>;
   onCreateNote(folder: string, template?: KnowledgeNoteTemplate): void;
   onDeleteNote(note: MapDocument): void;
+  onSidebarLayoutChange?(width: number, collapsed: boolean): void;
   workbench: Omit<DocumentWorkbenchProps, 'document'>;
 }
 
@@ -87,7 +88,7 @@ function clampSidebarWidth(value: number): number {
   );
 }
 
-function readSidebarWidth(): number {
+export function readKnowledgeSidebarWidth(): number {
   try {
     const raw = localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
     if (!raw) return DEFAULT_SIDEBAR_WIDTH;
@@ -100,7 +101,7 @@ function readSidebarWidth(): number {
   }
 }
 
-function readSidebarCollapsed(): boolean {
+export function readKnowledgeSidebarCollapsed(): boolean {
   try {
     return localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === '1';
   } catch {
@@ -433,6 +434,7 @@ export default function KnowledgeWorkspace({
   onCloseNote,
   onCreateNote,
   onDeleteNote,
+  onSidebarLayoutChange,
   workbench,
 }: KnowledgeWorkspaceProps) {
   const [query, setQuery] = useState('');
@@ -444,11 +446,14 @@ export default function KnowledgeWorkspace({
     readCollapsedFolders(),
   );
   const [sidebarWidth, setSidebarWidth] = useState<number>(() =>
-    readSidebarWidth(),
+    readKnowledgeSidebarWidth(),
   );
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() =>
-    readSidebarCollapsed(),
+    readKnowledgeSidebarCollapsed(),
   );
+  useEffect(() => {
+    onSidebarLayoutChange?.(sidebarWidth, sidebarCollapsed);
+  }, [onSidebarLayoutChange, sidebarWidth, sidebarCollapsed]);
   const [isResizing, setIsResizing] = useState(false);
   const [pendingDeletePath, setPendingDeletePath] = useState<string | null>(
     null,
@@ -796,14 +801,14 @@ export default function KnowledgeWorkspace({
           </span>
         </aside>
       ) : (
-        <aside className="knowledge-sidebar" aria-label="知识库笔记导航">
+        <aside className="knowledge-sidebar" aria-label="知识库文档导航">
           <header className="knowledge-sidebar-head">
             <div className="knowledge-sidebar-title">
-              <strong>知识库</strong>
+              <strong>文档</strong>
               <span className="knowledge-count-pill">
                 {query.trim()
-                  ? `${visibleNoteCount}/${globalSearch ? docNotes.length : sourceNotes.length}`
-                  : sourceNotes.length}
+                  ? `${visibleNoteCount}/${docNotes.length}`
+                  : docNotes.length}
               </span>
             </div>
             <div className="knowledge-head-tools">
@@ -840,23 +845,6 @@ export default function KnowledgeWorkspace({
               </button>
             </div>
           </header>
-
-          <nav className="knowledge-source-nav" aria-label="按笔记来源浏览">
-            {KNOWLEDGE_SOURCE_PAGES.filter(
-              ({ id }) => id !== 'unknown' || sourceCounts.unknown > 0,
-            ).map(({ id, label }) => (
-              <button
-                key={id}
-                type="button"
-                className={`knowledge-source-tab${activeSource === id ? ' is-active' : ''}`}
-                aria-current={activeSource === id ? 'page' : undefined}
-                onClick={() => void selectSource(id)}
-              >
-                <span>{label}</span>
-                <small>{sourceCounts[id]}</small>
-              </button>
-            ))}
-          </nav>
 
           {errorMessage && (
             <div className="knowledge-error-banner" role="alert">
@@ -1004,6 +992,23 @@ export default function KnowledgeWorkspace({
               )}
             </div>
           )}
+
+          <nav className="knowledge-source-nav" aria-label="按笔记来源浏览">
+            {KNOWLEDGE_SOURCE_PAGES.filter(
+              ({ id }) => id !== 'unknown' || sourceCounts.unknown > 0,
+            ).map(({ id, label }) => (
+              <button
+                key={id}
+                type="button"
+                className={`knowledge-source-tab${activeSource === id ? ' is-active' : ''}`}
+                aria-current={activeSource === id ? 'page' : undefined}
+                onClick={() => void selectSource(id)}
+              >
+                <span>{label}</span>
+                <small>{sourceCounts[id]}</small>
+              </button>
+            ))}
+          </nav>
 
           <div className="knowledge-groups">
             {!rootPath ? (

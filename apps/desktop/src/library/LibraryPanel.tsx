@@ -26,6 +26,8 @@ export interface LibraryPanelProps {
   categoryFilter: string;
   query: string;
   busy: boolean;
+  showBooks?: boolean;
+  showDocumentCreation?: boolean;
   summarizeEpubOnImport: boolean;
   currentMarkdown?: string;
   onSearch: (value: string) => void;
@@ -43,7 +45,7 @@ export interface LibraryPanelProps {
   onCreateOfKind: (kind: NewFileKind) => void;
   onToggleEpubSummary: (enabled: boolean) => void;
   onCreateCategory: () => void;
-  onRenameFolder: (path: string, newName: string) => Promise<void>;
+  onRenameFolder: (path: string, newName: string) => Promise<boolean>;
   onSelectCategory: (category: string) => void;
   onOpenDocument: (document: MapDocument) => void;
   onDeleteDocument: (document: MapDocument) => void;
@@ -169,6 +171,8 @@ export default function LibraryPanel({
   categoryFilter,
   query,
   busy,
+  showBooks = true,
+  showDocumentCreation = true,
   summarizeEpubOnImport,
   currentMarkdown,
   onSearch,
@@ -309,6 +313,7 @@ export default function LibraryPanel({
   }, [documents, sortMode]);
 
   const visibleBooks = useMemo(() => {
+    if (!showBooks) return [];
     const queryText = query.trim().toLocaleLowerCase();
     const categoryText = categoryFilter.trim();
     const list = (snapshot?.books ?? []).filter((book) => {
@@ -327,7 +332,7 @@ export default function LibraryPanel({
     if (sortMode === 'title')
       return list.sort((a, b) => a.title.localeCompare(b.title, 'zh-CN'));
     return list.sort((a, b) => a.category.localeCompare(b.category, 'zh-CN'));
-  }, [snapshot?.books, categoryFilter, query, sortMode]);
+  }, [snapshot?.books, categoryFilter, query, sortMode, showBooks]);
 
   const visiblePlantUmlFiles = useMemo(() => {
     const queryText = query.trim().toLocaleLowerCase();
@@ -374,19 +379,13 @@ export default function LibraryPanel({
   const folderTree = useMemo(
     () =>
       buildLibraryFolderTree(
-        snapshot?.categories ?? [],
+        snapshot?.mindmapCategories ?? [],
         sortedDocuments,
         visibleBooks,
-        visiblePlantUmlFiles,
-        visibleTextDocuments,
+        [],
+        [],
       ),
-    [
-      snapshot?.categories,
-      sortedDocuments,
-      visibleBooks,
-      visiblePlantUmlFiles,
-      visibleTextDocuments,
-    ],
+    [snapshot?.mindmapCategories, sortedDocuments, visibleBooks],
   );
 
   const toggleFolder = (cat: string) => {
@@ -423,7 +422,7 @@ export default function LibraryPanel({
     setRenamePending(true);
     setRenameError('');
     try {
-      await onRenameFolder(renameFolder.path, nextName);
+      if (!(await onRenameFolder(renameFolder.path, nextName))) return;
       const normalizedName = nextName.replace(/\.+$/, '').trimEnd();
       const parent = renameFolder.path.includes('/')
         ? renameFolder.path.slice(0, renameFolder.path.lastIndexOf('/'))
@@ -580,13 +579,8 @@ export default function LibraryPanel({
               <svg viewBox="0 0 16 16" className="tab-icon" aria-hidden="true">
                 <path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.879a1.5 1.5 0 0 1 1.06.44l1.122 1.12A1.5 1.5 0 0 0 9.62 5H12.5A1.5 1.5 0 0 1 14 6.5v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12.5v-8z" />
               </svg>
-              <span>文件库</span>
-              <span className="library-tab-badge">
-                {documents.length +
-                  (snapshot?.books.length ?? 0) +
-                  (snapshot?.plantumlFiles.length ?? 0) +
-                  (snapshot?.textDocuments?.length ?? 0)}
-              </span>
+              <span>导图文件</span>
+              <span className="library-tab-badge">{documents.length}</span>
             </button>
             <button
               type="button"
@@ -706,20 +700,22 @@ export default function LibraryPanel({
                         <small>输入主题生成专业思维结构</small>
                       </div>
                     </button>
-                    <button
-                      type="button"
-                      className="library-menu-item"
-                      onClick={() => {
-                        setCreateMenuOpen(false);
-                        onCreateOfKind('doc');
-                      }}
-                    >
-                      <span className="menu-icon">📝</span>
-                      <div>
-                        <strong>新建 Markdown 文档</strong>
-                        <small>源码与渲染预览并排，适合写作</small>
-                      </div>
-                    </button>
+                    {showDocumentCreation && (
+                      <button
+                        type="button"
+                        className="library-menu-item"
+                        onClick={() => {
+                          setCreateMenuOpen(false);
+                          onCreateOfKind('doc');
+                        }}
+                      >
+                        <span className="menu-icon">📝</span>
+                        <div>
+                          <strong>新建 Markdown 文档</strong>
+                          <small>源码与渲染预览并排，适合写作</small>
+                        </div>
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="library-menu-item"
@@ -758,8 +754,8 @@ export default function LibraryPanel({
                     >
                       <span className="menu-icon">📖</span>
                       <div>
-                        <strong>导入 EPUB 电子书…</strong>
-                        <small>自动解析书籍目录树与章节</small>
+                        <strong>从 EPUB 生成导图…</strong>
+                        <small>解析书籍目录树与章节</small>
                       </div>
                     </button>
                     <div className="library-menu-divider" />
@@ -783,7 +779,7 @@ export default function LibraryPanel({
                         checked={summarizeEpubOnImport}
                         onChange={(e) => onToggleEpubSummary(e.target.checked)}
                       />
-                      <span>导入 EPUB 时自动生成 AI 摘要</span>
+                      <span>生成导图时附加 AI 摘要</span>
                     </label>
                   </div>
                 )}
@@ -897,6 +893,29 @@ export default function LibraryPanel({
                     </span>
                   </div>
                   {visibleBooks.map((book) => renderEpubRow(book, onOpenBook))}
+                  {sortedDocuments.length > 0 && (
+                    <div className="tree-section-title">
+                      导图 ({sortedDocuments.length})
+                    </div>
+                  )}
+                  {sortedDocuments.map((doc) =>
+                    renderDocumentRow(
+                      doc,
+                      selectedPath,
+                      onOpenDocument,
+                      (document) =>
+                        setDeleteConfirmation({ kind: 'map', document }),
+                    ),
+                  )}
+                  {visiblePlantUmlFiles.length + visibleTextDocuments.length >
+                    0 && (
+                    <div className="tree-section-title">
+                      图表 (
+                      {visiblePlantUmlFiles.length +
+                        visibleTextDocuments.length}
+                      )
+                    </div>
+                  )}
                   {visiblePlantUmlFiles.map((file) =>
                     renderPlantUmlRow(
                       file,
@@ -915,15 +934,6 @@ export default function LibraryPanel({
                         setDeleteConfirmation({ kind: 'text', document }),
                     ),
                   )}
-                  {sortedDocuments.map((doc) =>
-                    renderDocumentRow(
-                      doc,
-                      selectedPath,
-                      onOpenDocument,
-                      (document) =>
-                        setDeleteConfirmation({ kind: 'map', document }),
-                    ),
-                  )}
                   {sortedDocuments.length === 0 &&
                     visibleBooks.length === 0 &&
                     visiblePlantUmlFiles.length === 0 &&
@@ -940,6 +950,42 @@ export default function LibraryPanel({
                 /* 文件夹层级折叠树 */
                 <div className="library-folder-tree">
                   {folderTree.map(renderFolder)}
+                  {visiblePlantUmlFiles.length + visibleTextDocuments.length >
+                    0 && (
+                    <div
+                      className="library-diagram-group"
+                      role="group"
+                      aria-label="图表"
+                    >
+                      <div className="tree-section-title">
+                        图表 (
+                        {visiblePlantUmlFiles.length +
+                          visibleTextDocuments.length}
+                        )
+                      </div>
+                      {visiblePlantUmlFiles.map((file) =>
+                        renderPlantUmlRow(
+                          file,
+                          selectedPlantUmlPath,
+                          onOpenPlantUmlFile,
+                          (document) =>
+                            setDeleteConfirmation({
+                              kind: 'plantuml',
+                              document,
+                            }),
+                        ),
+                      )}
+                      {visibleTextDocuments.map((file) =>
+                        renderTextDocumentRow(
+                          file,
+                          selectedTextPath,
+                          onOpenTextDocument,
+                          (document) =>
+                            setDeleteConfirmation({ kind: 'text', document }),
+                        ),
+                      )}
+                    </div>
+                  )}
 
                   {documents.length === 0 &&
                     visibleBooks.length === 0 &&
@@ -1251,6 +1297,9 @@ function renderTextDocumentRow(
         <div className="doc-meta-row">
           <span className="doc-time">{formatRelativeTime(file.updatedAt)}</span>
           <span className="doc-badge">MMD · {sizeLabel}</span>
+          {file.category && file.category !== '未分类' && (
+            <span className="doc-badge doc-cat-badge">{file.category}</span>
+          )}
         </div>
       </div>
       <button
@@ -1319,6 +1368,9 @@ function renderPlantUmlRow(
         <div className="doc-meta-row">
           <span className="doc-time">{formatRelativeTime(file.updatedAt)}</span>
           <span className="doc-badge">PUML · {sizeLabel}</span>
+          {file.category && file.category !== '未分类' && (
+            <span className="doc-badge doc-cat-badge">{file.category}</span>
+          )}
         </div>
       </div>
       <button

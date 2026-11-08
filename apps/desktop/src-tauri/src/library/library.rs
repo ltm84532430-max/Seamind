@@ -4,7 +4,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashSet,
+    collections::{BTreeSet, HashSet},
     fs,
     io::{Read, Write},
     net::IpAddr,
@@ -18,6 +18,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
 const SETTINGS_FILE: &str = "library.json";
+const CATEGORY_SCOPES_FILE: &str = ".seamind-category-scopes.json";
 const DATABASE_FILE: &str = "library-index.sqlite3";
 const HISTORY_DATABASE_FILE: &str = "document-history.sqlite3";
 const META_PREFIX: &str = "<!-- markmap-desktop: ";
@@ -128,6 +129,17 @@ pub struct LibrarySnapshot {
     pub plantuml_files: Vec<PlantUmlDocument>,
     pub text_documents: Vec<TextDocument>,
     pub categories: Vec<String>,
+    pub document_categories: Vec<String>,
+    pub mindmap_categories: Vec<String>,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CategoryScopes {
+    #[serde(default)]
+    document_categories: Vec<String>,
+    #[serde(default)]
+    mindmap_categories: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -304,6 +316,7 @@ pub fn search_library(
     app: AppHandle,
     query: String,
     category: Option<String>,
+    kind: Option<String>,
 ) -> Result<Vec<MapDocument>, String> {
     let root = configured_root(&app)?;
     let Some(_root) = root else {
@@ -312,6 +325,12 @@ pub fn search_library(
     let connection = open_database(&app)?;
     let query = query.trim().to_lowercase();
     let category = category.unwrap_or_default();
+    let kind = match kind.as_deref() {
+        None => None,
+        Some(KIND_DOC) => Some(KIND_DOC),
+        Some(KIND_MINDMAP) => Some(KIND_MINDMAP),
+        Some(_) => return Err("未知的文档类型。".to_string()),
+    };
     let mut statement = connection
         .prepare(
             "SELECT id, relative_path, title, category, map_type, tags, created_at, updated_at, kind, origin, source_ref
@@ -320,30 +339,34 @@ pub fn search_library(
                     OR instr(lower(map_type), ?1) > 0 OR instr(lower(tags), ?1) > 0
                     OR instr(lower(content), ?1) > 0)
                AND (?2 = '' OR category = ?2 OR substr(category, 1, length(?2) + 1) = ?2 || '/')
+               AND (?3 IS NULL OR kind = ?3)
              ORDER BY updated_at DESC, title COLLATE NOCASE
-             LIMIT ?3",
+             LIMIT ?4",
         )
         .map_err(db_error)?;
     let rows = statement
-        .query_map(params![query, category, MAX_SEARCH_RESULTS as i64], |row| {
-            let tags_json: String = row.get(5)?;
-            let tags = serde_json::from_str(&tags_json).unwrap_or_default();
-            Ok(MapDocument {
-                id: row.get(0)?,
-                relative_path: row.get(1)?,
-                title: row.get(2)?,
-                category: row.get(3)?,
-                map_type: row.get(4)?,
-                tags,
-                created_at: row.get(6)?,
-                updated_at: row.get(7)?,
-                kind: row.get(8)?,
-                origin: row.get(9)?,
-                source_ref: row
-                    .get::<_, Option<String>>(10)?
-                    .and_then(|raw| serde_json::from_str(&raw).ok()),
-            })
-        })
+        .query_map(
+            params![query, category, kind, MAX_SEARCH_RESULTS as i64],
+            |row| {
+                let tags_json: String = row.get(5)?;
+                let tags = serde_json::from_str(&tags_json).unwrap_or_default();
+                Ok(MapDocument {
+                    id: row.get(0)?,
+                    relative_path: row.get(1)?,
+                    title: row.get(2)?,
+                    category: row.get(3)?,
+                    map_type: row.get(4)?,
+                    tags,
+                    created_at: row.get(6)?,
+                    updated_at: row.get(7)?,
+                    kind: row.get(8)?,
+                    origin: row.get(9)?,
+                    source_ref: row
+                        .get::<_, Option<String>>(10)?
+                        .and_then(|raw| serde_json::from_str(&raw).ok()),
+                })
+            },
+        )
         .map_err(db_error)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
 }
@@ -983,11 +1006,11 @@ pub fn save_document(app: AppHandle, input: SaveDocumentInput) -> Result<MapDocu
         },
     };
     // 省略来源时沿用原文件，避免编辑器的旧保存路径抹掉电子书和视频关联。
-    let origin = match input
-        .origin
-        .as_deref()
-        .or_else(|| previous_meta.as_ref().and_then(|meta| meta.origin.as_deref()))
-    {
+    let origin = match input.origin.as_deref().or_else(|| {
+        previous_meta
+            .as_ref()
+            .and_then(|meta| meta.origin.as_deref())
+    }) {
         Some("manual") => ORIGIN_MANUAL,
         Some("ebook") => "ebook",
         Some("player") => "player",
@@ -997,13 +1020,18 @@ pub fn save_document(app: AppHandle, input: SaveDocumentInput) -> Result<MapDocu
         None => ORIGIN_UNKNOWN,
     };
     let source_ref = if input.origin.as_deref().is_some_and(|requested| {
-        previous_meta.as_ref().and_then(|meta| meta.origin.as_deref()) != Some(requested)
+        previous_meta
+            .as_ref()
+            .and_then(|meta| meta.origin.as_deref())
+            != Some(requested)
     }) {
         input.source_ref
     } else {
-        input
-            .source_ref
-            .or_else(|| previous_meta.as_ref().and_then(|meta| meta.source_ref.clone()))
+        input.source_ref.or_else(|| {
+            previous_meta
+                .as_ref()
+                .and_then(|meta| meta.source_ref.clone())
+        })
     };
     let document = MapDocument {
         id: id.clone(),
@@ -1026,8 +1054,8 @@ pub fn save_document(app: AppHandle, input: SaveDocumentInput) -> Result<MapDocu
         created_at,
         updated_at: now,
         kind: (kind == KIND_DOC).then(|| KIND_DOC.to_string()),
-        origin: (kind == KIND_DOC).then(|| origin.to_string()),
-        source_ref: if kind == KIND_DOC { source_ref } else { None },
+        origin: (kind == KIND_DOC || origin != ORIGIN_UNKNOWN).then(|| origin.to_string()),
+        source_ref,
     };
     let metadata_json = serde_json::to_string(&metadata)
         .map_err(|error| error.to_string())?
@@ -1738,11 +1766,29 @@ pub fn delete_document(app: AppHandle, relative_path: String) -> Result<(), Stri
 }
 
 #[tauri::command]
-pub fn create_category(app: AppHandle, category: String) -> Result<LibrarySnapshot, String> {
+pub fn create_category(
+    app: AppHandle,
+    category: String,
+    kind: Option<String>,
+) -> Result<LibrarySnapshot, String> {
     let root = require_root(&app)?;
     let category = normalize_category(&category)?;
+    let kind = kind.as_deref().unwrap_or(KIND_MINDMAP);
+    if kind != KIND_DOC && kind != KIND_MINDMAP {
+        return Err("未知的分类类型。".to_string());
+    }
     let relative = category_path(&category)?;
     let _directory = create_directory_inside_root(&root, &relative)?;
+    let mut scopes = read_category_scopes(&root)?;
+    let target = if kind == KIND_DOC {
+        &mut scopes.document_categories
+    } else {
+        &mut scopes.mindmap_categories
+    };
+    if !target.contains(&category) {
+        target.push(category);
+        write_category_scopes(&root, &scopes)?;
+    }
     snapshot_for(&app, Some(root))
 }
 
@@ -1811,6 +1857,25 @@ pub fn rename_library_folder(
         Err(error) => return Err(format!("无法检查目标文件夹：{error}")),
     }
 
+    let mut scopes = read_category_scopes(&root)?;
+    let old_prefix = format!("{normalized_path}/");
+    let new_path = path_to_relative_string(
+        destination
+            .strip_prefix(&root)
+            .map_err(|_| "分类目录超出了文件库位置。")?,
+    );
+    for category in scopes
+        .document_categories
+        .iter_mut()
+        .chain(scopes.mindmap_categories.iter_mut())
+    {
+        if category == &normalized_path {
+            *category = new_path.clone();
+        } else if category.starts_with(&old_prefix) {
+            *category = format!("{new_path}/{}", &category[old_prefix.len()..]);
+        }
+    }
+    write_category_scopes(&root, &scopes)?;
     snapshot_for(&app, Some(root))
 }
 
@@ -1871,10 +1936,21 @@ fn snapshot_for(app: &AppHandle, root: Option<PathBuf>) -> Result<LibrarySnapsho
             plantuml_files: Vec::new(),
             text_documents: Vec::new(),
             categories: Vec::new(),
+            document_categories: Vec::new(),
+            mindmap_categories: Vec::new(),
         });
     };
     fs::create_dir_all(&root).map_err(|error| format!("无法访问文件库目录：{error}"))?;
     let (documents, books, plantuml_files, text_documents, categories) = scan_library(&root)?;
+    let scopes = read_category_scopes(&root)?;
+    let (document_categories, mindmap_categories) = scoped_categories(
+        &root,
+        &documents,
+        &plantuml_files,
+        &text_documents,
+        &categories,
+        &scopes,
+    );
     replace_index(app, &documents, &root)?;
     Ok(LibrarySnapshot {
         root_path: Some(root.to_string_lossy().into_owned()),
@@ -1883,7 +1959,89 @@ fn snapshot_for(app: &AppHandle, root: Option<PathBuf>) -> Result<LibrarySnapsho
         plantuml_files,
         text_documents,
         categories,
+        document_categories,
+        mindmap_categories,
     })
+}
+
+fn read_category_scopes(root: &Path) -> Result<CategoryScopes, String> {
+    match fs::read_to_string(root.join(CATEGORY_SCOPES_FILE)) {
+        Ok(content) => {
+            serde_json::from_str(&content).map_err(|error| format!("无法读取分类归属信息：{error}"))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(CategoryScopes::default()),
+        Err(error) => Err(format!("无法读取分类归属信息：{error}")),
+    }
+}
+
+fn write_category_scopes(root: &Path, scopes: &CategoryScopes) -> Result<(), String> {
+    let content = serde_json::to_vec_pretty(scopes)
+        .map_err(|error| format!("无法序列化分类归属信息：{error}"))?;
+    write_atomically(&root.join(CATEGORY_SCOPES_FILE), &content)
+}
+
+fn include_category(categories: &mut BTreeSet<String>, category: &str) {
+    if category.is_empty() {
+        return;
+    }
+    let mut prefix = String::new();
+    for segment in category.split('/') {
+        if !prefix.is_empty() {
+            prefix.push('/');
+        }
+        prefix.push_str(segment);
+        categories.insert(prefix.clone());
+    }
+}
+
+fn scoped_categories(
+    root: &Path,
+    documents: &[MapDocument],
+    plantuml_files: &[PlantUmlDocument],
+    text_documents: &[TextDocument],
+    categories: &[String],
+    scopes: &CategoryScopes,
+) -> (Vec<String>, Vec<String>) {
+    let existing = categories.iter().cloned().collect::<HashSet<_>>();
+    let mut doc = BTreeSet::new();
+    let mut map = BTreeSet::new();
+    for document in documents {
+        include_category(
+            if document.kind == KIND_DOC {
+                &mut doc
+            } else {
+                &mut map
+            },
+            &document.category,
+        );
+    }
+    for file in plantuml_files {
+        include_category(&mut map, &file.category);
+    }
+    for file in text_documents {
+        include_category(&mut map, &file.category);
+    }
+    for category in &scopes.document_categories {
+        if existing.contains(category) {
+            include_category(&mut doc, category);
+        }
+    }
+    for category in &scopes.mindmap_categories {
+        if existing.contains(category) {
+            include_category(&mut map, category);
+        }
+    }
+    // Legacy empty folders used to belong to the mind-map library. Resource-only
+    // directories are omitted, while an actual Markdown document under assets stays visible.
+    for category in categories {
+        if doc.contains(category) || map.contains(category) {
+            continue;
+        }
+        if fs::read_dir(root.join(category)).is_ok_and(|mut entries| entries.next().is_none()) {
+            include_category(&mut map, category);
+        }
+    }
+    (doc.into_iter().collect(), map.into_iter().collect())
 }
 
 fn configured_root(app: &AppHandle) -> Result<Option<PathBuf>, String> {
@@ -2133,6 +2291,12 @@ fn open_database(app: &AppHandle) -> Result<Connection, String> {
         .map_err(db_error)?;
     ensure_maps_kind_column(&connection)?;
     ensure_maps_origin_columns(&connection)?;
+    connection
+        .execute(
+            "CREATE INDEX IF NOT EXISTS idx_maps_kind_category_updated ON maps(kind, category, updated_at DESC)",
+            [],
+        )
+        .map_err(db_error)?;
     Ok(connection)
 }
 
@@ -3085,6 +3249,41 @@ mod tests {
     const DOC_HEADER: &str = r#"<!-- markmap-desktop: {"id":"doc-1","title":"说明","mapType":"文档","tags":[],"createdAt":1,"updatedAt":2,"kind":"doc"} -->"#;
 
     #[test]
+    fn category_pages_follow_file_kinds_and_keep_owned_empty_folders() {
+        let scratch = Scratch::new();
+        scratch.write("shared/note.md", "# 文档\n");
+        scratch.write("shared/map.md", &format!("{MAP_HEADER}\n\n# 导图\n"));
+        scratch.write("assets/with-doc.md", "# 资源中的文档\n");
+        scratch.write("assets/images/icon.svg", "<svg/>\n");
+        scratch.write("books/book.epub", "epub");
+        fs::create_dir_all(scratch.0.join("empty-doc")).unwrap();
+        fs::create_dir_all(scratch.0.join("empty-legacy")).unwrap();
+        let scopes = CategoryScopes {
+            document_categories: vec!["empty-doc".into()],
+            mindmap_categories: Vec::new(),
+        };
+        write_category_scopes(&scratch.0, &scopes).unwrap();
+        let (documents, _books, plantuml, text, categories) = scan_library(&scratch.0).unwrap();
+        let loaded = read_category_scopes(&scratch.0).unwrap();
+        let (doc, map) = scoped_categories(
+            &scratch.0,
+            &documents,
+            &plantuml,
+            &text,
+            &categories,
+            &loaded,
+        );
+        assert!(doc.contains(&"shared".to_string()));
+        assert!(map.contains(&"shared".to_string()));
+        assert!(doc.contains(&"assets".to_string()));
+        assert!(doc.contains(&"empty-doc".to_string()));
+        assert!(map.contains(&"empty-legacy".to_string()));
+        assert!(!map.contains(&"assets".to_string()));
+        assert!(!doc.contains(&"books".to_string()));
+        assert!(!map.contains(&"books".to_string()));
+    }
+
+    #[test]
     fn diagram_metadata_round_trips_and_stays_a_mermaid_comment() {
         let metadata = TextMetadata {
             id: "id-1".into(),
@@ -3342,6 +3541,8 @@ mod tests {
             plantuml_files: Vec::new(),
             text_documents: vec![diagram.clone()],
             categories: Vec::new(),
+            document_categories: Vec::new(),
+            mindmap_categories: Vec::new(),
         })
         .unwrap();
         for key in [
@@ -3481,7 +3682,9 @@ mod tests {
             .unwrap();
         assert_eq!(kind, "mindmap");
         let legacy_origin: String = connection
-            .query_row("SELECT origin FROM maps WHERE id = 'a'", [], |row| row.get(0))
+            .query_row("SELECT origin FROM maps WHERE id = 'a'", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(legacy_origin, "unknown");
 
@@ -3504,7 +3707,9 @@ mod tests {
             .unwrap();
         assert_eq!(kind, "doc");
         let origin: String = connection
-            .query_row("SELECT origin FROM maps WHERE id = 'b'", [], |row| row.get(0))
+            .query_row("SELECT origin FROM maps WHERE id = 'b'", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(origin, "manual");
     }
