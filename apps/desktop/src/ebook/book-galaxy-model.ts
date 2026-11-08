@@ -12,13 +12,16 @@ export interface GalaxyNode {
   chapterIndex?: string;
   chapterHref?: string;
   parentChapter?: string;
+  parentId?: string;
   hierarchy: string[];
   hasNote: boolean;
   notePath?: string;
   noteTitle?: string;
   noteUpdatedAt?: number;
+  noteTags?: string[];
   wordEstimate?: number;
   isCurrent?: boolean;
+  degree?: number;
   // Spatial coordinates
   x: number;
   y: number;
@@ -279,11 +282,13 @@ export function buildBookGalaxyGraph(
       chapterIndex: clusterIndex,
       chapterHref: topItem.href,
       parentChapter: '',
+      parentId: sunNode.id,
       hierarchy: clusterHierarchy,
       hasNote: Boolean(clusterDoc),
       notePath: clusterDoc?.relativePath,
       noteTitle: clusterDoc?.title,
       noteUpdatedAt: clusterDoc?.updatedAt,
+      noteTags: clusterDoc?.tags,
       isCurrent: isClusterCurrent,
       x: clusterX,
       y: clusterY,
@@ -349,11 +354,13 @@ export function buildBookGalaxyGraph(
         chapterIndex: subIndexStr,
         chapterHref: subItem.href,
         parentChapter: clusterLabel,
+        parentId: clusterId,
         hierarchy: subHierarchy,
         hasNote: Boolean(subDoc),
         notePath: subDoc?.relativePath,
         noteTitle: subDoc?.title,
         noteUpdatedAt: subDoc?.updatedAt,
+        noteTags: subDoc?.tags,
         isCurrent: isSubCurrent,
         x: subLayout.x,
         y: subLayout.y,
@@ -422,11 +429,13 @@ export function buildBookGalaxyGraph(
             chapterIndex: deepIndexStr,
             chapterHref: deepItem.href,
             parentChapter: subLabel,
+            parentId: planetId,
             hierarchy: satHierarchy,
             hasNote: Boolean(satDoc),
             notePath: satDoc?.relativePath,
             noteTitle: satDoc?.title,
             noteUpdatedAt: satDoc?.updatedAt,
+            noteTags: satDoc?.tags,
             isCurrent: isSatCurrent,
             x: satX,
             y: satY,
@@ -454,6 +463,72 @@ export function buildBookGalaxyGraph(
       target: `cluster-${i + 1}`,
       kind: 'sequence',
     });
+  }
+
+  // 3.5. Build cross-chapter semantic links (Obsidian shared tags / knowledge notes)
+  const GENERIC_TAGS = new Set([
+    '读书笔记',
+    '电子书',
+    '笔记',
+    cleanBook.toLowerCase(),
+  ]);
+  const noteNodes = nodes.filter((n) => n.kind !== 'sun' && n.hasNote);
+  const existingPairs = new Set(
+    links.map((l) =>
+      l.source < l.target
+        ? `${l.source}::${l.target}`
+        : `${l.target}::${l.source}`,
+    ),
+  );
+
+  for (let i = 0; i < noteNodes.length; i++) {
+    const a = noteNodes[i];
+    const tagsA = (a.noteTags ?? [])
+      .map((t) => t.trim().toLowerCase())
+      .filter((t) => t && !GENERIC_TAGS.has(t));
+    for (let j = i + 1; j < noteNodes.length; j++) {
+      const b = noteNodes[j];
+      if (a.parentId === b.id || b.parentId === a.id) continue;
+      const pairKey = a.id < b.id ? `${a.id}::${b.id}` : `${b.id}::${a.id}`;
+      if (existingPairs.has(pairKey)) continue;
+
+      const tagsB = (b.noteTags ?? [])
+        .map((t) => t.trim().toLowerCase())
+        .filter((t) => t && !GENERIC_TAGS.has(t));
+      const sharedTag = tagsA.find((t) => tagsB.includes(t));
+
+      if (sharedTag) {
+        existingPairs.add(pairKey);
+        links.push({
+          source: a.id,
+          target: b.id,
+          kind: 'cross_link',
+          label: `#${sharedTag}`,
+          color: a.color,
+        });
+      } else if (a.hierarchy[0] !== b.hierarchy[0] && noteNodes.length <= 24) {
+        // Connect cross-chapter documented nodes so sparse note sets form a connected Obsidian web
+        existingPairs.add(pairKey);
+        links.push({
+          source: a.id,
+          target: b.id,
+          kind: 'cross_link',
+          label: '知识联动',
+          color: a.color,
+        });
+      }
+    }
+  }
+
+  // Compute node degree (number of topological edges)
+  const degreeMap = new Map<string, number>();
+  for (const link of links) {
+    if (link.kind === 'sequence') continue;
+    degreeMap.set(link.source, (degreeMap.get(link.source) ?? 0) + 1);
+    degreeMap.set(link.target, (degreeMap.get(link.target) ?? 0) + 1);
+  }
+  for (const node of nodes) {
+    node.degree = degreeMap.get(node.id) ?? 0;
   }
 
   // 4. Calculate bounds for auto-fit zoom
@@ -493,4 +568,309 @@ export function buildBookGalaxyGraph(
       completionPercentage,
     },
   };
+}
+
+/* ==========================================================================
+   Obsidian-Style Topology Spotlight & Force-Directed Physics Engine
+   ========================================================================== */
+
+export interface GalaxyPhysicsConfig {
+  repelStrength: number; // 0.2 .. 2.5 (default 1.0)
+  linkDistanceScale: number; // 0.5 .. 1.8 (default 1.0)
+  linkTension: number; // 0.3 .. 2.0 (default 1.0)
+  centerGravity: number; // 0.2 .. 2.0 (default 1.0)
+}
+
+export const DEFAULT_GALAXY_PHYSICS_CONFIG: GalaxyPhysicsConfig = {
+  repelStrength: 1.0,
+  linkDistanceScale: 1.0,
+  linkTension: 1.0,
+  centerGravity: 1.0,
+};
+
+export interface GalaxySimBody {
+  id: string;
+  kind: GalaxyNodeKind;
+  parentId?: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  anchorX: number;
+  anchorY: number;
+  fx: number | null;
+  fy: number | null;
+  radius: number;
+  orbitRadius: number;
+  orbitAngle: number;
+}
+
+export interface GalaxyPhysicsState {
+  bodies: Map<string, GalaxySimBody>;
+  bodyList: GalaxySimBody[];
+  links: GalaxyLink[];
+  alpha: number;
+}
+
+/**
+ * Builds a 1-hop adjacency lookup table for Obsidian-style hover spotlighting.
+ * When hovering a cluster node, also includes its direct child planets & their satellites
+ * so the entire chapter constellation lights up cleanly.
+ */
+export function buildGalaxyAdjacencyMap(
+  nodes: readonly GalaxyNode[],
+  links: readonly GalaxyLink[],
+  options?: { includeSequence?: boolean; includeCrossLinks?: boolean },
+): Map<string, Set<string>> {
+  const includeSequence = options?.includeSequence ?? false;
+  const includeCrossLinks = options?.includeCrossLinks ?? true;
+  const map = new Map<string, Set<string>>();
+
+  for (const node of nodes) {
+    map.set(node.id, new Set([node.id]));
+  }
+
+  for (const link of links) {
+    if (link.kind === 'sequence' && !includeSequence) continue;
+    if (link.kind === 'cross_link' && !includeCrossLinks) continue;
+    map.get(link.source)?.add(link.target);
+    map.get(link.target)?.add(link.source);
+  }
+
+  // If hovering a cluster, also include 2-hop satellites under its planets
+  for (const node of nodes) {
+    if (node.kind === 'satellite' && node.parentId) {
+      const planet = nodes.find((n) => n.id === node.parentId);
+      if (planet?.parentId) {
+        map.get(planet.parentId)?.add(node.id);
+      }
+    }
+  }
+
+  return map;
+}
+
+export function createGalaxyPhysicsState(
+  graph: BookGalaxyGraph,
+): GalaxyPhysicsState {
+  const bodies = new Map<string, GalaxySimBody>();
+  const bodyList: GalaxySimBody[] = [];
+
+  for (const node of graph.nodes) {
+    const body: GalaxySimBody = {
+      id: node.id,
+      kind: node.kind,
+      parentId: node.parentId,
+      x: node.x,
+      y: node.y,
+      vx: 0,
+      vy: 0,
+      anchorX: node.x,
+      anchorY: node.y,
+      fx: null,
+      fy: null,
+      radius: node.radius,
+      orbitRadius: node.orbitRadius ?? Math.hypot(node.x, node.y),
+      orbitAngle: node.orbitAngle ?? Math.atan2(node.y, node.x),
+    };
+    bodies.set(node.id, body);
+    bodyList.push(body);
+  }
+
+  return {
+    bodies,
+    bodyList,
+    links: graph.links,
+    alpha: 0.45,
+  };
+}
+
+/**
+ * Advances the force-directed simulation by one 60fps tick.
+ * Returns true if the simulation is still active (alpha > 0.002 or dragging).
+ */
+export function stepGalaxyPhysics(
+  state: GalaxyPhysicsState,
+  config: GalaxyPhysicsConfig = DEFAULT_GALAXY_PHYSICS_CONFIG,
+  visibleIds?: Set<string>,
+): boolean {
+  const { bodies, bodyList, links } = state;
+  const hasPinned = bodyList.some((b) => b.fx !== null || b.fy !== null);
+  if (state.alpha < 0.002 && !hasPinned) {
+    return false;
+  }
+
+  const activeAlpha = hasPinned ? Math.max(state.alpha, 0.28) : state.alpha;
+  const distScale = config.linkDistanceScale;
+  const tension = config.linkTension;
+  const repel = config.repelStrength;
+  const gravity = config.centerGravity;
+
+  const activeBodies = visibleIds
+    ? bodyList.filter((b) => visibleIds.has(b.id))
+    : bodyList;
+  const n = activeBodies.length;
+
+  // 1. Pairwise Many-Body Charge Repulsion (Spatial window pruned for O(N) fast performance on 600+ nodes)
+  const maxRepelDist = 210;
+  const maxRepelDistSq = maxRepelDist * maxRepelDist;
+
+  for (let i = 0; i < n; i++) {
+    const a = activeBodies[i];
+    for (let j = i + 1; j < n; j++) {
+      const b = activeBodies[j];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      if (Math.abs(dx) > maxRepelDist || Math.abs(dy) > maxRepelDist) continue;
+      const dSq = dx * dx + dy * dy;
+      if (dSq > maxRepelDistSq) continue;
+
+      const dist = Math.max(8, Math.sqrt(dSq));
+      const minGap = (a.radius + b.radius + 22) * Math.sqrt(repel);
+      const charge =
+        a.kind === 'sun' || b.kind === 'sun'
+          ? 2400 * repel
+          : a.kind === 'cluster' && b.kind === 'cluster'
+            ? 1450 * repel
+            : 460 * repel;
+
+      let force = (charge / (dSq + 120)) * activeAlpha;
+      if (dist < minGap) {
+        force += (minGap - dist) * 0.22 * activeAlpha;
+      }
+
+      const fx = (dx / dist) * force;
+      const fy = (dy / dist) * force;
+
+      if (a.fx === null && a.kind !== 'sun') {
+        a.vx -= fx;
+        a.vy -= fy;
+      }
+      if (b.fx === null && b.kind !== 'sun') {
+        b.vx += fx;
+        b.vy += fy;
+      }
+    }
+  }
+
+  // 2. Hookean Spring Forces along Topological Links
+  for (const link of links) {
+    if (
+      visibleIds &&
+      (!visibleIds.has(link.source) || !visibleIds.has(link.target))
+    ) {
+      continue;
+    }
+    const src = bodies.get(link.source);
+    const tgt = bodies.get(link.target);
+    if (!src || !tgt) continue;
+
+    const dx = tgt.x - src.x;
+    const dy = tgt.y - src.y;
+    const dist = Math.max(1, Math.hypot(dx, dy));
+
+    if (link.kind === 'orbit') {
+      const restLength = (tgt.orbitRadius || 100) * distScale;
+      const k =
+        (tgt.kind === 'cluster' ? 0.065 : tgt.kind === 'planet' ? 0.14 : 0.18) *
+        tension *
+        activeAlpha;
+      const delta = (dist - restLength) * k;
+      const fx = (dx / dist) * delta;
+      const fy = (dy / dist) * delta;
+
+      if (src.fx === null && src.kind !== 'sun') {
+        // Parent feels lighter pull from child unless child is actively dragged
+        const parentWeight = tgt.fx !== null ? 0.55 : 0.22;
+        src.vx += fx * parentWeight;
+        src.vy += fy * parentWeight;
+      }
+      if (tgt.fx === null) {
+        const childWeight = src.fx !== null ? 0.92 : 0.78;
+        tgt.vx -= fx * childWeight;
+        tgt.vy -= fy * childWeight;
+      }
+    } else if (link.kind === 'cross_link') {
+      const restLength = 240 * distScale;
+      const k = 0.015 * tension * activeAlpha;
+      const delta = (dist - restLength) * k;
+      const fx = (dx / dist) * delta;
+      const fy = (dy / dist) * delta;
+      if (src.fx === null) {
+        src.vx += fx;
+        src.vy += fy;
+      }
+      if (tgt.fx === null) {
+        tgt.vx -= fx;
+        tgt.vy -= fy;
+      }
+    }
+  }
+
+  // 3. Soft Anchor & Radial Orientation Gravity (prevents subtrees from inverting while staying elastic)
+  const sun = bodies.get('sun-root');
+  if (sun && sun.fx === null) {
+    sun.vx += (0 - sun.x) * 0.18 * gravity;
+    sun.vy += (0 - sun.y) * 0.18 * gravity;
+  }
+
+  for (let i = 0; i < n; i++) {
+    const body = activeBodies[i];
+    if (body.fx !== null && body.fy !== null) {
+      body.x = body.fx;
+      body.y = body.fy;
+      body.vx = 0;
+      body.vy = 0;
+      continue;
+    }
+
+    if (body.kind === 'cluster' && sun) {
+      const targetX = sun.x + body.anchorX * distScale;
+      const targetY = sun.y + body.anchorY * distScale;
+      body.vx += (targetX - body.x) * 0.042 * gravity * activeAlpha;
+      body.vy += (targetY - body.y) * 0.042 * gravity * activeAlpha;
+    } else if (body.kind === 'planet' && body.parentId) {
+      const parent = bodies.get(body.parentId);
+      if (parent) {
+        // Desired position relative to parent's current live position
+        const relX = Math.cos(body.orbitAngle) * body.orbitRadius * distScale;
+        const relY = Math.sin(body.orbitAngle) * body.orbitRadius * distScale;
+        const targetX = parent.x + relX;
+        const targetY = parent.y + relY;
+        const pull = parent.fx !== null ? 0.16 : 0.055 * gravity * activeAlpha;
+        body.vx += (targetX - body.x) * pull;
+        body.vy += (targetY - body.y) * pull;
+      }
+    } else if (body.kind === 'satellite' && body.parentId) {
+      const parent = bodies.get(body.parentId);
+      if (parent) {
+        const relX = Math.cos(body.orbitAngle) * body.orbitRadius * distScale;
+        const relY = Math.sin(body.orbitAngle) * body.orbitRadius * distScale;
+        const targetX = parent.x + relX;
+        const targetY = parent.y + relY;
+        const pull = parent.fx !== null ? 0.2 : 0.075 * gravity * activeAlpha;
+        body.vx += (targetX - body.x) * pull;
+        body.vy += (targetY - body.y) * pull;
+      }
+    }
+
+    // Damping and velocity clamping
+    body.vx *= 0.76;
+    body.vy *= 0.76;
+
+    const speed = Math.hypot(body.vx, body.vy);
+    if (speed > 28) {
+      body.vx = (body.vx / speed) * 28;
+      body.vy = (body.vy / speed) * 28;
+    }
+
+    body.x += body.vx;
+    body.y += body.vy;
+  }
+
+  if (!hasPinned) {
+    state.alpha *= 0.965;
+  }
+
+  return true;
 }

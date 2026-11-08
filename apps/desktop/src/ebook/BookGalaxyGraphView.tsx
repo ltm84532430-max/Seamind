@@ -1,12 +1,23 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
 } from 'react';
-import type { BookGalaxyGraph, GalaxyNode } from './book-galaxy-model';
+import {
+  buildGalaxyAdjacencyMap,
+  createGalaxyPhysicsState,
+  DEFAULT_GALAXY_PHYSICS_CONFIG,
+  stepGalaxyPhysics,
+  type BookGalaxyGraph,
+  type GalaxyNode,
+  type GalaxyPhysicsConfig,
+  type GalaxyPhysicsState,
+} from './book-galaxy-model';
 import type { Theme } from '../app/app-storage';
 import './book-galaxy-view.css';
 
@@ -26,9 +37,19 @@ export function BookGalaxyGraphView({
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
   const [pan, setPan] = useState({ x: 400, y: 300 });
-  const [scale, setScale] = useState(1);
+  const [scale, setScale] = useState(0.65);
   const [isPanning, setIsPanning] = useState(false);
   const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
+
+  // Interactive node drag state
+  const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
+  const dragInfoRef = useRef<{
+    node: GalaxyNode;
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    moved: boolean;
+  } | null>(null);
 
   const [hoveredNode, setHoveredNode] = useState<{
     node: GalaxyNode;
@@ -37,19 +58,163 @@ export function BookGalaxyGraphView({
   } | null>(null);
 
   const [searchFilter, setSearchFilter] = useState('');
+  const [controlsOpen, setControlsOpen] = useState(false);
+
+  // Obsidian-style Graph Filter & Display states
+  const [onlyWithNotes, setOnlyWithNotes] = useState(false);
+  const [showSatellites, setShowSatellites] = useState(true);
+  const [showCrossLinks, setShowCrossLinks] = useState(true);
+  const [showSequenceLinks, setShowSequenceLinks] = useState(false);
+  const [showOrbitGuides, setShowOrbitGuides] = useState(false);
+  const [nodeSizeScale, setNodeSizeScale] = useState(1.0);
+  const [labelFadeThreshold, setLabelFadeThreshold] = useState(0.68);
+  const [physicsConfig, setPhysicsConfig] = useState<GalaxyPhysicsConfig>(
+    DEFAULT_GALAXY_PHYSICS_CONFIG,
+  );
+
+  // Force simulation state & live positions
+  const physicsRef = useRef<GalaxyPhysicsState | null>(null);
+  const physicsConfigRef = useRef<GalaxyPhysicsConfig>(physicsConfig);
+  physicsConfigRef.current = physicsConfig;
+
+  const [livePositions, setLivePositions] = useState<
+    Record<string, { x: number; y: number }>
+  >(() => {
+    const initial: Record<string, { x: number; y: number }> = {};
+    for (const n of graph.nodes) {
+      initial[n.id] = { x: n.x, y: n.y };
+    }
+    return initial;
+  });
+
+  // Visible nodes based on topology filters
+  const visibleNodeIds = useMemo(() => {
+    const set = new Set<string>();
+    const activeClustersWithNotes = new Set<string>();
+    if (onlyWithNotes) {
+      for (const n of graph.nodes) {
+        if (n.hasNote || n.isCurrent) {
+          set.add(n.id);
+          if (n.parentId) activeClustersWithNotes.add(n.parentId);
+        }
+      }
+    }
+    for (const n of graph.nodes) {
+      if (n.kind === 'sun') {
+        set.add(n.id);
+        continue;
+      }
+      if (!showSatellites && n.kind === 'satellite') {
+        continue;
+      }
+      if (onlyWithNotes) {
+        if (n.hasNote || n.isCurrent || activeClustersWithNotes.has(n.id)) {
+          set.add(n.id);
+        }
+        continue;
+      }
+      set.add(n.id);
+    }
+    return set;
+  }, [graph.nodes, onlyWithNotes, showSatellites]);
+
+  const visibleIdsRef = useRef<Set<string>>(visibleNodeIds);
+  visibleIdsRef.current = visibleNodeIds;
+
+  const syncPositionsFromPhysics = useCallback((state: GalaxyPhysicsState) => {
+    const next: Record<string, { x: number; y: number }> = {};
+    for (const body of state.bodyList) {
+      next[body.id] = { x: body.x, y: body.y };
+    }
+    setLivePositions(next);
+  }, []);
+
+  // Initialize & run 60fps force simulation
+  const rafRef = useRef<number | null>(null);
+  const startSimulationLoop = useCallback(() => {
+    if (rafRef.current !== null) return;
+    const tick = () => {
+      const state = physicsRef.current;
+      if (!state) {
+        rafRef.current = null;
+        return;
+      }
+      const keepRunning = stepGalaxyPhysics(
+        state,
+        physicsConfigRef.current,
+        visibleIdsRef.current,
+      );
+      syncPositionsFromPhysics(state);
+      if (keepRunning) {
+        rafRef.current = requestAnimationFrame(tick);
+      } else {
+        rafRef.current = null;
+      }
+    };
+    rafRef.current = requestAnimationFrame(tick);
+  }, [syncPositionsFromPhysics]);
+
+  useEffect(() => {
+    const state = createGalaxyPhysicsState(graph);
+    // Warm up 10 steps for organic initial relaxation
+    for (let i = 0; i < 10; i++) {
+      stepGalaxyPhysics(state, physicsConfigRef.current, visibleIdsRef.current);
+    }
+    physicsRef.current = state;
+    syncPositionsFromPhysics(state);
+    startSimulationLoop();
+
+    return () => {
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+    };
+  }, [graph, startSimulationLoop, syncPositionsFromPhysics]);
+
+  const reheatSimulation = useCallback(
+    (alpha = 0.45) => {
+      const state = physicsRef.current;
+      if (!state) return;
+      state.alpha = Math.max(state.alpha, alpha);
+      startSimulationLoop();
+    },
+    [startSimulationLoop],
+  );
+
+  // Reheat when physics sliders or visibility filters change
+  useEffect(() => {
+    reheatSimulation(0.38);
+  }, [
+    physicsConfig.repelStrength,
+    physicsConfig.linkDistanceScale,
+    physicsConfig.linkTension,
+    physicsConfig.centerGravity,
+    onlyWithNotes,
+    showSatellites,
+    reheatSimulation,
+  ]);
 
   // Auto-fit calculation
-  const calculateAutoFit = (width: number, height: number) => {
-    const gw = Math.max(300, graph.bounds.maxX - graph.bounds.minX);
-    const gh = Math.max(300, graph.bounds.maxY - graph.bounds.minY);
-    const scaleX = (width - 80) / gw;
-    const scaleY = (height - 80) / gh;
-    const fitScale = Math.min(1.15, Math.max(0.28, Math.min(scaleX, scaleY)));
-    return {
-      scale: fitScale,
-      pan: { x: width / 2, y: height / 2 },
-    };
-  };
+  const calculateAutoFit = useCallback(
+    (width: number, height: number) => {
+      const gw = Math.max(300, graph.bounds.maxX - graph.bounds.minX);
+      const gh = Math.max(300, graph.bounds.maxY - graph.bounds.minY);
+      const scaleX = (width - 96) / gw;
+      const scaleY = (height - 96) / gh;
+      const fitScale = Math.min(1.15, Math.max(0.28, Math.min(scaleX, scaleY)));
+      return {
+        scale: fitScale,
+        pan: { x: width / 2, y: height / 2 },
+      };
+    },
+    [
+      graph.bounds.maxX,
+      graph.bounds.maxY,
+      graph.bounds.minX,
+      graph.bounds.minY,
+    ],
+  );
 
   // Measure container dimensions & initial auto-fit
   useEffect(() => {
@@ -68,16 +233,62 @@ export function BookGalaxyGraphView({
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [
-    graph.bounds.maxX,
-    graph.bounds.maxY,
-    graph.bounds.minX,
-    graph.bounds.minY,
-  ]);
+  }, [calculateAutoFit]);
 
-  // Pan interaction
+  // Convert client coordinates to graph world coordinates
+  const clientToWorld = useCallback(
+    (clientX: number, clientY: number) => {
+      const rect = containerRef.current?.getBoundingClientRect();
+      const localX = clientX - (rect?.left ?? 0);
+      const localY = clientY - (rect?.top ?? 0);
+      return {
+        x: (localX - pan.x) / scale,
+        y: (localY - pan.y) / scale,
+        localX,
+        localY,
+      };
+    },
+    [pan.x, pan.y, scale],
+  );
+
+  // Node pointer down (initiate elastic drag or click)
+  const handleNodePointerDown = (
+    e: ReactPointerEvent<SVGGElement>,
+    node: GalaxyNode,
+  ) => {
+    e.stopPropagation();
+    const world = clientToWorld(e.clientX, e.clientY);
+    dragInfoRef.current = {
+      node,
+      pointerId: e.pointerId,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      moved: false,
+    };
+    setDraggingNodeId(node.id);
+
+    const body = physicsRef.current?.bodies.get(node.id);
+    if (body) {
+      body.fx = world.x;
+      body.fy = world.y;
+      reheatSimulation(0.35);
+    }
+
+    try {
+      containerRef.current
+        ?.querySelector('.book-galaxy-canvas')
+        ?.setPointerCapture(e.pointerId);
+    } catch {
+      // ignore in non-DOM test environments
+    }
+  };
+
+  // Canvas Pan & Node Drag interaction
   const handlePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement).closest('.galaxy-node-group')) return;
+    if ((e.target as HTMLElement).closest('.book-galaxy-controls-drawer')) {
+      return;
+    }
     setIsPanning(true);
     panStartRef.current = {
       x: e.clientX,
@@ -85,10 +296,38 @@ export function BookGalaxyGraphView({
       panX: pan.x,
       panY: pan.y,
     };
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
   };
 
   const handlePointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragInfoRef.current) {
+      const info = dragInfoRef.current;
+      const dist = Math.hypot(
+        e.clientX - info.startClientX,
+        e.clientY - info.startClientY,
+      );
+      if (dist >= 4) {
+        info.moved = true;
+      }
+      const world = clientToWorld(e.clientX, e.clientY);
+      const body = physicsRef.current?.bodies.get(info.node.id);
+      if (body) {
+        body.fx = world.x;
+        body.fy = world.y;
+        reheatSimulation(0.32);
+      }
+      setHoveredNode({
+        node: info.node,
+        clientX: world.localX,
+        clientY: world.localY,
+      });
+      return;
+    }
+
     if (!isPanning) return;
     const dx = e.clientX - panStartRef.current.x;
     const dy = e.clientY - panStartRef.current.y;
@@ -99,6 +338,34 @@ export function BookGalaxyGraphView({
   };
 
   const handlePointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragInfoRef.current) {
+      const info = dragInfoRef.current;
+      const body = physicsRef.current?.bodies.get(info.node.id);
+      if (body) {
+        if (info.node.kind === 'cluster') {
+          // Update cluster anchor so dragged cluster stays in its new region organically
+          body.anchorX = body.x;
+          body.anchorY = body.y;
+        }
+        body.fx = null;
+        body.fy = null;
+        reheatSimulation(0.22);
+      }
+      const wasClick = !info.moved;
+      const clickedNode = info.node;
+      dragInfoRef.current = null;
+      setDraggingNodeId(null);
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+      if (wasClick) {
+        onSelectNode(clickedNode);
+      }
+      return;
+    }
+
     if (!isPanning) return;
     setIsPanning(false);
     try {
@@ -112,7 +379,7 @@ export function BookGalaxyGraphView({
   const handleWheel = (e: ReactWheelEvent<HTMLDivElement>) => {
     e.preventDefault();
     const zoomFactor = e.deltaY < 0 ? 1.12 : 0.89;
-    const nextScale = Math.min(3.2, Math.max(0.18, scale * zoomFactor));
+    const nextScale = Math.min(3.5, Math.max(0.18, scale * zoomFactor));
 
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) {
@@ -123,7 +390,6 @@ export function BookGalaxyGraphView({
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
 
-    // Zoom towards mouse pointer
     const nextPanX = mouseX - (mouseX - pan.x) * (nextScale / scale);
     const nextPanY = mouseY - (mouseY - pan.y) * (nextScale / scale);
 
@@ -132,11 +398,54 @@ export function BookGalaxyGraphView({
   };
 
   const handleResetView = () => {
+    const state = createGalaxyPhysicsState(graph);
+    for (let i = 0; i < 10; i++) {
+      stepGalaxyPhysics(state, physicsConfigRef.current, visibleIdsRef.current);
+    }
+    physicsRef.current = state;
+    syncPositionsFromPhysics(state);
+    startSimulationLoop();
+
     const fit = calculateAutoFit(dimensions.width, dimensions.height);
     setScale(fit.scale);
     setPan(fit.pan);
     setSearchFilter('');
   };
+
+  const handleResetPhysicsDefaults = () => {
+    setPhysicsConfig(DEFAULT_GALAXY_PHYSICS_CONFIG);
+    setNodeSizeScale(1.0);
+    setLabelFadeThreshold(0.68);
+    setOnlyWithNotes(false);
+    setShowSatellites(true);
+    setShowCrossLinks(true);
+    setShowSequenceLinks(false);
+    setShowOrbitGuides(false);
+  };
+
+  const nodeMap = useMemo(() => {
+    const map = new Map<string, GalaxyNode>();
+    for (const n of graph.nodes) {
+      map.set(n.id, n);
+    }
+    return map;
+  }, [graph.nodes]);
+
+  // 1-Hop Obsidian Adjacency Map
+  const adjacencyMap = useMemo(
+    () =>
+      buildGalaxyAdjacencyMap(graph.nodes, graph.links, {
+        includeSequence: showSequenceLinks,
+        includeCrossLinks: showCrossLinks,
+      }),
+    [graph.nodes, graph.links, showSequenceLinks, showCrossLinks],
+  );
+
+  const activeHoveredId = draggingNodeId ?? hoveredNode?.node.id ?? null;
+  const spotlightNeighborSet = useMemo(() => {
+    if (!activeHoveredId) return null;
+    return adjacencyMap.get(activeHoveredId) ?? new Set([activeHoveredId]);
+  }, [activeHoveredId, adjacencyMap]);
 
   const filteredNodes = useMemo(() => {
     const q = searchFilter.trim().toLowerCase();
@@ -153,20 +462,35 @@ export function BookGalaxyGraphView({
     return new Set(filteredNodes.map((n) => n.id));
   }, [filteredNodes]);
 
-  // Unique orbit radii for guide rings
+  // Unique orbit radii for optional guide rings
   const orbitGuideRadii = useMemo(() => {
     const set = new Set<number>();
     graph.nodes.forEach((n) => {
       if (n.kind === 'cluster' && n.orbitRadius) {
-        set.add(n.orbitRadius);
+        set.add(Math.round(n.orbitRadius * physicsConfig.linkDistanceScale));
       }
     });
     return Array.from(set).sort((a, b) => a - b);
-  }, [graph.nodes]);
+  }, [graph.nodes, physicsConfig.linkDistanceScale]);
 
   const sunNode = graph.nodes.find((n) => n.kind === 'sun');
-  const sunRadius = sunNode ? sunNode.radius : 40;
+  const sunRadius = sunNode ? Math.round(32 * nodeSizeScale) : 32;
   const coverUrl = sunNode?.coverDataUrl || graph.coverDataUrl;
+
+  const crossLinksCount = useMemo(
+    () => graph.links.filter((l) => l.kind === 'cross_link').length,
+    [graph.links],
+  );
+
+  // Inverse scale font compensation for Obsidian-like crisp labels at any zoom
+  const clusterFontSize = Math.max(
+    9.5,
+    Math.min(13.5, 11.2 / Math.pow(scale, 0.28)),
+  );
+  const planetFontSize = Math.max(
+    8.5,
+    Math.min(11.5, 9.8 / Math.pow(scale, 0.28)),
+  );
 
   return (
     <div className="book-galaxy-container" ref={containerRef}>
@@ -177,29 +501,52 @@ export function BookGalaxyGraphView({
           <span className="book-galaxy-title">《{graph.bookTitle}》</span>
           <div className="book-galaxy-stats">
             <span className="book-galaxy-stat-pill">
-              章节: {graph.stats.totalChapters}
+              节点: {visibleNodeIds.size - 1}/{graph.stats.totalChapters}
             </span>
             <span>·</span>
             <span className="book-galaxy-stat-pill">
-              笔记覆盖: {graph.stats.notesCount} (
+              已记笔记: {graph.stats.notesCount} (
               {graph.stats.completionPercentage}%)
             </span>
+            {crossLinksCount > 0 && (
+              <>
+                <span>·</span>
+                <span className="book-galaxy-stat-pill">
+                  跨章联动: {crossLinksCount}
+                </span>
+              </>
+            )}
           </div>
         </div>
 
         <div className="book-galaxy-actions">
           <input
             type="text"
-            className="lit-text-input"
-            style={{ width: 140, height: 26, fontSize: 11 }}
-            placeholder="搜索章节或知识点…"
+            className="lit-text-input book-galaxy-search-input"
+            placeholder="检索章节或知识节点…"
             value={searchFilter}
             onChange={(e) => setSearchFilter(e.target.value)}
           />
           <button
             type="button"
+            className={`book-galaxy-btn ${onlyWithNotes ? 'is-active' : ''}`}
+            title="仅显示已创建读书笔记的章节与路径"
+            onClick={() => setOnlyWithNotes((prev) => !prev)}
+          >
+            仅看笔记
+          </button>
+          <button
+            type="button"
+            className={`book-galaxy-btn ${controlsOpen ? 'is-active' : ''}`}
+            title="打开 Obsidian 力导向物理与视图参数控制台"
+            onClick={() => setControlsOpen((prev) => !prev)}
+          >
+            图谱参数
+          </button>
+          <button
+            type="button"
             className="book-galaxy-btn"
-            title="自适应居中缩放全景"
+            title="重排力导向布局并自适应居中缩放"
             onClick={handleResetView}
           >
             重置视角
@@ -216,9 +563,188 @@ export function BookGalaxyGraphView({
         </div>
       </div>
 
+      {/* Institutional Obsidian-Style Graph Control Drawer */}
+      {controlsOpen && (
+        <aside
+          className="book-galaxy-controls-drawer"
+          aria-label="图谱物理与显示参数"
+        >
+          <div className="book-galaxy-controls-head">
+            <span>GRAPH ENGINE · 图谱参数</span>
+            <button
+              type="button"
+              className="book-galaxy-controls-close"
+              onClick={() => setControlsOpen(false)}
+            >
+              关闭
+            </button>
+          </div>
+
+          <div className="book-galaxy-controls-section">
+            <div className="book-galaxy-controls-kicker">
+              拓扑过滤 · FILTERS
+            </div>
+            <label className="book-galaxy-toggle-row">
+              <span>仅显示已关联笔记章节</span>
+              <input
+                type="checkbox"
+                checked={onlyWithNotes}
+                onChange={(e) => setOnlyWithNotes(e.target.checked)}
+              />
+            </label>
+            <label className="book-galaxy-toggle-row">
+              <span>显示三级子节节点</span>
+              <input
+                type="checkbox"
+                checked={showSatellites}
+                onChange={(e) => setShowSatellites(e.target.checked)}
+              />
+            </label>
+            <label className="book-galaxy-toggle-row">
+              <span>显示跨章节知识关联边</span>
+              <input
+                type="checkbox"
+                checked={showCrossLinks}
+                onChange={(e) => setShowCrossLinks(e.target.checked)}
+              />
+            </label>
+            <label className="book-galaxy-toggle-row">
+              <span>显示章节顺序脉络线</span>
+              <input
+                type="checkbox"
+                checked={showSequenceLinks}
+                onChange={(e) => setShowSequenceLinks(e.target.checked)}
+              />
+            </label>
+            <label className="book-galaxy-toggle-row">
+              <span>显示同心轨道参考环</span>
+              <input
+                type="checkbox"
+                checked={showOrbitGuides}
+                onChange={(e) => setShowOrbitGuides(e.target.checked)}
+              />
+            </label>
+          </div>
+
+          <div className="book-galaxy-controls-section">
+            <div className="book-galaxy-controls-kicker">
+              视觉表现 · DISPLAY
+            </div>
+            <div className="book-galaxy-slider-row">
+              <div className="book-galaxy-slider-label">
+                <span>节点尺寸比例</span>
+                <strong>{nodeSizeScale.toFixed(2)}x</strong>
+              </div>
+              <input
+                type="range"
+                min="0.6"
+                max="1.6"
+                step="0.05"
+                value={nodeSizeScale}
+                onChange={(e) => setNodeSizeScale(Number(e.target.value))}
+              />
+            </div>
+            <div className="book-galaxy-slider-row">
+              <div className="book-galaxy-slider-label">
+                <span>标签显现缩放阈值 (LOD)</span>
+                <strong>{labelFadeThreshold.toFixed(2)}</strong>
+              </div>
+              <input
+                type="range"
+                min="0.35"
+                max="1.25"
+                step="0.05"
+                value={labelFadeThreshold}
+                onChange={(e) => setLabelFadeThreshold(Number(e.target.value))}
+              />
+            </div>
+          </div>
+
+          <div className="book-galaxy-controls-section">
+            <div className="book-galaxy-controls-kicker">力场引擎 · FORCES</div>
+            <div className="book-galaxy-slider-row">
+              <div className="book-galaxy-slider-label">
+                <span>节点电荷排斥力</span>
+                <strong>{physicsConfig.repelStrength.toFixed(2)}</strong>
+              </div>
+              <input
+                type="range"
+                min="0.3"
+                max="2.2"
+                step="0.05"
+                value={physicsConfig.repelStrength}
+                onChange={(e) =>
+                  setPhysicsConfig((prev) => ({
+                    ...prev,
+                    repelStrength: Number(e.target.value),
+                  }))
+                }
+              />
+            </div>
+            <div className="book-galaxy-slider-row">
+              <div className="book-galaxy-slider-label">
+                <span>弹簧连线距离</span>
+                <strong>{physicsConfig.linkDistanceScale.toFixed(2)}x</strong>
+              </div>
+              <input
+                type="range"
+                min="0.55"
+                max="1.6"
+                step="0.05"
+                value={physicsConfig.linkDistanceScale}
+                onChange={(e) =>
+                  setPhysicsConfig((prev) => ({
+                    ...prev,
+                    linkDistanceScale: Number(e.target.value),
+                  }))
+                }
+              />
+            </div>
+            <div className="book-galaxy-slider-row">
+              <div className="book-galaxy-slider-label">
+                <span>中心向心聚拢力</span>
+                <strong>{physicsConfig.centerGravity.toFixed(2)}</strong>
+              </div>
+              <input
+                type="range"
+                min="0.3"
+                max="1.8"
+                step="0.05"
+                value={physicsConfig.centerGravity}
+                onChange={(e) =>
+                  setPhysicsConfig((prev) => ({
+                    ...prev,
+                    centerGravity: Number(e.target.value),
+                  }))
+                }
+              />
+            </div>
+          </div>
+
+          <div className="book-galaxy-controls-foot">
+            <button
+              type="button"
+              className="book-galaxy-btn"
+              onClick={() => reheatSimulation(0.65)}
+            >
+              重新演化力场
+            </button>
+            <button
+              type="button"
+              className="book-galaxy-btn"
+              onClick={handleResetPhysicsDefaults}
+            >
+              恢复默认
+            </button>
+          </div>
+        </aside>
+      )}
+
       {/* SVG Canvas Viewport */}
       <div
-        className={`book-galaxy-canvas ${isPanning ? 'is-panning' : ''}`}
+        className={`book-galaxy-canvas ${isPanning ? 'is-panning' : ''} ${
+          draggingNodeId ? 'is-dragging-node' : ''
+        }`}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
@@ -230,7 +756,6 @@ export function BookGalaxyGraphView({
           height={dimensions.height}
         >
           <defs>
-            {/* Center Book Cover: True SVG Circular Clip and Pattern (Sanitized Identifiers) */}
             <clipPath id="galaxy-sun-cover-clip">
               <circle cx={0} cy={0} r={sunRadius} />
             </clipPath>
@@ -260,70 +785,107 @@ export function BookGalaxyGraphView({
               <stop offset="70%" stopColor="#e05638" />
               <stop offset="100%" stopColor="#992e18" />
             </radialGradient>
-
-            <filter
-              id="galaxyGlow"
-              x="-50%"
-              y="-50%"
-              width="200%"
-              height="200%"
-            >
-              <feGaussianBlur
-                in="SourceGraphic"
-                stdDeviation="4"
-                result="blur"
-              />
-              <feMerge>
-                <feMergeNode in="blur" />
-                <feMergeNode in="SourceGraphic" />
-              </feMerge>
-            </filter>
           </defs>
 
           <g transform={`translate(${pan.x}, ${pan.y}) scale(${scale})`}>
-            {/* Dynamic concentric orbital guide rings */}
-            {orbitGuideRadii.map((radius) => (
-              <circle
-                key={`orbit-ring-${radius}`}
-                cx={0}
-                cy={0}
-                r={radius}
-                className="galaxy-orbit-ring"
-              />
-            ))}
+            {/* Optional concentric orbital guide rings */}
+            {showOrbitGuides &&
+              orbitGuideRadii.map((radius) => (
+                <circle
+                  key={`orbit-ring-${radius}`}
+                  cx={0}
+                  cy={0}
+                  r={radius}
+                  className="galaxy-orbit-ring"
+                />
+              ))}
 
-            {/* Links */}
+            {/* Topological & Cross-Chapter Links */}
             {graph.links.map((link, idx) => {
-              const srcNode = graph.nodes.find((n) => n.id === link.source);
-              const tgtNode = graph.nodes.find((n) => n.id === link.target);
+              if (link.kind === 'sequence' && !showSequenceLinks) return null;
+              if (link.kind === 'cross_link' && !showCrossLinks) return null;
+              if (
+                !visibleNodeIds.has(link.source) ||
+                !visibleNodeIds.has(link.target)
+              ) {
+                return null;
+              }
+
+              const srcNode = nodeMap.get(link.source);
+              const tgtNode = nodeMap.get(link.target);
               if (!srcNode || !tgtNode) return null;
+
+              const srcPos = livePositions[link.source] ?? srcNode;
+              const tgtPos = livePositions[link.target] ?? tgtNode;
+
+              const isSpotlightLink = spotlightNeighborSet
+                ? (link.source === activeHoveredId &&
+                    spotlightNeighborSet.has(link.target)) ||
+                  (link.target === activeHoveredId &&
+                    spotlightNeighborSet.has(link.source)) ||
+                  (hoveredNode?.node.kind === 'cluster' &&
+                    spotlightNeighborSet.has(link.source) &&
+                    spotlightNeighborSet.has(link.target))
+                : false;
+
+              const isDimmedBySpotlight =
+                Boolean(spotlightNeighborSet) && !isSpotlightLink;
+
+              const isSearchDimmed =
+                Boolean(searchFilter) &&
+                !activeFilteredIds.has(link.source) &&
+                !activeFilteredIds.has(link.target);
 
               if (link.kind === 'sequence') {
                 return (
                   <path
                     key={`seq-${idx}`}
-                    d={`M ${srcNode.x} ${srcNode.y} Q ${(srcNode.x + tgtNode.x) / 2} ${(srcNode.y + tgtNode.y) / 2} ${tgtNode.x} ${tgtNode.y}`}
-                    className="galaxy-link-sequence"
+                    d={`M ${srcPos.x} ${srcPos.y} Q ${(srcPos.x + tgtPos.x) / 2} ${(srcPos.y + tgtPos.y) / 2} ${tgtPos.x} ${tgtPos.y}`}
+                    className={`galaxy-link-sequence ${
+                      isSpotlightLink ? 'is-spotlight' : ''
+                    } ${isDimmedBySpotlight || isSearchDimmed ? 'is-dimmed' : ''}`}
+                  />
+                );
+              }
+
+              if (link.kind === 'cross_link') {
+                const mx = (srcPos.x + tgtPos.x) / 2;
+                const my = (srcPos.y + tgtPos.y) / 2 - 28;
+                return (
+                  <path
+                    key={`cross-${idx}`}
+                    d={`M ${srcPos.x} ${srcPos.y} Q ${mx} ${my} ${tgtPos.x} ${tgtPos.y}`}
+                    className={`galaxy-link-cross ${
+                      isSpotlightLink ? 'is-spotlight' : ''
+                    } ${isDimmedBySpotlight || isSearchDimmed ? 'is-dimmed' : ''}`}
+                    style={
+                      link.color
+                        ? ({ '--link-color': link.color } as CSSProperties)
+                        : undefined
+                    }
                   />
                 );
               }
 
               const isIntraCluster =
                 tgtNode.kind === 'planet' || tgtNode.kind === 'satellite';
-              const strokeColor =
-                isIntraCluster && link.color ? link.color : undefined;
+              const strokeColor = link.color || tgtNode.color;
 
               return (
                 <line
                   key={`link-${idx}`}
-                  x1={srcNode.x}
-                  y1={srcNode.y}
-                  x2={tgtNode.x}
-                  y2={tgtNode.y}
-                  className={`galaxy-link-orbit ${isIntraCluster ? 'is-intra' : ''}`}
+                  x1={srcPos.x}
+                  y1={srcPos.y}
+                  x2={tgtPos.x}
+                  y2={tgtPos.y}
+                  className={`galaxy-link-orbit ${
+                    isIntraCluster ? 'is-intra' : 'is-root-spoke'
+                  } ${isSpotlightLink ? 'is-spotlight' : ''} ${
+                    isDimmedBySpotlight || isSearchDimmed ? 'is-dimmed' : ''
+                  }`}
                   style={
                     strokeColor
-                      ? { stroke: strokeColor, opacity: 0.35 }
+                      ? ({ '--link-color': strokeColor } as CSSProperties)
                       : undefined
                   }
                 />
@@ -332,20 +894,83 @@ export function BookGalaxyGraphView({
 
             {/* Nodes */}
             {graph.nodes.map((node) => {
+              if (!visibleNodeIds.has(node.id)) return null;
+
+              const pos = livePositions[node.id] ?? node;
               const isMatch = activeFilteredIds.has(node.id);
               const isSun = node.kind === 'sun';
               const isCluster = node.kind === 'cluster';
               const isPlanet = node.kind === 'planet';
               const isSatellite = node.kind === 'satellite';
 
+              const isHoveredSelf = activeHoveredId === node.id;
+              const isSpotlightNeighbor = spotlightNeighborSet
+                ? spotlightNeighborSet.has(node.id)
+                : false;
+              const isDimmed =
+                (Boolean(spotlightNeighborSet) && !isSpotlightNeighbor) ||
+                (Boolean(searchFilter) && !isMatch);
+
+              // Refined Obsidian node radius scaled by degree & note status
+              const degreeBoost = Math.min(3.5, (node.degree ?? 0) * 0.25);
+              const displayRadius = isSun
+                ? sunRadius
+                : isCluster
+                  ? (9.5 + degreeBoost) * nodeSizeScale
+                  : isPlanet
+                    ? ((node.hasNote ? 6.2 : 4.5) + degreeBoost * 0.35) *
+                      nodeSizeScale
+                    : (node.hasNote ? 4.2 : 3.0) * nodeSizeScale;
+
+              // Semantic Zoom (LOD) label visibility calculation
+              const t1 = labelFadeThreshold * 0.55;
+              const t2 = labelFadeThreshold;
+              const forceShowLabel =
+                isHoveredSelf ||
+                isSpotlightNeighbor ||
+                Boolean(node.isCurrent) ||
+                Boolean(node.hasNote) ||
+                (Boolean(searchFilter) && isMatch);
+
+              let planetLabelOpacity = 0;
+              if (forceShowLabel) {
+                planetLabelOpacity = 1;
+              } else if (scale >= t2) {
+                planetLabelOpacity = 0.88;
+              } else if (scale > t1) {
+                planetLabelOpacity = ((scale - t1) / (t2 - t1)) * 0.85;
+              }
+
+              const showSatelliteLabel =
+                isHoveredSelf ||
+                isSpotlightNeighbor ||
+                node.hasNote ||
+                scale >= labelFadeThreshold * 1.35;
+
+              const cleanPlanetText =
+                scale >= 0.95 || isHoveredSelf || isSpotlightNeighbor
+                  ? node.label.length > 22
+                    ? `${node.label.slice(0, 22)}…`
+                    : node.label
+                  : node.chapterIndex ||
+                    (node.label.length > 10
+                      ? `${node.label.slice(0, 10)}…`
+                      : node.label);
+
               return (
                 <g
                   key={node.id}
-                  className={`galaxy-node-group ${isSun ? 'is-sun' : ''}`}
-                  transform={`translate(${node.x}, ${node.y})`}
-                  opacity={searchFilter && !isMatch ? 0.18 : 1}
-                  onClick={() => onSelectNode(node)}
+                  className={`galaxy-node-group is-${node.kind} ${
+                    isSun ? 'is-sun' : ''
+                  } ${node.hasNote ? 'has-note' : 'no-note'} ${
+                    isHoveredSelf ? 'is-hovered' : ''
+                  } ${isSpotlightNeighbor ? 'is-neighbor' : ''} ${
+                    isDimmed ? 'is-dimmed' : ''
+                  }`}
+                  transform={`translate(${pos.x}, ${pos.y})`}
+                  onPointerDown={(e) => handleNodePointerDown(e, node)}
                   onMouseEnter={(e) => {
+                    if (dragInfoRef.current) return;
                     const rect = containerRef.current?.getBoundingClientRect();
                     setHoveredNode({
                       node,
@@ -353,45 +978,57 @@ export function BookGalaxyGraphView({
                       clientY: e.clientY - (rect?.top ?? 0),
                     });
                   }}
-                  onMouseLeave={() => setHoveredNode(null)}
+                  onMouseLeave={() => {
+                    if (dragInfoRef.current) return;
+                    setHoveredNode(null);
+                  }}
                 >
+                  {/* Invisible hit area so small Obsidian nodes remain effortless to grab/click */}
+                  <circle
+                    cx={0}
+                    cy={0}
+                    r={Math.max(14, displayRadius + 6)}
+                    fill="transparent"
+                  />
+
                   {/* Active reading chapter pulse */}
                   {node.isCurrent && (
                     <circle cx={0} cy={0} className="galaxy-current-pulse" />
                   )}
 
-                  {/* Has-note glowing halo */}
+                  {/* Has-note crisp outer ring */}
                   {node.hasNote && !isSun && (
                     <circle
                       cx={0}
                       cy={0}
-                      r={node.radius + 5}
+                      r={displayRadius + 3.5}
                       className="galaxy-note-halo"
+                      style={
+                        {
+                          '--node-color': node.color,
+                        } as CSSProperties
+                      }
                     />
                   )}
 
-                  {/* Central Node: Inherently circular book cover */}
+                  {/* Central Book Node */}
                   {isSun ? (
                     <>
                       {coverUrl ? (
                         <circle
                           cx={0}
                           cy={0}
-                          r={node.radius}
+                          r={sunRadius}
                           fill="url(#galaxy-sun-cover-pattern)"
                           clipPath="url(#galaxy-sun-cover-clip)"
                           className="galaxy-sun-circle"
-                          style={{
-                            stroke: 'rgba(255, 255, 255, 0.45)',
-                            strokeWidth: 1.5,
-                          }}
                         />
                       ) : (
                         <>
                           <circle
                             cx={0}
                             cy={0}
-                            r={node.radius}
+                            r={sunRadius}
                             fill="url(#sunGradient)"
                             className="galaxy-node-circle"
                           />
@@ -400,10 +1037,9 @@ export function BookGalaxyGraphView({
                           </text>
                         </>
                       )}
-                      {/* Name of the book strictly below the center node */}
                       <text
                         x={0}
-                        y={node.radius + 20}
+                        y={sunRadius + 18}
                         className="galaxy-sun-title"
                       >
                         《{graph.bookTitle}》
@@ -411,89 +1047,67 @@ export function BookGalaxyGraphView({
                     </>
                   ) : (
                     <>
-                      {/* Cluster, Planet, Satellite Node Circle */}
+                      {/* Obsidian Node Core */}
                       <circle
                         cx={0}
                         cy={0}
-                        r={node.radius}
+                        r={displayRadius}
                         fill={node.color}
                         className="galaxy-node-circle"
                         style={
                           {
                             '--node-color': node.color,
-                          } as React.CSSProperties
+                          } as CSSProperties
                         }
                       />
 
-                      {/* Note marker dot if note exists */}
-                      {node.hasNote && (
-                        <circle
-                          cx={node.radius - 2}
-                          cy={-node.radius + 2}
-                          r={3.2}
-                          fill="#10b981"
-                        />
-                      )}
-
                       {/* Cluster Chapter Labels */}
                       {isCluster && (
-                        <>
-                          <text
-                            x={0}
-                            y={node.radius + 13}
-                            className="galaxy-node-label"
-                          >
-                            {node.chapterIndex ||
-                              (node.label.length > 8
-                                ? `${node.label.slice(0, 8)}…`
-                                : node.label)}
-                          </text>
-                          <text
-                            x={0}
-                            y={node.radius + 24}
-                            className="galaxy-node-sublabel"
-                          >
-                            {node.label.length > 12
-                              ? `${node.label.slice(0, 12)}…`
-                              : node.label}
-                          </text>
-                        </>
-                      )}
-
-                      {/* Planet Labels: Clean index or hover decluttering */}
-                      {isPlanet && (
-                        <>
-                          {node.chapterIndex ? (
-                            <text
-                              x={0}
-                              y={node.radius + 11}
-                              className="galaxy-planet-badge"
-                            >
-                              {node.chapterIndex}
-                            </text>
-                          ) : hoveredNode?.node.id === node.id ||
-                            scale >= 1.05 ? (
-                            <text
-                              x={0}
-                              y={node.radius + 11}
-                              className="galaxy-node-sublabel"
-                            >
-                              {node.label.length > 8
-                                ? `${node.label.slice(0, 8)}…`
-                                : node.label}
-                            </text>
-                          ) : null}
-                        </>
-                      )}
-
-                      {/* Satellite hover-only label */}
-                      {isSatellite && hoveredNode?.node.id === node.id && (
                         <text
                           x={0}
-                          y={node.radius + 10}
-                          className="galaxy-node-sublabel"
+                          y={displayRadius + 14}
+                          className="galaxy-node-label"
+                          style={{ fontSize: `${clusterFontSize}px` }}
                         >
-                          {node.label.slice(0, 8)}
+                          {scale >= 0.72 || isHoveredSelf || isSpotlightNeighbor
+                            ? node.label.length > 18
+                              ? `${node.label.slice(0, 18)}…`
+                              : node.label
+                            : node.chapterIndex ||
+                              (node.label.length > 10
+                                ? `${node.label.slice(0, 10)}…`
+                                : node.label)}
+                        </text>
+                      )}
+
+                      {/* Planet Labels with Smooth Semantic Zoom (LOD) */}
+                      {isPlanet && planetLabelOpacity > 0.04 && (
+                        <text
+                          x={0}
+                          y={displayRadius + 11}
+                          className={`galaxy-planet-badge ${
+                            node.hasNote || isHoveredSelf ? 'is-prominent' : ''
+                          }`}
+                          style={{
+                            fontSize: `${planetFontSize}px`,
+                            opacity: planetLabelOpacity,
+                          }}
+                        >
+                          {cleanPlanetText}
+                        </text>
+                      )}
+
+                      {/* Satellite Labels on close zoom or spotlight */}
+                      {isSatellite && showSatelliteLabel && (
+                        <text
+                          x={0}
+                          y={displayRadius + 10}
+                          className="galaxy-node-sublabel"
+                          style={{ fontSize: `${planetFontSize * 0.92}px` }}
+                        >
+                          {node.label.length > 16
+                            ? `${node.label.slice(0, 16)}…`
+                            : node.label}
                         </text>
                       )}
                     </>
@@ -504,13 +1118,24 @@ export function BookGalaxyGraphView({
           </g>
         </svg>
 
+        {/* Bottom-left subtle Obsidian interaction legend */}
+        <div className="book-galaxy-hud-hint">
+          <span>拖拽节点：物理牵引簇群</span>
+          <span>·</span>
+          <span>悬停：1-Hop 拓扑聚光灯</span>
+          <span>·</span>
+          <span>滚轮：语义缩放 ({Math.round(scale * 100)}%)</span>
+          <span>·</span>
+          <span>单击：同步章节与笔记</span>
+        </div>
+
         {/* Floating Tooltip Card */}
-        {hoveredNode && (
+        {hoveredNode && !draggingNodeId && (
           <div
             className="book-galaxy-tooltip"
             style={{
-              left: Math.min(hoveredNode.clientX, dimensions.width - 290),
-              top: Math.min(hoveredNode.clientY, dimensions.height - 150),
+              left: Math.min(hoveredNode.clientX, dimensions.width - 300),
+              top: Math.min(hoveredNode.clientY, dimensions.height - 165),
             }}
           >
             <div className="book-galaxy-tooltip-head">
@@ -523,15 +1148,19 @@ export function BookGalaxyGraphView({
                 {hoveredNode.node.kind === 'sun'
                   ? '全书核心'
                   : hoveredNode.node.chapterIndex ||
-                    (hoveredNode.node.kind === 'cluster' ? '章节' : '小节')}
+                    (hoveredNode.node.kind === 'cluster' ? '章节点' : '小节')}
               </span>
             </div>
 
             {hoveredNode.node.parentChapter && (
-              <div style={{ color: '#94a3b8', fontSize: 11 }}>
+              <div className="book-galaxy-tooltip-meta">
                 所属章节：{hoveredNode.node.parentChapter}
               </div>
             )}
+
+            <div className="book-galaxy-tooltip-meta">
+              拓扑连接度：{hoveredNode.node.degree ?? 1} 个相邻节点
+            </div>
 
             <div
               className={`book-galaxy-tooltip-status ${
@@ -541,20 +1170,20 @@ export function BookGalaxyGraphView({
               <span>
                 {hoveredNode.node.hasNote
                   ? '● 已关联章节知识库笔记'
-                  : '○ 暂无独立笔记'}
+                  : '○ 暂无独立笔记（点击可创建）'}
               </span>
             </div>
 
             {hoveredNode.node.isCurrent && (
-              <div style={{ color: '#d9573b', fontWeight: 600, fontSize: 11 }}>
-                ★ 当前正文阅读所在位置
+              <div className="book-galaxy-tooltip-current">
+                当前阅读所在章节
               </div>
             )}
 
             <div className="book-galaxy-tooltip-hint">
               {hoveredNode.node.kind === 'sun'
-                ? '点击节点：查看全书总览笔记与主目录'
-                : '点击节点：电子书同步跳转该章，右侧展开该节笔记'}
+                ? '单击查看全书总览笔记 · 按住可拖拽牵引星系'
+                : '单击跳转该章并展开笔记 · 按住可物理拖拽节点'}
             </div>
           </div>
         )}

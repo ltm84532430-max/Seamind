@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildBookGalaxyGraph,
+  buildGalaxyAdjacencyMap,
+  createGalaxyPhysicsState,
   extractChapterIndex,
+  stepGalaxyPhysics,
   type TocLikeItem,
 } from '../src/ebook/book-galaxy-model';
 import type { LibrarySnapshot, MapDocument } from '../src/library/library';
@@ -210,5 +213,87 @@ describe('Book Galaxy Model', () => {
         expect(planetDist).toBeGreaterThan(clusterDist);
       });
     });
+  });
+
+  it('supports Obsidian-style cross-chapter links, adjacency spotlight, and force physics dragging', () => {
+    const toc: TocLikeItem[] = [
+      {
+        href: 'text/ch01.xhtml',
+        label: '第1章 概览',
+        subitems: [
+          {
+            href: 'text/ch01.xhtml#s1',
+            label: '1.1 指针导论',
+            subitems: [
+              { href: 'text/ch01.xhtml#s1_1', label: '1.1.1 地址概念' },
+            ],
+          },
+        ],
+      },
+      {
+        href: 'text/ch02.xhtml',
+        label: '第2章 内存',
+        subitems: [{ href: 'text/ch02.xhtml#s2', label: '2.1 动态分配' }],
+      },
+    ];
+
+    const doc1: MapDocument = {
+      id: 'doc-1',
+      relativePath: '读书笔记/C Book/第1章 概览/1.1 指针导论.md',
+      title: '1.1 指针导论',
+      category: '读书笔记/C Book/第1章 概览',
+      mapType: '文档',
+      tags: ['读书笔记', '内存模型'],
+      createdAt: 1000,
+      updatedAt: 2000,
+      kind: 'doc',
+    };
+    const doc2: MapDocument = {
+      id: 'doc-2',
+      relativePath: '读书笔记/C Book/第2章 内存/2.1 动态分配.md',
+      title: '2.1 动态分配',
+      category: '读书笔记/C Book/第2章 内存',
+      mapType: '文档',
+      tags: ['读书笔记', '内存模型'],
+      createdAt: 1000,
+      updatedAt: 2000,
+      kind: 'doc',
+    };
+
+    const snapshot: LibrarySnapshot = {
+      rootPath: 'C:/books',
+      documents: [doc1, doc2],
+      books: [],
+      plantumlFiles: [],
+      textDocuments: [],
+      categories: [],
+    };
+
+    const graph = buildBookGalaxyGraph('C Book', 'c-book', toc, snapshot);
+    const crossLinks = graph.links.filter((l) => l.kind === 'cross_link');
+    expect(crossLinks.length).toBe(1);
+    expect(crossLinks[0].label).toBe('#内存模型');
+
+    // Adjacency map spotlight check: hovering cluster-0 highlights sun-root, planet-0-0, and satellite-0-0-0
+    const adjacency = buildGalaxyAdjacencyMap(graph.nodes, graph.links);
+    const cluster0Neighbors = adjacency.get('cluster-0');
+    expect(cluster0Neighbors?.has('sun-root')).toBe(true);
+    expect(cluster0Neighbors?.has('planet-0-0')).toBe(true);
+    expect(cluster0Neighbors?.has('satellite-0-0-0')).toBe(true);
+
+    // Force physics check: dragging cluster-0 pulls its child planet-0-0 elastically
+    const sim = createGalaxyPhysicsState(graph);
+    const clusterBody = sim.bodies.get('cluster-0')!;
+    const planetBody = sim.bodies.get('planet-0-0')!;
+    const initialPlanetX = planetBody.x;
+
+    clusterBody.fx = clusterBody.x + 180;
+    clusterBody.fy = clusterBody.y;
+
+    for (let step = 0; step < 15; step++) {
+      stepGalaxyPhysics(sim);
+    }
+
+    expect(planetBody.x).toBeGreaterThan(initialPlanetX + 25);
   });
 });

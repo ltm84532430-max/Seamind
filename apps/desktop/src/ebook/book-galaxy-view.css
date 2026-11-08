@@ -1,5 +1,5 @@
 /* ==========================================================================
-   SeaMind Book Galaxy View — Topological Chapter Constellation & Knowledge Graph
+   SeaMind Book Galaxy View — Obsidian-Style Force-Directed Knowledge Graph
    ========================================================================== */
 
 .book-galaxy-container {
@@ -8,67 +8,122 @@
   width: 100%;
   height: 100%;
   position: relative;
-  background: radial-gradient(circle at center, #14171d 0%, #0a0c10 100%);
+  background-color: #0d1016;
+  background-image:
+    radial-gradient(rgba(255, 255, 255, 0.055) 1px, transparent 1px),
+    radial-gradient(
+      circle at 50% 50%,
+      rgba(26, 32, 46, 0.55) 0%,
+      rgba(10, 12, 16, 0.95) 100%
+    );
+  background-size:
+    24px 24px,
+    100% 100%;
   color: #e2e8f0;
   overflow: hidden;
   user-select: none;
 }
 
 .app-shell[data-theme='light'] .book-galaxy-container {
-  background: radial-gradient(circle at center, #ffffff 0%, #edf1f5 100%);
+  background-color: #f6f8fa;
+  background-image:
+    radial-gradient(rgba(15, 23, 42, 0.075) 1px, transparent 1px),
+    radial-gradient(circle at 50% 50%, #ffffff 0%, #eef2f6 100%);
+  background-size:
+    24px 24px,
+    100% 100%;
   color: #1e293b;
+}
+
+.app-shell[data-theme='navy'] .book-galaxy-container {
+  background-color: #071120;
+  background-image:
+    radial-gradient(rgba(56, 189, 248, 0.07) 1px, transparent 1px),
+    radial-gradient(circle at 50% 50%, #0d1f3a 0%, #050c18 100%);
+  background-size:
+    24px 24px,
+    100% 100%;
+  color: #e0f0fe;
+}
+
+.app-shell[data-theme='purple'] .book-galaxy-container {
+  background-color: #0c0716;
+  background-image:
+    radial-gradient(rgba(192, 132, 252, 0.07) 1px, transparent 1px),
+    radial-gradient(circle at 50% 50%, #1a0f30 0%, #090511 100%);
+  background-size:
+    24px 24px,
+    100% 100%;
+  color: #f3e8ff;
 }
 
 /* Header toolbar */
 .book-galaxy-header {
-  height: 48px;
-  flex: 0 0 48px;
+  height: 44px;
+  flex: 0 0 44px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
+  padding: 0 14px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(10, 12, 16, 0.7);
+  background: rgba(13, 16, 22, 0.88);
   backdrop-filter: blur(8px);
-  z-index: 10;
+  z-index: 20;
+  gap: 10px;
 }
 
 .app-shell[data-theme='light'] .book-galaxy-header {
-  border-bottom-color: rgba(0, 0, 0, 0.08);
-  background: rgba(255, 255, 255, 0.85);
+  border-bottom-color: rgba(15, 23, 42, 0.09);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.app-shell[data-theme='navy'] .book-galaxy-header {
+  border-bottom-color: #1a3658;
+  background: rgba(8, 19, 36, 0.92);
+}
+
+.app-shell[data-theme='purple'] .book-galaxy-header {
+  border-bottom-color: #2b1b42;
+  background: rgba(20, 13, 36, 0.92);
 }
 
 .book-galaxy-title-wrap {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .book-galaxy-badge {
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.02em;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(217, 87, 59, 0.15);
-  color: #d9573b;
-  border: 1px solid rgba(217, 87, 59, 0.3);
+  padding: 2px 7px;
+  border-radius: 2px;
+  background: rgba(217, 87, 59, 0.14);
+  color: #e06c50;
+  border: 1px solid rgba(217, 87, 59, 0.32);
+  white-space: nowrap;
 }
 
 .book-galaxy-title {
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: -0.01em;
   color: inherit;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .book-galaxy-stats {
-  font-size: 11.5px;
+  font-size: 11px;
   color: #94a3b8;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  white-space: nowrap;
 }
 
 .app-shell[data-theme='light'] .book-galaxy-stats {
@@ -79,42 +134,82 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  font-variant-numeric: tabular-nums;
 }
 
 .book-galaxy-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.book-galaxy-search-input {
+  width: 148px;
+  height: 26px;
+  font-size: 11px;
+  padding: 0 8px;
+  border-radius: 2px;
 }
 
 .book-galaxy-btn {
-  height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
-  border-radius: 4px;
+  height: 26px;
+  padding: 0 9px;
+  font-size: 11.5px;
+  border-radius: 2px;
   border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.04);
   color: inherit;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  transition: all 0.15s ease;
+  justify-content: center;
+  gap: 5px;
+  white-space: nowrap;
+  transition:
+    background 0.14s ease,
+    border-color 0.14s ease,
+    color 0.14s ease;
 }
 
 .app-shell[data-theme='light'] .book-galaxy-btn {
-  border-color: rgba(0, 0, 0, 0.12);
-  background: #f1f5f9;
+  border-color: rgba(15, 23, 42, 0.14);
+  background: #f8fafc;
+  color: #1e293b;
+}
+
+.app-shell[data-theme='navy'] .book-galaxy-btn {
+  border-color: #1a3658;
+  background: #0a182e;
+  color: #cde0f5;
+}
+
+.app-shell[data-theme='purple'] .book-galaxy-btn {
+  border-color: #331e50;
+  background: #160e28;
+  color: #e5d7f7;
 }
 
 .book-galaxy-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.24);
 }
 
 .app-shell[data-theme='light'] .book-galaxy-btn:hover {
   background: #e2e8f0;
-  border-color: #cbd5e1;
+  border-color: #94a3b8;
+}
+
+.book-galaxy-btn.is-active {
+  border-color: #d9573b;
+  color: #f28b73;
+  background: rgba(217, 87, 59, 0.15);
+}
+
+.app-shell[data-theme='light'] .book-galaxy-btn.is-active {
+  border-color: #c84b31;
+  color: #b53c22;
+  background: rgba(217, 87, 59, 0.1);
 }
 
 .book-galaxy-btn.is-primary {
@@ -124,7 +219,154 @@
 }
 
 .book-galaxy-btn.is-primary:hover {
-  filter: brightness(1.1);
+  filter: brightness(1.08);
+}
+
+/* Institutional Obsidian-Style Graph Control Drawer */
+.book-galaxy-controls-drawer {
+  position: absolute;
+  top: 52px;
+  right: 12px;
+  width: 256px;
+  z-index: 35;
+  background: rgba(15, 19, 26, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 2px;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.55);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 11.5px;
+  backdrop-filter: blur(12px);
+}
+
+.app-shell[data-theme='light'] .book-galaxy-controls-drawer {
+  background: rgba(255, 255, 255, 0.97);
+  border-color: rgba(15, 23, 42, 0.14);
+  color: #0f172a;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.14);
+}
+
+.app-shell[data-theme='navy'] .book-galaxy-controls-drawer {
+  background: rgba(9, 20, 38, 0.97);
+  border-color: #20456e;
+  color: #e0f0fe;
+}
+
+.app-shell[data-theme='purple'] .book-galaxy-controls-drawer {
+  background: rgba(18, 11, 32, 0.97);
+  border-color: #462b6e;
+  color: #f6effe;
+}
+
+.book-galaxy-controls-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #94a3b8;
+}
+
+.app-shell[data-theme='light'] .book-galaxy-controls-head {
+  border-bottom-color: rgba(15, 23, 42, 0.08);
+  color: #475569;
+}
+
+.book-galaxy-controls-close {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: transparent;
+  color: inherit;
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.app-shell[data-theme='light'] .book-galaxy-controls-close {
+  border-color: rgba(15, 23, 42, 0.15);
+}
+
+.book-galaxy-controls-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.app-shell[data-theme='light'] .book-galaxy-controls-section {
+  border-bottom-color: rgba(15, 23, 42, 0.06);
+}
+
+.book-galaxy-controls-kicker {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #64748b;
+  margin-bottom: 1px;
+}
+
+.book-galaxy-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11.5px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.book-galaxy-toggle-row input[type='checkbox'] {
+  accent-color: #d9573b;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  cursor: pointer;
+}
+
+.book-galaxy-slider-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.book-galaxy-slider-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.book-galaxy-slider-label strong {
+  font-family: var(--mono, monospace);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #94a3b8;
+}
+
+.book-galaxy-slider-row input[type='range'] {
+  width: 100%;
+  height: 4px;
+  accent-color: #d9573b;
+  cursor: pointer;
+  margin: 2px 0;
+}
+
+.book-galaxy-controls-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.book-galaxy-controls-foot .book-galaxy-btn {
+  flex: 1 1 0;
+  height: 24px;
+  font-size: 11px;
 }
 
 /* Canvas / SVG viewport */
@@ -134,9 +376,11 @@
   height: 100%;
   position: relative;
   cursor: grab;
+  touch-action: none;
 }
 
-.book-galaxy-canvas.is-panning {
+.book-galaxy-canvas.is-panning,
+.book-galaxy-canvas.is-dragging-node {
   cursor: grabbing;
 }
 
@@ -146,67 +390,168 @@
   display: block;
 }
 
-/* SVG Elements & Styling */
+/* SVG Elements & Obsidian Link Styling */
 .galaxy-orbit-ring {
   fill: none;
-  stroke: rgba(255, 255, 255, 0.05);
-  stroke-dasharray: 4 6;
+  stroke: rgba(255, 255, 255, 0.045);
+  stroke-dasharray: 3 6;
   pointer-events: none;
 }
 
 .app-shell[data-theme='light'] .galaxy-orbit-ring {
-  stroke: rgba(0, 0, 0, 0.07);
+  stroke: rgba(15, 23, 42, 0.065);
 }
 
 .galaxy-link-orbit {
   fill: none;
-  stroke: rgba(255, 255, 255, 0.08);
-  stroke-width: 1;
+  stroke: var(--link-color, rgba(148, 163, 184, 0.25));
+  stroke-width: 0.95;
+  opacity: 0.22;
+  transition:
+    opacity 0.16s ease,
+    stroke-width 0.16s ease;
+  pointer-events: none;
 }
 
 .app-shell[data-theme='light'] .galaxy-link-orbit {
-  stroke: rgba(0, 0, 0, 0.09);
+  opacity: 0.28;
+}
+
+.galaxy-link-orbit.is-root-spoke {
+  stroke: rgba(148, 163, 184, 0.28);
+  stroke-width: 0.85;
+  opacity: 0.16;
+}
+
+.app-shell[data-theme='light'] .galaxy-link-orbit.is-root-spoke {
+  stroke: rgba(71, 85, 105, 0.32);
+  opacity: 0.2;
 }
 
 .galaxy-link-orbit.is-intra {
-  stroke-width: 1.2;
+  stroke-width: 1.05;
+  opacity: 0.28;
+}
+
+.galaxy-link-orbit.is-spotlight {
+  stroke: var(--link-color, #e05638);
+  stroke-width: 1.85;
+  opacity: 0.92;
+}
+
+.galaxy-link-orbit.is-dimmed {
+  opacity: 0.045;
+}
+
+.galaxy-link-cross {
+  fill: none;
+  stroke: var(--link-color, #38bdf8);
+  stroke-width: 1.15;
+  stroke-dasharray: 4 3;
+  opacity: 0.35;
+  pointer-events: none;
+  transition:
+    opacity 0.16s ease,
+    stroke-width 0.16s ease;
+}
+
+.galaxy-link-cross.is-spotlight {
+  stroke-width: 1.9;
+  opacity: 0.95;
+}
+
+.galaxy-link-cross.is-dimmed {
+  opacity: 0.04;
 }
 
 .galaxy-link-sequence {
   fill: none;
-  stroke: rgba(217, 87, 59, 0.35);
-  stroke-width: 1.5;
-  stroke-dasharray: 5 3;
+  stroke: rgba(217, 87, 59, 0.32);
+  stroke-width: 1.2;
+  stroke-dasharray: 5 4;
+  pointer-events: none;
+  transition: opacity 0.16s ease;
 }
 
-/* Node styles */
+.galaxy-link-sequence.is-spotlight {
+  stroke: #e05638;
+  stroke-width: 1.75;
+  opacity: 0.9;
+}
+
+.galaxy-link-sequence.is-dimmed {
+  opacity: 0.04;
+}
+
+/* Obsidian Node Styles */
 .galaxy-node-group {
   cursor: pointer;
-  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity 0.16s ease;
+}
+
+.galaxy-node-group.is-dimmed {
+  opacity: 0.12;
 }
 
 .galaxy-node-circle {
-  transition: all 0.2s ease;
+  stroke: rgba(15, 23, 42, 0.75);
+  stroke-width: 1.2px;
+  transition:
+    r 0.15s ease,
+    filter 0.15s ease,
+    opacity 0.15s ease,
+    stroke-width 0.15s ease;
 }
 
+.app-shell[data-theme='light'] .galaxy-node-circle {
+  stroke: rgba(255, 255, 255, 0.92);
+  stroke-width: 1.3px;
+}
+
+/* Undocumented nodes are subtly muted so documented notes stand out like Obsidian active notes */
+.galaxy-node-group.no-note.is-planet .galaxy-node-circle,
+.galaxy-node-group.no-note.is-satellite .galaxy-node-circle {
+  opacity: 0.72;
+}
+
+.galaxy-node-group.has-note .galaxy-node-circle {
+  opacity: 1;
+  stroke: #ffffff;
+  stroke-width: 1.4px;
+}
+
+.app-shell[data-theme='light'] .galaxy-node-group.has-note .galaxy-node-circle {
+  stroke: #0f172a;
+}
+
+.galaxy-node-group.is-hovered .galaxy-node-circle,
 .galaxy-node-group:hover .galaxy-node-circle {
-  filter: drop-shadow(0 0 10px var(--node-color, #d9573b));
+  opacity: 1;
+  stroke: #ffffff;
+  stroke-width: 2px;
+  filter: drop-shadow(0 0 8px var(--node-color, #d9573b));
+}
+
+.galaxy-node-group.is-neighbor .galaxy-node-circle {
+  opacity: 1;
 }
 
 /* Central Book Sun Node Styling */
 .galaxy-sun-circle {
-  transition: all 0.2s ease;
+  stroke: rgba(255, 255, 255, 0.55);
+  stroke-width: 1.6px;
+  transition: filter 0.18s ease;
   cursor: pointer;
 }
 
 .galaxy-node-group.is-sun:hover .galaxy-sun-circle,
 .galaxy-node-group.is-sun:hover .galaxy-node-circle {
-  filter: drop-shadow(0 0 16px rgba(224, 86, 56, 0.75));
+  filter: drop-shadow(0 0 14px rgba(224, 86, 56, 0.75));
 }
 
 .galaxy-sun-monogram {
   font-family: inherit;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   fill: #ffffff;
   text-anchor: middle;
@@ -216,7 +561,7 @@
 
 .galaxy-sun-title {
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 650;
   fill: #f1f5f9;
   text-anchor: middle;
@@ -230,20 +575,35 @@
   font-weight: 700;
 }
 
-/* Node Text Labels */
+/* Node Text Labels with crisp halo for readability over links */
 .galaxy-node-label {
   font-family: inherit;
   font-size: 11px;
-  font-weight: 550;
-  fill: #cbd5e1;
+  font-weight: 600;
+  fill: #e2e8f0;
   text-anchor: middle;
   pointer-events: none;
   user-select: none;
+  paint-order: stroke;
+  stroke: rgba(13, 16, 22, 0.88);
+  stroke-width: 3px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .app-shell[data-theme='light'] .galaxy-node-label {
-  fill: #334155;
-  font-weight: 600;
+  fill: #1e293b;
+  stroke: rgba(246, 248, 250, 0.92);
+}
+
+.app-shell[data-theme='navy'] .galaxy-node-label {
+  fill: #e0f0fe;
+  stroke: rgba(7, 17, 32, 0.9);
+}
+
+.app-shell[data-theme='purple'] .galaxy-node-label {
+  fill: #f3e8ff;
+  stroke: rgba(12, 7, 22, 0.9);
 }
 
 .galaxy-node-sublabel {
@@ -252,46 +612,68 @@
   fill: #94a3b8;
   text-anchor: middle;
   pointer-events: none;
+  paint-order: stroke;
+  stroke: rgba(13, 16, 22, 0.85);
+  stroke-width: 2.5px;
 }
 
 .app-shell[data-theme='light'] .galaxy-node-sublabel {
-  fill: #64748b;
+  fill: #475569;
+  stroke: rgba(246, 248, 250, 0.9);
 }
 
 .galaxy-planet-badge {
-  font-family: var(--mono, monospace);
-  font-size: 10px;
-  font-weight: 600;
+  font-family: inherit;
+  font-size: 9.8px;
+  font-weight: 500;
   fill: #94a3b8;
   text-anchor: middle;
   pointer-events: none;
+  paint-order: stroke;
+  stroke: rgba(13, 16, 22, 0.85);
+  stroke-width: 2.6px;
+  transition: opacity 0.14s ease;
+}
+
+.galaxy-planet-badge.is-prominent,
+.galaxy-node-group.is-neighbor .galaxy-planet-badge {
+  fill: #f1f5f9;
+  font-weight: 600;
 }
 
 .app-shell[data-theme='light'] .galaxy-planet-badge {
   fill: #475569;
+  stroke: rgba(246, 248, 250, 0.92);
 }
 
-/* Note indicator halo */
+.app-shell[data-theme='light'] .galaxy-planet-badge.is-prominent,
+.app-shell[data-theme='light']
+  .galaxy-node-group.is-neighbor
+  .galaxy-planet-badge {
+  fill: #0f172a;
+}
+
+/* Note indicator outer halo */
 .galaxy-note-halo {
   fill: none;
-  stroke: #10b981;
-  stroke-width: 2;
-  stroke-dasharray: 2 2;
-  opacity: 0.85;
+  stroke: var(--node-color, #10b981);
+  stroke-width: 1.4;
+  opacity: 0.65;
+  pointer-events: none;
 }
 
 /* Pulse animation for active reading chapter */
 @keyframes galaxyCurrentPulse {
   0% {
-    r: 16px;
+    r: 10px;
     opacity: 0.9;
   }
-  50% {
-    r: 30px;
-    opacity: 0.3;
+  60% {
+    r: 22px;
+    opacity: 0.25;
   }
   100% {
-    r: 38px;
+    r: 28px;
     opacity: 0;
   }
 }
@@ -299,9 +681,46 @@
 .galaxy-current-pulse {
   fill: none;
   stroke: #d9573b;
-  stroke-width: 2;
+  stroke-width: 1.8;
   animation: galaxyCurrentPulse 2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
   pointer-events: none;
+}
+
+/* Bottom-left subtle Obsidian interaction legend */
+.book-galaxy-hud-hint {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  z-index: 15;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px;
+  font-size: 10.5px;
+  color: #94a3b8;
+  background: rgba(13, 16, 22, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+  pointer-events: none;
+  backdrop-filter: blur(6px);
+}
+
+.app-shell[data-theme='light'] .book-galaxy-hud-hint {
+  color: #475569;
+  background: rgba(255, 255, 255, 0.88);
+  border-color: rgba(15, 23, 42, 0.1);
+}
+
+.app-shell[data-theme='navy'] .book-galaxy-hud-hint {
+  color: #9ec0e6;
+  background: rgba(8, 19, 36, 0.85);
+  border-color: #1a3658;
+}
+
+.app-shell[data-theme='purple'] .book-galaxy-hud-hint {
+  color: #c8b6e2;
+  background: rgba(18, 11, 32, 0.85);
+  border-color: #331e50;
 }
 
 /* Interactive Floating Tooltip */
@@ -309,28 +728,40 @@
   position: absolute;
   z-index: 50;
   pointer-events: none;
-  background: rgba(15, 23, 42, 0.94);
+  background: rgba(15, 19, 26, 0.95);
   backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 6px;
-  padding: 10px 14px;
-  min-width: 210px;
-  max-width: 290px;
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
-  font-size: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+  padding: 9px 12px;
+  min-width: 216px;
+  max-width: 292px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.55);
+  font-size: 11.5px;
   line-height: 1.45;
   color: #f1f5f9;
-  transform: translate(12px, 12px);
+  transform: translate(14px, 14px);
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 4px;
 }
 
 .app-shell[data-theme='light'] .book-galaxy-tooltip {
-  background: rgba(255, 255, 255, 0.96);
-  border-color: rgba(0, 0, 0, 0.12);
+  background: rgba(255, 255, 255, 0.97);
+  border-color: rgba(15, 23, 42, 0.14);
   color: #0f172a;
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.15);
+}
+
+.app-shell[data-theme='navy'] .book-galaxy-tooltip {
+  background: rgba(9, 20, 38, 0.96);
+  border-color: #20456e;
+  color: #e0f0fe;
+}
+
+.app-shell[data-theme='purple'] .book-galaxy-tooltip {
+  background: rgba(18, 11, 32, 0.96);
+  border-color: #462b6e;
+  color: #f6effe;
 }
 
 .book-galaxy-tooltip-head {
@@ -339,14 +770,29 @@
   justify-content: space-between;
   gap: 8px;
   font-weight: 650;
-  font-size: 12.5px;
+  font-size: 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   padding-bottom: 5px;
   margin-bottom: 2px;
 }
 
 .app-shell[data-theme='light'] .book-galaxy-tooltip-head {
-  border-bottom-color: rgba(0, 0, 0, 0.08);
+  border-bottom-color: rgba(15, 23, 42, 0.08);
+}
+
+.book-galaxy-tooltip-meta {
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.app-shell[data-theme='light'] .book-galaxy-tooltip-meta {
+  color: #64748b;
+}
+
+.book-galaxy-tooltip-current {
+  color: #d9573b;
+  font-weight: 600;
+  font-size: 11px;
 }
 
 .book-galaxy-tooltip-status {
@@ -360,6 +806,10 @@
   color: #34d399;
 }
 
+.app-shell[data-theme='light'] .book-galaxy-tooltip-status.is-has-note {
+  color: #059669;
+}
+
 .book-galaxy-tooltip-status.is-no-note {
   color: #94a3b8;
 }
@@ -367,8 +817,8 @@
 .book-galaxy-tooltip-hint {
   font-size: 10.5px;
   color: #cbd5e1;
-  opacity: 0.8;
-  margin-top: 4px;
+  opacity: 0.82;
+  margin-top: 3px;
 }
 
 .app-shell[data-theme='light'] .book-galaxy-tooltip-hint {
