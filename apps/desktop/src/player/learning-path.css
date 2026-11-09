@@ -3171,3 +3171,155 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ==========================================================================
+   Academic × Engineering Prompt Blueprint Matrix & Copilot Operator Chips
+   ========================================================================== */
+
+.lp-blueprint-matrix {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--player-line);
+}
+
+.lp-blueprint-matrix-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.lp-blueprint-matrix-kicker {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--player-accent);
+  padding: 2px 6px;
+  border: 1px solid var(--player-line-strong);
+  background: var(--player-panel);
+}
+
+.lp-blueprint-matrix-hint {
+  font-size: 11px;
+  color: var(--player-muted);
+}
+
+.lp-blueprint-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: 8px;
+}
+
+.lp-blueprint-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 9px 11px;
+  border: 1px solid var(--player-line-strong);
+  border-radius: 2px;
+  background: var(--player-panel);
+  color: var(--player-ink);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+
+.lp-blueprint-card:hover {
+  border-color: var(--player-accent);
+  background: var(--player-hover);
+}
+
+.lp-blueprint-card.is-active {
+  border-color: var(--player-accent);
+  box-shadow: inset 2px 0 0 var(--player-accent);
+  background: var(--player-hover);
+}
+
+.lp-blueprint-card-top {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+}
+
+.lp-blueprint-tag {
+  flex: none;
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 1px 5px;
+  border: 1px solid var(--player-line-strong);
+  color: var(--player-accent);
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.lp-blueprint-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--player-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lp-blueprint-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  font-size: 10.5px;
+  line-height: 1.38;
+  color: var(--player-muted);
+}
+
+.lp-blueprint-meta span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lp-copilot-preset-chips {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+.lp-copilot-preset-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  border: 1px solid var(--lp-border-strong);
+  border-radius: 2px;
+  background: var(--lp-card);
+  color: var(--lp-ink);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+
+.lp-copilot-preset-chip:hover {
+  border-color: var(--lp-accent);
+  background: var(--lp-card-stage);
+}
+
+.lp-copilot-preset-tag {
+  flex: none;
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border: 1px solid var(--lp-border-strong);
+  color: var(--lp-accent);
+}

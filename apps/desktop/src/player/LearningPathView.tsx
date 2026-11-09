@@ -34,6 +34,8 @@ import {
 import { extractProposalFromText } from './learning-path-parser';
 import LearningPathStarMapView from './LearningPathStarMapView';
 import {
+  ACADEMIC_ENGINEERING_PROMPT_BLUEPRINTS,
+  compileAcademicEngineeringPrompt,
   HACKER_CONSTELLATION_PATH_ID,
   HACKER_LEARNING_PATH_PRESET,
 } from './learning-path-presets';
@@ -283,7 +285,10 @@ export function LearningPathsHomeView({
     const existing = host.learningPaths.find(
       (p) => p.pathId === HACKER_CONSTELLATION_PATH_ID,
     );
-    if (existing) {
+    if (
+      existing &&
+      existing.nodeCount >= HACKER_LEARNING_PATH_PRESET.nodes.length
+    ) {
       host.go({ kind: 'learning-path', pathId: existing.pathId });
       return;
     }
@@ -294,7 +299,11 @@ export function LearningPathsHomeView({
       );
       await host.reloadOverview();
       host.go({ kind: 'learning-path', pathId: saved.summary.pathId });
-      host.notify('已生成「黑客与网络安全全链路星图路径」');
+      host.notify(
+        existing
+          ? '已升级为「学术理论 × 底层工程 64 节点巨型黑客星图」'
+          : '已生成「黑客与系统安全全链路星图（64 节点）」',
+      );
     } catch (err) {
       host.notify(errorText(err, '生成黑客星图路径失败'), 'error');
     } finally {
@@ -406,14 +415,13 @@ export function LearningPathsHomeView({
   };
 
   const launchCliPrompt = (cli: 'agy' | 'claude' | 'codex') => {
-    const topic = aiTopic.trim() || 'Rust 异步与并发系统编程';
-    const topologyHint =
-      aiTopologyMode === 'constellation'
-        ? '星图网状结构（包含 5-7 个并行知识簇 stage、每簇下多节课程视频、并使用 prerequisiteIds 建立跨模块的先修依赖与汇聚里程碑 checkpoint）'
-        : aiTopologyMode === 'radial'
-          ? '专题中心辐射结构（以核心模块为中心，向外分层展开专题分支与选修卫星节点）'
-          : '分阶段从左向右递进的主线结构';
-    const prompt = `请使用 Seamind MCP 工具先调用 player_search_youtube 搜索真实的 YouTube 教学视频，围绕「${topic}」规划一条【${topologyHint}】的视频学习路径，并调用 learning_path_propose 提交预览。`;
+    const topic =
+      aiTopic.trim() ||
+      ACADEMIC_ENGINEERING_PROMPT_BLUEPRINTS[0]?.prompt ||
+      '操作系统与 Linux 内核源码工程';
+    const prompt = compileAcademicEngineeringPrompt(topic, aiTopologyMode)
+      .replace(/\s+/g, ' ')
+      .trim();
     const escaped = prompt.replace(/"/g, '\\"');
     const cmd =
       cli === 'agy'
@@ -435,18 +443,18 @@ export function LearningPathsHomeView({
     const topic = aiTopic.trim();
     if (!topic || aiRunning) return;
     setAiRunning(true);
-    setAiStatus('正在检索 YouTube 视频并规划知识网络…');
+    setAiStatus(
+      '正在执行「名校公开课 × 底层源码工程」多批次正交检索并构建知识星图…',
+    );
     setAiCandidateProposal(null);
-    const topologyInstruction =
-      aiTopologyMode === 'constellation'
-        ? '请构建一条【星图网状型（Constellation DAG）】学习路径：包含 4-6 个不同的知识领域簇（stage），每个领域簇包含 2-4 节真实视频节点，并通过 prerequisiteIds 构建跨阶段的先修依赖关系与综合里程碑（checkpoint），以及 1-2 节选修拓展节点（optional: true）。'
-        : aiTopologyMode === 'radial'
-          ? '请构建一条【专题辐射型】学习路径：围绕核心原理模块向外划分多个平行专题阶段（stage）及选修拓展节点（optional: true）。'
-          : '请构建一条包含 3-4 个递进阶段与对应视频节点的【进阶主线型】学习路径。';
+    const compiledPrompt = compileAcademicEngineeringPrompt(
+      topic,
+      aiTopologyMode,
+    );
     try {
       const result = await runLearningPathAgentTurn({
         history: [],
-        prompt: `请围绕「${topic}」搜索真实 YouTube 课程视频。${topologyInstruction} 完成后提交预览提案。`,
+        prompt: compiledPrompt,
         provider: bridges.aiProvider,
         capabilities: bridges.agentCapabilities,
         activePathSummary: null,
@@ -537,7 +545,7 @@ export function LearningPathsHomeView({
         style={{ marginTop: 18, padding: '14px 16px' }}
       >
         <div className="lp-topology-mode-bar">
-          <h4>快速让 CLI / AI 生成视频学习路径</h4>
+          <h4>学术理论 × 工业底层工程 · 双螺旋星图生成器</h4>
           <div
             className="lp-segmented lp-topology-mode-pills"
             role="group"
@@ -575,7 +583,7 @@ export function LearningPathsHomeView({
             type="text"
             value={aiTopic}
             onChange={(e) => setAiTopic(e.target.value)}
-            placeholder="输入想学的主题，例如：3Blue1Brown 线性代数与微积分 / TypeScript 类型体操 / 计算机图形学入门…"
+            placeholder="输入领域或点击下方「学术×工程提示词矩阵」（如：MIT 6.S081 操作系统与 Linux 内核源码 / CMU 15-445 存储引擎…）"
             style={{
               flex: '1 1 320px',
               height: 32,
@@ -598,7 +606,7 @@ export function LearningPathsHomeView({
             type="button"
             className="lp-btn"
             onClick={() => launchCliPrompt('agy')}
-            title="唤醒底部终端并用 Google AGY CLI 搜索生成"
+            title="唤醒底部终端并用 Google AGY CLI 执行多批次学术+工程检索生成"
           >
             用 AGY CLI 生成
           </button>
@@ -609,6 +617,42 @@ export function LearningPathsHomeView({
           >
             用 Claude CLI 生成
           </button>
+        </div>
+        <div
+          className="lp-blueprint-matrix"
+          aria-label="学术理论与底层工程提示词范式"
+        >
+          <div className="lp-blueprint-matrix-head">
+            <span className="lp-blueprint-matrix-kicker">
+              ACADEMIC × ENGINEERING BLUEPRINTS
+            </span>
+            <span className="lp-blueprint-matrix-hint">
+              点击任一矩阵卡片即可填入「名校公开课理论基座 +
+              底层源码/调试/顶会实验」结构化提示词（自动驱动 6–10 批次正交搜索）
+            </span>
+          </div>
+          <div className="lp-blueprint-grid">
+            {ACADEMIC_ENGINEERING_PROMPT_BLUEPRINTS.map((bp) => {
+              const active = aiTopic.trim() === bp.prompt;
+              return (
+                <button
+                  key={bp.id}
+                  type="button"
+                  className={`lp-blueprint-card${active ? ' is-active' : ''}`}
+                  onClick={() => setAiTopic(bp.prompt)}
+                >
+                  <div className="lp-blueprint-card-top">
+                    <span className="lp-blueprint-tag">{bp.tag}</span>
+                    <strong className="lp-blueprint-title">{bp.title}</strong>
+                  </div>
+                  <div className="lp-blueprint-meta">
+                    <span>学术：{bp.academicBenchmarks}</span>
+                    <span>工程：{bp.engineeringTargets}</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         </div>
         {aiStatus && (
           <p style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
@@ -868,7 +912,15 @@ export default function LearningPathView({
   const loadDetail = useCallback(async () => {
     setLoading(true);
     try {
-      const loaded = await playerApi.learningPathGet(pathId);
+      let loaded = await playerApi.learningPathGet(pathId);
+      if (
+        loaded &&
+        pathId === HACKER_CONSTELLATION_PATH_ID &&
+        loaded.nodes.length < HACKER_LEARNING_PATH_PRESET.nodes.length
+      ) {
+        loaded = await playerApi.learningPathSave(HACKER_LEARNING_PATH_PRESET);
+        void host.reloadOverview();
+      }
       if (!loaded) {
         setError('找不到这条学习路径，可能已被删除。');
         setDetail(null);
@@ -881,7 +933,7 @@ export default function LearningPathView({
     } finally {
       setLoading(false);
     }
-  }, [pathId]);
+  }, [host, pathId]);
 
   useEffect(() => {
     void loadDetail();
@@ -1416,8 +1468,16 @@ export default function LearningPathView({
 
   const sendCliForCurrentPath = (cli: 'agy' | 'claude' | 'codex') => {
     if (!detail) return;
-    const prompt = `请先调用 learning_path_get(pathId="${detail.summary.pathId}") 查看当前学习路径「${detail.summary.title}」，再用 player_search_youtube 搜索真实进阶视频，并通过 learning_path_propose(mode="append_nodes", pathId="${detail.summary.pathId}", ...) 为后续阶段补充视频节点。`;
-    const escaped = prompt.replace(/"/g, '\\"');
+    const prompt = compileAcademicEngineeringPrompt(
+      aiPrompt.trim() || detail.summary.title,
+      'constellation',
+      {
+        targetPathId: detail.summary.pathId,
+        targetPathTitle: detail.summary.title,
+        mode: 'append_nodes',
+      },
+    );
+    const escaped = prompt.replace(/"/g, '\\"').replace(/\r?\n+/g, ' ');
     const cmd =
       cli === 'agy'
         ? `agy -i "${escaped}"`
@@ -1440,10 +1500,19 @@ export default function LearningPathView({
     setAiBusy(true);
     setAiEvents([]);
     setAiReply('');
+    const compiledTurnPrompt = compileAcademicEngineeringPrompt(
+      aiPrompt.trim(),
+      'constellation',
+      {
+        targetPathId: detail.summary.pathId,
+        targetPathTitle: detail.summary.title,
+        mode: 'append_nodes',
+      },
+    );
     try {
       const turn = await runLearningPathAgentTurn({
         history: aiHistory,
-        prompt: aiPrompt.trim(),
+        prompt: compiledTurnPrompt,
         provider: bridges.aiProvider,
         capabilities: bridges.agentCapabilities,
         activePathSummary: {
@@ -2545,15 +2614,54 @@ export default function LearningPathView({
                 onSubmit={(e) => void submitCopilotPrompt(e)}
                 className="lp-copilot-section"
               >
-                <h4>内置 AI 路径助手</h4>
+                <h4>内置 AI 学术×工程扩充助手</h4>
                 <p>
-                  直接向应用内置模型下达指令（例如：“帮我在第二阶段补充两节实战案例视频，并加一个里程碑汇合节点”）：
+                  点击下方预设算子或输入深度扩充指令（自动携带「学术理论 ×
+                  底层工程」多批次检索规范）：
                 </p>
+                <div className="lp-copilot-preset-chips">
+                  {[
+                    {
+                      tag: 'ACAD',
+                      label: '补齐名校理论课 (MIT/CMU/Stanford)',
+                      prompt:
+                        '为当前路径各阶段检索并补齐 MIT / CMU / Stanford / Berkeley 名校公开课理论讲座与形式化模型推导节点（共新增 12–20 节长视频），完善跨阶段 prerequisiteIds。',
+                    },
+                    {
+                      tag: 'ENG',
+                      label: '补齐底层源码剖析与调试实验',
+                      prompt:
+                        '为当前路径各阶段检索并补齐内核/编译器/协议栈源码级剖析、GDB/Wireshark/eBPF 现场调试与高校经典 Lab 实战视频（共新增 12–20 节深度工程课）。',
+                    },
+                    {
+                      tag: 'CONF',
+                      label: '增补顶会案例与阶段里程碑',
+                      prompt:
+                        '检索 USENIX / OSDI / DEF CON / Black Hat / CppCon 工业顶会深度演讲，在各星域交汇处增补综合工程实战与 kind="checkpoint" 里程碑节点。',
+                    },
+                    {
+                      tag: 'FULL',
+                      label: '重构升级为 50+ 节点双螺旋巨型星图',
+                      prompt:
+                        '按照「学术理论基座 × 工业底层工程双螺旋」标准，对当前路径进行全面重构与大规模扩充（规划 7–10 个知识星域、45–60+ 节长视频课程，每个节点 note 标注【学术基座】/【工程实现】及 4–6 个三级知识卫星术语）。',
+                    },
+                  ].map((item) => (
+                    <button
+                      key={item.tag}
+                      type="button"
+                      className="lp-copilot-preset-chip"
+                      onClick={() => setAiPrompt(item.prompt)}
+                    >
+                      <span className="lp-copilot-preset-tag">{item.tag}</span>
+                      <span>{item.label}</span>
+                    </button>
+                  ))}
+                </div>
                 <textarea
                   className="lp-copilot-textarea"
                   value={aiPrompt}
                   onChange={(e) => setAiPrompt(e.target.value)}
-                  placeholder="输入你的扩展或重构需求…"
+                  placeholder="输入你的学术理论或底层工程扩展需求…"
                 />
                 <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
                   <button
@@ -2561,7 +2669,7 @@ export default function LearningPathView({
                     className="lp-btn is-primary"
                     disabled={aiBusy || !aiPrompt.trim()}
                   >
-                    {aiBusy ? '正在检索规划…' : '生成修改预览'}
+                    {aiBusy ? '正在多批次检索规划…' : '生成修改预览'}
                   </button>
                 </div>
               </form>

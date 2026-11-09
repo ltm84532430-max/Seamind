@@ -239,32 +239,56 @@ export async function fetchPlaylist(listId: string): Promise<PlaylistListing> {
 /** Searches YouTube for long-form playable videos matching `query`, returning real metadata. */
 export async function searchYouTubeVideos(
   query: string,
-  limit = 8,
+  limit = 16,
 ): Promise<VideoInput[]> {
   const cleaned = query.trim();
   if (!cleaned) return [];
-  const cappedLimit = Math.max(1, Math.min(20, Math.floor(limit) || 8));
+  const cappedLimit = Math.max(1, Math.min(35, Math.floor(limit) || 16));
   const { innertube } = await session();
-  const search = await innertube.search(cleaned, { type: 'video' });
+  let search = await innertube.search(cleaned, { type: 'video' });
   const now = Math.floor(Date.now() / 1000);
-  const candidates: unknown[] = [
-    ...((search.videos as unknown[]) ?? []),
-    ...((search.results as unknown[]) ?? []),
-  ];
   const seen = new Set<string>();
   const out: VideoInput[] = [];
-  for (const item of candidates) {
-    if (!item || typeof item !== 'object') continue;
-    const nodeType = (item as { type?: string }).type;
-    if (nodeType === 'ReelItem' || nodeType === 'ShortsLockupView') continue;
-    const mapped = videoFromItem(item, { now });
-    if (!mapped || seen.has(mapped.videoId)) continue;
-    seen.add(mapped.videoId);
-    out.push({
-      ...mapped,
-      thumbnailUrl: mapped.thumbnailUrl ?? thumbnailUrl(mapped.videoId, 'mq'),
-    });
-    if (out.length >= cappedLimit) break;
+  const shortFallbacks: VideoInput[] = [];
+
+  for (let page = 0; page < 2 && out.length < cappedLimit; page += 1) {
+    const candidates: unknown[] = [
+      ...((search.videos as unknown[]) ?? []),
+      ...((search.results as unknown[]) ?? []),
+    ];
+    for (const item of candidates) {
+      if (!item || typeof item !== 'object') continue;
+      const nodeType = (item as { type?: string }).type;
+      if (nodeType === 'ReelItem' || nodeType === 'ShortsLockupView') continue;
+      const mapped = videoFromItem(item, { now });
+      if (!mapped || seen.has(mapped.videoId)) continue;
+      seen.add(mapped.videoId);
+      const enriched: VideoInput = {
+        ...mapped,
+        thumbnailUrl: mapped.thumbnailUrl ?? thumbnailUrl(mapped.videoId, 'mq'),
+      };
+      // Deprioritize ultra-short clips (< 90s) so academic lectures & deep engineering talks rank first
+      if (
+        typeof enriched.durationSeconds === 'number' &&
+        enriched.durationSeconds > 0 &&
+        enriched.durationSeconds < 90
+      ) {
+        shortFallbacks.push(enriched);
+        continue;
+      }
+      out.push(enriched);
+      if (out.length >= cappedLimit) break;
+    }
+    if (out.length >= cappedLimit || !search.has_continuation) break;
+    try {
+      search = await search.getContinuation();
+    } catch {
+      break;
+    }
+  }
+
+  if (out.length === 0 && shortFallbacks.length > 0) {
+    return shortFallbacks.slice(0, cappedLimit);
   }
   return out;
 }

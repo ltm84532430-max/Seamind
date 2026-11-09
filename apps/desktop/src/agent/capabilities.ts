@@ -454,7 +454,7 @@ export const agentToolCatalog: AgentToolDescriptor[] = [
     version: 1,
     name: 'player_search_youtube',
     description:
-      '只读搜索 YouTube 视频，返回真实的 11 位 videoId、观看链接、标题、频道名称、时长（秒）与观看量。为学习路径挑选视频前必须先调用此工具获取真实视频编号，严禁凭记忆编造 videoId。',
+      '只读搜索 YouTube 视频，返回真实的 11 位 videoId、观看链接、标题、频道名称、时长（秒）与观看量。构建深度学习路径时必须采用「学术理论（MIT/CMU/Stanford/ETH/pwn.college 公开课、形式化模型、RFC/论文）× 底层工程实践（内核/编译器源码剖析、GDB/Wireshark/eBPF 调试、USENIX/DEF CON/Black Hat 顶会演讲、经典 Lab 靶场）」双螺旋正交检索策略，分多批次（6–12 次）调用此工具获取充足候选池，严禁凭记忆编造 videoId。',
     permission: 'read',
     inputSchema: schema(
       {
@@ -463,13 +463,13 @@ export const agentToolCatalog: AgentToolDescriptor[] = [
           minLength: 1,
           maxLength: 160,
           description:
-            'YouTube 搜索关键词（中英文皆可，可包含频道名或课程主题）。',
+            'YouTube 搜索关键词（建议分别检索英文名校课程号/顶会名如 "MIT 6.824 lecture"、"CMU 15-445"、"USENIX Security"、"Linux kernel internals" 与中文深度源码/工程解析关键词）。',
         },
         limit: {
           type: 'integer',
           minimum: 1,
-          maximum: 15,
-          description: '最多返回条数，默认 8。',
+          maximum: 30,
+          description: '最多返回条数，默认 16（最大 30）。',
         },
       },
       ['query'],
@@ -500,7 +500,7 @@ export const agentToolCatalog: AgentToolDescriptor[] = [
     version: 1,
     name: 'learning_path_propose',
     description:
-      '为播放器提出创建（create）、整体替换（replace）或向已有学习路径追加节点（append_nodes）的提案。支持从左向右延伸的阶段树（parentId 指向所属阶段或上级节点）以及多分支汇合的前置依赖（prerequisiteIds）。每个视频节点的 videoUrlOrId 必须来自 player_search_youtube、现有路径或用户明确提供的真实 YouTube 链接/11位编号。此工具只打开预览弹窗，必须经用户点击确认后才会写入数据库并打开路径。',
+      '为播放器提出创建（create）、整体替换（replace）或向已有学习路径追加节点（append_nodes）的提案。支持庞大星图（6–10 个知识星域 stage、30–80+ 节真实视频课与里程碑）以及跨领域前置依赖拓扑（prerequisiteIds）。每个阶段内部需兼顾「学术理论基座」与「底层工程实现/实验靶场」，每个视频节点的 videoUrlOrId 必须来自 player_search_youtube、现有路径或用户明确提供的真实 YouTube 链接/11位编号。此工具只打开预览弹窗，必须经用户点击确认后才会写入数据库并打开路径。',
     permission: 'user_approval',
     inputSchema: schema(
       {
@@ -524,12 +524,12 @@ export const agentToolCatalog: AgentToolDescriptor[] = [
         description: {
           type: 'string',
           maxLength: 2000,
-          description: '学习路径简介、适用人群或学习目标。',
+          description: '学习路径简介、学术对标课程与工程实践目标。',
         },
         nodes: {
           type: 'array',
           minItems: 1,
-          maxItems: 120,
+          maxItems: 260,
           items: schema(
             {
               nodeId: {
@@ -537,7 +537,7 @@ export const agentToolCatalog: AgentToolDescriptor[] = [
                 minLength: 1,
                 maxLength: 64,
                 description:
-                  '路径内唯一节点 ID（仅字母、数字、_、-、:），例如 stage-1、vid-ownership。',
+                  '路径内唯一节点 ID（仅字母、数字、_、-、:），例如 stage-kernel、vid-vm-pagetable。',
               },
               parentId: {
                 type: ['string', 'null'],
@@ -554,18 +554,19 @@ export const agentToolCatalog: AgentToolDescriptor[] = [
                 type: 'string',
                 enum: ['stage', 'video', 'checkpoint'],
                 description:
-                  'stage 表示阶段分组节点；video 表示具体视频课；checkpoint 表示里程碑/综合实战节点。',
+                  'stage 表示阶段/星域分组节点；video 表示具体视频课；checkpoint 表示阶段里程碑/综合工程靶场节点。',
               },
               title: {
                 type: 'string',
                 minLength: 1,
                 maxLength: 200,
-                description: '节点显示标题。',
+                description: '节点显示标题（建议使用精准学术与工程术语）。',
               },
               note: {
                 type: 'string',
                 maxLength: 1500,
-                description: '学习要点、看点提示或练习要求。',
+                description:
+                  '学习要点与三级知识卫星点：建议以【学术理论】/【工程实现】/【源码实验】标注定位，并用顿号「、」或逗号列出 3–6 个核心底层概念（星图视图会自动将其解析为第三级知识微粒点）。',
               },
               videoUrlOrId: {
                 type: ['string', 'null'],
@@ -1258,8 +1259,8 @@ export async function executeAgentTool(
     const query = requireString(input, 'query', 160);
     const limit =
       input.limit === undefined
-        ? 8
-        : Math.max(1, Math.min(15, requireInteger(input, 'limit')));
+        ? 16
+        : Math.max(1, Math.min(30, requireInteger(input, 'limit')));
     const videos = await capabilities.searchYouTubeVideos(query, limit);
     const results = videos.map((video) => ({
       videoId: video.videoId,
@@ -1350,9 +1351,9 @@ export async function executeAgentTool(
     if (
       !Array.isArray(input.nodes) ||
       input.nodes.length === 0 ||
-      input.nodes.length > 120
+      input.nodes.length > 260
     ) {
-      throw new Error('参数 nodes 必须是包含 1 到 120 个节点的数组。');
+      throw new Error('参数 nodes 必须是包含 1 到 260 个节点的数组。');
     }
     const parsedNodes: ProposeLearningPathRawNode[] = input.nodes.map(
       (rawItem, index) => {

@@ -1839,7 +1839,7 @@ pub fn favorite_set_note(
 
 // ---- learning paths -----------------------------------------------------------------------------
 
-const MAX_LEARNING_PATH_NODES: usize = 200;
+const MAX_LEARNING_PATH_NODES: usize = 400;
 
 fn is_path_or_node_id(value: &str) -> bool {
     (1..=64).contains(&value.len())

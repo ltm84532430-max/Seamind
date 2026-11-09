@@ -19,6 +19,8 @@ import type {
   PositionedPathNode,
 } from '../src/player/learning-path-layout';
 import {
+  ACADEMIC_ENGINEERING_PROMPT_BLUEPRINTS,
+  compileAcademicEngineeringPrompt,
   HACKER_CONSTELLATION_PATH_ID,
   HACKER_LEARNING_PATH_PRESET,
 } from '../src/player/learning-path-presets';
@@ -532,7 +534,7 @@ describe('buildValidatedLearningPathNodes & learningPathToMarkdown', () => {
 });
 
 describe('Course Constellation Star-Map & Hacker Learning Path Preset', () => {
-  it('validates the Hacker Constellation learning path preset with 7 domain clusters, 21 videos, and cross-stage prerequisites', () => {
+  it('validates the Academic × Engineering Hacker Constellation preset with 10 domain clusters, 54 video lessons, and 180+ satellites', () => {
     expect(HACKER_LEARNING_PATH_PRESET.pathId).toBe(
       HACKER_CONSTELLATION_PATH_ID,
     );
@@ -545,10 +547,21 @@ describe('Course Constellation Star-Map & Hacker Learning Path Preset', () => {
     const checkpointNodes = HACKER_LEARNING_PATH_PRESET.nodes.filter(
       (n) => n.kind === 'checkpoint',
     );
-    expect(stageNodes).toHaveLength(7);
-    expect(playableNodes).toHaveLength(21);
-    expect(checkpointNodes).toHaveLength(3);
-    expect(HACKER_LEARNING_PATH_PRESET.videos).toHaveLength(21);
+    expect(stageNodes).toHaveLength(10);
+    expect(playableNodes).toHaveLength(54);
+    expect(checkpointNodes).toHaveLength(10);
+    expect(HACKER_LEARNING_PATH_PRESET.nodes).toHaveLength(64);
+    expect(HACKER_LEARNING_PATH_PRESET.videos?.length).toBeGreaterThanOrEqual(
+      30,
+    );
+
+    // Every playable node references a known video in HACKER_LEARNING_PATH_PRESET.videos
+    const knownVideoIds = new Set(
+      (HACKER_LEARNING_PATH_PRESET.videos ?? []).map((v) => v.videoId),
+    );
+    for (const n of playableNodes) {
+      expect(knownVideoIds.has(n.videoId!)).toBe(true);
+    }
 
     // Hydrate into a LearningPathDetail and run layout + star graph
     const videoById = new Map(
@@ -590,19 +603,19 @@ describe('Course Constellation Star-Map & Hacker Learning Path Preset', () => {
     expect(layout.nodes).toHaveLength(detail.nodes.length);
 
     const starGraph = buildLearningPathStarGraph(detail, layout);
-    // 1 core node + all path nodes + extracted Tier-3 knowledge satellites
-    expect(starGraph.stats.totalSatellites).toBeGreaterThan(60);
+    // 1 core node + 64 path nodes + extracted Tier-3 knowledge satellites
+    expect(starGraph.stats.totalSatellites).toBeGreaterThan(180);
     expect(starGraph.nodes).toHaveLength(
       detail.nodes.length + 1 + starGraph.stats.totalSatellites,
     );
     expect(starGraph.coverThumbnailUrl).toContain('ytimg.com');
-    expect(starGraph.stats.totalStages).toBe(7);
-    expect(starGraph.stats.totalVideos).toBe(21);
-    expect(starGraph.stats.prerequisiteLinksCount).toBeGreaterThan(10);
+    expect(starGraph.stats.totalStages).toBe(10);
+    expect(starGraph.stats.totalVideos).toBe(54);
+    expect(starGraph.stats.prerequisiteLinksCount).toBeGreaterThan(25);
 
     const adj = buildPathStarAdjacencyMap(starGraph);
-    // core-hub includes itself + 7 stage hubs = 8
-    expect(adj.get('core-hub')?.size).toBe(8);
+    // core-hub includes itself + 10 stage hubs = 11
+    expect(adj.get('core-hub')?.size).toBe(11);
     // Hovering a satellite dot highlights its parent video lesson and sibling satellites
     const sampleSatellite = starGraph.nodes.find(
       (n) => n.kind === 'satellite',
@@ -626,5 +639,34 @@ describe('Course Constellation Star-Map & Hacker Learning Path Preset', () => {
       expect(Number.isFinite(node.x)).toBe(true);
       expect(Number.isFinite(node.y)).toBe(true);
     }
+  });
+
+  it('compiles Academic × Engineering dual-helix prompts with university benchmarks and multi-batch search directives', () => {
+    expect(
+      ACADEMIC_ENGINEERING_PROMPT_BLUEPRINTS.length,
+    ).toBeGreaterThanOrEqual(6);
+    const bp = ACADEMIC_ENGINEERING_PROMPT_BLUEPRINTS[0]!;
+    const compiled = compileAcademicEngineeringPrompt(
+      bp.prompt,
+      'constellation',
+    );
+    expect(compiled).toContain('学术理论基座 × 工业底层工程双螺旋');
+    expect(compiled).toContain(bp.academicBenchmarks);
+    expect(compiled).toContain(bp.engineeringTargets);
+    expect(compiled).toContain('player_search_youtube');
+    expect(compiled).toContain('【学术基座】');
+
+    const appendCompiled = compileAcademicEngineeringPrompt(
+      '补齐 eBPF 与内核源码实验',
+      'constellation',
+      {
+        targetPathId: 'csapp-sys',
+        targetPathTitle: '计算机系统全链路进阶规划路径',
+        mode: 'append_nodes',
+      },
+    );
+    expect(appendCompiled).toContain('learning_path_get');
+    expect(appendCompiled).toContain('csapp-sys');
+    expect(appendCompiled).toContain('append_nodes');
   });
 });
