@@ -1,10 +1,12 @@
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
   useImperativeHandle,
   forwardRef,
 } from 'react';
+import type { CSSProperties } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { FitAddon } from '@xterm/addon-fit';
@@ -32,6 +34,7 @@ interface TerminalSessionViewProps {
   tab: TerminalTab;
   theme: Theme;
   active: boolean;
+  style?: CSSProperties;
   onStatusChange?: (status: TerminalTab['status'], message?: string) => void;
 }
 
@@ -139,19 +142,38 @@ function resolveTerminalTheme(theme: Theme) {
 export const TerminalSessionView = forwardRef<
   TerminalSessionViewHandle,
   TerminalSessionViewProps
->(function TerminalSessionView({ tab, theme, active, onStatusChange }, ref) {
+>(function TerminalSessionView(
+  { tab, theme, active, style, onStatusChange },
+  ref,
+) {
   const hostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const sessionIdRef = useRef<string | null>(null);
+  const activeRef = useRef(active);
+  const resizeScheduleRef = useRef<() => void>(() => undefined);
+  const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [internalStatus, setInternalStatus] = useState<string>('正在初始化…');
+
+  activeRef.current = active;
+
+  const queueTerminalInput = useCallback(
+    (sessionId: string, data: number[]) => {
+      const nextWrite = writeQueueRef.current.then(async () => {
+        await invoke('terminal_write', { sessionId, data });
+      });
+      writeQueueRef.current = nextWrite.catch(() => undefined);
+      return nextWrite;
+    },
+    [],
+  );
 
   const sendCommand = (command: string, execute = true) => {
     const sessionId = sessionIdRef.current;
     if (!sessionId) return;
     const payload = execute ? `${command}\r` : command;
     const bytes = Array.from(new TextEncoder().encode(payload));
-    void invoke('terminal_write', { sessionId, data: bytes })
+    void queueTerminalInput(sessionId, bytes)
       .then(() => {
         terminalRef.current?.focus();
       })
@@ -174,6 +196,59 @@ export const TerminalSessionView = forwardRef<
     let resizeObserver: ResizeObserver | null = null;
     let unlistenOutput: (() => void) | null = null;
     let unlistenExit: (() => void) | null = null;
+    let resizeTimer: number | null = null;
+    let outputFrame: number | null = null;
+    let outputChunks: Uint8Array[] = [];
+    let queuedOutputBytes = 0;
+    let omittedOutputBytes = 0;
+    const maxQueuedOutputBytes = 2 * 1024 * 1024;
+
+    const flushOutput = () => {
+      outputFrame = null;
+      if (!terminal || outputChunks.length === 0) return;
+      const chunks = outputChunks;
+      const byteLength = queuedOutputBytes;
+      const omitted = omittedOutputBytes;
+      outputChunks = [];
+      queuedOutputBytes = 0;
+      omittedOutputBytes = 0;
+      if (omitted > 0) {
+        terminal.write(
+          new TextEncoder().encode(
+            '\r\n[输出繁忙，已省略 ' + omitted + ' 字节旧内容]\r\n',
+          ),
+        );
+      }
+      const batch = new Uint8Array(byteLength);
+      let offset = 0;
+      for (const chunk of chunks) {
+        batch.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      terminal.write(batch);
+    };
+
+    const queueOutput = (data: number[]) => {
+      let chunk = Uint8Array.from(data);
+      if (chunk.byteLength > maxQueuedOutputBytes) {
+        omittedOutputBytes += chunk.byteLength - maxQueuedOutputBytes;
+        chunk = chunk.slice(chunk.byteLength - maxQueuedOutputBytes);
+      }
+      outputChunks.push(chunk);
+      queuedOutputBytes += chunk.byteLength;
+      while (
+        queuedOutputBytes > maxQueuedOutputBytes &&
+        outputChunks.length > 0
+      ) {
+        const removed = outputChunks.shift();
+        if (removed) {
+          queuedOutputBytes -= removed.byteLength;
+          omittedOutputBytes += removed.byteLength;
+        }
+      }
+      if (outputFrame === null)
+        outputFrame = requestAnimationFrame(flushOutput);
+    };
 
     const startSession = async () => {
       const host = hostRef.current;
@@ -183,7 +258,7 @@ export const TerminalSessionView = forwardRef<
         'seamind-terminal-output',
         (event) => {
           if (alive && event.payload.sessionId === sessionId) {
-            terminal?.write(Uint8Array.from(event.payload.data));
+            queueOutput(event.payload.data);
           }
         },
       );
@@ -225,8 +300,8 @@ export const TerminalSessionView = forwardRef<
       terminal.open(host);
       fitAddon.fit();
 
-      const handleResize = () => {
-        if (!alive || !terminal || !fitAddon) return;
+      const applyResize = () => {
+        if (!alive || !activeRef.current || !terminal || !fitAddon) return;
         try {
           fitAddon.fit();
           if (sessionId) {
@@ -241,7 +316,15 @@ export const TerminalSessionView = forwardRef<
         }
       };
 
-      resizeObserver = new ResizeObserver(handleResize);
+      const scheduleResize = () => {
+        if (resizeTimer !== null) window.clearTimeout(resizeTimer);
+        resizeTimer = window.setTimeout(() => {
+          resizeTimer = null;
+          requestAnimationFrame(applyResize);
+        }, 64);
+      };
+      resizeScheduleRef.current = scheduleResize;
+      resizeObserver = new ResizeObserver(scheduleResize);
       resizeObserver.observe(host);
 
       sessionId = await invoke<string>('terminal_start', {
@@ -266,18 +349,14 @@ export const TerminalSessionView = forwardRef<
       terminal.onData((data) => {
         if (!sessionId) return;
         const bytes = Array.from(new TextEncoder().encode(data));
-        void invoke('terminal_write', { sessionId, data: bytes }).catch(
-          (err: unknown) => {
-            if (alive) {
-              setInternalStatus(
-                err instanceof Error ? err.message : '写入异常',
-              );
-            }
-          },
-        );
+        void queueTerminalInput(sessionId, bytes).catch((err: unknown) => {
+          if (alive) {
+            setInternalStatus(err instanceof Error ? err.message : '写入异常');
+          }
+        });
       });
 
-      requestAnimationFrame(handleResize);
+      scheduleResize();
     };
 
     void startSession().catch((err: unknown) => {
@@ -292,6 +371,11 @@ export const TerminalSessionView = forwardRef<
       alive = false;
       sessionIdRef.current = null;
       resizeObserver?.disconnect();
+      resizeScheduleRef.current = () => undefined;
+      if (resizeTimer !== null) window.clearTimeout(resizeTimer);
+      if (outputFrame !== null) cancelAnimationFrame(outputFrame);
+      outputChunks = [];
+      queuedOutputBytes = 0;
       unlistenOutput?.();
       unlistenExit?.();
       terminal?.dispose();
@@ -312,21 +396,13 @@ export const TerminalSessionView = forwardRef<
 
   // Refit when tab becomes active
   useEffect(() => {
-    if (active && fitAddonRef.current) {
-      requestAnimationFrame(() => {
-        try {
-          fitAddonRef.current?.fit();
-        } catch {
-          // ignore
-        }
-      });
-    }
+    if (active) resizeScheduleRef.current();
   }, [active]);
 
   return (
     <div
       className={`terminal-session-container ${active ? 'is-active' : 'is-inactive'}`}
-      style={{ display: active ? 'flex' : 'none' }}
+      style={{ ...style, display: active ? 'flex' : 'none' }}
     >
       <div className="terminal-session-host" ref={hostRef} />
       <footer className="terminal-session-statusbar">

@@ -2602,6 +2602,27 @@
   min-height: 0;
 }
 
+.lp-starmap-root .galaxy-node-group.is-note .galaxy-note-node-mark {
+  stroke: #e0f2fe;
+  stroke-width: 1.6px;
+}
+
+.lp-starmap-root .galaxy-node-group.is-note.is-hovered .galaxy-note-node-mark {
+  filter: drop-shadow(0 0 7px rgba(56, 189, 248, 0.72));
+}
+
+.lp-starmap-root:fullscreen,
+.lp-starmap-root.is-fullscreen-fallback {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  width: 100vw;
+  height: 100vh;
+  min-height: 0;
+  margin: 0;
+  background: #0d1016;
+}
+
 .lp-starmap-dock-right {
   position: absolute;
   right: 14px;
@@ -2943,6 +2964,42 @@
   background: rgba(56, 189, 248, 0.12);
   color: #bae6fd;
   font-size: 11px;
+}
+
+.lp-star-vcard-note-document {
+  padding: 8px 9px;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-left: 2px solid #38bdf8;
+  background: rgba(56, 189, 248, 0.07);
+}
+
+.lp-star-vcard-note-document-head {
+  display: grid;
+  gap: 3px;
+}
+
+.lp-star-vcard-note-document-head span {
+  color: #7dd3fc;
+  font-family: var(--lp-mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+}
+
+.lp-star-vcard-note-document-head strong {
+  color: #e2e8f0;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.lp-star-vcard-note-document p {
+  display: -webkit-box;
+  margin: 6px 0 0;
+  overflow: hidden;
+  color: #b8c7d8;
+  font-size: 10.5px;
+  line-height: 1.5;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
 }
 
 .lp-star-vcard-title {

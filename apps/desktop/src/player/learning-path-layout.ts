@@ -1121,7 +1121,8 @@ export type PathStarNodeKind =
   | 'stage'
   | 'video'
   | 'checkpoint'
-  | 'satellite';
+  | 'satellite'
+  | 'note';
 
 export interface PathStarNode {
   id: string;
@@ -1136,6 +1137,8 @@ export interface PathStarNode {
   isNextUp: boolean;
   optional: boolean;
   note: string | null;
+  noteDocumentTitle?: string | null;
+  noteDocumentPreview?: string | null;
   knowledgeTopics: string[];
   video: VideoItem | null;
   positionedNode: PositionedPathNode | null;
@@ -1178,6 +1181,7 @@ export interface LearningPathStarGraph {
     totalStages: number;
     totalVideos: number;
     totalSatellites: number;
+    videoNoteNodes: number;
     completedVideos: number;
     prerequisiteLinksCount: number;
     optionalCount: number;
@@ -1263,9 +1267,36 @@ export function extractLessonKnowledgeSatellites(
   return candidates.slice(0, 4);
 }
 
+function extractVideoNoteTitle(markdown: string, fallback: string): string {
+  return markdown.match(/^\s*#\s+(.+?)\s*$/m)?.[1]?.trim() || fallback;
+}
+
+function extractVideoNotePreview(markdown: string): string {
+  const personalNotes = markdown.match(
+    /(?:^|\r?\n)## 我的观看笔记\s*\r?\n([\s\S]*)$/,
+  )?.[1];
+  const source = personalNotes?.trim() ? personalNotes : markdown;
+  const plainText = source
+    .replace(/^\uFEFF/, '')
+    .replace(/```[\s\S]*?```/g, ' 代码片段 ')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/^\s{0,3}#{1,6}\s*/gm, '')
+    .replace(/^\s{0,3}>+\s?/gm, '')
+    .replace(/^\s{0,3}(?:[-*+]\s+|\d+\.\s+)/gm, '')
+    .replace(/[*_~`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (plainText.length <= 320) return plainText;
+  const excerpt = plainText.slice(0, 320);
+  const lastSpace = excerpt.lastIndexOf(' ');
+  return `${excerpt.slice(0, lastSpace > 220 ? lastSpace : 320)}…`;
+}
+
 export function buildLearningPathStarGraph(
   detail: LearningPathDetail,
   layout: LearningPathLayoutResult,
+  videoNoteMarkdown: Readonly<Record<string, string>> = {},
 ): LearningPathStarGraph {
   const posById = new Map<string, PositionedPathNode>();
   for (const item of layout.nodes) {
@@ -1316,6 +1347,52 @@ export function buildLearningPathStarGraph(
   const starNodes: PathStarNode[] = [];
   const starLinks: PathStarLink[] = [];
   let totalSatellites = 0;
+  let videoNoteNodes = 0;
+
+  const appendVideoNoteNode = (
+    lesson: LearningPathNode,
+    lessonStarNode: PathStarNode,
+  ) => {
+    const markdown = lesson.videoId
+      ? videoNoteMarkdown[lesson.videoId]?.trim()
+      : undefined;
+    if (!markdown) return;
+
+    const noteDistance = 66;
+    const noteAngle = lessonStarNode.orbitAngle + 0.72;
+    const noteId = `${lesson.nodeId}::video-note`;
+    videoNoteNodes += 1;
+    starNodes.push({
+      ...lessonStarNode,
+      id: noteId,
+      label: '视频笔记',
+      shortCode: `${lessonStarNode.shortCode ?? lesson.nodeId}.N`,
+      kind: 'note',
+      note: null,
+      noteDocumentTitle: extractVideoNoteTitle(markdown, lesson.title),
+      noteDocumentPreview: extractVideoNotePreview(markdown),
+      knowledgeTopics: [],
+      parentId: lesson.nodeId,
+      prerequisiteIds: [],
+      dependentIds: [],
+      degree: 1,
+      x: Math.round(lessonStarNode.x + noteDistance * Math.cos(noteAngle)),
+      y: Math.round(lessonStarNode.y + noteDistance * Math.sin(noteAngle)),
+      radius: 7.5,
+      orbitRadius: noteDistance,
+      orbitAngle: noteAngle,
+      color: '#38bdf8',
+    });
+    starLinks.push({
+      id: `${lesson.nodeId}->${noteId}`,
+      source: lesson.nodeId,
+      target: noteId,
+      kind: 'hierarchy',
+      active: lessonStarNode.status === 'completed',
+      optional: lessonStarNode.optional,
+      color: '#38bdf8',
+    });
+  };
 
   // 1. Central Course Hub ("core-hub")
   const coreNode: PathStarNode = {
@@ -1411,6 +1488,8 @@ export function buildLearningPathStarGraph(
       optional: false,
       color: stageColor,
     });
+
+    appendVideoNoteNode(root, starNodes[starNodes.length - 1]);
 
     if (stageIdx > 0) {
       starLinks.push({
@@ -1514,6 +1593,8 @@ export function buildLearningPathStarGraph(
           optional: child.optional,
           color: stageColor,
         });
+
+        appendVideoNoteNode(child, starNodes[starNodes.length - 1]);
 
         // 3rd-level Knowledge Point Satellites fanning out around this lesson planet (like BookGalaxyGraph subsections)
         const satDist = 56;
@@ -1639,6 +1720,7 @@ export function buildLearningPathStarGraph(
       totalStages: roots.length,
       totalVideos,
       totalSatellites,
+      videoNoteNodes,
       completedVideos,
       prerequisiteLinksCount,
       optionalCount: sortedNodes.filter((n) => n.optional).length,
@@ -1673,8 +1755,8 @@ export function buildPathStarAdjacencyMap(
           map.get(n.id)?.add(member.id);
         }
       }
-    } else if (n.kind === 'satellite' && n.parentId) {
-      // Hovering a satellite highlights its parent lesson and sibling satellites
+    } else if ((n.kind === 'satellite' || n.kind === 'note') && n.parentId) {
+      // 悬停知识点或视频笔记时，同时突出所属视频及其关联节点。
       const parentSet = map.get(n.parentId);
       if (parentSet) {
         for (const id of parentSet) {

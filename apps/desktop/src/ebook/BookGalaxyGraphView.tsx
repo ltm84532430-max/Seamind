@@ -522,7 +522,7 @@ export function BookGalaxyGraphView({
         <div className="book-galaxy-actions">
           <input
             type="text"
-            className="lit-text-input book-galaxy-search-input"
+            className="book-galaxy-search-input"
             placeholder="检索章节或知识节点…"
             value={searchFilter}
             onChange={(e) => setSearchFilter(e.target.value)}

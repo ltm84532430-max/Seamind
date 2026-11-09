@@ -120,12 +120,14 @@
   color: #1d4ed8;
   background: rgba(59, 130, 246, 0.15);
 }
-.app-shell[data-theme='dark'] .ebook-shelf-actions .ebook-shelf-zlib {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-actions
+  .ebook-shelf-zlib {
   border-color: #3b82f6;
   color: #60a5fa;
   background: rgba(59, 130, 246, 0.16);
 }
-.app-shell[data-theme='dark']
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
   .ebook-shelf-actions
   .ebook-shelf-zlib:hover:not(:disabled) {
   border-color: #60a5fa;
@@ -488,36 +490,65 @@
   color: #b94d34;
   font-size: 11px;
 }
-.app-shell[data-theme='dark'] .ebook-paths,
-.app-shell[data-theme='dark'] .ebook-paths-stage-head,
-.app-shell[data-theme='dark'] .ebook-paths input,
-.app-shell[data-theme='dark'] .ebook-paths select,
-.app-shell[data-theme='dark'] .ebook-paths button,
-.app-shell[data-theme='dark'] .ebook-paths-node,
-.app-shell[data-theme='dark'] .ebook-paths-book-order {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-paths,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-paths-stage-head,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-paths
+  input,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-paths
+  select,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-paths
+  button,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-paths-node,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-paths-book-order {
   border-color: #3c484f;
   color: #c2cbd0;
   background: #202a30;
 }
-.app-shell[data-theme='dark'] .ebook-paths-sidebar,
-.app-shell[data-theme='dark'] .ebook-paths-add-book,
-.app-shell[data-theme='dark'] .ebook-paths-book-editor {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-paths-sidebar,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-paths-add-book,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-paths-book-editor {
   border-color: #3c484f;
   background: #1c252a;
 }
-.app-shell[data-theme='dark'] .ebook-paths h2,
-.app-shell[data-theme='dark'] .ebook-paths h3,
-.app-shell[data-theme='dark'] .ebook-paths strong {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-paths
+  h2,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-paths
+  h3,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-paths
+  strong {
   color: #e0e7ea;
 }
-.app-shell[data-theme='dark'] .ebook-paths-list button.is-active {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-paths-list
+  button.is-active {
   border-color: #bd5b42;
   background: #302824;
 }
-.app-shell[data-theme='dark'] .ebook-paths-create button,
-.app-shell[data-theme='dark'] .ebook-paths-add-stage button,
-.app-shell[data-theme='dark'] .ebook-paths-add-book button[type='submit'],
-.app-shell[data-theme='dark'] .ebook-paths-book-editor button[type='submit'] {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-paths-create
+  button,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-paths-add-stage
+  button,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-paths-add-book
+  button[type='submit'],
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-paths-book-editor
+  button[type='submit'] {
   border-color: #bd5b42;
   color: #fff;
   background: #bd5b42;
@@ -840,28 +871,129 @@
 .ebook-reading-dashboard .ebook-paths-book-preview span:last-child {
   min-width: 0;
 }
-.app-shell[data-theme='dark'] .ebook-dashboard-pages button {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-dashboard-pages
+  button {
   border-color: #3c484f;
   color: #acb8be;
   background: #202a30;
 }
-.app-shell[data-theme='dark'] .ebook-dashboard-pages button.is-active {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-dashboard-pages
+  button.is-active {
   border-color: #bd5b42;
   color: #f0a18a;
   background: #302824;
 }
-.app-shell[data-theme='dark'] .ebook-paths-options summary {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-paths-options
+  summary {
   border-color: #3c484f;
   color: #acb8be;
   background: #202a30;
 }
-.app-shell[data-theme='dark'] .ebook-reading-dashboard .ebook-paths-book-cover {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-reading-dashboard
+  .ebook-paths-book-cover {
   border-color: #47545b;
 }
 @media (min-width: 1481px) {
   .ebook-reading-dashboard.is-collapsed .ebook-dashboard-pages,
   .ebook-reading-dashboard.is-collapsed .ebook-dashboard-path-page {
     display: none;
+  }
+}
+
+/* 电子书滚动条与知识库保持一致：轨道透明，悬停时才显示细滑块。 */
+.ebook-shelf,
+.ebook-workspace-stage .ebook-shelf-content,
+.ebook-workspace-stage .ebook-reading-dashboard,
+.ebook-workspace-stage .zlib-side-panel,
+.ebook-workspace-stage .epub-online-results-list {
+  --scrollbar-thumb: transparent;
+  transition: --scrollbar-thumb 800ms linear;
+}
+
+.ebook-shelf:hover,
+.ebook-workspace-stage .ebook-shelf-content:hover,
+.ebook-workspace-stage .ebook-reading-dashboard:hover,
+.ebook-workspace-stage .zlib-side-panel:hover,
+.ebook-workspace-stage .epub-online-results-list:hover {
+  --scrollbar-thumb: var(--scrollbar-slider);
+  transition-duration: 100ms;
+}
+
+.ebook-shelf::-webkit-scrollbar,
+.ebook-workspace-stage .ebook-shelf-content::-webkit-scrollbar,
+.ebook-workspace-stage .ebook-reading-dashboard::-webkit-scrollbar,
+.ebook-workspace-stage .zlib-side-panel::-webkit-scrollbar,
+.ebook-workspace-stage .epub-online-results-list::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.ebook-shelf::-webkit-scrollbar-track,
+.ebook-workspace-stage .ebook-shelf-content::-webkit-scrollbar-track,
+.ebook-workspace-stage .ebook-reading-dashboard::-webkit-scrollbar-track,
+.ebook-workspace-stage .zlib-side-panel::-webkit-scrollbar-track,
+.ebook-workspace-stage .epub-online-results-list::-webkit-scrollbar-track,
+.ebook-shelf::-webkit-scrollbar-corner,
+.ebook-workspace-stage .ebook-shelf-content::-webkit-scrollbar-corner,
+.ebook-workspace-stage .ebook-reading-dashboard::-webkit-scrollbar-corner,
+.ebook-workspace-stage .zlib-side-panel::-webkit-scrollbar-corner,
+.ebook-workspace-stage .epub-online-results-list::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.ebook-shelf::-webkit-scrollbar-thumb,
+.ebook-workspace-stage .ebook-shelf-content::-webkit-scrollbar-thumb,
+.ebook-workspace-stage .ebook-reading-dashboard::-webkit-scrollbar-thumb,
+.ebook-workspace-stage .zlib-side-panel::-webkit-scrollbar-thumb,
+.ebook-workspace-stage .epub-online-results-list::-webkit-scrollbar-thumb {
+  min-width: 20px;
+  min-height: 20px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--scrollbar-thumb);
+  background-clip: content-box;
+}
+
+.ebook-shelf::-webkit-scrollbar-thumb:hover,
+.ebook-workspace-stage .ebook-shelf-content::-webkit-scrollbar-thumb:hover,
+.ebook-workspace-stage .ebook-reading-dashboard::-webkit-scrollbar-thumb:hover,
+.ebook-workspace-stage .zlib-side-panel::-webkit-scrollbar-thumb:hover,
+.ebook-workspace-stage
+  .epub-online-results-list::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-slider-hover);
+  background-clip: content-box;
+}
+
+.ebook-shelf::-webkit-scrollbar-thumb:active,
+.ebook-workspace-stage .ebook-shelf-content::-webkit-scrollbar-thumb:active,
+.ebook-workspace-stage .ebook-reading-dashboard::-webkit-scrollbar-thumb:active,
+.ebook-workspace-stage .zlib-side-panel::-webkit-scrollbar-thumb:active,
+.ebook-workspace-stage
+  .epub-online-results-list::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-slider-active);
+  background-clip: content-box;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  .ebook-shelf,
+  .ebook-workspace-stage .ebook-shelf-content,
+  .ebook-workspace-stage .ebook-reading-dashboard,
+  .ebook-workspace-stage .zlib-side-panel,
+  .ebook-workspace-stage .epub-online-results-list {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  .ebook-shelf:hover,
+  .ebook-workspace-stage .ebook-shelf-content:hover,
+  .ebook-workspace-stage .ebook-reading-dashboard:hover,
+  .ebook-workspace-stage .zlib-side-panel:hover,
+  .ebook-workspace-stage .epub-online-results-list:hover {
+    scrollbar-color: var(--scrollbar-slider) transparent;
   }
 }
 .ebook-book-card {
@@ -1449,43 +1581,66 @@
   accent-color: #c45d42;
   cursor: pointer;
 }
-.app-shell[data-theme='dark'] .workspace-switcher {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .workspace-switcher {
   border-color: #30383f;
   background: #1b2227;
 }
-.app-shell[data-theme='dark'] .workspace-switcher button {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .workspace-switcher
+  button {
   color: #aab5bb;
 }
-.app-shell[data-theme='dark'] .workspace-switcher button.is-active {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .workspace-switcher
+  button.is-active {
   border-color: #3b454c;
   color: #f0a18a;
   background: #242c31;
 }
-.app-shell[data-theme='dark'] .ebook-workspace-stage,
-.app-shell[data-theme='dark'] .ebook-shelf {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-workspace-stage,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf {
   color: #dce3e8;
   background: #1a2025;
 }
-.app-shell[data-theme='dark'] .ebook-shelf-header {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-header {
   border-color: #30383f;
 }
-.app-shell[data-theme='dark'] .ebook-shelf-header h1,
-.app-shell[data-theme='dark'] .ebook-book-title,
-.app-shell[data-theme='dark'] .ebook-shelf-empty h2 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-header
+  h1,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-book-title,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-empty
+  h2 {
   color: #e0e6ea;
 }
-.app-shell[data-theme='dark'] .ebook-shelf-header p,
-.app-shell[data-theme='dark'] .ebook-shelf-empty p,
-.app-shell[data-theme='dark'] .ebook-book-meta {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-header
+  p,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-empty
+  p,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-book-meta {
   color: #9aa6ae;
 }
-.app-shell[data-theme='dark'] .ebook-shelf-actions button,
-.app-shell[data-theme='dark'] .ebook-shelf-empty-icon {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-actions
+  button,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-empty-icon {
   border-color: #3b454c;
   color: #c4cdd2;
   background: #20282d;
 }
-.app-shell[data-theme='dark'] .ebook-shelf-actions .ebook-shelf-zlib {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-actions
+  .ebook-shelf-zlib {
   border-color: #3b82f6;
   color: #2563eb;
   background: rgba(59, 130, 246, 0.08);
@@ -1495,12 +1650,14 @@
   color: #1d4ed8;
   background: rgba(59, 130, 246, 0.15);
 }
-.app-shell[data-theme='dark'] .ebook-shelf-actions .ebook-shelf-zlib {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-actions
+  .ebook-shelf-zlib {
   border-color: #3b82f6;
   color: #60a5fa;
   background: rgba(59, 130, 246, 0.16);
 }
-.app-shell[data-theme='dark']
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
   .ebook-shelf-actions
   .ebook-shelf-zlib:hover:not(:disabled) {
   border-color: #60a5fa;
@@ -1508,12 +1665,15 @@
   background: rgba(59, 130, 246, 0.24);
 }
 .ebook-shelf-actions .ebook-shelf-import,
-.app-shell[data-theme='dark'] .ebook-shelf-empty button {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-empty
+  button {
   border-color: #bd5b42;
   color: #fff;
   background: #bd5b42;
 }
-.app-shell[data-theme='dark'] .ebook-book-cover {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-book-cover {
   border-color: #414c53;
 }
 .app-shell[data-theme='dark'] .epub-reader {
@@ -2005,36 +2165,50 @@
   font-size: 16px;
 }
 
-.app-shell[data-theme='dark'] .ebook-shelf-search,
-.app-shell[data-theme='dark'] .ebook-shelf-sort select,
-.app-shell[data-theme='dark'] .ebook-delete-dialog {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-search,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-sort
+  select,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-delete-dialog {
   border-color: #3b454c;
   color: #dce4e8;
   background: #20282d;
 }
-.app-shell[data-theme='dark'] .ebook-shelf-search input {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-search
+  input {
   color: #dce4e8;
 }
-.app-shell[data-theme='dark'] .ebook-shelf-sort {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-sort {
   color: #9aa6ae;
 }
-.app-shell[data-theme='dark'] .ebook-book-progress {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-book-progress {
   background: #354047;
 }
-.app-shell[data-theme='dark'] .ebook-book-date {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-book-date {
   color: #9aa6ae;
 }
-.app-shell[data-theme='dark'] .ebook-book-delete {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-book-delete {
   border-color: #3b454c;
   color: #dce4e8;
   background: #20282ded;
 }
-.app-shell[data-theme='dark'] .ebook-delete-dialog button {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-delete-dialog
+  button {
   border-color: #3b454c;
   color: #dce4e8;
   background: #20282d;
 }
-.app-shell[data-theme='dark'] .ebook-delete-dialog button.is-danger {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-delete-dialog
+  button.is-danger {
   border-color: #bd5b42;
   color: #fff;
   background: #bd5b42;
@@ -2869,324 +3043,406 @@
 }
 
 /* ==========================================================================
-   Dark Theme Adaptation (.app-shell[data-theme='dark'])
+   Dark Theme Adaptation (.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple']))
    ========================================================================== */
 
-.app-shell[data-theme='dark'] .ebook-institutional-heatmap {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-institutional-heatmap {
   border-color: #364047;
   background: #1c2429;
 }
 
-.app-shell[data-theme='dark'] .ebook-institutional-header {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-institutional-header {
   border-bottom-color: #2b353c;
 }
 
-.app-shell[data-theme='dark'] .ebook-institutional-kicker {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-institutional-kicker {
   color: #8fa0aa;
 }
 
-.app-shell[data-theme='dark'] .ebook-institutional-badge {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-institutional-badge {
   border-color: #404d55;
   color: #a4b3bc;
   background: #232c32;
 }
 
-.app-shell[data-theme='dark'] .ebook-institutional-title-row h2 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-institutional-title-row
+  h2 {
   color: #e2e8ec;
 }
 
-.app-shell[data-theme='dark'] .ebook-institutional-period-tag {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-institutional-period-tag {
   color: #9daab2;
 }
 
-.app-shell[data-theme='dark'] .ebook-institutional-seg-control {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-institutional-seg-control {
   border-color: #3c4850;
   background: #20292f;
 }
 
-.app-shell[data-theme='dark'] .ebook-institutional-seg-btn {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-institutional-seg-btn {
   color: #a1afb7;
 }
 
-.app-shell[data-theme='dark'] .ebook-institutional-seg-btn:hover {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-institutional-seg-btn:hover {
   color: #edf2f5;
 }
 
-.app-shell[data-theme='dark'] .ebook-institutional-seg-btn.is-active {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-institutional-seg-btn.is-active {
   border-color: #4c5a63;
   color: #f18c72;
   background: #2a353c;
 }
 
-.app-shell[data-theme='dark'] .ebook-institutional-stepper {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-institutional-stepper {
   border-color: #3c4850;
   background: #20292f;
 }
 
-.app-shell[data-theme='dark'] .ebook-institutional-stepper-btn {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-institutional-stepper-btn {
   color: #a7b5bd;
 }
 
-.app-shell[data-theme='dark'] .ebook-institutional-stepper-btn:hover {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-institutional-stepper-btn:hover {
   color: #f18c72;
   background: #28333a;
 }
 
-.app-shell[data-theme='dark'] .ebook-institutional-stepper-reset {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-institutional-stepper-reset {
   border-right-color: #2e3a42;
   border-left-color: #2e3a42;
   color: #a7b5bd;
 }
 
-.app-shell[data-theme='dark'] .ebook-institutional-stepper-reset:hover {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-institutional-stepper-reset:hover {
   color: #f18c72;
   background: #28333a;
 }
 
-.app-shell[data-theme='dark'] .ebook-institutional-kpi-tile {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-institutional-kpi-tile {
   border-color: #323d44;
   background: #20292f;
 }
 
-.app-shell[data-theme='dark'] .ebook-kpi-label {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-kpi-label {
   color: #8fa0aa;
 }
 
-.app-shell[data-theme='dark'] .ebook-kpi-value {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-kpi-value {
   color: #e5ebef;
 }
 
-.app-shell[data-theme='dark'] .ebook-kpi-unit,
-.app-shell[data-theme='dark'] .ebook-kpi-denom {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-kpi-unit,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-kpi-denom {
   color: #8c9ba4;
 }
 
-.app-shell[data-theme='dark'] .ebook-kpi-badge {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-kpi-badge {
   border-color: #723c31;
   color: #f69b84;
   background: #3c2420;
 }
 
-.app-shell[data-theme='dark'] .ebook-kpi-sub {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-kpi-sub {
   color: #82929b;
 }
 
-.app-shell[data-theme='dark'] .ebook-institutional-heatmap-pane,
-.app-shell[data-theme='dark'] .ebook-institutional-chart-pane {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-institutional-heatmap-pane,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-institutional-chart-pane {
   border-color: #323d44;
   background: #1c2429;
 }
 
-.app-shell[data-theme='dark'] .ebook-pane-header {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-pane-header {
   border-bottom-color: #2a343a;
 }
 
-.app-shell[data-theme='dark'] .ebook-pane-tag {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-pane-tag {
   border-color: #3c4850;
   color: #9cb0ba;
   background: #232c32;
 }
 
-.app-shell[data-theme='dark'] .ebook-pane-title {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-pane-title {
   color: #dde4e8;
 }
 
-.app-shell[data-theme='dark'] .ebook-pane-status,
-.app-shell[data-theme='dark'] .ebook-pane-sub {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-pane-status,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-pane-sub {
   color: #8a9ba4;
 }
 
 /* Dark Month Grid */
-.app-shell[data-theme='dark'] .ebook-month-weekdays span {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-month-weekdays
+  span {
   color: #8798a2;
 }
 
-.app-shell[data-theme='dark'] .ebook-month-day {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-month-day {
   border-color: #2b353c;
   background: #222b31;
 }
 
-.app-shell[data-theme='dark'] .ebook-month-day.is-outside {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-month-day.is-outside {
   background: #1a2227;
   border-color: #232c32;
 }
 
-.app-shell[data-theme='dark'] .ebook-month-day-num {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-month-day-num {
   color: #cdd7dd;
 }
 
-.app-shell[data-theme='dark'] .ebook-month-day-val {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-month-day-val {
   color: #a8b8c2;
 }
 
-.app-shell[data-theme='dark'] .ebook-month-day.level-0 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-month-day.level-0 {
   background: #222b31;
 }
 
-.app-shell[data-theme='dark'] .ebook-month-day.level-1 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-month-day.level-1 {
   background: #4a2d26;
   border-color: #5d382f;
 }
 
-.app-shell[data-theme='dark'] .ebook-month-day.level-2 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-month-day.level-2 {
   background: #753b2f;
   border-color: #8e493b;
 }
 
-.app-shell[data-theme='dark'] .ebook-month-day.level-3 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-month-day.level-3 {
   background: #aa4e39;
   border-color: #c55d44;
 }
 
-.app-shell[data-theme='dark'] .ebook-month-day.level-4 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-month-day.level-4 {
   background: #db6549;
   border-color: #f1785b;
 }
 
-.app-shell[data-theme='dark'] .ebook-month-day.is-selected {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-month-day.is-selected {
   outline-color: #e5ebef;
 }
 
-.app-shell[data-theme='dark'] .ebook-institutional-legend {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-institutional-legend {
   border-top-color: #293339;
 }
 
-.app-shell[data-theme='dark'] .ebook-legend-title {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-legend-title {
   color: #8899a3;
 }
 
-.app-shell[data-theme='dark'] .ebook-legend-chip {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-legend-chip {
   color: #92a3ad;
 }
 
-.app-shell[data-theme='dark'] .ebook-legend-chip i.level-0 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-legend-chip
+  i.level-0 {
   background: #222b31;
   border-color: #344048;
 }
-.app-shell[data-theme='dark'] .ebook-legend-chip i.level-1 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-legend-chip
+  i.level-1 {
   background: #4a2d26;
   border-color: #5d382f;
 }
-.app-shell[data-theme='dark'] .ebook-legend-chip i.level-2 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-legend-chip
+  i.level-2 {
   background: #753b2f;
   border-color: #8e493b;
 }
-.app-shell[data-theme='dark'] .ebook-legend-chip i.level-3 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-legend-chip
+  i.level-3 {
   background: #aa4e39;
   border-color: #c55d44;
 }
-.app-shell[data-theme='dark'] .ebook-legend-chip i.level-4 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-legend-chip
+  i.level-4 {
   background: #db6549;
   border-color: #f1785b;
 }
 
-.app-shell[data-theme='dark'] .ebook-2d-chart-box {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-2d-chart-box {
   border-color: #2e383f;
   background: #182025;
 }
 
-.app-shell[data-theme='dark'] .ebook-chart-grid-line {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-chart-grid-line {
   stroke: #28333a;
 }
 
-.app-shell[data-theme='dark'] .ebook-chart-y-text,
-.app-shell[data-theme='dark'] .ebook-chart-x-text {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-chart-y-text,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-chart-x-text {
   fill: #788993;
 }
 
-.app-shell[data-theme='dark'] .ebook-chart-x-text.is-active {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-chart-x-text.is-active {
   fill: #f18c72;
 }
 
-.app-shell[data-theme='dark'] .ebook-chart-avg-line {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-chart-avg-line {
   stroke: #e27156;
 }
 
-.app-shell[data-theme='dark'] .ebook-chart-avg-label {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-chart-avg-label {
   fill: #f18c72;
   stroke: #182025;
 }
 
-.app-shell[data-theme='dark'] .ebook-chart-bar-hit:hover,
-.app-shell[data-theme='dark']
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-chart-bar-hit:hover,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
   .ebook-chart-bar-group.is-active
   .ebook-chart-bar-hit {
   fill: rgba(241, 140, 114, 0.08);
 }
 
-.app-shell[data-theme='dark'] .ebook-chart-active-col {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-chart-active-col {
   fill: rgba(241, 140, 114, 0.12);
 }
 
-.app-shell[data-theme='dark'] .ebook-chart-bar-zero {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-chart-bar-zero {
   fill: #34414a;
 }
 
-.app-shell[data-theme='dark'] .ebook-chart-bar-rect.level-0 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-chart-bar-rect.level-0 {
   fill: #263138;
 }
-.app-shell[data-theme='dark'] .ebook-chart-bar-rect.level-1 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-chart-bar-rect.level-1 {
   fill: #523129;
 }
-.app-shell[data-theme='dark'] .ebook-chart-bar-rect.level-2 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-chart-bar-rect.level-2 {
   fill: #824032;
 }
-.app-shell[data-theme='dark'] .ebook-chart-bar-rect.level-3 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-chart-bar-rect.level-3 {
   fill: #b8543d;
 }
-.app-shell[data-theme='dark'] .ebook-chart-bar-rect.level-4 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-chart-bar-rect.level-4 {
   fill: #e56d51;
 }
 
-.app-shell[data-theme='dark']
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
   .ebook-chart-bar-group:hover
   .ebook-chart-bar-rect,
-.app-shell[data-theme='dark'] .ebook-chart-bar-rect.is-active {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-chart-bar-rect.is-active {
   stroke: #e2e8ec;
 }
 
-.app-shell[data-theme='dark'] .ebook-institutional-inspector {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-institutional-inspector {
   border-color: #313c43;
   background: #20292f;
 }
 
-.app-shell[data-theme='dark'] .ebook-inspector-header {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-inspector-header {
   border-bottom-color: #2b353c;
 }
 
-.app-shell[data-theme='dark'] .ebook-inspector-dot {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-inspector-dot {
   background: #f18c72;
 }
 
-.app-shell[data-theme='dark'] .ebook-inspector-date {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-inspector-date {
   color: #e2e8ec;
 }
 
-.app-shell[data-theme='dark'] .ebook-inspector-level {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-inspector-level {
   color: #8c9da7;
 }
 
-.app-shell[data-theme='dark'] .ebook-inspector-number {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-inspector-number {
   color: #edf2f5;
 }
 
-.app-shell[data-theme='dark'] .ebook-inspector-unit {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-inspector-unit {
   color: #8a9aa3;
 }
 
-.app-shell[data-theme='dark'] .ebook-inspector-ratio {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-inspector-ratio {
   color: #f18c72;
 }
 
-.app-shell[data-theme='dark'] .ebook-inspector-book-name {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-inspector-book-name {
   color: #cad4da;
 }
 
-.app-shell[data-theme='dark'] .ebook-inspector-book-words {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-inspector-book-words {
   color: #8f9ea7;
 }
 
-.app-shell[data-theme='dark'] .ebook-inspector-empty {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-inspector-empty {
   color: #798a94;
 }
 
@@ -3346,74 +3602,87 @@
 }
 
 /* Dark mode overrides */
-.app-shell[data-theme='dark'] .ebook-heatmap-context-menu {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-heatmap-context-menu {
   border-color: #334155;
   background: #1e262c;
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.65);
 }
 
-.app-shell[data-theme='dark'] .ebook-context-menu-head {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-context-menu-head {
   border-bottom-color: #2a353d;
 }
 
-.app-shell[data-theme='dark'] .ebook-context-menu-date {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-context-menu-date {
   color: #f1f5f9;
 }
 
-.app-shell[data-theme='dark'] .ebook-context-menu-words {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-context-menu-words {
   color: #94a3b8;
 }
 
-.app-shell[data-theme='dark'] .ebook-context-menu-item {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-context-menu-item {
   color: #cbd5e1;
 }
 
-.app-shell[data-theme='dark'] .ebook-context-menu-item:hover:not(:disabled) {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-context-menu-item:hover:not(:disabled) {
   background: #28333b;
   color: #f8fafc;
 }
 
-.app-shell[data-theme='dark'] .ebook-context-menu-item.is-danger {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-context-menu-item.is-danger {
   color: #fb923c;
 }
 
-.app-shell[data-theme='dark']
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
   .ebook-context-menu-item.is-danger:hover:not(:disabled) {
   background: rgba(234, 88, 12, 0.16);
   color: #fdba74;
 }
 
-.app-shell[data-theme='dark'] .ebook-context-menu-item.is-muted {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-context-menu-item.is-muted {
   color: #94a3b8;
 }
 
-.app-shell[data-theme='dark']
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
   .ebook-context-menu-item.is-muted:hover:not(:disabled) {
   background: #252e35;
   color: #e2e8f0;
 }
 
-.app-shell[data-theme='dark'] .ebook-context-menu-divider {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-context-menu-divider {
   background: #2a353d;
 }
 
-.app-shell[data-theme='dark'] .ebook-inspector-clear-btn {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-inspector-clear-btn {
   border-color: #475569;
   color: #f87171;
 }
 
-.app-shell[data-theme='dark'] .ebook-inspector-clear-btn:hover {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-inspector-clear-btn:hover {
   border-color: #ef4444;
   background: rgba(239, 68, 68, 0.15);
   color: #fca5a5;
 }
 
-.app-shell[data-theme='dark'] .ebook-heatmap-clear-all {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-heatmap-clear-all {
   border-color: #3e4a54;
   color: #94a3b8;
 }
 
-.app-shell[data-theme='dark'] .ebook-heatmap-clear-all:hover {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-heatmap-clear-all:hover {
   border-color: #ef4444;
   color: #f87171;
   background: rgba(239, 68, 68, 0.12);
@@ -3794,24 +4063,27 @@
 }
 
 /* Dark theme overrides for Ebook & Online Search */
-.app-shell[data-theme='dark'] .ebook-shelf-refresh-button {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-refresh-button {
   border-color: #3b474e;
   background: #1c2328;
   color: #c4d0d7;
 }
 
-.app-shell[data-theme='dark'] .ebook-shelf-refresh-button:hover:not(:disabled) {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-refresh-button:hover:not(:disabled) {
   border-color: #e5765c;
   color: #e5765c;
 }
 
-.app-shell[data-theme='dark'] .ebook-book-add-cover {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-book-add-cover {
   border-color: #3b474e;
   background: rgba(255, 255, 255, 0.03);
   color: #8c9ba4;
 }
 
-.app-shell[data-theme='dark']
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
   .ebook-book-add-card:hover:not(:disabled)
   .ebook-book-add-cover {
   border-color: #e5765c;
@@ -4026,5 +4298,32 @@
 @keyframes epubReaderBilingualSpin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* 宽屏书架以工作区实际高度为边界，三栏各自滚动并完整贴合底部。 */
+@media (min-width: 1481px) {
+  .ebook-workspace-stage > .ebook-shelf {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+    align-items: stretch;
+  }
+
+  .ebook-workspace-stage .ebook-shelf-content {
+    height: 100%;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .ebook-workspace-stage .ebook-reading-dashboard,
+  .ebook-workspace-stage .zlib-side-panel {
+    position: relative;
+    top: auto;
+    height: 100%;
+    min-height: 0;
+    max-height: none;
+    align-self: stretch;
   }
 }

@@ -388,6 +388,10 @@ export default function App() {
   const [playerOpened, setPlayerOpened] = useState(
     () => activeWorkspace === 'player',
   );
+  // 终端页首次打开后保持挂载，切换工作区时保留 PTY 会话与屏幕缓冲。
+  const [terminalWorkspaceOpened, setTerminalWorkspaceOpened] = useState(
+    () => activeWorkspace === 'terminal',
+  );
   const [theme, setTheme] = useState<Theme>(readTheme);
   const [mindmapStyle, setMindmapStyle] =
     useState<MindmapStyle>(readMindmapStyle);
@@ -706,6 +710,7 @@ export default function App() {
       // The active workspace remains available for this session.
     }
     if (activeWorkspace === 'player') setPlayerOpened(true);
+    if (activeWorkspace === 'terminal') setTerminalWorkspaceOpened(true);
   }, [activeWorkspace]);
 
   useEffect(() => {
@@ -6773,21 +6778,23 @@ export default function App() {
         aria-label="终端与系统实验工作区"
         aria-hidden={activeWorkspace !== 'terminal'}
       >
-        <Suspense
-          fallback={
-            <div className="terminal-workspace-loading">
-              正在载入终端实验室…
-            </div>
-          }
-        >
-          <TerminalWorkspace
-            active={activeWorkspace === 'terminal'}
-            cwd={librarySnapshot?.rootPath ?? ''}
-            theme={theme}
-            books={librarySnapshot?.books ?? []}
-            onOpenBook={(book) => void openLibraryEpub(book)}
-          />
-        </Suspense>
+        {terminalWorkspaceOpened && (
+          <Suspense
+            fallback={
+              <div className="terminal-workspace-loading">
+                正在载入终端实验室…
+              </div>
+            }
+          >
+            <TerminalWorkspace
+              active={activeWorkspace === 'terminal'}
+              cwd={librarySnapshot?.rootPath ?? ''}
+              theme={theme}
+              books={librarySnapshot?.books ?? []}
+              onOpenBook={(book) => void openLibraryEpub(book)}
+            />
+          </Suspense>
+        )}
       </section>
 
       {activeWorkspace === 'tasks' && (

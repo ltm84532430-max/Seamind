@@ -307,8 +307,13 @@ pub fn run() {
             feed_asr::feed_asr_start,
             feed_asr::feed_asr_stop,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Markmap Desktop");
+        .build(tauri::generate_context!())
+        .expect("error while building Markmap Desktop")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                app_handle.state::<terminal::TerminalState>().close_all();
+            }
+        });
 }
 
 const KEYRING_SERVICE: &str = "com.markmap.desktop";

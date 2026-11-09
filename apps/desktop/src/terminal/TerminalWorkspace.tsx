@@ -57,6 +57,31 @@ const DEFAULT_SHELLS: TerminalShellOption[] = [
   },
 ];
 
+const COMMAND_FAVORITES_KEY = 'seamind:terminal-command-favorites:v1';
+const COMMAND_RECENTS_KEY = 'seamind:terminal-command-recents:v1';
+const MAX_WORKSPACE_TABS = 16;
+
+function readCommandIds(key: string): string[] {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(key) ?? '[]');
+    return Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function getCheatCommand(
+  item: (typeof LINUX_CHEAT_ITEMS)[number],
+  shell: TerminalShellType,
+) {
+  return (
+    item.commandByShell?.[shell] ??
+    (shell === 'bash' || shell === 'wsl' ? item.cmd : undefined)
+  );
+}
+
 export default function TerminalWorkspace({
   active,
   cwd,
@@ -84,6 +109,23 @@ export default function TerminalWorkspace({
     'linux',
   );
   const [linuxFilter, setLinuxFilter] = useState<string>('all');
+  const [commandQuery, setCommandQuery] = useState('');
+  const [commandView, setCommandView] = useState<
+    'all' | 'favorites' | 'recent'
+  >('all');
+  const [favoriteCommandIds, setFavoriteCommandIds] = useState<string[]>(() =>
+    readCommandIds(COMMAND_FAVORITES_KEY),
+  );
+  const [recentCommandIds, setRecentCommandIds] = useState<string[]>(() =>
+    readCommandIds(COMMAND_RECENTS_KEY),
+  );
+  const [pendingCommand, setPendingCommand] = useState<{
+    title: string;
+    command: string;
+    tabId: string;
+    shell: TerminalShellType;
+    cwd: string;
+  } | null>(null);
   const [showShellMenu, setShowShellMenu] = useState<boolean>(false);
   const [editingTabId, setEditingTabId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState<string>('');
@@ -112,6 +154,7 @@ export default function TerminalWorkspace({
   );
 
   const addTab = (shell: TerminalShellType = 'powershell') => {
+    if (tabs.length >= MAX_WORKSPACE_TABS) return;
     const nextIndex = tabs.length + 1;
     const shellDef = shells.find((s) => s.id === shell);
     const title = `${shellDef?.name ?? shell.toUpperCase()} ${nextIndex}`;
@@ -169,10 +212,109 @@ export default function TerminalWorkspace({
     }
   };
 
+  useEffect(() => {
+    try {
+      // 只保存内置卡片 ID，不落盘保存终端命令或用户输入，避免记录凭据。
+      localStorage.setItem(
+        COMMAND_FAVORITES_KEY,
+        JSON.stringify(favoriteCommandIds),
+      );
+    } catch {
+      // 收藏状态仍可在当前进程中使用。
+    }
+  }, [favoriteCommandIds]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        COMMAND_RECENTS_KEY,
+        JSON.stringify(recentCommandIds),
+      );
+    } catch {
+      // 最近使用记录仍可在当前进程中使用。
+    }
+  }, [recentCommandIds]);
+
+  const rememberCommand = (id: string) => {
+    if (!LINUX_CHEAT_ITEMS.some((item) => item.id === id)) return;
+    setRecentCommandIds((previous) =>
+      [id, ...previous.filter((item) => item !== id)].slice(0, 30),
+    );
+  };
+
+  const toggleCommandFavorite = (id: string) => {
+    setFavoriteCommandIds((previous) =>
+      previous.includes(id)
+        ? previous.filter((item) => item !== id)
+        : [id, ...previous],
+    );
+  };
+
+  const runOrConfirmCommand = (
+    title: string,
+    command: string,
+    requiresConfirmation: boolean,
+    itemId: string,
+  ) => {
+    rememberCommand(itemId);
+    if (requiresConfirmation) {
+      setPendingCommand({
+        title,
+        command,
+        tabId: activeTabId,
+        shell: activeTab?.shell ?? 'powershell',
+        cwd: activeTab?.cwd ?? cwd,
+      });
+      return;
+    }
+    sendCommandToActive(command, true);
+  };
+
+  const confirmPendingCommand = () => {
+    if (!pendingCommand) return;
+    const handle = terminalRefs.current.get(pendingCommand.tabId);
+    if (handle) {
+      handle.sendCommand(pendingCommand.command, true);
+      handle.focus();
+    }
+    setPendingCommand(null);
+  };
+
+  const activeShell = activeTab?.shell ?? 'powershell';
   const filteredLinuxCheats = useMemo(() => {
-    if (linuxFilter === 'all') return LINUX_CHEAT_ITEMS;
-    return LINUX_CHEAT_ITEMS.filter((item) => item.category === linuxFilter);
-  }, [linuxFilter]);
+    const query = commandQuery.trim().toLocaleLowerCase();
+    return LINUX_CHEAT_ITEMS.filter((item) => {
+      const command = getCheatCommand(item, activeShell);
+      if (!command) return false;
+      if (linuxFilter !== 'all' && item.category !== linuxFilter) return false;
+      if (commandView === 'favorites' && !favoriteCommandIds.includes(item.id))
+        return false;
+      if (commandView === 'recent' && !recentCommandIds.includes(item.id))
+        return false;
+      return (
+        !query ||
+        [item.title, item.explanation, item.practicalScenario, command].some(
+          (value) => value.toLocaleLowerCase().includes(query),
+        )
+      );
+    }).sort((left, right) => {
+      if (commandView !== 'recent') return 0;
+      return (
+        recentCommandIds.indexOf(left.id) - recentCommandIds.indexOf(right.id)
+      );
+    });
+  }, [
+    activeShell,
+    commandQuery,
+    commandView,
+    favoriteCommandIds,
+    linuxFilter,
+    recentCommandIds,
+  ]);
+
+  const availableKnowledgeActions = KNOWLEDGE_ACTION_ITEMS.filter(
+    (item) => item.commandByShell?.[activeShell],
+  );
 
   const relatedBooks = useMemo(() => {
     return books.filter((b) =>
@@ -328,6 +470,7 @@ export default function TerminalWorkspace({
             type="button"
             className="terminal-new-tab-btn"
             onClick={() => setShowShellMenu((prev) => !prev)}
+            disabled={tabs.length >= MAX_WORKSPACE_TABS}
             title="新建终端会话"
           >
             + 新建终端
@@ -339,12 +482,18 @@ export default function TerminalWorkspace({
               onMouseLeave={() => setShowShellMenu(false)}
             >
               <div className="shell-menu-header">选择会话环境</div>
+              {tabs.length >= MAX_WORKSPACE_TABS && (
+                <div className="shell-menu-limit">
+                  当前工作区已达到 {MAX_WORKSPACE_TABS}{' '}
+                  个会话上限，请先关闭一个标签。
+                </div>
+              )}
               {shells.map((opt) => (
                 <button
                   key={opt.id}
                   type="button"
                   className={`shell-menu-option ${opt.available ? '' : 'is-unavailable'}`}
-                  disabled={!opt.available}
+                  disabled={!opt.available || tabs.length >= MAX_WORKSPACE_TABS}
                   onClick={() => addTab(opt.id)}
                 >
                   <div className="option-main">
@@ -362,150 +511,139 @@ export default function TerminalWorkspace({
       {/* 3. Center Workspace Body (Split Stage + Right Drawer) */}
       <div className="terminal-workspace-body">
         {/* 中央主舞台：支持单屏与多分屏 */}
+        {/* 每个标签只挂载一个 xterm；切换分屏只改变网格区域，不重建 PTY。 */}
         <section
-          className={`terminal-stage-panes ${splitMode !== 'single' ? `is-split-${splitMode}` : 'is-single'}`}
+          className={`terminal-stage-panes is-${splitMode}`}
           aria-label="终端画布"
+          style={
+            {
+              '--primary-pane-size': `${splitRatio}fr`,
+              '--secondary-pane-size': `${1 - splitRatio}fr`,
+            } as React.CSSProperties
+          }
         >
-          {splitMode === 'single' ? (
-            <div className="terminal-pane-primary">
+          <div className="pane-header pane-header-primary">
+            <span className="pane-label">
+              {splitMode === 'single' ? '当前会话' : '窗格 A'}
+            </span>
+            <select
+              className="pane-tab-select"
+              value={activeTabId}
+              onChange={(event) => setActiveTabId(event.target.value)}
+              aria-label="窗格 A 关联会话"
+            >
               {tabs.map((tab) => (
-                <TerminalSessionView
-                  key={tab.id}
-                  ref={(instance) => {
-                    if (instance) terminalRefs.current.set(tab.id, instance);
-                    else terminalRefs.current.delete(tab.id);
-                  }}
-                  tab={tab}
-                  theme={theme}
-                  active={tab.id === activeTabId}
-                  onStatusChange={(status, message) => {
-                    setTabs((prev) =>
-                      prev.map((t) =>
-                        t.id === tab.id
-                          ? { ...t, status, statusMessage: message }
-                          : t,
-                      ),
-                    );
-                  }}
-                />
+                <option key={tab.id} value={tab.id}>
+                  [{tab.shell.toUpperCase()}] {tab.title} ·{' '}
+                  {tab.status === 'ready'
+                    ? '就绪'
+                    : tab.status === 'starting'
+                      ? '启动中'
+                      : tab.status === 'exited'
+                        ? '已退出'
+                        : '错误'}
+                </option>
               ))}
+            </select>
+          </div>
+
+          {splitMode !== 'single' && (
+            <div className="pane-header pane-header-secondary">
+              <span className="pane-label">窗格 B</span>
+              <select
+                className="pane-tab-select"
+                value={secondaryTabId}
+                onChange={(event) => setSecondaryTabId(event.target.value)}
+                aria-label="窗格 B 关联会话"
+              >
+                {tabs.map((tab) => (
+                  <option key={tab.id} value={tab.id}>
+                    [{tab.shell.toUpperCase()}] {tab.title}
+                  </option>
+                ))}
+              </select>
             </div>
-          ) : (
-            <>
-              {/* 分屏窗格 1 */}
-              <div
-                className="terminal-split-pane pane-1"
-                style={{
-                  flex: splitRatio,
-                }}
-              >
-                <div className="pane-header">
-                  <span className="pane-label">窗格 A</span>
-                  <select
-                    className="pane-tab-select"
-                    value={activeTabId}
-                    onChange={(e) => setActiveTabId(e.target.value)}
-                    aria-label="窗格 A 关联会话"
-                  >
-                    {tabs.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        [{t.shell.toUpperCase()}] {t.title}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="pane-content">
-                  {tabs.map((tab) => (
-                    <TerminalSessionView
-                      key={`pane1-${tab.id}`}
-                      ref={(instance) => {
-                        if (instance)
-                          terminalRefs.current.set(tab.id, instance);
-                      }}
-                      tab={tab}
-                      theme={theme}
-                      active={tab.id === activeTabId}
-                    />
-                  ))}
-                </div>
-              </div>
+          )}
 
-              {/* 分屏拖拽手柄 */}
-              <div
-                className="terminal-pane-divider"
-                role="separator"
-                aria-orientation={
-                  splitMode === 'vertical' ? 'vertical' : 'horizontal'
-                }
-                onPointerDown={(e) => {
-                  const target = e.currentTarget;
-                  const container = target.parentElement;
-                  if (!container) return;
-                  const rect = container.getBoundingClientRect();
-                  const isVert = splitMode === 'vertical';
+          {splitMode !== 'single' && (
+            <div
+              className="terminal-pane-divider"
+              role="separator"
+              aria-orientation={
+                splitMode === 'vertical' ? 'vertical' : 'horizontal'
+              }
+              onPointerDown={(event) => {
+                const container = event.currentTarget.parentElement;
+                if (!container) return;
+                const rect = container.getBoundingClientRect();
+                const isVertical = splitMode === 'vertical';
+                const onPointerMove = (moveEvent: PointerEvent) => {
+                  const ratio = isVertical
+                    ? (moveEvent.clientX - rect.left) / rect.width
+                    : (moveEvent.clientY - rect.top - 60) /
+                      Math.max(1, rect.height - 65);
+                  setSplitRatio(Math.max(0.2, Math.min(0.8, ratio)));
+                };
+                const onPointerUp = () => {
+                  window.removeEventListener('pointermove', onPointerMove);
+                  window.removeEventListener('pointerup', onPointerUp);
+                };
+                window.addEventListener('pointermove', onPointerMove);
+                window.addEventListener('pointerup', onPointerUp, {
+                  once: true,
+                });
+              }}
+              title="拖动调整窗格比例"
+            >
+              <div className="divider-handle" />
+            </div>
+          )}
 
-                  const onPointerMove = (moveEvent: PointerEvent) => {
-                    const ratio = isVert
-                      ? (moveEvent.clientX - rect.left) / rect.width
-                      : (moveEvent.clientY - rect.top) / rect.height;
-                    setSplitRatio(Math.max(0.2, Math.min(0.8, ratio)));
-                  };
+          {tabs.map((tab) => (
+            <TerminalSessionView
+              key={tab.id}
+              ref={(instance) => {
+                if (instance) terminalRefs.current.set(tab.id, instance);
+                else terminalRefs.current.delete(tab.id);
+              }}
+              tab={tab}
+              theme={theme}
+              style={{
+                gridArea: tab.id === activeTabId ? 'primary' : 'secondary',
+              }}
+              active={
+                active &&
+                (tab.id === activeTabId ||
+                  (splitMode !== 'single' &&
+                    tab.id === secondaryTabId &&
+                    tab.id !== activeTabId))
+              }
+              onStatusChange={(status, message) => {
+                setTabs((previous) =>
+                  previous.map((item) =>
+                    item.id === tab.id
+                      ? { ...item, status, statusMessage: message }
+                      : item,
+                  ),
+                );
+              }}
+            />
+          ))}
 
-                  const onPointerUp = () => {
-                    window.removeEventListener('pointermove', onPointerMove);
-                    window.removeEventListener('pointerup', onPointerUp);
-                  };
-
-                  window.addEventListener('pointermove', onPointerMove);
-                  window.addEventListener('pointerup', onPointerUp);
-                }}
-                title="拖动调整两窗格比例"
-              >
-                <div className="divider-handle" />
-              </div>
-
-              {/* 分屏窗格 2 */}
-              <div
-                className="terminal-split-pane pane-2"
-                style={{
-                  flex: 1 - splitRatio,
-                }}
-              >
-                <div className="pane-header">
-                  <span className="pane-label">窗格 B</span>
-                  <select
-                    className="pane-tab-select"
-                    value={secondaryTabId}
-                    onChange={(e) => setSecondaryTabId(e.target.value)}
-                    aria-label="窗格 B 关联会话"
-                  >
-                    {tabs.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        [{t.shell.toUpperCase()}] {t.title}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="pane-content">
-                  {tabs.map((tab) => (
-                    <TerminalSessionView
-                      key={`pane2-${tab.id}`}
-                      tab={tab}
-                      theme={theme}
-                      active={tab.id === secondaryTabId}
-                    />
-                  ))}
-                </div>
-              </div>
-            </>
+          {splitMode !== 'single' && activeTabId === secondaryTabId && (
+            <div
+              className="terminal-pane-empty"
+              style={{ gridArea: 'secondary' }}
+            >
+              选择另一个会话以打开第二个窗格
+            </div>
           )}
         </section>
-
         {/* 4. Right Collapsible Drawer: Linux 实操与跨界面知识联动 */}
         {drawerOpen && (
           <aside
             className="terminal-knowledge-drawer"
-            aria-label="Linux 实操与跨界面知识联动"
+            aria-label="终端命令与跨界面知识联动"
           >
             {/* 抽屉分段控制 */}
             <div className="drawer-segmented-tabs">
@@ -514,7 +652,7 @@ export default function TerminalWorkspace({
                 className={`drawer-tab-btn ${drawerTab === 'linux' ? 'is-active' : ''}`}
                 onClick={() => setDrawerTab('linux')}
               >
-                Linux 实验
+                命令库
               </button>
               <button
                 type="button"
@@ -532,9 +670,49 @@ export default function TerminalWorkspace({
               </button>
             </div>
 
-            {/* TAB 1: Linux 实验指南 */}
+            {/* TAB 1: 按当前 Shell 过滤的命令卡片 */}
             {drawerTab === 'linux' && (
               <div className="drawer-panel-scroll">
+                <div className="command-library-toolbar">
+                  <input
+                    className="command-search"
+                    type="search"
+                    value={commandQuery}
+                    onChange={(event) => setCommandQuery(event.target.value)}
+                    placeholder="搜索命令、用途或场景"
+                    aria-label="搜索终端命令卡片"
+                  />
+                  <div
+                    className="command-view-switch"
+                    aria-label="命令卡片筛选"
+                  >
+                    {(
+                      [
+                        ['all', '全部'],
+                        ['favorites', '收藏'],
+                        ['recent', '最近'],
+                      ] as const
+                    ).map(([view, label]) => (
+                      <button
+                        key={view}
+                        type="button"
+                        className={
+                          commandView === view
+                            ? 'filter-chip is-active'
+                            : 'filter-chip'
+                        }
+                        onClick={() => setCommandView(view)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="command-shell-context">
+                    当前环境：
+                    {shells.find((shell) => shell.id === activeShell)?.name ??
+                      activeShell}
+                  </div>
+                </div>
                 <div className="drawer-filter-bar">
                   {[
                     ['all', '全部'],
@@ -556,43 +734,83 @@ export default function TerminalWorkspace({
                 </div>
 
                 <div className="drawer-cards-stack">
-                  {filteredLinuxCheats.map((item) => (
-                    <article key={item.id} className="cheat-card">
-                      <div className="cheat-card-top">
-                        <span className="cheat-badge">
-                          [{item.category.toUpperCase()}]
-                        </span>
-                        <h4 className="cheat-title">{item.title}</h4>
-                      </div>
-                      <p className="cheat-expl">{item.explanation}</p>
-                      <pre className="cheat-code-box">
-                        <code>{item.cmd}</code>
-                      </pre>
-                      <div className="cheat-scenario">
-                        <span className="scenario-label">实战场景:</span>
-                        <span>{item.practicalScenario}</span>
-                      </div>
-                      <div className="cheat-actions">
-                        <button
-                          type="button"
-                          className="cheat-btn-fill"
-                          onClick={() => sendCommandToActive(item.cmd, false)}
-                          title="将命令写入终端输入区但不立即回车"
-                        >
-                          填入终端
-                        </button>
-                        <button
-                          type="button"
-                          className="cheat-btn-run"
-                          onClick={() => sendCommandToActive(item.cmd, true)}
-                          title="直接发送命令并在终端执行"
-                        >
-                          执行命令
-                        </button>
-                      </div>
-                    </article>
-                  ))}
+                  {filteredLinuxCheats.map((item) => {
+                    const command = getCheatCommand(item, activeShell);
+                    if (!command) return null;
+                    return (
+                      <article key={item.id} className="cheat-card">
+                        <div className="cheat-card-top">
+                          <span className="cheat-badge">
+                            [{item.category.toUpperCase()}]
+                          </span>
+                          <h4 className="cheat-title">{item.title}</h4>
+                          <button
+                            type="button"
+                            className={
+                              favoriteCommandIds.includes(item.id)
+                                ? 'command-favorite is-active'
+                                : 'command-favorite'
+                            }
+                            onClick={() => toggleCommandFavorite(item.id)}
+                            aria-label={
+                              favoriteCommandIds.includes(item.id)
+                                ? '取消收藏命令'
+                                : '收藏命令'
+                            }
+                          >
+                            {favoriteCommandIds.includes(item.id)
+                              ? '已收藏'
+                              : '收藏'}
+                          </button>
+                        </div>
+                        <p className="cheat-expl">{item.explanation}</p>
+                        <pre className="cheat-code-box">
+                          <code>{command}</code>
+                        </pre>
+                        <div className="cheat-scenario">
+                          <span className="scenario-label">实战场景:</span>
+                          <span>{item.practicalScenario}</span>
+                        </div>
+                        <div className="cheat-actions">
+                          <button
+                            type="button"
+                            className="cheat-btn-fill"
+                            disabled={activeTab?.status !== 'ready'}
+                            onClick={() => {
+                              rememberCommand(item.id);
+                              sendCommandToActive(command, false);
+                            }}
+                            title="将命令写入终端输入区但不立即回车"
+                          >
+                            填入终端
+                          </button>
+                          <button
+                            type="button"
+                            className="cheat-btn-run"
+                            disabled={activeTab?.status !== 'ready'}
+                            onClick={() =>
+                              runOrConfirmCommand(
+                                item.title,
+                                command,
+                                Boolean(item.requiresConfirmation),
+                                item.id,
+                              )
+                            }
+                            title="直接发送命令并在终端执行"
+                          >
+                            执行命令
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  })}
                 </div>
+                {filteredLinuxCheats.length === 0 && (
+                  <div className="command-empty-state">
+                    当前 Shell 没有匹配的命令卡片。可切换到 PowerShell、Git Bash
+                    或 WSL，或修改搜索条件。
+                  </div>
+                )}
 
                 {relatedBooks.length > 0 && (
                   <div className="drawer-related-books">
@@ -629,43 +847,55 @@ export default function TerminalWorkspace({
                 </div>
 
                 <div className="drawer-cards-stack">
-                  {KNOWLEDGE_ACTION_ITEMS.map((item) => (
-                    <article key={item.id} className="knowledge-action-card">
-                      <div className="action-card-header">
-                        <span className="action-badge">
-                          [{item.categoryBadge}]
-                        </span>
-                        <span className="action-target">
-                          联动 {item.targetWorkspace}
-                        </span>
-                      </div>
-                      <h4 className="action-title">{item.title}</h4>
-                      <p className="action-desc">{item.description}</p>
-                      <pre className="action-code-box">
-                        <code>{item.commandTemplate}</code>
-                      </pre>
-                      <div className="action-footer">
-                        <button
-                          type="button"
-                          className="action-fill-btn"
-                          onClick={() =>
-                            sendCommandToActive(item.commandTemplate, false)
-                          }
-                        >
-                          填入终端
-                        </button>
-                        <button
-                          type="button"
-                          className="action-run-btn"
-                          onClick={() =>
-                            sendCommandToActive(item.commandTemplate, true)
-                          }
-                        >
-                          运行修正
-                        </button>
-                      </div>
-                    </article>
-                  ))}
+                  {availableKnowledgeActions.map((item) => {
+                    const command = item.commandByShell?.[activeShell];
+                    if (!command) return null;
+                    return (
+                      <article key={item.id} className="knowledge-action-card">
+                        <div className="action-card-header">
+                          <span className="action-badge">
+                            [{item.categoryBadge}]
+                          </span>
+                          <span className="action-target">
+                            联动 {item.targetWorkspace}
+                          </span>
+                        </div>
+                        <h4 className="action-title">{item.title}</h4>
+                        <p className="action-desc">{item.description}</p>
+                        <pre className="action-code-box">
+                          <code>{command}</code>
+                        </pre>
+                        <div className="action-footer">
+                          <button
+                            type="button"
+                            className="action-fill-btn"
+                            disabled={activeTab?.status !== 'ready'}
+                            onClick={() => {
+                              rememberCommand(item.id);
+                              sendCommandToActive(command, false);
+                            }}
+                          >
+                            填入终端
+                          </button>
+                          <button
+                            type="button"
+                            className="action-run-btn"
+                            disabled={activeTab?.status !== 'ready'}
+                            onClick={() =>
+                              runOrConfirmCommand(
+                                item.title,
+                                command,
+                                Boolean(item.requiresConfirmation),
+                                item.id,
+                              )
+                            }
+                          >
+                            运行修正
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -716,6 +946,54 @@ export default function TerminalWorkspace({
           </aside>
         )}
       </div>
+      {pendingCommand && (
+        <div
+          className="terminal-command-confirm-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setPendingCommand(null);
+          }}
+        >
+          <section
+            className="terminal-command-confirm"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="terminal-command-confirm-title"
+          >
+            <div className="terminal-command-confirm-heading">
+              <span className="terminal-confirm-label">执行前确认</span>
+              <button
+                type="button"
+                className="terminal-confirm-close"
+                onClick={() => setPendingCommand(null)}
+                aria-label="关闭确认窗口"
+              >
+                ×
+              </button>
+            </div>
+            <h2 id="terminal-command-confirm-title">{pendingCommand.title}</h2>
+            <p>
+              此命令会修改文件或权限。确认 Shell 为{' '}
+              <strong>{pendingCommand.shell.toUpperCase()}</strong>，工作目录为{' '}
+              <code>{pendingCommand.cwd || '.'}</code>。
+            </p>
+            <pre className="terminal-confirm-command">
+              <code>{pendingCommand.command}</code>
+            </pre>
+            <div className="terminal-confirm-actions">
+              <button type="button" onClick={() => setPendingCommand(null)}>
+                取消
+              </button>
+              <button
+                type="button"
+                className="is-danger"
+                onClick={confirmPendingCommand}
+              >
+                确认并执行
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </main>
   );
 }

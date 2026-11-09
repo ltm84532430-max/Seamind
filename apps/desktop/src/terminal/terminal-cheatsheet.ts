@@ -5,6 +5,11 @@ export const LINUX_CHEAT_ITEMS: readonly LinuxCheatItem[] = [
   {
     id: 'fs-ls',
     cmd: 'ls -lah',
+    commandByShell: {
+      powershell:
+        'Get-ChildItem -Force | Format-Table Mode, Length, LastWriteTime, Name',
+      cmd: 'dir /a',
+    },
     category: 'fs',
     categoryLabel: '文件与目录',
     title: '全量详细列表',
@@ -15,6 +20,10 @@ export const LINUX_CHEAT_ITEMS: readonly LinuxCheatItem[] = [
   {
     id: 'fs-find',
     cmd: 'find . -type f -name "*.md" -size +10k',
+    commandByShell: {
+      powershell:
+        'Get-ChildItem -Path . -Recurse -File -Filter *.md | Where-Object { $_.Length -gt 10KB } | Select-Object FullName, Length',
+    },
     category: 'fs',
     categoryLabel: '文件与目录',
     title: '深度检索指定文件',
@@ -24,6 +33,7 @@ export const LINUX_CHEAT_ITEMS: readonly LinuxCheatItem[] = [
   {
     id: 'fs-chmod',
     cmd: 'chmod 755 run.sh && chmod 600 config.json',
+    requiresConfirmation: true,
     category: 'fs',
     categoryLabel: '文件与目录',
     title: '权限八进制控制',
@@ -35,6 +45,10 @@ export const LINUX_CHEAT_ITEMS: readonly LinuxCheatItem[] = [
   {
     id: 'fs-du',
     cmd: 'du -sh * | sort -hr | head -n 10',
+    commandByShell: {
+      powershell:
+        'Get-ChildItem -Directory | ForEach-Object { $size = (Get-ChildItem $_.FullName -File -Recurse -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum; [pscustomobject]@{ MB = [math]::Round($size / 1MB, 1); Path = $_.Name } } | Sort-Object MB -Descending | Select-Object -First 10',
+    },
     category: 'fs',
     categoryLabel: '文件与目录',
     title: '磁盘目录占用分析',
@@ -46,6 +60,11 @@ export const LINUX_CHEAT_ITEMS: readonly LinuxCheatItem[] = [
   {
     id: 'text-grep',
     cmd: 'grep -rnI --color=auto "TODO\\|FIXME" ./src',
+    commandByShell: {
+      powershell:
+        'Get-ChildItem -Path .\\src -Recurse -File | Select-String -Pattern "TODO|FIXME"',
+      cmd: 'findstr /s /n /i /c:"TODO" /c:"FIXME" src\\*',
+    },
     category: 'text',
     categoryLabel: '文本三剑客',
     title: '递归检索文本特征',
@@ -64,6 +83,7 @@ export const LINUX_CHEAT_ITEMS: readonly LinuxCheatItem[] = [
   {
     id: 'text-sed',
     cmd: "sed -i 's/OLD_HOST/NEW_HOST/g' config.yaml",
+    requiresConfirmation: true,
     category: 'text',
     categoryLabel: '文本三剑客',
     title: '流编辑器批量替换',
@@ -75,6 +95,11 @@ export const LINUX_CHEAT_ITEMS: readonly LinuxCheatItem[] = [
   {
     id: 'proc-ps',
     cmd: 'ps aux | grep node',
+    commandByShell: {
+      powershell:
+        "Get-Process | Where-Object ProcessName -Like '*node*' | Select-Object Id, ProcessName, CPU, WorkingSet64",
+      cmd: 'tasklist | findstr /i node',
+    },
     category: 'proc',
     categoryLabel: '进程与监控',
     title: '进程全景与管道过滤',
@@ -84,6 +109,11 @@ export const LINUX_CHEAT_ITEMS: readonly LinuxCheatItem[] = [
   {
     id: 'proc-lsof',
     cmd: 'lsof -i :1420',
+    commandByShell: {
+      powershell:
+        'Get-NetTCPConnection -LocalPort 1420 | Select-Object LocalAddress, LocalPort, State, OwningProcess',
+      cmd: 'netstat -ano | findstr :1420',
+    },
     category: 'proc',
     categoryLabel: '进程与监控',
     title: '端口占用排查',
@@ -94,6 +124,11 @@ export const LINUX_CHEAT_ITEMS: readonly LinuxCheatItem[] = [
   {
     id: 'proc-htop',
     cmd: 'top -b -n 1 | head -n 20',
+    commandByShell: {
+      powershell:
+        'Get-Process | Sort-Object CPU -Descending | Select-Object -First 20 Id, ProcessName, CPU, WorkingSet64',
+      cmd: 'tasklist',
+    },
     category: 'proc',
     categoryLabel: '进程与监控',
     title: 'CPU 与内存实时负载',
@@ -105,6 +140,10 @@ export const LINUX_CHEAT_ITEMS: readonly LinuxCheatItem[] = [
   {
     id: 'net-curl',
     cmd: 'curl -Iv https://z-lib.gd',
+    commandByShell: {
+      powershell: 'curl.exe -I -v https://z-lib.gd',
+      cmd: 'curl.exe -I -v https://z-lib.gd',
+    },
     category: 'net',
     categoryLabel: '网络与排错',
     title: 'HTTP 协议握手与头分析',
@@ -115,6 +154,11 @@ export const LINUX_CHEAT_ITEMS: readonly LinuxCheatItem[] = [
   {
     id: 'net-ss',
     cmd: 'ss -tulwn',
+    commandByShell: {
+      powershell:
+        'Get-NetTCPConnection | Sort-Object State, LocalPort | Format-Table -AutoSize',
+      cmd: 'netstat -ano',
+    },
     category: 'net',
     categoryLabel: '网络与排错',
     title: '套接字监听状态速查',
@@ -127,6 +171,11 @@ export const LINUX_CHEAT_ITEMS: readonly LinuxCheatItem[] = [
   {
     id: 'sys-journal',
     cmd: 'journalctl -xe --no-pager -n 50',
+    commandByShell: {
+      powershell:
+        'Get-WinEvent -LogName System -MaxEvents 50 | Select-Object TimeCreated, LevelDisplayName, Message',
+      cmd: 'wevtutil qe System /c:50 /rd:true /f:text',
+    },
     category: 'sys',
     categoryLabel: '系统级诊断',
     title: 'systemd 日志快速排查',
@@ -149,6 +198,13 @@ export const KNOWLEDGE_ACTION_ITEMS: readonly KnowledgeActionItem[] = [
   // 1. 知识库联动
   {
     id: 'act-kb-list',
+    commandByShell: {
+      powershell:
+        'Get-ChildItem -Path . -Recurse -Filter "*.md" | Select-Object Name, Length, LastWriteTime',
+      bash: "find . -type f -name '*.md' -printf '%f %s bytes\\n'",
+      wsl: "find . -type f -name '*.md' -printf '%f %s bytes\\n'",
+      cmd: 'dir /s /b *.md',
+    },
     category: 'kb',
     categoryBadge: 'KB',
     targetWorkspace: '知识库',
@@ -159,6 +215,14 @@ export const KNOWLEDGE_ACTION_ITEMS: readonly KnowledgeActionItem[] = [
   },
   {
     id: 'act-kb-append',
+    commandByShell: {
+      powershell:
+        'Add-Content -Path "计算机网络复习.md" -Value ([Environment]::NewLine + "### 今日攻坚总结" + [Environment]::NewLine + "- 完成传输层滑动窗口协议与拥塞控制理论验证。")',
+      bash: "printf '\\n### 今日攻坚总结\\n- 完成传输层滑动窗口协议与拥塞控制理论验证。\\n' >> '计算机网络复习.md'",
+      wsl: "printf '\\n### 今日攻坚总结\\n- 完成传输层滑动窗口协议与拥塞控制理论验证。\\n' >> '计算机网络复习.md'",
+      cmd: 'echo.>>计算机网络复习.md & echo ### 今日攻坚总结>>计算机网络复习.md & echo - 完成传输层滑动窗口协议与拥塞控制理论验证。>>计算机网络复习.md',
+    },
+    requiresConfirmation: true,
     category: 'kb',
     categoryBadge: 'KB',
     targetWorkspace: '知识库',
@@ -171,6 +235,13 @@ export const KNOWLEDGE_ACTION_ITEMS: readonly KnowledgeActionItem[] = [
   // 2. 思维导图联动
   {
     id: 'act-map-inspect',
+    commandByShell: {
+      powershell:
+        'Get-ChildItem -Filter "*.md" | Select-String -Pattern "^#+\\s" | Select-Object Path, LineNumber, Line',
+      bash: "rg --line-number '^#+\\s' --glob '*.md'",
+      wsl: "rg --line-number '^#+\\s' --glob '*.md'",
+      cmd: 'findstr /r /n "^#" *.md',
+    },
     category: 'map',
     categoryBadge: 'MAP',
     targetWorkspace: '思维导图',
@@ -183,6 +254,14 @@ export const KNOWLEDGE_ACTION_ITEMS: readonly KnowledgeActionItem[] = [
   // 3. 试卷与复习联动
   {
     id: 'act-exam-review',
+    requiresConfirmation: true,
+    commandByShell: {
+      powershell:
+        'gcc -Wall -O2 test.c -o test.exe; if ($LASTEXITCODE -eq 0) { .\\test.exe }',
+      bash: 'gcc -Wall -O2 test.c -o test && ./test',
+      wsl: 'gcc -Wall -O2 test.c -o test && ./test',
+      cmd: 'gcc -Wall -O2 test.c -o test.exe && test.exe',
+    },
     category: 'exam',
     categoryBadge: 'EXAM',
     targetWorkspace: '试卷与复习',
@@ -195,6 +274,11 @@ export const KNOWLEDGE_ACTION_ITEMS: readonly KnowledgeActionItem[] = [
   // 4. 智能体 Agent 联动
   {
     id: 'act-agent-review',
+    requiresConfirmation: true,
+    commandByShell: {
+      powershell:
+        'agy "检查当前工作区笔记与导图结构，补充 Linux 权限系统要点并对齐格式"',
+    },
     category: 'agent',
     categoryBadge: 'AGENT',
     targetWorkspace: '全应用联动',

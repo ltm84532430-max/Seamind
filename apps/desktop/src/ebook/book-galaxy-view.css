@@ -145,11 +145,104 @@
 }
 
 .book-galaxy-search-input {
-  width: 148px;
+  box-sizing: border-box;
+  width: 172px;
   height: 26px;
-  font-size: 11px;
-  padding: 0 8px;
+  line-height: 24px;
+  font-size: 11.5px;
+  font-family: inherit;
+  padding: 0 9px;
   border-radius: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: #e2e8f0;
+  outline: none;
+  transition:
+    border-color 0.14s ease,
+    background 0.14s ease,
+    box-shadow 0.14s ease,
+    color 0.14s ease;
+}
+
+.book-galaxy-search-input:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+.book-galaxy-search-input:focus {
+  background: rgba(8, 12, 20, 0.94);
+  border-color: #d9573b;
+  box-shadow: 0 0 0 1px rgba(217, 87, 59, 0.35);
+  color: #ffffff;
+}
+
+.book-galaxy-search-input::placeholder {
+  color: #64748b;
+  opacity: 0.85;
+}
+
+.app-shell[data-theme='light'] .book-galaxy-search-input {
+  border-color: rgba(15, 23, 42, 0.14);
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+.app-shell[data-theme='light'] .book-galaxy-search-input:hover {
+  border-color: rgba(15, 23, 42, 0.28);
+  background: #f1f5f9;
+}
+
+.app-shell[data-theme='light'] .book-galaxy-search-input:focus {
+  border-color: #c84b31;
+  background: #ffffff;
+  box-shadow: 0 0 0 1px rgba(200, 75, 49, 0.25);
+  color: #0f172a;
+}
+
+.app-shell[data-theme='light'] .book-galaxy-search-input::placeholder {
+  color: #94a3b8;
+}
+
+.app-shell[data-theme='navy'] .book-galaxy-search-input {
+  border-color: #1a3658;
+  background: #0a182e;
+  color: #cde0f5;
+}
+
+.app-shell[data-theme='navy'] .book-galaxy-search-input:hover {
+  border-color: #2b4c74;
+}
+
+.app-shell[data-theme='navy'] .book-galaxy-search-input:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.35);
+  background: #061122;
+  color: #ffffff;
+}
+
+.app-shell[data-theme='navy'] .book-galaxy-search-input::placeholder {
+  color: #5d7d9a;
+}
+
+.app-shell[data-theme='purple'] .book-galaxy-search-input {
+  border-color: #331e50;
+  background: #160e28;
+  color: #e5d7f7;
+}
+
+.app-shell[data-theme='purple'] .book-galaxy-search-input:hover {
+  border-color: #4b2a75;
+}
+
+.app-shell[data-theme='purple'] .book-galaxy-search-input:focus {
+  border-color: #a855f7;
+  box-shadow: 0 0 0 1px rgba(168, 85, 247, 0.35);
+  background: #0d0818;
+  color: #ffffff;
+}
+
+.app-shell[data-theme='purple'] .book-galaxy-search-input::placeholder {
+  color: #7e6999;
 }
 
 .book-galaxy-btn {

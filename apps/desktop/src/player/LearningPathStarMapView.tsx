@@ -22,6 +22,12 @@ import {
 } from './learning-path-layout';
 import type { LearningPathDetail } from './types';
 import { thumbnailUrl } from './video-links';
+import {
+  PLAYER_DOCUMENT_UPDATED_EVENT,
+  readPlayerDocumentMarkdown,
+  type PlayerDocumentUpdatedDetail,
+} from './player-note-storage';
+import '../ebook/book-galaxy-view.css';
 
 export interface LearningPathStarMapViewProps {
   detail: LearningPathDetail;
@@ -45,6 +51,15 @@ function formatDurationShort(seconds: number | null | undefined): string {
     return `${hrs}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   }
   return `${mins}:${String(secs).padStart(2, '0')}`;
+}
+
+function readPathVideoNotes(videoIds: string[]): Record<string, string> {
+  const notes: Record<string, string> = {};
+  for (const videoId of videoIds) {
+    const markdown = readPlayerDocumentMarkdown(videoId);
+    if (markdown) notes[videoId] = markdown;
+  }
+  return notes;
 }
 
 export default function LearningPathStarMapView({
@@ -94,6 +109,131 @@ export default function LearningPathStarMapView({
 
   const [searchFilter, setSearchFilter] = useState('');
   const [controlsOpen, setControlsOpen] = useState(false);
+  const pathVideoIds = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          detail.nodes
+            .map((node) => node.videoId)
+            .filter((videoId): videoId is string => Boolean(videoId)),
+        ),
+      ),
+    [detail.nodes],
+  );
+  const [videoNoteMarkdown, setVideoNoteMarkdown] = useState<
+    Record<string, string>
+  >(() => readPathVideoNotes(pathVideoIds));
+
+  useEffect(() => {
+    const refreshNotesFromStorage = () => {
+      const storedNotes = readPathVideoNotes(pathVideoIds);
+      setVideoNoteMarkdown((current) => {
+        const currentIds = Object.keys(current);
+        const storedIds = Object.keys(storedNotes);
+        if (
+          currentIds.length === storedIds.length &&
+          storedIds.every(
+            (videoId) => current[videoId] === storedNotes[videoId],
+          )
+        ) {
+          return current;
+        }
+        return storedNotes;
+      });
+    };
+    const handleDocumentUpdated = (event: Event) => {
+      const update = (event as CustomEvent<PlayerDocumentUpdatedDetail>).detail;
+      if (!update || !pathVideoIds.includes(update.videoId)) return;
+      setVideoNoteMarkdown((current) => {
+        const markdown = update.markdown.trim();
+        if (!markdown) {
+          if (!(update.videoId in current)) return current;
+          const next = { ...current };
+          delete next[update.videoId];
+          return next;
+        }
+        if (current[update.videoId] === update.markdown) return current;
+        return { ...current, [update.videoId]: update.markdown };
+      });
+    };
+    const handleStorage = (event: StorageEvent) => {
+      if (
+        event.key === null ||
+        event.key.startsWith('seamind:player-document:v1:') ||
+        event.key.startsWith('seamind:player-note:v1:')
+      ) {
+        refreshNotesFromStorage();
+      }
+    };
+
+    refreshNotesFromStorage();
+    window.addEventListener(
+      PLAYER_DOCUMENT_UPDATED_EVENT,
+      handleDocumentUpdated,
+    );
+    window.addEventListener('storage', handleStorage);
+    window.addEventListener('focus', refreshNotesFromStorage);
+    return () => {
+      window.removeEventListener(
+        PLAYER_DOCUMENT_UPDATED_EVENT,
+        handleDocumentUpdated,
+      );
+      window.removeEventListener('storage', handleStorage);
+      window.removeEventListener('focus', refreshNotesFromStorage);
+    };
+  }, [pathVideoIds]);
+
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fullscreenFallback, setFullscreenFallback] = useState(false);
+
+  // 浏览器全屏退出（包括按 Esc）时同步工具栏状态。
+  useEffect(() => {
+    const syncFullscreenState = () => {
+      setIsFullscreen(
+        document.fullscreenElement === containerRef.current ||
+          fullscreenFallback,
+      );
+    };
+    document.addEventListener('fullscreenchange', syncFullscreenState);
+    return () =>
+      document.removeEventListener('fullscreenchange', syncFullscreenState);
+  }, [fullscreenFallback]);
+
+  useEffect(() => {
+    if (!fullscreenFallback) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setFullscreenFallback(false);
+      setIsFullscreen(false);
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [fullscreenFallback]);
+
+  const toggleFullscreen = useCallback(async () => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    if (document.fullscreenElement === container) {
+      await document.exitFullscreen().catch(() => undefined);
+      return;
+    }
+    if (fullscreenFallback) {
+      setFullscreenFallback(false);
+      setIsFullscreen(false);
+      return;
+    }
+
+    try {
+      await container.requestFullscreen();
+      setIsFullscreen(true);
+    } catch {
+      // 某些 WebView 禁用 Fullscreen API 时，使用视口覆盖保持可用。
+      setFullscreenFallback(true);
+      setIsFullscreen(true);
+    }
+  }, [fullscreenFallback]);
 
   // Obsidian-style Graph Filter & Display states (matched to BookGalaxyGraphView)
   const [onlyPending, setOnlyPending] = useState(false);
@@ -108,8 +248,8 @@ export default function LearningPathStarMapView({
   );
 
   const starGraph = useMemo(
-    () => buildLearningPathStarGraph(detail, layout),
-    [detail, layout],
+    () => buildLearningPathStarGraph(detail, layout, videoNoteMarkdown),
+    [detail, layout, videoNoteMarkdown],
   );
 
   const nodeMap = useMemo(() => {
@@ -139,7 +279,7 @@ export default function LearningPathStarMapView({
         set.add(n.id);
         continue;
       }
-      if (!showSatellites && n.kind === 'satellite') {
+      if (!showSatellites && (n.kind === 'satellite' || n.kind === 'note')) {
         continue;
       }
       if (onlyPending) {
@@ -437,7 +577,7 @@ export default function LearningPathStarMapView({
         const nextId = pinnedCardNodeId === clicked.id ? null : clicked.id;
         setPinnedCardNodeId(nextId);
         const realNodeId =
-          clicked.kind === 'satellite'
+          clicked.kind === 'satellite' || clicked.kind === 'note'
             ? clicked.parentId
             : clicked.id === 'core-hub'
               ? null
@@ -582,7 +722,10 @@ export default function LearningPathStarMapView({
     : null;
   const pinnedLessonNode = useMemo(() => {
     if (!pinnedNode) return null;
-    if (pinnedNode.kind === 'satellite' && pinnedNode.parentId) {
+    if (
+      (pinnedNode.kind === 'satellite' || pinnedNode.kind === 'note') &&
+      pinnedNode.parentId
+    ) {
       return nodeMap.get(pinnedNode.parentId) ?? pinnedNode;
     }
     return pinnedNode;
@@ -642,7 +785,10 @@ export default function LearningPathStarMapView({
   ]);
 
   return (
-    <div className="book-galaxy-container lp-starmap-root" ref={containerRef}>
+    <div
+      className={`book-galaxy-container lp-starmap-root${fullscreenFallback ? ' is-fullscreen-fallback' : ''}`}
+      ref={containerRef}
+    >
       {/* Top Header Controls — Identical structure to Image 1 (BookGalaxyGraphView) */}
       <div className="book-galaxy-header">
         <div className="book-galaxy-title-wrap">
@@ -665,13 +811,21 @@ export default function LearningPathStarMapView({
                 </span>
               </>
             )}
+            {starGraph.stats.videoNoteNodes > 0 && (
+              <>
+                <span>·</span>
+                <span className="book-galaxy-stat-pill">
+                  视频笔记: {starGraph.stats.videoNoteNodes}
+                </span>
+              </>
+            )}
           </div>
         </div>
 
         <div className="book-galaxy-actions">
           <input
             type="text"
-            className="lit-text-input book-galaxy-search-input"
+            className="book-galaxy-search-input"
             placeholder="检索课程或知识节点…"
             value={searchFilter}
             onChange={(e) => setSearchFilter(e.target.value)}
@@ -699,6 +853,16 @@ export default function LearningPathStarMapView({
             onClick={handleResetView}
           >
             重置视角
+          </button>
+          <button
+            type="button"
+            className={`book-galaxy-btn${isFullscreen ? ' is-active' : ''}`}
+            title={isFullscreen ? '退出全屏（Esc）' : '全屏显示星图'}
+            aria-label={isFullscreen ? '退出全屏' : '全屏显示星图'}
+            aria-pressed={isFullscreen}
+            onClick={() => void toggleFullscreen()}
+          >
+            {isFullscreen ? '退出全屏' : '全屏'}
           </button>
         </div>
       </div>
@@ -733,7 +897,7 @@ export default function LearningPathStarMapView({
               />
             </label>
             <label className="book-galaxy-toggle-row">
-              <span>显示三级知识点星点</span>
+              <span>显示知识点与视频笔记</span>
               <input
                 type="checkbox"
                 checked={showSatellites}
@@ -1045,7 +1209,8 @@ export default function LearningPathStarMapView({
               const isCluster = node.kind === 'stage';
               const isPlanet =
                 node.kind === 'video' || node.kind === 'checkpoint';
-              const isSatellite = node.kind === 'satellite';
+              const isNote = node.kind === 'note';
+              const isSatellite = node.kind === 'satellite' || isNote;
 
               const isHoveredSelf = activeHoveredId === node.id;
               const isPinnedSelf = pinnedCardNodeId === node.id;
@@ -1068,7 +1233,9 @@ export default function LearningPathStarMapView({
                   : isPlanet
                     ? ((hasVideoOrDone ? 6.2 : 4.8) + degreeBoost * 0.3) *
                       nodeSizeScale
-                    : 3.1 * nodeSizeScale;
+                    : isNote
+                      ? 6.4 * nodeSizeScale
+                      : 3.1 * nodeSizeScale;
 
               // Semantic Zoom (LOD) label visibility calculation
               const t1 = labelFadeThreshold * 0.55;
@@ -1095,7 +1262,8 @@ export default function LearningPathStarMapView({
                 isHoveredSelf ||
                 isPinnedSelf ||
                 isSpotlightNeighbor ||
-                scale >= labelFadeThreshold * 1.15;
+                scale >= labelFadeThreshold * 1.15 ||
+                (isNote && scale >= labelFadeThreshold * 0.72);
 
               const cleanPlanetText =
                 scale >= 0.88 ||
@@ -1121,8 +1289,10 @@ export default function LearningPathStarMapView({
                         : isPlanet
                           ? 'planet'
                           : 'satellite'
-                  } ${
-                    hasVideoOrDone || isPinnedSelf ? 'has-note' : 'no-note'
+                  } ${isNote ? 'is-note' : ''} ${
+                    isNote || hasVideoOrDone || isPinnedSelf
+                      ? 'has-note'
+                      : 'no-note'
                   } ${isHoveredSelf || isPinnedSelf ? 'is-hovered' : ''} ${
                     isSpotlightNeighbor ? 'is-neighbor' : ''
                   } ${isDimmed ? 'is-dimmed' : ''}`}
@@ -1212,18 +1382,35 @@ export default function LearningPathStarMapView({
                     </>
                   ) : (
                     <>
-                      <circle
-                        cx={0}
-                        cy={0}
-                        r={displayRadius}
-                        fill={node.color}
-                        className="galaxy-node-circle"
-                        style={
-                          {
-                            '--node-color': node.color,
-                          } as CSSProperties
-                        }
-                      />
+                      {isNote ? (
+                        <rect
+                          x={-displayRadius}
+                          y={-displayRadius}
+                          width={displayRadius * 2}
+                          height={displayRadius * 2}
+                          rx={1.5}
+                          fill={node.color}
+                          className="galaxy-node-circle galaxy-note-node-mark"
+                          style={
+                            {
+                              '--node-color': node.color,
+                            } as CSSProperties
+                          }
+                        />
+                      ) : (
+                        <circle
+                          cx={0}
+                          cy={0}
+                          r={displayRadius}
+                          fill={node.color}
+                          className="galaxy-node-circle"
+                          style={
+                            {
+                              '--node-color': node.color,
+                            } as CSSProperties
+                          }
+                        />
+                      )}
 
                       {/* Stage Cluster Label */}
                       {isCluster && (
@@ -1353,9 +1540,11 @@ export default function LearningPathStarMapView({
                     ? '课程核心'
                     : hoveredNode.node.kind === 'stage'
                       ? `星域 ${hoveredNode.node.stageIndex + 1}`
-                      : hoveredNode.node.kind === 'satellite'
-                        ? '知识要领'
-                        : hoveredNode.node.shortCode || '视频课'}
+                      : hoveredNode.node.kind === 'note'
+                        ? '视频笔记'
+                        : hoveredNode.node.kind === 'satellite'
+                          ? '知识要领'
+                          : hoveredNode.node.shortCode || '视频课'}
                 </span>
               </div>
 
@@ -1386,11 +1575,13 @@ export default function LearningPathStarMapView({
                 }`}
               >
                 <span>
-                  {hoveredNode.node.isNextUp
-                    ? '★ 当前推荐下一课（单击展开视频缩略图）'
-                    : hoveredNode.node.status === 'completed'
-                      ? '● 已学完该课程节点'
-                      : '○ 单击星点查看视频缩略图与课程操作'}
+                  {hoveredNode.node.kind === 'note'
+                    ? '单击查看关联笔记摘录 · 双击播放视频'
+                    : hoveredNode.node.isNextUp
+                      ? '★ 当前推荐下一课（单击展开视频缩略图）'
+                      : hoveredNode.node.status === 'completed'
+                        ? '● 已学完该课程节点'
+                        : '○ 单击星点查看视频缩略图与课程操作'}
                 </span>
               </div>
             </div>
@@ -1539,15 +1730,17 @@ export default function LearningPathStarMapView({
                     <span
                       className={`lp-star-vcard-status is-${pinnedLessonNode.status}`}
                     >
-                      {pinnedLessonNode.isNextUp
-                        ? '下一课'
-                        : pinnedLessonNode.status === 'completed'
-                          ? '已完成'
-                          : pinnedLessonNode.kind === 'checkpoint'
-                            ? '里程碑'
-                            : pinnedLessonNode.optional
-                              ? '选修'
-                              : '待学习'}
+                      {pinnedNode.kind === 'note'
+                        ? '视频笔记'
+                        : pinnedLessonNode.isNextUp
+                          ? '下一课'
+                          : pinnedLessonNode.status === 'completed'
+                            ? '已完成'
+                            : pinnedLessonNode.kind === 'checkpoint'
+                              ? '里程碑'
+                              : pinnedLessonNode.optional
+                                ? '选修'
+                                : '待学习'}
                     </span>
                   </div>
                   <button
@@ -1568,6 +1761,22 @@ export default function LearningPathStarMapView({
                     <div className="lp-star-vcard-sat-focus">
                       当前点击知识星点：<strong>{pinnedNode.label}</strong>
                     </div>
+                  )}
+
+                  {pinnedNode.kind === 'note' && (
+                    <section className="lp-star-vcard-note-document">
+                      <div className="lp-star-vcard-note-document-head">
+                        <span>VIDEO NOTE</span>
+                        <strong>
+                          {pinnedNode.noteDocumentTitle ||
+                            pinnedLessonNode.label}
+                        </strong>
+                      </div>
+                      <p>
+                        {pinnedNode.noteDocumentPreview ||
+                          '这条视频已有保存的笔记。'}
+                      </p>
+                    </section>
                   )}
 
                   <div className="lp-star-vcard-media-row">

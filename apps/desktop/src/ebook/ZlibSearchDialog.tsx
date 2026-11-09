@@ -15,6 +15,13 @@ function isExpiredSession(message: string): boolean {
   return /not logged in|session expired|请先登录/i.test(message);
 }
 
+function explainSearchError(message: string): string {
+  if (/network request failed|连接.*失败|无法连接|节点不可达/i.test(message)) {
+    return '本机会话仍已保存，但当前书库节点无法连接。请检查网络，或在终端运行 zlib doctor 查看可用节点。';
+  }
+  return message;
+}
+
 export default function ZlibSearchDialog({
   active,
   hasRoot,
@@ -89,7 +96,7 @@ export default function ZlibSearchDialog({
         setLoginError('登录会话已失效，请重新登录。');
         setLoginOpen(true);
       } else {
-        setSearchError(message);
+        setSearchError(explainSearchError(message));
       }
     } finally {
       setSearching(false);
@@ -136,7 +143,7 @@ export default function ZlibSearchDialog({
         setLoginError('登录会话已失效，请重新登录。');
         setLoginOpen(true);
       } else {
-        setDownloadError(message);
+        setDownloadError(explainSearchError(message));
       }
     } finally {
       setDownloadingId(null);
@@ -154,7 +161,13 @@ export default function ZlibSearchDialog({
           <span
             className={`zlib-side-status${env?.hasLogin ? ' is-connected' : ''}`}
           >
-            {env?.hasLogin ? '已登录' : env?.installed ? '未登录' : '未配置'}
+            {!env
+              ? '检测中'
+              : env.hasLogin
+                ? '会话已保存'
+                : env.installed
+                  ? '未登录'
+                  : '未安装'}
           </span>
         </header>
 
@@ -339,7 +352,8 @@ export default function ZlibSearchDialog({
               onSubmit={(event) => void handleLogin(event)}
             >
               <p>
-                登录会话只保存在本机 zlib 配置目录；密码不会写入文件或命令行。
+                登录会话保存在本机 zlib 配置目录，关闭 Seamind
+                后仍可使用；密码不会写入文件或命令行。
               </p>
               <label>
                 邮箱

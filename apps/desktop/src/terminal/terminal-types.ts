@@ -23,6 +23,8 @@ export type SplitLayoutMode = 'single' | 'vertical' | 'horizontal';
 export interface LinuxCheatItem {
   id: string;
   cmd: string;
+  commandByShell?: Partial<Record<TerminalShellType, string>>;
+  requiresConfirmation?: boolean;
   category: 'fs' | 'text' | 'proc' | 'net' | 'sys';
   categoryLabel: string;
   title: string;
@@ -38,5 +40,7 @@ export interface KnowledgeActionItem {
   targetWorkspace: string;
   title: string;
   commandTemplate: string;
+  commandByShell?: Partial<Record<TerminalShellType, string>>;
+  requiresConfirmation?: boolean;
   description: string;
 }

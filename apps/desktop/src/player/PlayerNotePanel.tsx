@@ -1,4 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
+import {
+  notifyPlayerDocumentUpdated,
+  playerDocumentStorageKey,
+  playerLegacyNoteStorageKey,
+} from './player-note-storage';
 
 export interface PlayerExportedDocument {
   id?: string;
@@ -148,8 +153,8 @@ export function PlayerDocumentEditor({
   const documentId = document?.id;
   const updateDocumentMarkdown = document?.updateMarkdown;
   const hasExportedDocument = Boolean(document);
-  const storageKey = `seamind:player-document:v1:${videoId}`;
-  const legacyStorageKey = `seamind:player-note:v1:${videoId}`;
+  const storageKey = playerDocumentStorageKey(videoId);
+  const legacyStorageKey = playerLegacyNoteStorageKey(videoId);
 
   useEffect(() => {
     const documentKey = document
@@ -196,6 +201,7 @@ export function PlayerDocumentEditor({
       try {
         localStorage.setItem(storageKey, markdown);
         if (hasExportedDocument) localStorage.removeItem(legacyStorageKey);
+        notifyPlayerDocumentUpdated(videoId, markdown);
       } catch {
         if (editVersion === editVersionRef.current)
           setSaveStatus('本机保存失败');

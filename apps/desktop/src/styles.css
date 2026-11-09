@@ -10384,50 +10384,76 @@ select option {
   border-color: #3b454c;
   background: #252e34;
 }
-.app-shell[data-theme='dark'] .ebook-workspace-stage,
-.app-shell[data-theme='dark'] .ebook-shelf {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-workspace-stage,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf {
   color: #dce3e8;
   background: #1a2025;
 }
-.app-shell[data-theme='dark'] .ebook-shelf-header {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-header {
   border-color: #30383f;
 }
-.app-shell[data-theme='dark'] .ebook-shelf-search {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-search {
   border-color: #3b454c;
   color: #9aa6ae;
   background: #20282d;
 }
-.app-shell[data-theme='dark'] .ebook-shelf-search input {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-search
+  input {
   color: #dce3e8;
 }
-.app-shell[data-theme='dark'] .ebook-shelf-sort select {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-sort
+  select {
   border-color: #3b454c;
   color: #c4cdd2;
   background: #20282d;
 }
-.app-shell[data-theme='dark'] .ebook-shelf-header h1,
-.app-shell[data-theme='dark'] .ebook-book-title,
-.app-shell[data-theme='dark'] .ebook-shelf-empty h2 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-header
+  h1,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-book-title,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-empty
+  h2 {
   color: #e0e6ea;
 }
-.app-shell[data-theme='dark'] .ebook-shelf-header p,
-.app-shell[data-theme='dark'] .ebook-shelf-empty p,
-.app-shell[data-theme='dark'] .ebook-book-meta {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-header
+  p,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-empty
+  p,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-book-meta {
   color: #9aa6ae;
 }
-.app-shell[data-theme='dark'] .ebook-shelf-actions button,
-.app-shell[data-theme='dark'] .ebook-shelf-empty-icon {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-actions
+  button,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-empty-icon {
   border-color: #3b454c;
   color: #c4cdd2;
   background: #20282d;
 }
-.app-shell[data-theme='dark'] .ebook-shelf-actions .ebook-shelf-import,
-.app-shell[data-theme='dark'] .ebook-shelf-empty button {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-actions
+  .ebook-shelf-import,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-empty
+  button {
   border-color: #bd5b42;
   color: #fff;
   background: #bd5b42;
 }
-.app-shell[data-theme='dark'] .ebook-book-cover {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-book-cover {
   border-color: #414c53;
 }
 
@@ -10985,99 +11011,167 @@ select option {
   opacity: 0.5;
 }
 
-.app-shell[data-theme='dark'] .ebook-reading-dashboard {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-reading-dashboard {
   border-color: #30383f;
   color: #dce3e8;
   scrollbar-color: #46515a transparent;
 }
-.app-shell[data-theme='dark'] .ebook-dashboard-header,
-.app-shell[data-theme='dark'] .ebook-reading-heatmap {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-dashboard-header,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-reading-heatmap {
   border-color: #30383f;
 }
-.app-shell[data-theme='dark'] .ebook-dashboard-header h2,
-.app-shell[data-theme='dark'] .ebook-dashboard-section-heading h3,
-.app-shell[data-theme='dark'] .ebook-dashboard-plan-topline strong {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-dashboard-header
+  h2,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-dashboard-section-heading
+  h3,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-dashboard-plan-topline
+  strong {
   color: #e0e6ea;
 }
-.app-shell[data-theme='dark'] .ebook-dashboard-kicker,
-.app-shell[data-theme='dark'] .ebook-plan-kicker,
-.app-shell[data-theme='dark'] .ebook-dashboard-section-heading p,
-.app-shell[data-theme='dark'] .ebook-dashboard-plan > p,
-.app-shell[data-theme='dark'] .ebook-dashboard-plan-footer,
-.app-shell[data-theme='dark'] .ebook-dashboard-plan-footer button,
-.app-shell[data-theme='dark'] .ebook-heatmap-legend,
-.app-shell[data-theme='dark'] .ebook-heatmap-note {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-dashboard-kicker,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-plan-kicker,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-dashboard-section-heading
+  p,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-dashboard-plan
+  > p,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-dashboard-plan-footer,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-dashboard-plan-footer
+  button,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-heatmap-legend,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-heatmap-note {
   color: #93a0a7;
 }
-.app-shell[data-theme='dark'] .ebook-dashboard-plan,
-.app-shell[data-theme='dark'] .ebook-plan-dialog,
-.app-shell[data-theme='dark'] .ebook-book-menu {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-dashboard-plan,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-plan-dialog,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-book-menu {
   border-color: #3b454c;
   color: #dce3e8;
   background: #20282d;
 }
-.app-shell[data-theme='dark'] .ebook-dashboard-empty {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-dashboard-empty {
   border-color: #3b454c;
   color: #aab5bb;
 }
-.app-shell[data-theme='dark'] .ebook-dashboard-empty > span {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-dashboard-empty
+  > span {
   border-color: #3b454c;
   color: #e28a70;
 }
-.app-shell[data-theme='dark'] .ebook-heatmap-day.level-0,
-.app-shell[data-theme='dark'] .ebook-heatmap-legend .level-0 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-heatmap-day.level-0,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-heatmap-legend
+  .level-0 {
   background: #2a343a;
 }
-.app-shell[data-theme='dark'] .ebook-heatmap-day.level-1,
-.app-shell[data-theme='dark'] .ebook-heatmap-legend .level-1 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-heatmap-day.level-1,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-heatmap-legend
+  .level-1 {
   background: #68463e;
 }
-.app-shell[data-theme='dark'] .ebook-heatmap-day.level-2,
-.app-shell[data-theme='dark'] .ebook-heatmap-legend .level-2 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-heatmap-day.level-2,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-heatmap-legend
+  .level-2 {
   background: #975741;
 }
-.app-shell[data-theme='dark'] .ebook-heatmap-day.level-3,
-.app-shell[data-theme='dark'] .ebook-heatmap-legend .level-3 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-heatmap-day.level-3,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-heatmap-legend
+  .level-3 {
   background: #c06b4e;
 }
-.app-shell[data-theme='dark'] .ebook-heatmap-day.level-4,
-.app-shell[data-theme='dark'] .ebook-heatmap-legend .level-4 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-heatmap-day.level-4,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-heatmap-legend
+  .level-4 {
   background: #e18b6c;
 }
-.app-shell[data-theme='dark'] .ebook-book-menu-trigger {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-book-menu-trigger {
   color: #adb8be;
   background: #20282d;
 }
-.app-shell[data-theme='dark'] .ebook-book-menu button {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-book-menu
+  button {
   color: #c4cdd2;
 }
-.app-shell[data-theme='dark'] .ebook-book-menu button:hover {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-book-menu
+  button:hover {
   color: #f0a18a;
   background: #2d2928;
 }
-.app-shell[data-theme='dark'] .ebook-plan-dialog h2 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-plan-dialog
+  h2 {
   color: #e0e6ea;
 }
-.app-shell[data-theme='dark'] .ebook-plan-dialog > header,
-.app-shell[data-theme='dark'] .ebook-plan-dialog > footer {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-plan-dialog
+  > header,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-plan-dialog
+  > footer {
   border-color: #3b454c;
 }
-.app-shell[data-theme='dark'] .ebook-plan-dialog > label,
-.app-shell[data-theme='dark'] .ebook-plan-book-title,
-.app-shell[data-theme='dark'] .ebook-plan-hint {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-plan-dialog
+  > label,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-plan-book-title,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-plan-hint {
   color: #9aa6ae;
 }
-.app-shell[data-theme='dark'] .ebook-plan-error {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-plan-error {
   color: #f08b73;
 }
-.app-shell[data-theme='dark'] .ebook-plan-dialog input,
-.app-shell[data-theme='dark'] .ebook-plan-dialog > header button,
-.app-shell[data-theme='dark'] .ebook-plan-dialog > footer button {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-plan-dialog
+  input,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-plan-dialog
+  > header
+  button,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-plan-dialog
+  > footer
+  button {
   border-color: #3b454c;
   color: #dce3e8;
   background: #1a2227;
 }
-.app-shell[data-theme='dark'] .ebook-plan-dialog > footer button.is-primary {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-plan-dialog
+  > footer
+  button.is-primary {
   border-color: #bd5b42;
   color: #fff;
   background: #bd5b42;
@@ -11203,7 +11297,8 @@ select option {
     width: 24px;
     height: 24px;
   }
-  .app-shell[data-theme='dark'] .ebook-dashboard-collapse {
+  .app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+    .ebook-dashboard-collapse {
     border-color: #3b454c;
     color: #b8c2c8;
     background: #20282d;
@@ -11367,25 +11462,36 @@ select option {
   margin-top: 12px;
   font-size: 10px;
 }
-.app-shell[data-theme='dark'] .ebook-heatmap-expand,
-.app-shell[data-theme='dark'] .ebook-heatmap-dialog-collapse {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-heatmap-expand,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-heatmap-dialog-collapse {
   border-color: #3b454c;
   color: #b8c2c8;
   background: #20282d;
 }
-.app-shell[data-theme='dark'] .ebook-heatmap-dialog {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-heatmap-dialog {
   border-color: #3b454c;
   color: #dce3e8;
   background: #20282d;
 }
-.app-shell[data-theme='dark'] .ebook-heatmap-dialog > header {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-heatmap-dialog
+  > header {
   border-color: #3b454c;
 }
-.app-shell[data-theme='dark'] .ebook-heatmap-dialog h2 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-heatmap-dialog
+  h2 {
   color: #e0e6ea;
 }
-.app-shell[data-theme='dark'] .ebook-heatmap-dialog > header p,
-.app-shell[data-theme='dark'] .ebook-heatmap-months {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-heatmap-dialog
+  > header
+  p,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-heatmap-months {
   color: #93a0a7;
 }
 
@@ -11510,25 +11616,35 @@ select option {
 .ebook-library-heatmap .ebook-heatmap-legend {
   margin-top: 12px;
 }
-.app-shell[data-theme='dark'] .ebook-dashboard-plan-cover {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-dashboard-plan-cover {
   border-color: #3b454c;
   background: #20282d;
 }
-.app-shell[data-theme='dark'] .ebook-dashboard-plan-cover-fallback {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-dashboard-plan-cover-fallback {
   color: #aab5bb;
 }
-.app-shell[data-theme='dark'] .ebook-dashboard-plan-content > p,
-.app-shell[data-theme='dark'] .ebook-library-heatmap-header p {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-dashboard-plan-content
+  > p,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-library-heatmap-header
+  p {
   color: #93a0a7;
 }
-.app-shell[data-theme='dark'] .ebook-library-heatmap {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-library-heatmap {
   border-color: #3b454c;
   background: #20282d;
 }
-.app-shell[data-theme='dark'] .ebook-library-heatmap-header h2 {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-library-heatmap-header
+  h2 {
   color: #e0e6ea;
 }
-.app-shell[data-theme='dark'] .ebook-heatmap-toggle {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-heatmap-toggle {
   border-color: #3b454c;
   color: #b8c2c8;
   background: #1a2227;
@@ -13086,7 +13202,8 @@ select option {
   font-size: 10px;
 }
 
-.app-shell[data-theme='dark'] .ebook-book-exam-count,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-book-exam-count,
 .app-shell[data-theme='dark'] .epub-exam-library,
 .app-shell[data-theme='dark'] .epub-exam-page {
   border-color: #354149;
@@ -14811,30 +14928,42 @@ select option {
   grid-template-columns: repeat(6, minmax(0, 1fr));
   column-gap: 24px;
 }
-.app-shell[data-theme='dark'] .ebook-shelf-category-filter select,
-.app-shell[data-theme='dark'] .ebook-book-category-control select {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-shelf-category-filter
+  select,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-book-category-control
+  select {
   border-color: #354149;
   color: #c8d2d8;
   background: #202a30;
 }
-.app-shell[data-theme='dark'] .ebook-category-error {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-category-error {
   color: #e0a391;
 }
-.app-shell[data-theme='dark'] .ebook-category-dialog {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-category-dialog {
   border-color: #354149;
   color: #dce5e9;
   background: #1a2328;
 }
-.app-shell[data-theme='dark'] .ebook-category-dialog input {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-category-dialog
+  input {
   border-color: #354149;
   color: #dce5e9;
   background: #12191d;
 }
-.app-shell[data-theme='dark'] .ebook-category-dialog-actions button {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-category-dialog-actions
+  button {
   border-color: #354149;
   color: #c8d2d8;
 }
-.app-shell[data-theme='dark'] .ebook-category-dialog-actions button.is-primary {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-category-dialog-actions
+  button.is-primary {
   border-color: #b94d34;
   color: #fff;
   background: #b94d34;
@@ -15006,19 +15135,27 @@ select option {
 .ebook-category-folder:hover .ebook-category-folder-preview {
   border-color: #ba5b42;
 }
-.app-shell[data-theme='dark'] .ebook-category-content-heading > button {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-category-content-heading
+  > button {
   border-color: #354149;
   color: #c8d2d8;
 }
-.app-shell[data-theme='dark'] .ebook-category-content-heading h2,
-.app-shell[data-theme='dark'] .ebook-category-folder > strong {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-category-content-heading
+  h2,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-category-folder
+  > strong {
   color: #dce5e9;
 }
-.app-shell[data-theme='dark'] .ebook-category-folder-preview {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-category-folder-preview {
   border-color: #354149;
   background: #202a30;
 }
-.app-shell[data-theme='dark'] .ebook-category-folder-empty {
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-category-folder-empty {
   border-color: #354149;
   color: #8f9da5;
   background: #1a2328;
@@ -16764,10 +16901,11 @@ select option {
     padding-left: 12px;
   }
 
-  .app-shell[data-theme='dark'] .ebook-reading-dashboard,
+  .app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+    .ebook-reading-dashboard,
   .app-shell[data-theme='dark'] .epub-exam-library {
-    border-color: #303b42;
-    background: #182127;
+    border-color: var(--line, #303b42);
+    background: var(--panel, #182127);
   }
 }
 .document-map-preview-notice {

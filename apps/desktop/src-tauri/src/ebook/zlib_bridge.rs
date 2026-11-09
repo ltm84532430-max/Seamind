@@ -23,6 +23,7 @@ pub struct ZlibBook {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ZlibEnvironment {
     pub installed: bool,
     pub path: Option<String>,
@@ -32,6 +33,7 @@ pub struct ZlibEnvironment {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ZlibProfile {
     pub email: Option<String>,
     pub downloads_today: Option<u32>,
@@ -58,6 +60,33 @@ fn json_text(value: &serde_json::Value) -> Option<String> {
 fn first_text(item: &serde_json::Value, keys: &[&str]) -> Option<String> {
     keys.iter()
         .find_map(|key| item.get(*key).and_then(json_text))
+}
+
+// 只检查本机已保存的会话，不把网络故障误判成退出登录。
+fn zlib_session_path() -> Option<PathBuf> {
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })?;
+    Some(
+        PathBuf::from(home)
+            .join(".config")
+            .join("zlib")
+            .join("session.json"),
+    )
+}
+
+fn saved_session_domain(value: &serde_json::Value) -> Option<String> {
+    let cookies = value.get("cookies")?;
+    for name in ["remix_userid", "remix_userkey"] {
+        if cookies.get(name).and_then(json_text).is_none() {
+            return None;
+        }
+    }
+    first_text(value, &["domain"])
+}
+
+fn read_saved_session_domain() -> Option<String> {
+    let bytes = std::fs::read(zlib_session_path()?).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    saved_session_domain(&value)
 }
 
 /// CLI 使用 name/authors/size，直连接口使用 title/author/filesizeString。
@@ -127,13 +156,27 @@ pub fn find_zlib_binary(custom_path: Option<&str>) -> Option<PathBuf> {
     #[cfg(windows)]
     {
         if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-            let winget_glob = PathBuf::from(&local_app_data)
+            let winget_root = PathBuf::from(&local_app_data)
                 .join("Microsoft")
-                .join("WinGet")
-                .join("Links")
-                .join("zlib.exe");
-            if winget_glob.is_file() {
-                return Some(winget_glob);
+                .join("WinGet");
+            let winget_link = winget_root.join("Links").join("zlib.exe");
+            if winget_link.is_file() {
+                return Some(winget_link);
+            }
+            // 某些 WinGet 安装没有建立 Links 别名，直接查找软件包内的程序。
+            if let Ok(packages) = std::fs::read_dir(winget_root.join("Packages")) {
+                for package in packages.flatten() {
+                    if package
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("heartleo.zlib_")
+                    {
+                        let executable = package.path().join("zlib.exe");
+                        if executable.is_file() {
+                            return Some(executable);
+                        }
+                    }
+                }
             }
         }
 
@@ -177,12 +220,13 @@ fn run_zlib_json(binary: &Path, args: &[&str]) -> Result<serde_json::Value, Stri
 #[tauri::command]
 pub fn zlib_check_environment(custom_path: Option<String>) -> Result<ZlibEnvironment, String> {
     let binary = find_zlib_binary(custom_path.as_deref());
+    let saved_domain = read_saved_session_domain();
     let mut env = ZlibEnvironment {
         installed: binary.is_some(),
         path: binary.as_ref().map(|p| p.to_string_lossy().to_string()),
         version: None,
-        has_login: false,
-        active_domain: None,
+        has_login: binary.is_some() && saved_domain.is_some(),
+        active_domain: saved_domain,
     };
 
     if let Some(ref bin_path) = binary {
@@ -197,13 +241,6 @@ pub fn zlib_check_environment(custom_path: Option<String>) -> Result<ZlibEnviron
         if let Ok(output) = cmd.output() {
             if output.status.success() {
                 env.version = Some(String::from_utf8_lossy(&output.stdout).trim().to_string());
-            }
-        }
-
-        // Check if config/cookies exist
-        if let Ok(val) = run_zlib_json(bin_path, &["profile", "--json"]) {
-            if val.get("email").is_some() || val.get("username").is_some() {
-                env.has_login = true;
             }
         }
     }
@@ -302,9 +339,10 @@ pub async fn zlib_login(email: String, password: String) -> Result<(), String> {
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "登录响应缺少会话凭据。".to_string())?;
 
-    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-        .ok_or_else(|| "无法定位当前用户目录。".to_string())?;
-    let directory = PathBuf::from(home).join(".config").join("zlib");
+    let session_path = zlib_session_path().ok_or_else(|| "无法定位当前用户目录。".to_string())?;
+    let directory = session_path
+        .parent()
+        .ok_or_else(|| "无法定位本地登录目录。".to_string())?;
     std::fs::create_dir_all(&directory).map_err(|_| "无法创建本地登录目录。".to_string())?;
     let session = serde_json::json!({
         "cookies": { "remix_userid": user_id, "remix_userkey": user_key },
@@ -313,7 +351,6 @@ pub async fn zlib_login(email: String, password: String) -> Result<(), String> {
     });
     let session_bytes =
         serde_json::to_vec_pretty(&session).map_err(|_| "无法保存登录会话。".to_string())?;
-    let session_path = directory.join("session.json");
     std::fs::write(&session_path, session_bytes)
         .map_err(|_| "无法写入本地登录会话。".to_string())?;
     #[cfg(unix)]
@@ -549,7 +586,7 @@ pub async fn zlib_download_book(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_zlib_book;
+    use super::{parse_zlib_book, saved_session_domain, ZlibEnvironment};
     use serde_json::json;
 
     #[test]
@@ -582,5 +619,38 @@ mod tests {
         assert_eq!(book.title, "物理学概论");
         assert_eq!(book.author.as_deref(), Some("作者丙"));
         assert_eq!(book.filesize.as_deref(), Some("3 MB"));
+    }
+
+    #[test]
+    fn saved_session_is_detected_without_a_network_profile_request() {
+        let session = json!({
+            "cookies": { "remix_userid": "123", "remix_userkey": "secret" },
+            "domain": "https://z-lib.gd",
+            "mode": "eapi"
+        });
+        assert_eq!(
+            saved_session_domain(&session).as_deref(),
+            Some("https://z-lib.gd")
+        );
+        assert!(saved_session_domain(&json!({
+            "cookies": { "remix_userid": "123", "remix_userkey": "" },
+            "domain": "https://z-lib.gd"
+        }))
+        .is_none());
+    }
+
+    #[test]
+    fn environment_fields_match_frontend_camel_case_contract() {
+        let environment = ZlibEnvironment {
+            installed: true,
+            path: None,
+            version: None,
+            has_login: true,
+            active_domain: Some("https://z-lib.gd".to_string()),
+        };
+        let value = serde_json::to_value(environment).unwrap();
+        assert_eq!(value.get("hasLogin"), Some(&json!(true)));
+        assert_eq!(value.get("activeDomain"), Some(&json!("https://z-lib.gd")));
+        assert!(value.get("has_login").is_none());
     }
 }

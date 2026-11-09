@@ -130,6 +130,7 @@ export default function TerminalPanel({
   const terminalHostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const sessionIdRef = useRef<string | null>(null);
+  const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
   const pendingCommandRef = useRef(pendingCommand);
   const pendingRawInputRef = useRef(pendingRawInput);
   const onCommandSubmittedRef = useRef(onCommandSubmitted);
@@ -145,6 +146,14 @@ export default function TerminalPanel({
   onCommandOutputRef.current = onCommandOutput;
   onRawInputSentRef.current = onRawInputSent;
 
+  const queueTerminalWrite = (sessionId: string, data: number[]) => {
+    const nextWrite = writeQueueRef.current.then(async () => {
+      await invoke('terminal_write', { sessionId, data });
+    });
+    writeQueueRef.current = nextWrite.catch(() => undefined);
+    return nextWrite;
+  };
+
   const writeRawToSession = (
     sessionId: string,
     text: string,
@@ -152,7 +161,7 @@ export default function TerminalPanel({
   ) => {
     const payload = execute ? `${text}\r` : text;
     const bytes = Array.from(new TextEncoder().encode(payload));
-    void invoke('terminal_write', { sessionId, data: bytes })
+    void queueTerminalWrite(sessionId, bytes)
       .then(() => {
         terminalRef.current?.focus();
       })
@@ -274,10 +283,7 @@ export default function TerminalPanel({
           started: false,
           truncated: false,
         };
-        await invoke('terminal_write', {
-          sessionId,
-          data: Array.from(bytes),
-        });
+        await queueTerminalWrite(sessionId, Array.from(bytes));
         onCommandSubmittedRef.current(request.id);
       } catch (error) {
         submittedCommandIdsRef.current.delete(request.id);
@@ -324,7 +330,67 @@ export default function TerminalPanel({
     let disposeInput: { dispose: () => void } | null = null;
     let unlistenOutput: (() => void) | null = null;
     let unlistenExit: (() => void) | null = null;
-    const pendingOutput: number[][] = [];
+    let resizeTimer: number | null = null;
+    let outputFrame: number | null = null;
+    let outputChunks: Uint8Array[] = [];
+    let queuedOutputBytes = 0;
+    let omittedOutputBytes = 0;
+    const maxQueuedOutputBytes = 2 * 1024 * 1024;
+    const pendingOutput: { sessionId: string; data: Uint8Array }[] = [];
+    let pendingOutputBytes = 0;
+
+    const flushOutput = () => {
+      outputFrame = null;
+      if (!terminal || outputChunks.length === 0) return;
+      const chunks = outputChunks;
+      const byteLength = queuedOutputBytes;
+      const omitted = omittedOutputBytes;
+      outputChunks = [];
+      queuedOutputBytes = 0;
+      omittedOutputBytes = 0;
+      if (omitted > 0) {
+        const notice = '\r\n[输出繁忙，已省略 ' + omitted + ' 字节旧内容]\r\n';
+        terminal.write(new TextEncoder().encode(notice));
+        const capture = commandCaptureRef.current;
+        if (capture) {
+          capture.truncated = true;
+          appendCapturedOutput(capture, notice);
+        }
+      }
+      const batch = new Uint8Array(byteLength);
+      let offset = 0;
+      for (const chunk of chunks) {
+        batch.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      terminal.write(batch);
+      const capture = commandCaptureRef.current;
+      if (capture)
+        consumeCommandOutput(capture.decoder.decode(batch, { stream: true }));
+    };
+
+    const queueOutput = (data: number[] | Uint8Array) => {
+      let chunk =
+        data instanceof Uint8Array ? data.slice() : Uint8Array.from(data);
+      if (chunk.byteLength > maxQueuedOutputBytes) {
+        omittedOutputBytes += chunk.byteLength - maxQueuedOutputBytes;
+        chunk = chunk.slice(chunk.byteLength - maxQueuedOutputBytes);
+      }
+      outputChunks.push(chunk);
+      queuedOutputBytes += chunk.byteLength;
+      while (
+        queuedOutputBytes > maxQueuedOutputBytes &&
+        outputChunks.length > 0
+      ) {
+        const removed = outputChunks.shift();
+        if (removed) {
+          queuedOutputBytes -= removed.byteLength;
+          omittedOutputBytes += removed.byteLength;
+        }
+      }
+      if (outputFrame === null)
+        outputFrame = requestAnimationFrame(flushOutput);
+    };
 
     const start = async () => {
       const outputListener = await listen<TerminalOutputEvent>(
@@ -333,17 +399,20 @@ export default function TerminalPanel({
           const payload = event.payload;
           if (!active) return;
           if (!sessionId) {
-            pendingOutput.push(payload.data);
+            const data = Uint8Array.from(payload.data);
+            pendingOutput.push({ sessionId: payload.sessionId, data });
+            pendingOutputBytes += data.byteLength;
+            while (
+              pendingOutputBytes > maxQueuedOutputBytes &&
+              pendingOutput.length > 0
+            ) {
+              const removed = pendingOutput.shift();
+              if (removed) pendingOutputBytes -= removed.data.byteLength;
+            }
             return;
           }
           if (payload.sessionId === sessionId) {
-            const bytes = Uint8Array.from(payload.data);
-            terminal?.write(bytes);
-            const capture = commandCaptureRef.current;
-            if (capture)
-              consumeCommandOutput(
-                capture.decoder.decode(bytes, { stream: true }),
-              );
+            queueOutput(payload.data);
           }
         },
       );
@@ -410,7 +479,7 @@ export default function TerminalPanel({
       terminal.open(host);
       fitAddon.fit();
 
-      const resize = () => {
+      const applyResize = () => {
         if (!active || !terminal || !fitAddon) return;
         try {
           fitAddon.fit();
@@ -424,7 +493,14 @@ export default function TerminalPanel({
           // The terminal can briefly have a zero-sized host during layout.
         }
       };
-      resizeObserver = new ResizeObserver(resize);
+      const scheduleResize = () => {
+        if (resizeTimer !== null) window.clearTimeout(resizeTimer);
+        resizeTimer = window.setTimeout(() => {
+          resizeTimer = null;
+          requestAnimationFrame(applyResize);
+        }, 64);
+      };
+      resizeObserver = new ResizeObserver(scheduleResize);
       resizeObserver.observe(host);
 
       sessionId = await invoke<string>('terminal_start', {
@@ -439,22 +515,21 @@ export default function TerminalPanel({
       }
       setStatus(cwd || 'PowerShell');
       terminal.writeln(`Seamind terminal  ·  ${cwd || '默认工作目录'}`);
-      pendingOutput.splice(0).forEach((data) => {
-        terminal?.write(Uint8Array.from(data));
+      pendingOutput.splice(0).forEach((event) => {
+        pendingOutputBytes -= event.data.byteLength;
+        if (event.sessionId === sessionId) queueOutput(event.data);
       });
       sendPendingCommandRef.current(sessionId);
       sendPendingRawRef.current(sessionId);
       disposeInput = terminal.onData((data) => {
         if (!sessionId) return;
         const bytes = Array.from(new TextEncoder().encode(data));
-        void invoke('terminal_write', { sessionId, data: bytes }).catch(
-          (error: unknown) => {
-            if (active)
-              setStatus(error instanceof Error ? error.message : '输入失败');
-          },
-        );
+        void queueTerminalWrite(sessionId, bytes).catch((error: unknown) => {
+          if (active)
+            setStatus(error instanceof Error ? error.message : '输入失败');
+        });
       });
-      requestAnimationFrame(resize);
+      scheduleResize();
     };
 
     void start().catch((error: unknown) => {
@@ -475,6 +550,12 @@ export default function TerminalPanel({
       active = false;
       sessionIdRef.current = null;
       resizeObserver?.disconnect();
+      if (resizeTimer !== null) window.clearTimeout(resizeTimer);
+      if (outputFrame !== null) cancelAnimationFrame(outputFrame);
+      outputChunks = [];
+      pendingOutput.splice(0);
+      queuedOutputBytes = 0;
+      pendingOutputBytes = 0;
       disposeInput?.dispose();
       unlistenOutput?.();
       unlistenExit?.();

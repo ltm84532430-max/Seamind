@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tauri::{AppHandle, Emitter, State};
@@ -12,17 +13,89 @@ use uuid::Uuid;
 
 const MAX_TERMINAL_INPUT_BYTES: usize = 65_536;
 const MAX_TERMINAL_SCRIPT_BYTES: usize = 40_000;
+const MAX_TERMINAL_SESSIONS: usize = 16;
 
 #[derive(Default, Clone)]
 pub struct TerminalState {
     sessions: Arc<Mutex<HashMap<String, TerminalSession>>>,
+    active_sessions: Arc<AtomicUsize>,
 }
 
 struct TerminalSession {
-    writer: Box<dyn Write + Send>,
-    master: Box<dyn MasterPty + Send>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
     cleanup_paths: Vec<PathBuf>,
+    active_sessions: Arc<AtomicUsize>,
+}
+
+impl Drop for TerminalSession {
+    fn drop(&mut self) {
+        let _ = self.killer.kill();
+        remove_temp_files(&self.cleanup_paths);
+        self.active_sessions.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+struct TerminalSessionReservation {
+    active_sessions: Arc<AtomicUsize>,
+    committed: bool,
+}
+
+impl TerminalSessionReservation {
+    fn reserve(active_sessions: Arc<AtomicUsize>) -> Result<Self, String> {
+        let mut current = active_sessions.load(Ordering::SeqCst);
+        loop {
+            if current >= MAX_TERMINAL_SESSIONS {
+                return Err(format!(
+                    "终端最多同时运行 {MAX_TERMINAL_SESSIONS} 个会话，请先关闭不需要的标签。"
+                ));
+            }
+            match active_sessions.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => {
+                    return Ok(Self {
+                        active_sessions,
+                        committed: false,
+                    });
+                }
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
+    fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for TerminalSessionReservation {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.active_sessions.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+}
+
+impl TerminalState {
+    pub fn close_all(&self) {
+        let sessions = self
+            .sessions
+            .lock()
+            .map(|mut sessions| {
+                sessions
+                    .drain()
+                    .map(|(_, session)| session)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        // 在会话表锁外释放资源，避免结束进程和清理文件时阻塞其他会话。
+        drop(sessions);
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -137,7 +210,7 @@ pub fn terminal_detect_shells() -> Vec<TerminalShellOption> {
             name: "WSL Linux".to_string(),
             badge: "WSL".to_string(),
             description: if wsl_exists {
-                "Windows Subsystem for Linux 原生 Linux 内核环境".to_string()
+                "已检测到 wsl.exe；可用发行版将在会话启动时确认".to_string()
             } else {
                 "未开启或未安装 WSL".to_string()
             },
@@ -189,6 +262,7 @@ pub fn terminal_start(
     if !working_directory.is_dir() {
         return Err("终端工作目录必须是文件夹。".to_string());
     }
+    let reservation = TerminalSessionReservation::reserve(state.active_sessions.clone())?;
 
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -238,7 +312,8 @@ pub fn terminal_start(
     };
     #[cfg(not(windows))]
     let mut command = {
-        let shell_bin = shell.unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()));
+        let shell_bin = shell
+            .unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()));
         let mut command = CommandBuilder::new(shell_bin);
         command.arg("-l");
         command
@@ -262,30 +337,49 @@ pub fn terminal_start(
         }
     };
     let killer = child.clone_killer();
-    let mut reader = pair
-        .master
-        .try_clone_reader()
-        .map_err(|error| format!("读取终端输出失败：{error}"))?;
-    let writer = pair
-        .master
-        .take_writer()
-        .map_err(|error| format!("初始化终端输入失败：{error}"))?;
+    let mut reader = match pair.master.try_clone_reader() {
+        Ok(reader) => reader,
+        Err(error) => {
+            let mut killer = killer;
+            let _ = killer.kill();
+            remove_temp_files(&cleanup_paths);
+            return Err(format!("读取终端输出失败：{error}"));
+        }
+    };
+    let writer = match pair.master.take_writer() {
+        Ok(writer) => writer,
+        Err(error) => {
+            let mut killer = killer;
+            let _ = killer.kill();
+            remove_temp_files(&cleanup_paths);
+            return Err(format!("初始化终端输入失败：{error}"));
+        }
+    };
     drop(pair.slave);
 
     let session_id = Uuid::new_v4().to_string();
     let sessions = state.sessions.clone();
-    sessions
-        .lock()
-        .map_err(|_| "终端会话状态不可用。".to_string())?
-        .insert(
-            session_id.clone(),
-            TerminalSession {
-                writer,
-                master: pair.master,
-                killer,
-                cleanup_paths,
-            },
-        );
+    let mut session_map = match sessions.lock() {
+        Ok(sessions) => sessions,
+        Err(_) => {
+            let mut killer = killer;
+            let _ = killer.kill();
+            remove_temp_files(&cleanup_paths);
+            return Err("终端会话状态不可用。".to_string());
+        }
+    };
+    session_map.insert(
+        session_id.clone(),
+        TerminalSession {
+            writer: Arc::new(Mutex::new(writer)),
+            master: Arc::new(Mutex::new(pair.master)),
+            killer,
+            cleanup_paths,
+            active_sessions: state.active_sessions.clone(),
+        },
+    );
+    drop(session_map);
+    reservation.commit();
 
     let output_app = app.clone();
     let output_session_id = session_id.clone();
@@ -317,11 +411,11 @@ pub fn terminal_start(
                 session_id: exit_session_id,
             },
         );
-        if let Ok(mut sessions) = sessions.lock() {
-            if let Some(session) = sessions.remove(&cleanup_session_id) {
-                remove_temp_files(&session.cleanup_paths);
-            }
-        }
+        let finished_session = sessions
+            .lock()
+            .ok()
+            .and_then(|mut sessions| sessions.remove(&cleanup_session_id));
+        drop(finished_session);
     });
 
     Ok(session_id)
@@ -336,17 +430,22 @@ pub fn terminal_write(
     if data.len() > MAX_TERMINAL_INPUT_BYTES {
         return Err("单次终端输入不能超过 64 KB。".to_string());
     }
-    let mut sessions = state
-        .sessions
+    let writer = {
+        let sessions = state
+            .sessions
+            .lock()
+            .map_err(|_| "终端会话状态不可用。".to_string())?;
+        sessions
+            .get(&session_id)
+            .map(|session| session.writer.clone())
+            .ok_or_else(|| "终端会话已经关闭。".to_string())?
+    };
+    let mut writer = writer
         .lock()
-        .map_err(|_| "终端会话状态不可用。".to_string())?;
-    let session = sessions
-        .get_mut(&session_id)
-        .ok_or_else(|| "终端会话已经关闭。".to_string())?;
-    session
-        .writer
+        .map_err(|_| "终端会话输入通道不可用。".to_string())?;
+    writer
         .write_all(&data)
-        .and_then(|_| session.writer.flush())
+        .and_then(|_| writer.flush())
         .map_err(|error| format!("发送终端输入失败：{error}"))
 }
 
@@ -357,29 +456,34 @@ pub fn terminal_resize(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    let sessions = state
-        .sessions
+    let master = {
+        let sessions = state
+            .sessions
+            .lock()
+            .map_err(|_| "终端会话状态不可用。".to_string())?;
+        sessions
+            .get(&session_id)
+            .map(|session| session.master.clone())
+            .ok_or_else(|| "终端会话已经关闭。".to_string())?
+    };
+    let master = master
         .lock()
-        .map_err(|_| "终端会话状态不可用。".to_string())?;
-    let session = sessions
-        .get(&session_id)
-        .ok_or_else(|| "终端会话已经关闭。".to_string())?;
-    session
-        .master
+        .map_err(|_| "终端会话控制通道不可用。".to_string())?;
+    master
         .resize(terminal_size(cols, rows))
         .map_err(|error| format!("调整终端大小失败：{error}"))
 }
 
 #[tauri::command]
 pub fn terminal_close(state: State<'_, TerminalState>, session_id: String) -> Result<(), String> {
-    let mut sessions = state
-        .sessions
-        .lock()
-        .map_err(|_| "终端会话状态不可用。".to_string())?;
-    if let Some(mut session) = sessions.remove(&session_id) {
-        let _ = session.killer.kill();
-        remove_temp_files(&session.cleanup_paths);
-    }
+    let session = {
+        let mut sessions = state
+            .sessions
+            .lock()
+            .map_err(|_| "终端会话状态不可用。".to_string())?;
+        sessions.remove(&session_id)
+    };
+    drop(session);
     Ok(())
 }
 

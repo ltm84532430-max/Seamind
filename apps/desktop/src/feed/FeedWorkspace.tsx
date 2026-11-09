@@ -4,7 +4,7 @@ import { FeedAddDialog } from './FeedAddDialog';
 import { FeedArticleList } from './FeedArticleList';
 import { FeedAudioPlayerBar } from './FeedAudioPlayerBar';
 import { FeedCategoryDialog } from './FeedCategoryDialog';
-import { FeedGalaxyView } from './FeedGalaxyView';
+import { FeedGalaxyGraphView } from './FeedGalaxyGraphView';
 import { FeedOpmlDialog } from './FeedOpmlDialog';
 import { FeedReaderView } from './FeedReaderView';
 import { FeedSidebar } from './FeedSidebar';
@@ -130,6 +130,11 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
       setLoadingArticles(false);
     }
   }, [selectedChannelId, selectedCategory, filterMode, searchQuery]);
+
+  const loadGalaxyChannelArticles = useCallback(
+    (channelId: string) => feedApi.listArticles({ channelId, limit: 20 }),
+    [],
+  );
 
   useEffect(() => {
     if (
@@ -578,9 +583,10 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
       />
 
       {isGalaxyOpen && (
-        <FeedGalaxyView
+        <FeedGalaxyGraphView
           categories={overview?.categories ?? []}
           channels={overview?.channels ?? []}
+          loadChannelArticles={loadGalaxyChannelArticles}
           onClose={() => setIsGalaxyOpen(false)}
           onSelectCategory={(category) => {
             setSelectedChannelId(null);
@@ -592,6 +598,10 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
             setSelectedCategory(null);
             setSelectedChannelId(channelId);
             setFilterMode('all');
+            setIsGalaxyOpen(false);
+          }}
+          onSelectArticle={(article) => {
+            void handleSelectArticle(article);
             setIsGalaxyOpen(false);
           }}
         />
