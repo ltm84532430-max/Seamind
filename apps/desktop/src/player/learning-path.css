@@ -391,13 +391,15 @@
 }
 
 .lp-btn.is-primary {
-  border-color: var(--lp-accent, var(--player-accent, #df735b));
-  background: var(--lp-accent, var(--player-accent, #df735b));
+  border-color: var(--player-accent, var(--accent, #d9573b));
+  background: var(--player-accent, var(--accent, #d9573b));
   color: #fff;
   font-weight: 600;
 }
 
 .lp-btn.is-primary:hover:not(:disabled) {
+  border-color: var(--player-accent, var(--accent, #d9573b));
+  background: var(--player-accent, var(--accent, #d9573b));
   filter: brightness(1.08);
   color: #fff;
 }
@@ -3379,4 +3381,456 @@
   padding: 1px 4px;
   border: 1px solid var(--lp-border-strong);
   color: var(--lp-accent);
+}
+
+/* ---- Directory studio: path rail and lesson list ---- */
+
+.lp-workspace.is-directory {
+  background: var(--player-bg);
+}
+
+.lp-studio {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: var(--player-bg);
+  color: var(--player-ink);
+}
+
+.lp-studio-rail {
+  width: 240px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--player-line);
+  background: var(--player-panel);
+}
+
+.lp-studio-rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 48px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--player-line);
+}
+
+.lp-studio-rail-title {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--player-ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.lp-studio-rail-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+}
+
+.lp-studio-rail-empty {
+  margin: 8px;
+  color: var(--player-muted);
+  font-size: 12px;
+}
+
+.lp-rail-group + .lp-rail-group {
+  margin-top: 2px;
+}
+
+.lp-rail-path {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 8px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--player-ink);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.lp-rail-group.is-active > .lp-rail-path,
+.lp-rail-path:hover,
+.lp-rail-stage:hover {
+  background: color-mix(in srgb, var(--player-accent) 12%, transparent);
+}
+
+.lp-rail-path-title {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lp-rail-path-meta,
+.lp-rail-stage-meta {
+  color: var(--player-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lp-rail-progress {
+  grid-column: 1 / -1;
+  display: block;
+  height: 2px;
+  background: var(--player-line);
+}
+
+.lp-rail-progress > span {
+  display: block;
+  height: 100%;
+  background: var(--player-accent);
+}
+
+.lp-rail-stages {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px 0 8px 8px;
+}
+
+.lp-rail-stage {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--player-ink);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.lp-rail-stage.is-active {
+  background: var(--player-bg);
+}
+
+.lp-rail-stage-index {
+  color: var(--player-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lp-rail-stage-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+
+.lp-studio-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.lp-studio-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 64px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--player-line);
+}
+
+.lp-studio-head-text {
+  min-width: 0;
+}
+
+.lp-studio-head-text h2,
+.lp-studio-empty h3 {
+  margin: 0;
+  overflow: hidden;
+  font-size: 16px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lp-studio-head-text p,
+.lp-studio-empty p,
+.lp-create-lead,
+.lp-studio-stage-note {
+  margin: 4px 0 0;
+  color: var(--player-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.lp-studio-head-text p span {
+  margin-left: 10px;
+}
+
+.lp-studio-head-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.lp-studio-stage-note {
+  margin: 0;
+  padding: 10px 20px 0;
+}
+
+.lp-studio-lessons {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.lp-studio-empty {
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: 8px;
+  max-width: 420px;
+  margin: auto;
+  padding: 32px 20px;
+}
+
+.lp-lesson {
+  border-bottom: 1px solid var(--player-line);
+}
+
+.lp-lesson-row {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) minmax(0, 180px) auto;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  padding: 12px 20px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.lp-lesson.is-next .lp-lesson-index,
+.lp-lesson-status.is-next {
+  color: var(--player-accent);
+}
+
+.lp-lesson.is-done .lp-lesson-title {
+  color: var(--player-muted);
+}
+
+.lp-lesson.is-locked {
+  opacity: 0.62;
+}
+
+.lp-lesson.is-open {
+  background: var(--player-panel);
+}
+
+.lp-lesson-index {
+  color: var(--player-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.lp-lesson-title {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lp-lesson-meta,
+.lp-lesson-status {
+  overflow: hidden;
+  color: var(--player-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lp-lesson-panel {
+  display: grid;
+  grid-template-columns: 168px minmax(0, 1fr);
+  gap: 16px;
+  padding: 0 20px 16px 68px;
+}
+
+.lp-lesson-panel:not(:has(.lp-lesson-thumb)) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.lp-lesson-thumb {
+  position: relative;
+  width: 168px;
+  height: 94px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 6px;
+  background: #14191e;
+  cursor: pointer;
+}
+
+.lp-lesson-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.lp-lesson-thumb span {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  padding: 1px 4px;
+  background: rgba(0, 0, 0, 0.78);
+  color: #fff;
+  font-size: 11px;
+}
+
+.lp-lesson-detail p {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.lp-lesson-detail p.is-muted {
+  color: var(--player-muted);
+}
+
+.lp-lesson-actions,
+.lp-create-form,
+.lp-create-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.lp-create-modal {
+  width: min(840px, 94vw);
+}
+
+.lp-create-input {
+  height: 32px;
+  min-width: 0;
+  padding: 0 10px;
+  border: 1px solid var(--player-line-strong);
+  background: var(--player-panel);
+  color: var(--player-ink);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.lp-create-input.is-grow {
+  flex: 1 1 220px;
+}
+
+.lp-create-generate h4 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.lp-create-status {
+  margin: 8px 0 0;
+  color: var(--player-muted);
+  font-size: 12px;
+}
+
+/* Primary actions follow the app theme. --lp-accent is the path palette:
+   terracotta cards are #fff, and 极简墨线 in dark is #f2f2f2, so a button
+   that prefers it stays white when the shell theme changes. */
+.lp-studio .lp-btn.is-primary,
+.lp-workspace .lp-continue-btn {
+  border-color: var(--player-accent, var(--accent, #d9573b));
+  background: var(--player-accent, var(--accent, #d9573b));
+  color: #fff;
+}
+
+.lp-studio .lp-btn.is-primary:hover:not(:disabled),
+.lp-workspace .lp-continue-btn:hover:not(:disabled) {
+  border-color: var(--player-accent, var(--accent, #d9573b));
+  background: var(--player-accent, var(--accent, #d9573b));
+  color: #fff;
+  filter: brightness(1.08);
+}
+
+.app-shell[data-theme='navy'] .lp-studio .lp-btn.is-primary,
+.app-shell[data-theme='navy'] .lp-workspace .lp-continue-btn {
+  background: #0284c7;
+  border-color: #38bdf8;
+  color: #fff;
+  filter: none;
+}
+
+.app-shell[data-theme='navy']
+  .lp-studio
+  .lp-btn.is-primary:hover:not(:disabled),
+.app-shell[data-theme='navy']
+  .lp-workspace
+  .lp-continue-btn:hover:not(:disabled) {
+  background: #0369a1;
+  border-color: #38bdf8;
+  color: #fff;
+  filter: none;
+}
+
+.app-shell[data-theme='purple'] .lp-studio .lp-btn.is-primary,
+.app-shell[data-theme='purple'] .lp-workspace .lp-continue-btn {
+  background: #9333ea;
+  border-color: #c084fc;
+  color: #fff;
+  filter: none;
+}
+
+.app-shell[data-theme='purple']
+  .lp-studio
+  .lp-btn.is-primary:hover:not(:disabled),
+.app-shell[data-theme='purple']
+  .lp-workspace
+  .lp-continue-btn:hover:not(:disabled) {
+  background: #7e22ce;
+  border-color: #c084fc;
+  color: #fff;
+  filter: none;
+}
+
+@media (max-width: 860px) {
+  .lp-studio-rail {
+    width: 200px;
+  }
+
+  .lp-lesson-row {
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+  }
+
+  .lp-lesson-meta {
+    display: none;
+  }
+
+  .lp-lesson-panel {
+    grid-template-columns: 1fr;
+    padding-left: 20px;
+  }
 }

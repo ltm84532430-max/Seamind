@@ -1387,6 +1387,38 @@
   border-color: var(--player-accent);
   color: var(--player-accent);
 }
+.player-video-notes-context button.player-save-knowledge-btn {
+  background: rgba(217, 87, 59, 0.14);
+  border-color: rgba(217, 87, 59, 0.45);
+  color: #f28b73;
+  font-weight: 600;
+  border-radius: 2px;
+}
+.player-video-notes-context
+  button.player-save-knowledge-btn:hover:not(:disabled) {
+  background: rgba(217, 87, 59, 0.25);
+  border-color: #d9573b;
+  color: #ffffff;
+}
+.player-video-notes-context button.player-save-knowledge-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  border-color: var(--player-line);
+  color: var(--player-ink-subtle);
+  background: transparent;
+}
+.player-video-notes-context button.player-open-knowledge-btn {
+  background: rgba(56, 189, 248, 0.1);
+  border-color: rgba(56, 189, 248, 0.35);
+  color: #38bdf8;
+  font-weight: 500;
+  border-radius: 2px;
+}
+.player-video-notes-context button.player-open-knowledge-btn:hover {
+  background: rgba(56, 189, 248, 0.2);
+  border-color: #38bdf8;
+  color: #ffffff;
+}
 .player-video-notes-context-actions {
   display: flex;
   flex: none;

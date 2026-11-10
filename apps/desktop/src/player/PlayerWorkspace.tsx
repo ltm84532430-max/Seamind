@@ -24,6 +24,7 @@ import {
   HACKER_LEARNING_PATH_PRESET,
 } from './learning-path-presets';
 import { ImportDialog, SettingsDialog } from './PlayerDialogs';
+import type { PlayerExportedDocument } from './PlayerNotePanel';
 import { errorText, playerApi } from './player-api';
 import { inputFromItem, patchOverlay } from './queue';
 import type { Overlay, QueueSource, VideoPatch } from './queue';
@@ -110,6 +111,8 @@ export default function PlayerWorkspace({
   onSendTerminalCommand,
   onExportMarkdownToMindmap,
   onExportTranscriptToKnowledge,
+  onSaveVideoNoteToKnowledge,
+  onFindVideoKnowledgeDocument,
 }: {
   active: boolean;
   provider: AgentProviderSettings;
@@ -132,6 +135,15 @@ export default function PlayerWorkspace({
   onExportTranscriptToKnowledge?: (
     payload: TranscriptKnowledgeExportPayload,
   ) => Promise<TranscriptKnowledgeExportResult | void>;
+  onSaveVideoNoteToKnowledge?: (payload: {
+    videoId: string;
+    videoTitle: string;
+    channelName?: string;
+    markdown: string;
+  }) => Promise<TranscriptKnowledgeExportResult | void>;
+  onFindVideoKnowledgeDocument?: (
+    videoId: string,
+  ) => Promise<PlayerExportedDocument | null> | PlayerExportedDocument | null;
 }) {
   const [overview, setOverview] = useState<PlayerOverview | null>(null);
   const handledTaskVideoRef = useRef<number | null>(null);
@@ -735,7 +747,11 @@ export default function PlayerWorkspace({
         <main
           ref={mainRef}
           className={`player-main${watching ? ' is-watching' : ''}${
-            !watching && view.kind === 'learning-path' ? ' is-canvas' : ''
+            !watching &&
+            (view.kind === 'learning-path' ||
+              view.kind === 'learning-paths-home')
+              ? ' is-canvas'
+              : ''
           }${!watching && view.kind === 'favorites' ? ' is-favorites-board' : ''}`}
         >
           {loadError && !overview && (
@@ -773,6 +789,8 @@ export default function PlayerWorkspace({
               onCreateTask={onCreateVideoTask}
               onOpenTask={onOpenTask}
               onExportTranscriptToKnowledge={onExportTranscriptToKnowledge}
+              onSaveVideoNoteToKnowledge={onSaveVideoNoteToKnowledge}
+              onFindVideoKnowledgeDocument={onFindVideoKnowledgeDocument}
             />
           )}
         </main>

@@ -522,6 +522,76 @@ export default function KnowledgeWorkspace({
     );
   }, [documents, activeSource, query, manualCategories, globalSearch]);
 
+  // 识别同一视频/同名重复文档，生成去重与版本元数据
+  const duplicateNotesMap = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        total: number;
+        index: number;
+        isLatest: boolean;
+        isDuplicate: boolean;
+      }
+    >();
+
+    for (const group of groups) {
+      const clusterMap = new Map<string, MapDocument[]>();
+      for (const note of group.notes) {
+        const vid = note.sourceRef?.videoId?.trim();
+        const baseTitle = note.title
+          .trim()
+          .replace(/\s*\(\d+\)$/, '')
+          .toLowerCase();
+        const key = vid ? `vid:${vid}` : `title:${baseTitle}`;
+        const list = clusterMap.get(key) ?? [];
+        list.push(note);
+        clusterMap.set(key, list);
+      }
+
+      for (const [, cluster] of clusterMap.entries()) {
+        if (cluster.length <= 1) continue;
+        const sorted = [...cluster].sort(
+          (a, b) => (a.updatedAt || 0) - (b.updatedAt || 0),
+        );
+        const total = sorted.length;
+        sorted.forEach((note, idx) => {
+          map.set(note.relativePath, {
+            total,
+            index: idx + 1,
+            isLatest: idx === total - 1,
+            isDuplicate: true,
+          });
+        });
+      }
+    }
+    return map;
+  }, [groups]);
+
+  const folderDuplicateCopies = useMemo(() => {
+    const map = new Map<string, MapDocument[]>();
+    for (const group of groups) {
+      const copies: MapDocument[] = [];
+      for (const note of group.notes) {
+        const meta = duplicateNotesMap.get(note.relativePath);
+        if (meta && !meta.isLatest) {
+          copies.push(note);
+        }
+      }
+      map.set(group.name, copies);
+    }
+    return map;
+  }, [groups, duplicateNotesMap]);
+
+  const handleCleanFolderDuplicates = useCallback(
+    (copies: MapDocument[]) => {
+      if (copies.length === 0) return;
+      for (const copy of copies) {
+        onDeleteNote(copy);
+      }
+    },
+    [onDeleteNote],
+  );
+
   const sourceNotes = useMemo(
     () => docNotes.filter((doc) => knowledgeOrigin(doc) === activeSource),
     [docNotes, activeSource],
@@ -1053,6 +1123,23 @@ export default function KnowledgeWorkspace({
                             {group.notes.length}
                           </span>
                         </button>
+                        {(folderDuplicateCopies.get(group.name)?.length ?? 0) >
+                          0 && (
+                          <button
+                            type="button"
+                            className="knowledge-folder-clean-dup"
+                            title={`该分类有 ${folderDuplicateCopies.get(group.name)!.length} 篇同视频历史副本，点击一键清理，仅保留最新版`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleCleanFolderDuplicates(
+                                folderDuplicateCopies.get(group.name)!,
+                              );
+                            }}
+                          >
+                            清理 {folderDuplicateCopies.get(group.name)!.length}{' '}
+                            副本
+                          </button>
+                        )}
                         {activeSource === 'manual' && !globalSearch && (
                           <button
                             type="button"
@@ -1124,6 +1211,31 @@ export default function KnowledgeWorkspace({
                                       {note.updatedAt > 0 && (
                                         <span className="knowledge-note-date">
                                           {formatRelativeDate(note.updatedAt)}
+                                        </span>
+                                      )}
+                                      {duplicateNotesMap.get(note.relativePath)
+                                        ?.isDuplicate && (
+                                        <span
+                                          className={`knowledge-dup-chip ${
+                                            duplicateNotesMap.get(
+                                              note.relativePath,
+                                            )!.isLatest
+                                              ? 'is-latest'
+                                              : 'is-copy'
+                                          }`}
+                                          title={
+                                            duplicateNotesMap.get(
+                                              note.relativePath,
+                                            )!.isLatest
+                                              ? `该视频共有 ${duplicateNotesMap.get(note.relativePath)!.total} 份笔记，此篇为最新版`
+                                              : `该视频共有 ${duplicateNotesMap.get(note.relativePath)!.total} 份笔记，此篇为历史副本 (${duplicateNotesMap.get(note.relativePath)!.index}/${duplicateNotesMap.get(note.relativePath)!.total})`
+                                          }
+                                        >
+                                          {duplicateNotesMap.get(
+                                            note.relativePath,
+                                          )!.isLatest
+                                            ? '最新版'
+                                            : `副本 ${duplicateNotesMap.get(note.relativePath)!.index}/${duplicateNotesMap.get(note.relativePath)!.total}`}
                                         </span>
                                       )}
                                       {note.tags && note.tags.length > 0 && (

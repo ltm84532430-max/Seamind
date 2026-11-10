@@ -115,7 +115,8 @@ function wrapDeep(host: HTMLElement): HTMLElement[] {
       (node) =>
         node.nodeType === Node.TEXT_NODE && (node.textContent ?? '').trim(),
     );
-  if (onlyWrapper && elementChildren[0]) return wrapDeep(elementChildren[0]);
+  if (onlyWrapper && elementChildren[0])
+    return wrapDeep(elementChildren[0] as HTMLElement);
   return wrapFlatFlow(host);
 }
 

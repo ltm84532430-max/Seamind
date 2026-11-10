@@ -80,6 +80,8 @@ export default function WatchView({
   onCreateTask,
   onOpenTask,
   onExportTranscriptToKnowledge,
+  onSaveVideoNoteToKnowledge,
+  onFindVideoKnowledgeDocument,
 }: {
   watching: Watching;
   /** Whether the player page is the workspace in front. */
@@ -93,6 +95,15 @@ export default function WatchView({
   onExportTranscriptToKnowledge?(
     payload: TranscriptKnowledgeExportPayload,
   ): Promise<TranscriptKnowledgeExportResult | void>;
+  onSaveVideoNoteToKnowledge?(payload: {
+    videoId: string;
+    videoTitle: string;
+    channelName?: string;
+    markdown: string;
+  }): Promise<TranscriptKnowledgeExportResult | void>;
+  onFindVideoKnowledgeDocument?(
+    videoId: string,
+  ): Promise<PlayerExportedDocument | null> | PlayerExportedDocument | null;
 }) {
   const host = usePlayerHost();
   const { queue } = watching;
@@ -306,7 +317,45 @@ export default function WatchView({
     setDocumentRefinementActive(false);
     setActiveTab(hasQueue ? 'queue' : 'transcript');
     lastShadowPausedCueIdRef.current = null;
-  }, [videoId, watching.token, hasQueue]);
+
+    if (onFindVideoKnowledgeDocument) {
+      void Promise.resolve(onFindVideoKnowledgeDocument(videoId)).then(
+        (existing) => {
+          if (existing) {
+            setExportedDocument(existing);
+          }
+        },
+      );
+    }
+  }, [videoId, watching.token, hasQueue, onFindVideoKnowledgeDocument]);
+
+  const handleDepositVideoNote = useCallback(
+    async (markdown: string): Promise<PlayerExportedDocument | void> => {
+      if (!onSaveVideoNoteToKnowledge) return;
+      const result = await onSaveVideoNoteToKnowledge({
+        videoId,
+        videoTitle: item.title,
+        channelName: item.channelName ?? undefined,
+        markdown,
+      });
+      if (result) {
+        const exportedDoc: PlayerExportedDocument = {
+          ...(result.id ? { id: result.id } : {}),
+          title: result.title,
+          category: result.category,
+          markdown,
+          ...(result.open ? { openKnowledge: result.open } : {}),
+          ...(result.updateMarkdown
+            ? { updateMarkdown: result.updateMarkdown }
+            : {}),
+        };
+        setExportedDocument(exportedDoc);
+        host.notify(`已将文稿笔记沉淀至知识库「${result.title}」`);
+        return exportedDoc;
+      }
+    },
+    [videoId, item.title, item.channelName, onSaveVideoNoteToKnowledge, host],
+  );
 
   const jumpToRelativeCue = useCallback(
     (offset: -1 | 1) => {
@@ -853,6 +902,7 @@ export default function WatchView({
                   currentTime={currentTime}
                   document={exportedDocument}
                   suspendDocumentSave={documentRefinementActive}
+                  onDepositToKnowledge={handleDepositVideoNote}
                   onDocumentMarkdownChange={(markdown) =>
                     setExportedDocument((current) =>
                       current ? { ...current, markdown } : current,

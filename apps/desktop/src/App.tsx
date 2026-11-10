@@ -113,9 +113,11 @@ import FavoritesProposalDialog, {
 import LearningPathProposalDialog from './player/LearningPathProposalDialog';
 import { playerApi } from './player/player-api';
 import type { VideoInput } from './player/types';
-import type {
-  TranscriptKnowledgeExportPayload,
-  TranscriptKnowledgeExportResult,
+import type { PlayerExportedDocument } from './player/PlayerNotePanel';
+import {
+  sanitizeTranscriptNoteTitle,
+  type TranscriptKnowledgeExportPayload,
+  type TranscriptKnowledgeExportResult,
 } from './player/transcript/export';
 import { searchYouTubeVideos } from './player/youtube-data';
 import {
@@ -3307,6 +3309,28 @@ export default function App() {
     await workbench.controller.createDocument('doc', folder);
   };
 
+  const upsertSavedInLibrary = (doc: MapDocument) => {
+    const latestSnapshot = librarySnapshotRef.current;
+    if (!latestSnapshot) return;
+    const categories = new Set(latestSnapshot.categories);
+    const parts = doc.category.split('/').filter(Boolean);
+    for (let idx = 1; idx <= parts.length; idx += 1) {
+      categories.add(parts.slice(0, idx).join('/'));
+    }
+    installLibrarySnapshot({
+      ...latestSnapshot,
+      categories: [...categories].sort(),
+      documents: [
+        doc,
+        ...latestSnapshot.documents.filter(
+          (candidate) =>
+            candidate.relativePath !== doc.relativePath &&
+            candidate.id !== doc.id,
+        ),
+      ],
+    });
+  };
+
   const exportTranscriptToKnowledge = async (
     payload: TranscriptKnowledgeExportPayload,
   ): Promise<TranscriptKnowledgeExportResult> => {
@@ -3314,33 +3338,19 @@ export default function App() {
       throw new Error('请先在顶部或知识库中选择文件库目录，再导出字幕文档。');
     }
 
-    const upsertSavedInLibrary = (doc: MapDocument) => {
-      const latestSnapshot = librarySnapshotRef.current;
-      if (!latestSnapshot) return;
-      const categories = new Set(latestSnapshot.categories);
-      const parts = doc.category.split('/').filter(Boolean);
-      for (let idx = 1; idx <= parts.length; idx += 1) {
-        categories.add(parts.slice(0, idx).join('/'));
-      }
-      installLibrarySnapshot({
-        ...latestSnapshot,
-        categories: [...categories].sort(),
-        documents: [
-          doc,
-          ...latestSnapshot.documents.filter(
-            (candidate) =>
-              candidate.relativePath !== doc.relativePath &&
-              candidate.id !== doc.id,
-          ),
-        ],
-      });
-    };
+    // 智能去重：检查知识库是否已存在同视频的字幕或笔记文档，避免盲目派生同名副本
+    const existingDoc = librarySnapshotRef.current?.documents.find(
+      (candidate) =>
+        candidate.kind === 'doc' &&
+        candidate.sourceRef?.videoId === payload.videoId &&
+        (candidate.mapType === '视频字幕' || candidate.origin === 'player'),
+    );
 
     const input: SaveDocumentInput = {
-      id: null,
-      relativePath: null,
-      title: payload.title,
-      category: payload.category,
+      id: existingDoc ? existingDoc.id : null,
+      relativePath: existingDoc ? existingDoc.relativePath : null,
+      title: existingDoc ? existingDoc.title : payload.title,
+      category: existingDoc?.category || payload.category,
       mapType: '视频字幕',
       tags: payload.tags,
       markdown: payload.markdown,
@@ -3357,7 +3367,11 @@ export default function App() {
     upsertSavedInLibrary(currentDoc);
     void searchLibrary().catch(() => undefined);
     setLibraryError('');
-    setSaveMessage(`已导出视频字幕至知识库「${currentDoc.title}」`);
+    setSaveMessage(
+      existingDoc
+        ? `已更新视频字幕笔记「${currentDoc.title}」`
+        : `已导出视频字幕至知识库「${currentDoc.title}」`,
+    );
 
     return {
       id: currentDoc.id,
@@ -3408,6 +3422,188 @@ export default function App() {
       },
     };
   };
+
+  const saveVideoNoteToKnowledge = async (payload: {
+    videoId: string;
+    videoTitle: string;
+    channelName?: string;
+    markdown: string;
+  }): Promise<TranscriptKnowledgeExportResult> => {
+    if (!librarySnapshotRef.current?.rootPath) {
+      throw new Error('请先在顶部或知识库中选择文件库目录，再保存文稿笔记。');
+    }
+    const cleanVideoId = payload.videoId.trim();
+    const existingDoc = librarySnapshotRef.current?.documents.find(
+      (candidate) =>
+        candidate.kind === 'doc' &&
+        candidate.sourceRef?.videoId === cleanVideoId,
+    );
+    const safeTitle = sanitizeTranscriptNoteTitle(
+      payload.videoTitle,
+      cleanVideoId,
+    );
+    const cleanChannel = payload.channelName?.trim() || '';
+    const category =
+      existingDoc?.category ||
+      (cleanChannel ? `视频笔记/${cleanChannel}` : '视频笔记');
+    const tags = Array.from(
+      new Set(
+        [
+          'YouTube',
+          '观看笔记',
+          cleanChannel,
+          ...(existingDoc?.tags ?? []),
+        ].filter(Boolean),
+      ),
+    );
+
+    const input: SaveDocumentInput = {
+      id: existingDoc ? existingDoc.id : null,
+      relativePath: existingDoc ? existingDoc.relativePath : null,
+      title: existingDoc ? existingDoc.title : safeTitle,
+      category,
+      mapType: existingDoc?.mapType || '观看笔记',
+      tags,
+      markdown: payload.markdown,
+      historySource: 'manual',
+      kind: 'doc',
+      origin: 'player',
+      sourceRef: {
+        videoId: cleanVideoId,
+        videoUrl: `https://www.youtube.com/watch?v=${cleanVideoId}`,
+        channelName: cleanChannel,
+      },
+    };
+    let currentDoc = await invoke<MapDocument>('save_document', { input });
+    upsertSavedInLibrary(currentDoc);
+    void searchLibrary().catch(() => undefined);
+    setLibraryError('');
+    setSaveMessage(
+      existingDoc
+        ? `已同步文稿笔记至知识库「${currentDoc.title}」`
+        : `已将文稿笔记沉淀至知识库「${currentDoc.title}」`,
+    );
+
+    return {
+      id: currentDoc.id,
+      title: currentDoc.title,
+      category: currentDoc.category || category,
+      relativePath: currentDoc.relativePath,
+      open: () => {
+        void (async () => {
+          await openKnowledgeNote(currentDoc);
+          setActiveWorkspace('knowledge');
+        })();
+      },
+      updateMarkdown: async (nextMarkdown: string, statusLabel?: string) => {
+        if (
+          !workbench.controller.canSyncSavedMarkdown(currentDoc.relativePath)
+        ) {
+          throw new Error(
+            '知识库文档有未保存的编辑，已暂停自动同步以保护你的修改。',
+          );
+        }
+        const updateInput: SaveDocumentInput = {
+          id: currentDoc.id,
+          relativePath: currentDoc.relativePath,
+          title: currentDoc.title,
+          category: currentDoc.category || category,
+          mapType: currentDoc.mapType || '观看笔记',
+          tags: currentDoc.tags.length > 0 ? currentDoc.tags : tags,
+          markdown: nextMarkdown,
+          historySource: 'manual',
+          kind: 'doc',
+          origin: 'player',
+          sourceRef: currentDoc.sourceRef,
+        };
+        currentDoc = await invoke<MapDocument>('save_document', {
+          input: updateInput,
+        });
+        upsertSavedInLibrary(currentDoc);
+        workbench.controller.syncSavedMarkdown(
+          currentDoc.relativePath,
+          nextMarkdown,
+          statusLabel,
+        );
+        if (statusLabel) {
+          setSaveMessage(statusLabel);
+        }
+      },
+    };
+  };
+
+  const findVideoKnowledgeDocument = useCallback(
+    async (videoId: string): Promise<PlayerExportedDocument | null> => {
+      const cleanVideoId = videoId.trim();
+      if (!cleanVideoId) return null;
+      const doc = librarySnapshotRef.current?.documents.find(
+        (candidate) =>
+          candidate.kind === 'doc' &&
+          candidate.sourceRef?.videoId === cleanVideoId,
+      );
+      if (!doc) return null;
+      try {
+        const opened = await invoke<OpenedDocument>('open_document', {
+          relativePath: doc.relativePath,
+        });
+        let currentDoc = doc;
+        return {
+          id: currentDoc.id,
+          title: currentDoc.title,
+          category: currentDoc.category,
+          markdown: opened.markdown,
+          openKnowledge: () => {
+            void (async () => {
+              await openKnowledgeNote(currentDoc);
+              setActiveWorkspace('knowledge');
+            })();
+          },
+          updateMarkdown: async (
+            nextMarkdown: string,
+            statusLabel?: string,
+          ) => {
+            if (
+              !workbench.controller.canSyncSavedMarkdown(
+                currentDoc.relativePath,
+              )
+            ) {
+              throw new Error(
+                '知识库文档有未保存的编辑，已暂停自动同步以保护你的修改。',
+              );
+            }
+            const updateInput: SaveDocumentInput = {
+              id: currentDoc.id,
+              relativePath: currentDoc.relativePath,
+              title: currentDoc.title,
+              category: currentDoc.category,
+              mapType: currentDoc.mapType || '观看笔记',
+              tags: currentDoc.tags,
+              markdown: nextMarkdown,
+              historySource: 'manual',
+              kind: 'doc',
+              origin: 'player',
+              sourceRef: currentDoc.sourceRef,
+            };
+            currentDoc = await invoke<MapDocument>('save_document', {
+              input: updateInput,
+            });
+            upsertSavedInLibrary(currentDoc);
+            workbench.controller.syncSavedMarkdown(
+              currentDoc.relativePath,
+              nextMarkdown,
+              statusLabel,
+            );
+            if (statusLabel) {
+              setSaveMessage(statusLabel);
+            }
+          },
+        };
+      } catch {
+        return null;
+      }
+    },
+    [],
+  );
 
   const createKnowledgeCategory = async (
     rawCategory: string,
@@ -6723,6 +6919,8 @@ export default function App() {
                 })();
               }}
               onExportTranscriptToKnowledge={exportTranscriptToKnowledge}
+              onSaveVideoNoteToKnowledge={saveVideoNoteToKnowledge}
+              onFindVideoKnowledgeDocument={findVideoKnowledgeDocument}
             />
           </Suspense>
         )}

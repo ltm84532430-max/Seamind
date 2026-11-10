@@ -10,7 +10,12 @@ import type {
 } from '../agent/types';
 import { formatDuration } from './format';
 import { usePlayerHost } from './host';
-import { CloseIcon, PathTreeIcon } from './icons';
+import { CloseIcon } from './icons';
+import {
+  CategoryImportDialog,
+  LearningPathCreateDialog,
+  PathDirectoryRail,
+} from './learning-path-studio';
 import {
   buildLearningPathStageOverview,
   computeLearningPathLayout,
@@ -24,8 +29,6 @@ import type {
 } from './learning-path-layout';
 import { errorText, playerApi } from './player-api';
 import {
-  FAVORITE_CATEGORY_COLORS,
-  type FavoritesSnapshot,
   type LearningPathDetail,
   type LearningPathNodeInput,
   type LearningPathNodeKind,
@@ -34,7 +37,6 @@ import {
 import { extractProposalFromText } from './learning-path-parser';
 import LearningPathStarMapView from './LearningPathStarMapView';
 import {
-  ACADEMIC_ENGINEERING_PROMPT_BLUEPRINTS,
   compileAcademicEngineeringPrompt,
   HACKER_CONSTELLATION_PATH_ID,
   HACKER_LEARNING_PATH_PRESET,
@@ -135,661 +137,7 @@ export interface LearningPathExternalBridges {
   onExportMarkdownToMindmap?: (title: string, markdown: string) => void;
 }
 
-export function CategoryImportDialog({
-  isOpen,
-  onClose,
-  onSelectCategory,
-  title = '从收藏分类导入视频',
-  subtitle = '选取一个收藏分类，将其包含的视频组织为知识树阶段与课程',
-}: {
-  isOpen: boolean;
-  onClose: () => void;
-  onSelectCategory: (category: { id: string | null; name: string }) => void;
-  title?: string;
-  subtitle?: string;
-}) {
-  const [snapshot, setSnapshot] = useState<FavoritesSnapshot | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    setLoading(true);
-    playerApi
-      .favoritesSnapshot()
-      .then((snap) => setSnapshot(snap))
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [isOpen]);
-
-  if (!isOpen) return null;
-
-  const uncategorizedCount =
-    snapshot?.items.filter((i) => i.categoryId === null).length ?? 0;
-
-  return (
-    <div className="lp-proposal-backdrop" role="dialog" aria-modal="true">
-      <div className="lp-proposal-modal" style={{ width: 'min(580px, 92vw)' }}>
-        <header className="lp-proposal-head">
-          <div>
-            <span className="lp-proposal-badge">一键生成知识树</span>
-            <h3>{title}</h3>
-            {subtitle && (
-              <p style={{ margin: '4px 0 0', fontSize: 12, opacity: 0.78 }}>
-                {subtitle}
-              </p>
-            )}
-          </div>
-          <button type="button" className="lp-icon-btn" onClick={onClose}>
-            <CloseIcon />
-          </button>
-        </header>
-
-        <div className="lp-proposal-body">
-          {loading ? (
-            <div
-              style={{ textAlign: 'center', padding: '30px 0', opacity: 0.7 }}
-            >
-              正在读取收藏分类…
-            </div>
-          ) : (
-            <div className="lp-cat-import-list">
-              <div
-                className="lp-cat-import-card"
-                onClick={() =>
-                  onSelectCategory({ id: null, name: '未分类收藏' })
-                }
-              >
-                <div className="lp-cat-import-card-title">
-                  <span
-                    className="vpick-cat-dot"
-                    style={{ background: 'var(--player-muted)' }}
-                  />
-                  <span>未分类收藏</span>
-                </div>
-                <span className="lp-cat-import-card-count">
-                  {uncategorizedCount} 个视频 →
-                </span>
-              </div>
-
-              {(snapshot?.categories ?? []).map((cat) => {
-                const count = (snapshot?.items ?? []).filter(
-                  (i) => i.categoryId === cat.categoryId,
-                ).length;
-                const colorMeta = FAVORITE_CATEGORY_COLORS.find(
-                  (c) => c.id === cat.color,
-                );
-                return (
-                  <div
-                    key={cat.categoryId}
-                    className="lp-cat-import-card"
-                    onClick={() =>
-                      onSelectCategory({ id: cat.categoryId, name: cat.name })
-                    }
-                  >
-                    <div className="lp-cat-import-card-title">
-                      <span
-                        className="vpick-cat-dot"
-                        style={{
-                          background: colorMeta?.accent ?? '#df735b',
-                        }}
-                      />
-                      <span>{cat.name}</span>
-                    </div>
-                    <span className="lp-cat-import-card-count">
-                      {count} 个视频 →
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        <footer className="lp-proposal-foot">
-          <span style={{ fontSize: 12, opacity: 0.72 }}>
-            点击任意分类即可自动读取全部视频并建立连贯的学习知识树。
-          </span>
-          <div className="lp-proposal-foot-actions">
-            <button type="button" className="lp-btn" onClick={onClose}>
-              取消
-            </button>
-          </div>
-        </footer>
-      </div>
-    </div>
-  );
-}
-
-export function LearningPathsHomeView({
-  bridges,
-}: {
-  bridges?: LearningPathExternalBridges;
-}) {
-  const host = usePlayerHost();
-  const [creating, setCreating] = useState(false);
-  const [categoryImportOpen, setCategoryImportOpen] = useState(false);
-  const [newTitle, setNewTitle] = useState('');
-  const [newDesc, setNewDesc] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [aiTopic, setAiTopic] = useState('');
-  const [aiTopologyMode, setAiTopologyMode] = useState<
-    'constellation' | 'linear' | 'radial'
-  >('constellation');
-  const [aiRunning, setAiRunning] = useState(false);
-  const [aiStatus, setAiStatus] = useState('');
-  const [aiCandidateProposal, setAiCandidateProposal] =
-    useState<LearningPathProposal | null>(null);
-
-  const openOrCreateHackerConstellation = async () => {
-    if (saving) return;
-    const existing = host.learningPaths.find(
-      (p) => p.pathId === HACKER_CONSTELLATION_PATH_ID,
-    );
-    if (
-      existing &&
-      existing.nodeCount >= HACKER_LEARNING_PATH_PRESET.nodes.length
-    ) {
-      host.go({ kind: 'learning-path', pathId: existing.pathId });
-      return;
-    }
-    setSaving(true);
-    try {
-      const saved = await playerApi.learningPathSave(
-        HACKER_LEARNING_PATH_PRESET,
-      );
-      await host.reloadOverview();
-      host.go({ kind: 'learning-path', pathId: saved.summary.pathId });
-      host.notify(
-        existing
-          ? '已升级为「学术理论 × 底层工程 64 节点巨型黑客星图」'
-          : '已生成「黑客与系统安全全链路星图（64 节点）」',
-      );
-    } catch (err) {
-      host.notify(errorText(err, '生成黑客星图路径失败'), 'error');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const createBlankPath = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!newTitle.trim() || saving) return;
-    setSaving(true);
-    try {
-      const saved = await playerApi.learningPathSave({
-        title: newTitle.trim(),
-        description: newDesc.trim() || null,
-        nodes: [
-          {
-            nodeId: 'stage-1',
-            parentId: null,
-            position: 0,
-            kind: 'stage',
-            title: '第一阶段：入门基础',
-            note: '点击卡片右上角 + 添加视频课程节点',
-          },
-        ],
-      });
-      await host.reloadOverview();
-      setCreating(false);
-      setNewTitle('');
-      setNewDesc('');
-      host.go({ kind: 'learning-path', pathId: saved.summary.pathId });
-    } catch (error) {
-      host.notify(errorText(error, '创建学习路径失败'), 'error');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const importCategoryAsPath = async (cat: {
-    id: string | null;
-    name: string;
-  }) => {
-    try {
-      setSaving(true);
-      const snap = await playerApi.favoritesSnapshot();
-      const items = snap.items.filter((i) =>
-        cat.id === null ? i.categoryId === null : i.categoryId === cat.id,
-      );
-      if (items.length === 0) {
-        host.notify(
-          `分类「${cat.name}」中暂无视频，请先在「我的收藏」中添加视频。`,
-          'error',
-        );
-        return;
-      }
-      const stageTitle = `${cat.name} 核心课程`;
-      const nodes: LearningPathNodeInput[] = [
-        {
-          nodeId: 'stage-1',
-          parentId: null,
-          position: 0,
-          kind: 'stage',
-          title: stageTitle,
-          note: `从收藏分类「${cat.name}」一键生成`,
-        },
-        ...items.map((item, idx) => ({
-          nodeId: `vid-${idx + 1}`,
-          parentId: 'stage-1',
-          position: idx + 1,
-          kind: 'video' as const,
-          title: item.video.title,
-          videoId: item.video.videoId,
-          startSeconds: 0,
-          optional: false,
-          note:
-            item.note ||
-            (item.video.channelName ? `频道：${item.video.channelName}` : null),
-        })),
-        {
-          nodeId: 'checkpoint-finish',
-          parentId: null,
-          position: items.length + 1,
-          kind: 'checkpoint' as const,
-          title: `${cat.name} · 知识通关`,
-          note: '恭喜学完本分类下的全部视频课程',
-        },
-      ];
-      const saved = await playerApi.learningPathSave({
-        title: `${cat.name} · 视频知识树`,
-        description: `由收藏分类「${cat.name}」生成，包含 ${items.length} 节视频课程`,
-        nodes,
-        videos: items.map((i) => ({
-          videoId: i.video.videoId,
-          title: i.video.title,
-          channelName: i.video.channelName,
-          channelId: i.video.channelId,
-          durationSeconds: i.video.durationSeconds,
-        })),
-      });
-      await host.reloadOverview();
-      setCategoryImportOpen(false);
-      host.go({ kind: 'learning-path', pathId: saved.summary.pathId });
-      host.notify(`已从「${cat.name}」成功创建视频知识树！`);
-    } catch (err) {
-      host.notify(errorText(err, '创建知识树失败'), 'error');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const launchCliPrompt = (cli: 'agy' | 'claude' | 'codex') => {
-    const topic =
-      aiTopic.trim() ||
-      ACADEMIC_ENGINEERING_PROMPT_BLUEPRINTS[0]?.prompt ||
-      '操作系统与 Linux 内核源码工程';
-    const prompt = compileAcademicEngineeringPrompt(topic, aiTopologyMode)
-      .replace(/\s+/g, ' ')
-      .trim();
-    const escaped = prompt.replace(/"/g, '\\"');
-    const cmd =
-      cli === 'agy'
-        ? `agy -i "${escaped}"`
-        : cli === 'claude'
-          ? `claude "${escaped}"`
-          : `codex "${escaped}"`;
-    bridges?.onSendTerminalCommand?.(cmd, true);
-  };
-
-  const runQuickAi = async () => {
-    if (!bridges?.aiProvider || !bridges.agentCapabilities) {
-      host.notify(
-        '请先在顶部「模型设置」中配置 API 地址、模型与密钥，或使用底部 CLI 终端。',
-        'error',
-      );
-      return;
-    }
-    const topic = aiTopic.trim();
-    if (!topic || aiRunning) return;
-    setAiRunning(true);
-    setAiStatus(
-      '正在执行「名校公开课 × 底层源码工程」多批次正交检索并构建知识星图…',
-    );
-    setAiCandidateProposal(null);
-    const compiledPrompt = compileAcademicEngineeringPrompt(
-      topic,
-      aiTopologyMode,
-    );
-    try {
-      const result = await runLearningPathAgentTurn({
-        history: [],
-        prompt: compiledPrompt,
-        provider: bridges.aiProvider,
-        capabilities: bridges.agentCapabilities,
-        activePathSummary: null,
-        onEvent: (ev) => {
-          if (ev.kind === 'tool') {
-            setAiStatus(`${ev.label}：${ev.summary}`);
-          }
-        },
-      });
-      if (result.learningPathProposal) {
-        bridges.onPreviewLearningPathProposal?.(
-          result.learningPathProposal,
-          'ai',
-        );
-        setAiStatus('已生成路径预览，请在弹窗中确认保存。');
-        setAiCandidateProposal(null);
-      } else {
-        const parsed = extractProposalFromText(topic, result.reply);
-        if (parsed) {
-          setAiCandidateProposal(parsed);
-          setAiStatus(
-            'AI 已规划完成！请点击下方「应用此方案并生成知识树」确认写入。',
-          );
-        } else {
-          setAiCandidateProposal(null);
-          setAiStatus(result.reply);
-        }
-      }
-    } catch (error) {
-      host.notify(errorText(error, 'AI 生成学习路径失败'), 'error');
-      setAiStatus('');
-    } finally {
-      setAiRunning(false);
-    }
-  };
-
-  return (
-    <div className="lp-home">
-      <div className="lp-home-hero">
-        <div>
-          <h2>学习路径 · 视频知识星图与技能树</h2>
-          <p>
-            支持多模态组织 YouTube 视频课程：全尺寸可交互力导向
-            <strong>知识星图</strong>、<strong>径向星环图</strong>、
-            <strong>技能拓扑图</strong>、<strong>树状图</strong>与
-            <strong>地铁轨道流</strong>。支持在底部终端调用 <code>agy</code> /{' '}
-            <code>claude</code> / <code>codex</code> 或内置 AI
-            自动构建网状先修图谱。
-          </p>
-        </div>
-        <div className="lp-home-actions">
-          <button
-            type="button"
-            className="lp-btn"
-            disabled={saving}
-            onClick={() => void openOrCreateHackerConstellation()}
-            title="打开或一键生成包含 7 大安全领域簇与 21 节课程的黑客攻防星图"
-          >
-            黑客安全星图路径
-          </button>
-          <button
-            type="button"
-            className="lp-btn"
-            onClick={() => bridges?.onSendTerminalCommand?.('', false)}
-          >
-            打开底部 CLI 终端
-          </button>
-          <button
-            type="button"
-            className="lp-btn"
-            onClick={() => setCategoryImportOpen(true)}
-            title="从现有收藏夹分类一键生成结构化视频知识树"
-          >
-            从收藏分类创建知识树
-          </button>
-          <button
-            type="button"
-            className="lp-btn is-primary"
-            onClick={() => setCreating((v) => !v)}
-          >
-            新建空白路径
-          </button>
-        </div>
-      </div>
-
-      <div
-        className="lp-copilot-section"
-        style={{ marginTop: 18, padding: '14px 16px' }}
-      >
-        <div className="lp-topology-mode-bar">
-          <h4>学术理论 × 工业底层工程 · 双螺旋星图生成器</h4>
-          <div
-            className="lp-segmented lp-topology-mode-pills"
-            role="group"
-            aria-label="路径结构形态"
-          >
-            {(
-              [
-                ['constellation', '星图网状型'],
-                ['linear', '进阶主线型'],
-                ['radial', '专题辐射型'],
-              ] as const
-            ).map(([mode, label]) => (
-              <button
-                key={mode}
-                type="button"
-                className={aiTopologyMode === mode ? 'is-active' : ''}
-                aria-pressed={aiTopologyMode === mode}
-                onClick={() => setAiTopologyMode(mode)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 8,
-            marginTop: 8,
-            alignItems: 'center',
-          }}
-        >
-          <input
-            type="text"
-            value={aiTopic}
-            onChange={(e) => setAiTopic(e.target.value)}
-            placeholder="输入领域或点击下方「学术×工程提示词矩阵」（如：MIT 6.S081 操作系统与 Linux 内核源码 / CMU 15-445 存储引擎…）"
-            style={{
-              flex: '1 1 320px',
-              height: 32,
-              padding: '0 10px',
-              border: '1px solid var(--player-line-strong)',
-              background: 'var(--player-panel)',
-              color: 'var(--player-ink)',
-              fontSize: 12.5,
-            }}
-          />
-          <button
-            type="button"
-            className="lp-btn is-primary"
-            disabled={!aiTopic.trim() || aiRunning}
-            onClick={() => void runQuickAi()}
-          >
-            {aiRunning ? '规划中…' : '内置 AI 生成预览'}
-          </button>
-          <button
-            type="button"
-            className="lp-btn"
-            onClick={() => launchCliPrompt('agy')}
-            title="唤醒底部终端并用 Google AGY CLI 执行多批次学术+工程检索生成"
-          >
-            用 AGY CLI 生成
-          </button>
-          <button
-            type="button"
-            className="lp-btn"
-            onClick={() => launchCliPrompt('claude')}
-          >
-            用 Claude CLI 生成
-          </button>
-        </div>
-        <div
-          className="lp-blueprint-matrix"
-          aria-label="学术理论与底层工程提示词范式"
-        >
-          <div className="lp-blueprint-matrix-head">
-            <span className="lp-blueprint-matrix-kicker">
-              ACADEMIC × ENGINEERING BLUEPRINTS
-            </span>
-            <span className="lp-blueprint-matrix-hint">
-              点击任一矩阵卡片即可填入「名校公开课理论基座 +
-              底层源码/调试/顶会实验」结构化提示词（自动驱动 6–10 批次正交搜索）
-            </span>
-          </div>
-          <div className="lp-blueprint-grid">
-            {ACADEMIC_ENGINEERING_PROMPT_BLUEPRINTS.map((bp) => {
-              const active = aiTopic.trim() === bp.prompt;
-              return (
-                <button
-                  key={bp.id}
-                  type="button"
-                  className={`lp-blueprint-card${active ? ' is-active' : ''}`}
-                  onClick={() => setAiTopic(bp.prompt)}
-                >
-                  <div className="lp-blueprint-card-top">
-                    <span className="lp-blueprint-tag">{bp.tag}</span>
-                    <strong className="lp-blueprint-title">{bp.title}</strong>
-                  </div>
-                  <div className="lp-blueprint-meta">
-                    <span>学术：{bp.academicBenchmarks}</span>
-                    <span>工程：{bp.engineeringTargets}</span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        {aiStatus && (
-          <p style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
-            {aiStatus}
-          </p>
-        )}
-        {aiCandidateProposal && (
-          <div className="lp-proposal-quick-card">
-            <div>
-              <span className="lp-proposal-badge">检测到 AI 知识规划方案</span>
-              <h4>{aiCandidateProposal.input.title}</h4>
-              <p>
-                包含 {aiCandidateProposal.stageCount} 个阶段，
-                {aiCandidateProposal.videoCount} 节视频课程
-              </p>
-            </div>
-            <button
-              type="button"
-              className="lp-btn is-primary"
-              onClick={() => {
-                bridges?.onPreviewLearningPathProposal?.(
-                  aiCandidateProposal,
-                  'ai',
-                );
-              }}
-            >
-              应用此方案并生成知识树
-            </button>
-          </div>
-        )}
-      </div>
-
-      {creating && (
-        <form
-          onSubmit={(e) => void createBlankPath(e)}
-          className="lp-copilot-section"
-          style={{ marginTop: 14, display: 'flex', gap: 8, flexWrap: 'wrap' }}
-        >
-          <input
-            type="text"
-            required
-            value={newTitle}
-            onChange={(e) => setNewTitle(e.target.value)}
-            placeholder="路径标题（必填）"
-            style={{
-              flex: '1 1 200px',
-              height: 30,
-              padding: '0 9px',
-              border: '1px solid var(--player-line-strong)',
-              background: 'var(--player-panel)',
-              color: 'var(--player-ink)',
-            }}
-          />
-          <input
-            type="text"
-            value={newDesc}
-            onChange={(e) => setNewDesc(e.target.value)}
-            placeholder="学习目标说明（选填）"
-            style={{
-              flex: '2 1 280px',
-              height: 30,
-              padding: '0 9px',
-              border: '1px solid var(--player-line-strong)',
-              background: 'var(--player-panel)',
-              color: 'var(--player-ink)',
-            }}
-          />
-          <button type="submit" className="lp-btn is-primary" disabled={saving}>
-            创建并打开
-          </button>
-          <button
-            type="button"
-            className="lp-btn"
-            onClick={() => setCreating(false)}
-          >
-            取消
-          </button>
-        </form>
-      )}
-
-      <CategoryImportDialog
-        isOpen={categoryImportOpen}
-        onClose={() => setCategoryImportOpen(false)}
-        onSelectCategory={(cat) => void importCategoryAsPath(cat)}
-        title="从收藏分类创建知识树"
-        subtitle="选取一个分类，将其包含的视频组织为一门结构化的完整知识树"
-      />
-
-      {host.learningPaths.length === 0 ? (
-        <div style={{ marginTop: 32 }}>
-          <StateMessage kind="empty" title="还没有学习路径">
-            可以在上方输入主题，点击「用 AGY CLI 生成」或「内置 AI
-            生成预览」，也可以手动新建空白路径。
-          </StateMessage>
-        </div>
-      ) : (
-        <div className="lp-home-grid">
-          {host.learningPaths.map((path) => (
-            <button
-              key={path.pathId}
-              type="button"
-              className="lp-home-card"
-              onClick={() =>
-                host.go({ kind: 'learning-path', pathId: path.pathId })
-              }
-            >
-              <div>
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    color: 'var(--player-accent)',
-                    marginBottom: 6,
-                  }}
-                >
-                  <PathTreeIcon />
-                  <span style={{ fontSize: 11, fontWeight: 600 }}>
-                    学习路径
-                  </span>
-                </div>
-                <h3>{path.title}</h3>
-                {path.description && <p>{path.description}</p>}
-              </div>
-              <div className="lp-home-card-foot">
-                <span>{path.nodeCount} 个节点</span>
-                <span>
-                  已完成 {path.finishedCount} / {path.videoCount} 课
-                </span>
-              </div>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
+export { LearningPathsHomeView } from './learning-path-studio';
 
 interface NodeEditorDraft {
   mode: 'add' | 'edit';
@@ -823,8 +171,8 @@ export default function LearningPathView({
   const [scale, setScale] = useState(1);
   const [panning, setPanning] = useState(false);
   const [canvasMode, setCanvasMode] = useState<
-    'constellation' | 'course' | 'overview'
-  >('constellation');
+    'directory' | 'constellation' | 'course' | 'overview'
+  >('directory');
   const lastGraphModeRef = useRef<'constellation' | 'course'>('constellation');
   const [starFocusRequest, setStarFocusRequest] = useState<{
     nodeId: string;
@@ -865,6 +213,8 @@ export default function LearningPathView({
     useState(false);
   const [activeAiCandidate, setActiveAiCandidate] =
     useState<LearningPathProposal | null>(null);
+  const [directoryStageId, setDirectoryStageId] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
 
   const updateStyle = (patch: Partial<StoredPathStyle>) => {
     setStyle((prev) => {
@@ -878,8 +228,9 @@ export default function LearningPathView({
     setPan({ x: 36, y: 36 });
     setScale(1);
     setSelectedNodeId(null);
-    setCanvasMode('constellation');
-    lastGraphModeRef.current = 'constellation';
+    setDirectoryStageId(null);
+    setCanvasMode('directory');
+    lastGraphModeRef.current = 'course';
   }, [pathId]);
 
   useEffect(() => {
@@ -1609,175 +960,113 @@ export default function LearningPathView({
         node.prerequisiteIds.includes(selectedNode.node.nodeId),
       )
     : [];
+  const activeStage =
+    stageOverview.find((stage) => stage.nodeId === directoryStageId) ??
+    stageOverview.find((stage) => stage.isCurrent) ??
+    stageOverview[0] ??
+    null;
+  const directoryLessons = (() => {
+    if (!activeStage) return [];
+    const inStage = layout.nodes.filter(
+      (item) => item.stageIndex === activeStage.index,
+    );
+    const rows = inStage.filter((item) => {
+      const bareStage =
+        item.node.nodeId === activeStage.nodeId &&
+        item.node.kind === 'stage' &&
+        !item.video;
+      return !bareStage;
+    });
+    return [...rows].sort((a, b) => {
+      const ao = a.orderIndex ?? a.node.position;
+      const bo = b.orderIndex ?? b.node.position;
+      return ao - bo || a.node.position - b.node.position;
+    });
+  })();
 
   return (
     <section
-      className="lp-workspace"
+      className={`lp-workspace${canvasMode === 'directory' ? ' is-directory' : ''}`}
       data-lp-theme={style.theme}
       data-lp-density={
         canvasMode === 'course' && scale < 0.85 ? 'compact' : 'full'
       }
       aria-label={`学习路径：${detail.summary.title}`}
     >
-      <header className="lp-topbar">
-        <div className="lp-title-group">
-          <button
-            type="button"
-            className="lp-btn lp-back-btn"
-            onClick={() => host.go({ kind: 'learning-paths-home' })}
-            title="返回全部学习路径"
-          >
-            ← 全部路径
-          </button>
-          <div className="lp-title-text">
-            <h2 title={detail.summary.title}>{detail.summary.title}</h2>
-            <div className="lp-subtitle">
-              <span className="lp-progress-pill">
-                已学 {finishedVideos} / {totalVideos} 课
-              </span>
-              {detail.summary.description && (
-                <>
-                  <span
-                    className="lp-description"
-                    title={detail.summary.description}
-                  >
-                    {detail.summary.description}
+      {canvasMode !== 'directory' && (
+        <>
+          <header className="lp-topbar">
+            <div className="lp-title-group">
+              <button
+                type="button"
+                className="lp-btn lp-back-btn"
+                onClick={() => host.go({ kind: 'learning-paths-home' })}
+                title="返回全部学习路径"
+              >
+                ← 全部路径
+              </button>
+              <div className="lp-title-text">
+                <h2 title={detail.summary.title}>{detail.summary.title}</h2>
+                <div className="lp-subtitle">
+                  <span className="lp-progress-pill">
+                    已学 {finishedVideos} / {totalVideos} 课
                   </span>
-                  <button
-                    type="button"
-                    className="lp-description-toggle"
-                    aria-expanded={descriptionExpanded}
-                    onClick={() => setDescriptionExpanded((value) => !value)}
-                  >
-                    详情
-                  </button>
-                </>
+                  {detail.summary.description && (
+                    <>
+                      <span
+                        className="lp-description"
+                        title={detail.summary.description}
+                      >
+                        {detail.summary.description}
+                      </span>
+                      <button
+                        type="button"
+                        className="lp-description-toggle"
+                        aria-expanded={descriptionExpanded}
+                        onClick={() =>
+                          setDescriptionExpanded((value) => !value)
+                        }
+                      >
+                        详情
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+              {descriptionExpanded && detail.summary.description && (
+                <div className="lp-description-popover">
+                  {detail.summary.description}
+                </div>
               )}
             </div>
-          </div>
-          {descriptionExpanded && detail.summary.description && (
-            <div className="lp-description-popover">
-              {detail.summary.description}
-            </div>
-          )}
-        </div>
-        {nextUp && (
-          <button
-            type="button"
-            className="lp-btn is-primary lp-continue-btn"
-            onClick={() => playNode(nextUp)}
-            title={nextUp.node.title}
-          >
-            继续学习
-          </button>
-        )}
-      </header>
+            {nextUp && (
+              <button
+                type="button"
+                className="lp-btn is-primary lp-continue-btn"
+                onClick={() => playNode(nextUp)}
+                title={nextUp.node.title}
+              >
+                继续学习
+              </button>
+            )}
+          </header>
 
-      <div ref={toolbarRef} className="lp-toolbar-row">
-        <div
-          className="lp-segmented lp-view-switch"
-          role="group"
-          aria-label="路径视图"
-        >
-          <button
-            type="button"
-            className={canvasMode === 'constellation' ? 'is-active' : ''}
-            aria-pressed={canvasMode === 'constellation'}
-            onClick={() => {
-              lastGraphModeRef.current = 'constellation';
-              setCanvasMode('constellation');
-            }}
-          >
-            星图视图
-          </button>
-          <button
-            type="button"
-            className={canvasMode === 'course' ? 'is-active' : ''}
-            aria-pressed={canvasMode === 'course'}
-            onClick={() => {
-              lastGraphModeRef.current = 'course';
-              setCanvasMode('course');
-            }}
-          >
-            线性视图
-          </button>
-          <button
-            type="button"
-            className={canvasMode === 'overview' ? 'is-active' : ''}
-            aria-pressed={canvasMode === 'overview'}
-            onClick={() => setCanvasMode('overview')}
-          >
-            路径总览
-          </button>
-        </div>
-        <label className="lp-stage-select-label">
-          <span>阶段</span>
-          <select
-            aria-label="定位到阶段"
-            value=""
-            onChange={(event) => {
-              if (event.target.value) {
-                focusNode(event.target.value, 1);
-              }
-            }}
-          >
-            <option value="">定位阶段</option>
-            {stageOverview.map((stage) => (
-              <option key={stage.nodeId} value={stage.nodeId}>
-                {String(stage.index + 1).padStart(2, '0')} · {stage.title}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="lp-toolbar-spacer" />
-        <details className="lp-menu">
-          <summary className="lp-btn">添加</summary>
-          <div
-            className="lp-menu-panel"
-            onClick={(event) => {
-              (event.currentTarget.parentElement as HTMLDetailsElement).open =
-                false;
-            }}
-          >
-            <button
-              type="button"
-              onClick={() =>
-                setVideoPickerState({
-                  isOpen: true,
-                  title: '选取课程视频加入知识树',
-                  subtitle: '从收藏、播放历史、关注频道或 YouTube 搜索中选取',
-                  multiple: true,
-                  parentId: null,
-                })
-              }
+          <div ref={toolbarRef} className="lp-toolbar-row">
+            <div
+              className="lp-segmented lp-view-switch"
+              role="group"
+              aria-label="路径视图"
             >
-              <span>选取视频添加</span>
-              <span className="lp-menu-code">VID</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => openAddNodeModal(null, 'stage')}
-            >
-              <span>新增阶段簇</span>
-              <span className="lp-menu-code">STG</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setCategoryImportActiveOpen(true)}
-            >
-              <span>从收藏导入</span>
-              <span className="lp-menu-code">FAV</span>
-            </button>
-          </div>
-        </details>
-        <details className="lp-menu">
-          <summary className="lp-btn">显示设置</summary>
-          <div className="lp-menu-panel lp-display-menu">
-            <div className="lp-menu-section-head">
-              <span>01 · 视图模式</span>
-              <em>VIEW</em>
-            </div>
-            <div className="lp-menu-grid is-two-col">
+              <button
+                type="button"
+                className={
+                  (canvasMode as string) === 'directory' ? 'is-active' : ''
+                }
+                aria-pressed={(canvasMode as string) === 'directory'}
+                onClick={() => setCanvasMode('directory')}
+              >
+                目录
+              </button>
               <button
                 type="button"
                 className={canvasMode === 'constellation' ? 'is-active' : ''}
@@ -1787,10 +1076,7 @@ export default function LearningPathView({
                   setCanvasMode('constellation');
                 }}
               >
-                <span>知识星图</span>
-                <span className="lp-menu-check">
-                  {canvasMode === 'constellation' ? '●' : '○'}
-                </span>
+                星图
               </button>
               <button
                 type="button"
@@ -1801,503 +1087,933 @@ export default function LearningPathView({
                   setCanvasMode('course');
                 }}
               >
-                <span>线性图谱</span>
-                <span className="lp-menu-check">
-                  {canvasMode === 'course' ? '●' : '○'}
-                </span>
+                图谱
               </button>
             </div>
-
-            <div className="lp-menu-section-head">
-              <span>02 · 线性拓扑结构</span>
-              <em>LAYOUT</em>
-            </div>
-            <div className="lp-menu-grid is-two-col">
-              {(
-                [
-                  ['tree', '横向树状流'],
-                  ['metro', '地铁轨道流'],
-                  ['lanes', '阶段泳道栏'],
-                  ['dag', '技能拓扑图'],
-                  ['radial', '径向星环图'],
-                ] as const
-              ).map(([mode, label]) => {
-                const active =
-                  canvasMode === 'course' && style.layoutMode === mode;
-                return (
-                  <button
-                    key={mode}
-                    type="button"
-                    className={active ? 'is-active' : ''}
-                    aria-pressed={active}
-                    onClick={() => {
-                      lastGraphModeRef.current = 'course';
-                      setCanvasMode('course');
-                      updateStyle({ layoutMode: mode });
-                    }}
-                  >
-                    <span>{label}</span>
-                    <span className="lp-menu-check">{active ? '✓' : ''}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="lp-menu-section-head">
-              <span>03 · 连线路由样式</span>
-              <em>ROUTE</em>
-            </div>
-            <div className="lp-menu-grid is-three-col">
-              {(
-                [
-                  ['curve', '平滑曲线'],
-                  ['orthogonal', '正交折线'],
-                  ['metro', '45° 轨道'],
-                ] as const
-              ).map(([connectorStyle, label]) => {
-                const active = style.connectorStyle === connectorStyle;
-                return (
-                  <button
-                    key={connectorStyle}
-                    type="button"
-                    className={active ? 'is-active' : ''}
-                    aria-pressed={active}
-                    onClick={() => updateStyle({ connectorStyle })}
-                  >
-                    <span>{label}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="lp-menu-section-head">
-              <span>04 · 视觉色彩主题</span>
-              <em>THEME</em>
-            </div>
-            <div className="lp-menu-theme-list">
-              {THEME_OPTIONS.map((theme) => {
-                const active = style.theme === theme.id;
-                return (
-                  <button
-                    key={theme.id}
-                    type="button"
-                    className={active ? 'is-active' : ''}
-                    aria-pressed={active}
-                    onClick={() => updateStyle({ theme: theme.id })}
-                  >
-                    <span className="lp-menu-theme-left">
-                      <span
-                        className="lp-swatch"
-                        style={{ backgroundColor: theme.swatch }}
-                      />
-                      <span>{theme.label}</span>
-                    </span>
-                    <span className="lp-menu-check">{active ? '✓' : ''}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </details>
-        <details className="lp-menu lp-more-menu">
-          <summary className="lp-btn">更多</summary>
-          <div
-            className="lp-menu-panel"
-            onClick={(event) => {
-              (event.currentTarget.parentElement as HTMLDetailsElement).open =
-                false;
-            }}
-          >
-            <button
-              type="button"
-              onClick={() => bridges?.onSendTerminalCommand?.('', false)}
-            >
-              <span>终端 CLI</span>
-              <span className="lp-menu-code">CLI</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedNodeId(null);
-                setCopilotOpen((value) => !value);
-              }}
-            >
-              <span>AI 规划助手</span>
-              <span className="lp-menu-code">AI</span>
-            </button>
-            {bridges?.onExportMarkdownToMindmap && (
-              <button
-                type="button"
-                onClick={() =>
-                  bridges.onExportMarkdownToMindmap?.(
-                    detail.summary.title,
-                    learningPathToMarkdown(detail),
-                  )
-                }
-              >
-                <span>导出导图</span>
-                <span className="lp-menu-code">MAP</span>
-              </button>
-            )}
-            <button
-              type="button"
-              className="is-danger"
-              onClick={() => void deleteEntirePath()}
-            >
-              <span>删除路径</span>
-              <span className="lp-menu-code">DEL</span>
-            </button>
-          </div>
-        </details>
-      </div>
-
-      <div className="lp-body">
-        <div
-          ref={viewportRef}
-          className={`lp-viewport${panning ? ' is-panning' : ''}${canvasMode === 'overview' ? ' is-overview' : canvasMode === 'constellation' ? ' is-constellation' : ''}`}
-          onMouseDown={handleMouseDown}
-          onWheel={handleWheel}
-        >
-          {canvasMode === 'constellation' ? (
-            <LearningPathStarMapView
-              detail={detail}
-              layout={layout}
-              selectedNodeId={selectedNodeId}
-              focusRequest={starFocusRequest}
-              onSelectNode={(id) => {
-                setSelectedNodeId(id);
-                setCopilotOpen(false);
-              }}
-              onPlayNode={playNode}
-              onEditNode={(nodeId) => {
-                const item = layout.nodes.find((n) => n.node.nodeId === nodeId);
-                if (item) openEditNodeModal(item);
-              }}
-              onAddChildNode={(parentId) => openAddNodeModal(parentId, 'video')}
-              onDeleteNode={(nodeId) => void deleteNode(nodeId)}
-            />
-          ) : canvasMode === 'overview' ? (
-            <div className="lp-overview" aria-label="路径阶段总览">
-              <div className="lp-overview-heading">
-                <div>
-                  <span className="lp-overview-eyebrow">PATH OVERVIEW</span>
-                  <h3>路径总览</h3>
-                </div>
-                <span>
-                  {stageOverview.length} 个阶段 · 已学 {finishedVideos} /{' '}
-                  {totalVideos} 课
-                </span>
-              </div>
-              <div className="lp-overview-grid">
-                {stageOverview.map((stage) => {
-                  const percent = stage.videoCount
-                    ? Math.round(
-                        (stage.completedCount / stage.videoCount) * 100,
-                      )
-                    : 0;
-                  return (
-                    <button
-                      type="button"
-                      key={stage.nodeId}
-                      className={`lp-overview-card${stage.isCurrent ? ' is-current' : ''}`}
-                      onClick={() => focusNode(stage.nodeId, 1)}
-                    >
-                      <span className="lp-overview-card-top">
-                        <span>
-                          阶段 {String(stage.index + 1).padStart(2, '0')}
-                        </span>
-                        <span>
-                          {stage.isCurrent
-                            ? '当前阶段'
-                            : percent === 100 && stage.videoCount > 0
-                              ? '已完成'
-                              : '待学习'}
-                        </span>
-                      </span>
-                      <strong>{stage.title}</strong>
-                      {stage.note && (
-                        <span className="lp-overview-note">{stage.note}</span>
-                      )}
-                      <span className="lp-overview-card-bottom">
-                        <span>
-                          {stage.completedCount} / {stage.videoCount} 课
-                        </span>
-                        {stage.optionalCount > 0 && (
-                          <span>{stage.optionalCount} 节选修</span>
-                        )}
-                      </span>
-                      <span className="lp-overview-progress" aria-hidden="true">
-                        <span style={{ width: `${percent}%` }} />
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ) : (
-            <>
-              <div
-                className="lp-stage"
-                style={{
-                  width: layout.width,
-                  height: layout.height,
-                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+            <label className="lp-stage-select-label">
+              <span>阶段</span>
+              <select
+                aria-label="定位到阶段"
+                value=""
+                onChange={(event) => {
+                  if (event.target.value) {
+                    focusNode(event.target.value, 1);
+                  }
                 }}
               >
-                <svg
-                  className="lp-edges-svg"
-                  width={layout.width}
-                  height={layout.height}
-                >
-                  <defs>
-                    <marker
-                      id="lp-arrow-muted"
-                      viewBox="0 0 10 10"
-                      refX="8"
-                      refY="5"
-                      markerWidth="5"
-                      markerHeight="5"
-                      orient="auto-start-reverse"
-                    >
-                      <path
-                        d="M 0 1.5 L 8.5 5 L 0 8.5 z"
-                        fill="var(--lp-edge)"
-                      />
-                    </marker>
-                    <marker
-                      id="lp-arrow-active"
-                      viewBox="0 0 10 10"
-                      refX="8"
-                      refY="5"
-                      markerWidth="5"
-                      markerHeight="5"
-                      orient="auto-start-reverse"
-                    >
-                      <path
-                        d="M 0 1.5 L 8.5 5 L 0 8.5 z"
-                        fill="var(--lp-edge-active)"
-                      />
-                    </marker>
-                  </defs>
-                  {layout.edges.map((edge) => (
-                    <path
-                      key={edge.id}
-                      d={edge.pathD}
-                      fill="none"
-                      className={[
-                        'lp-edge-path',
-                        edge.kind === 'spine' ? 'is-spine' : '',
-                        edge.optional ? 'is-optional' : '',
-                        edge.kind === 'prerequisite' ? 'is-prerequisite' : '',
-                        edge.active ? 'is-active' : '',
-                      ]
-                        .filter(Boolean)
-                        .join(' ')}
-                      markerEnd={
-                        edge.active
-                          ? 'url(#lp-arrow-active)'
-                          : 'url(#lp-arrow-muted)'
-                      }
-                    />
-                  ))}
-                </svg>
-
-                {layout.laneHeaders.map((header) => (
-                  <div
-                    key={`lane-${header.stageNodeId}`}
-                    className="lp-lane-header"
-                    style={{
-                      left: header.x,
-                      top: header.y,
-                      width: header.width,
-                      height: header.height,
-                    }}
-                  >
-                    <div className="lp-lane-header-top">
-                      <strong>{header.title}</strong>
-                      <span>
-                        {header.completedCount}/{header.totalCount}
-                      </span>
-                    </div>
-                    {header.note && <p>{header.note}</p>}
-                  </div>
+                <option value="">定位阶段</option>
+                {stageOverview.map((stage) => (
+                  <option key={stage.nodeId} value={stage.nodeId}>
+                    {String(stage.index + 1).padStart(2, '0')} · {stage.title}
+                  </option>
                 ))}
-
-                {layout.nodes.map((item) => {
-                  const { node, video } = item;
-                  const isStageCard = node.kind === 'stage' && !video;
-                  return (
-                    <article
-                      key={node.nodeId}
-                      className={[
-                        'lp-node-card',
-                        isStageCard ? 'is-stage' : '',
-                        node.kind === 'checkpoint' ? 'is-checkpoint' : '',
-                        item.status === 'completed' ? 'is-completed' : '',
-                        item.isNextUp ? 'is-next-up' : '',
-                        item.status === 'locked' ? 'is-locked' : '',
-                        node.optional ? 'is-optional' : '',
-                        selectedNodeId === node.nodeId ? 'is-selected' : '',
-                      ]
-                        .filter(Boolean)
-                        .join(' ')}
-                      style={{
-                        left: item.x,
-                        top: item.y,
-                        width: item.width,
-                        height: item.height,
-                      }}
-                      aria-current={item.isNextUp ? 'step' : undefined}
-                    >
-                      <div className="lp-node-top">
-                        <div className="lp-node-badges">
-                          <span className="lp-step-num">
-                            {item.orderIndex !== null
-                              ? `#${String(item.orderIndex).padStart(2, '0')}`
-                              : `S${item.stageIndex + 1}`}
-                          </span>
-                          {item.isNextUp && (
-                            <span className="lp-kind-tag is-next">下一课</span>
-                          )}
-                          {node.kind === 'checkpoint' && (
-                            <span className="lp-kind-tag">里程碑</span>
-                          )}
-                          {node.optional && (
-                            <span className="lp-kind-tag">选修</span>
-                          )}
-                          {item.status === 'completed' && (
-                            <span className="lp-kind-tag is-done">已完成</span>
-                          )}
-                          {item.status === 'locked' && (
-                            <span className="lp-kind-tag">待解锁</span>
-                          )}
-                        </div>
-
-                        {video && (
-                          <button
-                            type="button"
-                            className="lp-node-quick-play"
-                            title={`播放「${node.title}」`}
-                            aria-label={`播放「${node.title}」`}
-                            onClick={() => playNode(item)}
-                          >
-                            播放
-                          </button>
-                        )}
-                      </div>
-
-                      <button
-                        type="button"
-                        id={`lp-select-${node.nodeId}`}
-                        className="lp-node-select"
-                        aria-label={`${NODE_KIND_LABEL[node.kind]}：${node.title}。按回车查看详情，左右方向键切换节点`}
-                        aria-expanded={selectedNodeId === node.nodeId}
-                        aria-controls={
-                          selectedNodeId === node.nodeId
-                            ? 'lp-node-inspector'
-                            : undefined
-                        }
-                        onClick={() => selectNode(node.nodeId)}
-                        onKeyDown={(event) =>
-                          handleNodeKeyDown(event, node.nodeId)
-                        }
-                      >
-                        <span className="lp-node-main">
-                          <span className="lp-node-info">
-                            <span className="lp-node-title" title={node.title}>
-                              {node.title}
-                            </span>
-                            <span className="lp-node-meta">
-                              {video
-                                ? `${video.channelName || video.videoId}${video.durationSeconds ? ` · ${formatDuration(video.durationSeconds)}` : ''}`
-                                : '阶段主干节点'}
-                            </span>
-                          </span>
-                        </span>
-                      </button>
-
-                      <div className="lp-node-footer">
-                        {node.note && (
-                          <p className="lp-node-note" title={node.note}>
-                            {node.note}
-                          </p>
-                        )}
-                        <div className="lp-progress-track">
-                          <div
-                            className="lp-progress-fill"
-                            style={{
-                              width: `${Math.round(item.progressRatio * 100)}%`,
-                            }}
-                          />
-                        </div>
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-
+              </select>
+            </label>
+            <div className="lp-toolbar-spacer" />
+            <details className="lp-menu">
+              <summary className="lp-btn">添加</summary>
               <div
-                className="lp-canvas-dock"
-                role="toolbar"
-                aria-label="画布视图控制"
+                className="lp-menu-panel"
+                onClick={(event) => {
+                  (
+                    event.currentTarget.parentElement as HTMLDetailsElement
+                  ).open = false;
+                }}
               >
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = Math.max(
-                      0.25,
-                      Number((scale - 0.12).toFixed(2)),
-                    );
-                    setScale(next);
-                  }}
-                  title="缩小"
-                >
-                  −
-                </button>
-                <span className="lp-zoom-readout">
-                  {Math.round(scale * 100)}%
-                </span>
                 <button
                   type="button"
                   onClick={() =>
-                    setScale((s) =>
-                      Math.min(1.65, Number((s + 0.12).toFixed(2))),
-                    )
+                    setVideoPickerState({
+                      isOpen: true,
+                      title: '选取课程视频加入知识树',
+                      subtitle:
+                        '从收藏、播放历史、关注频道或 YouTube 搜索中选取',
+                      multiple: true,
+                      parentId: null,
+                    })
                   }
-                  title="放大"
                 >
-                  +
+                  <span>选取视频添加</span>
+                  <span className="lp-menu-code">VID</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openAddNodeModal(null, 'stage')}
+                >
+                  <span>新增阶段簇</span>
+                  <span className="lp-menu-code">STG</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCategoryImportActiveOpen(true)}
+                >
+                  <span>从收藏导入</span>
+                  <span className="lp-menu-code">FAV</span>
+                </button>
+              </div>
+            </details>
+            <details className="lp-menu">
+              <summary className="lp-btn">显示设置</summary>
+              <div className="lp-menu-panel lp-display-menu">
+                <div className="lp-menu-section-head">
+                  <span>01 · 视图模式</span>
+                  <em>VIEW</em>
+                </div>
+                <div className="lp-menu-grid is-two-col">
+                  <button
+                    type="button"
+                    className={
+                      canvasMode === 'constellation' ? 'is-active' : ''
+                    }
+                    aria-pressed={canvasMode === 'constellation'}
+                    onClick={() => {
+                      lastGraphModeRef.current = 'constellation';
+                      setCanvasMode('constellation');
+                    }}
+                  >
+                    <span>星图</span>
+                    <span className="lp-menu-check">
+                      {canvasMode === 'constellation' ? '●' : '○'}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className={canvasMode === 'course' ? 'is-active' : ''}
+                    aria-pressed={canvasMode === 'course'}
+                    onClick={() => {
+                      lastGraphModeRef.current = 'course';
+                      setCanvasMode('course');
+                    }}
+                  >
+                    <span>图谱</span>
+                    <span className="lp-menu-check">
+                      {canvasMode === 'course' ? '●' : '○'}
+                    </span>
+                  </button>
+                </div>
+
+                <div className="lp-menu-section-head">
+                  <span>02 · 线性拓扑结构</span>
+                  <em>LAYOUT</em>
+                </div>
+                <div className="lp-menu-grid is-two-col">
+                  {(
+                    [
+                      ['tree', '横向树状流'],
+                      ['metro', '地铁轨道流'],
+                      ['lanes', '阶段泳道栏'],
+                      ['dag', '技能拓扑图'],
+                      ['radial', '径向星环图'],
+                    ] as const
+                  ).map(([mode, label]) => {
+                    const active =
+                      canvasMode === 'course' && style.layoutMode === mode;
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        className={active ? 'is-active' : ''}
+                        aria-pressed={active}
+                        onClick={() => {
+                          lastGraphModeRef.current = 'course';
+                          setCanvasMode('course');
+                          updateStyle({ layoutMode: mode });
+                        }}
+                      >
+                        <span>{label}</span>
+                        <span className="lp-menu-check">
+                          {active ? '✓' : ''}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="lp-menu-section-head">
+                  <span>03 · 连线路由样式</span>
+                  <em>ROUTE</em>
+                </div>
+                <div className="lp-menu-grid is-three-col">
+                  {(
+                    [
+                      ['curve', '平滑曲线'],
+                      ['orthogonal', '正交折线'],
+                      ['metro', '45° 轨道'],
+                    ] as const
+                  ).map(([connectorStyle, label]) => {
+                    const active = style.connectorStyle === connectorStyle;
+                    return (
+                      <button
+                        key={connectorStyle}
+                        type="button"
+                        className={active ? 'is-active' : ''}
+                        aria-pressed={active}
+                        onClick={() => updateStyle({ connectorStyle })}
+                      >
+                        <span>{label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="lp-menu-section-head">
+                  <span>04 · 视觉色彩主题</span>
+                  <em>THEME</em>
+                </div>
+                <div className="lp-menu-theme-list">
+                  {THEME_OPTIONS.map((theme) => {
+                    const active = style.theme === theme.id;
+                    return (
+                      <button
+                        key={theme.id}
+                        type="button"
+                        className={active ? 'is-active' : ''}
+                        aria-pressed={active}
+                        onClick={() => updateStyle({ theme: theme.id })}
+                      >
+                        <span className="lp-menu-theme-left">
+                          <span
+                            className="lp-swatch"
+                            style={{ backgroundColor: theme.swatch }}
+                          />
+                          <span>{theme.label}</span>
+                        </span>
+                        <span className="lp-menu-check">
+                          {active ? '✓' : ''}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </details>
+            <details className="lp-menu lp-more-menu">
+              <summary className="lp-btn">更多</summary>
+              <div
+                className="lp-menu-panel"
+                onClick={(event) => {
+                  (
+                    event.currentTarget.parentElement as HTMLDetailsElement
+                  ).open = false;
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => bridges?.onSendTerminalCommand?.('', false)}
+                >
+                  <span>终端 CLI</span>
+                  <span className="lp-menu-code">CLI</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => {
-                    setScale(1);
-                    setPan({ x: 24, y: 24 });
+                    setSelectedNodeId(null);
+                    setCopilotOpen((value) => !value);
                   }}
-                  title="重置为 100%"
                 >
-                  1:1
+                  <span>AI 规划助手</span>
+                  <span className="lp-menu-code">AI</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={fitCanvas}
-                  title="自动适配整个路径树"
-                >
-                  适配画布
-                </button>
-                {layout.nextUpNodeId && (
+                {bridges?.onExportMarkdownToMindmap && (
                   <button
                     type="button"
-                    onClick={() => focusNode(layout.nextUpNodeId!, 1)}
-                    title="定位到下一节待学视频"
+                    onClick={() =>
+                      bridges.onExportMarkdownToMindmap?.(
+                        detail.summary.title,
+                        learningPathToMarkdown(detail),
+                      )
+                    }
                   >
-                    定位下一课
+                    <span>导出导图</span>
+                    <span className="lp-menu-code">MAP</span>
                   </button>
                 )}
+                <button
+                  type="button"
+                  className="is-danger"
+                  onClick={() => void deleteEntirePath()}
+                >
+                  <span>删除路径</span>
+                  <span className="lp-menu-code">DEL</span>
+                </button>
               </div>
-            </>
-          )}
-        </div>
+            </details>
+          </div>
+        </>
+      )}
+
+      <div className="lp-body">
+        {canvasMode === 'directory' ? (
+          <div className="lp-studio">
+            <PathDirectoryRail
+              activePathId={pathId}
+              stages={stageOverview}
+              activeStageId={activeStage?.nodeId ?? null}
+              onSelectStage={(stageId) => {
+                setDirectoryStageId(stageId);
+                setSelectedNodeId(null);
+              }}
+              onCreate={() => setCreateOpen(true)}
+            />
+            <section className="lp-studio-main">
+              <header className="lp-studio-head">
+                <div className="lp-studio-head-text">
+                  <h2 title={detail.summary.title}>{detail.summary.title}</h2>
+                  <p>
+                    {activeStage
+                      ? `阶段 ${String(activeStage.index + 1).padStart(2, '0')} · ${activeStage.title}`
+                      : '还没有阶段'}
+                    <span>
+                      已学 {finishedVideos} / {totalVideos} 课
+                    </span>
+                  </p>
+                </div>
+                <div ref={toolbarRef} className="lp-studio-head-actions">
+                  {nextUp && (
+                    <button
+                      type="button"
+                      className="lp-btn is-primary"
+                      onClick={() => playNode(nextUp)}
+                      title={nextUp.node.title}
+                    >
+                      继续学习
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="lp-btn"
+                    onClick={() => {
+                      lastGraphModeRef.current = 'constellation';
+                      setCanvasMode('constellation');
+                    }}
+                  >
+                    星图
+                  </button>
+                  <button
+                    type="button"
+                    className="lp-btn"
+                    onClick={() => {
+                      lastGraphModeRef.current = 'course';
+                      setCanvasMode('course');
+                    }}
+                  >
+                    图谱
+                  </button>
+                  <button
+                    type="button"
+                    className="lp-btn"
+                    onClick={() => setCreateOpen(true)}
+                  >
+                    新建
+                  </button>
+                  <details className="lp-menu">
+                    <summary className="lp-btn">添加</summary>
+                    <div
+                      className="lp-menu-panel"
+                      onClick={(event) => {
+                        (
+                          event.currentTarget
+                            .parentElement as HTMLDetailsElement
+                        ).open = false;
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setVideoPickerState({
+                            isOpen: true,
+                            title: '选取课程视频',
+                            subtitle: '从收藏、播放历史、关注频道或搜索中选取',
+                            multiple: true,
+                            parentId: activeStage?.nodeId ?? null,
+                          })
+                        }
+                      >
+                        <span>选取视频</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openAddNodeModal(null, 'stage')}
+                      >
+                        <span>新增阶段</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCategoryImportActiveOpen(true)}
+                      >
+                        <span>从收藏导入</span>
+                      </button>
+                    </div>
+                  </details>
+                  <details className="lp-menu lp-more-menu">
+                    <summary className="lp-btn">更多</summary>
+                    <div
+                      className="lp-menu-panel"
+                      onClick={(event) => {
+                        (
+                          event.currentTarget
+                            .parentElement as HTMLDetailsElement
+                        ).open = false;
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() =>
+                          bridges?.onSendTerminalCommand?.('', false)
+                        }
+                      >
+                        <span>终端</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedNodeId(null);
+                          setCopilotOpen((value) => !value);
+                        }}
+                      >
+                        <span>AI 规划</span>
+                      </button>
+                      {bridges?.onExportMarkdownToMindmap && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            bridges.onExportMarkdownToMindmap?.(
+                              detail.summary.title,
+                              learningPathToMarkdown(detail),
+                            )
+                          }
+                        >
+                          <span>导出导图</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="is-danger"
+                        onClick={() => void deleteEntirePath()}
+                      >
+                        <span>删除路径</span>
+                      </button>
+                    </div>
+                  </details>
+                </div>
+              </header>
+              {activeStage?.note && (
+                <p className="lp-studio-stage-note">{activeStage.note}</p>
+              )}
+              <div className="lp-studio-lessons">
+                {directoryLessons.length === 0 ? (
+                  <div className="lp-studio-empty">
+                    <h3>这个阶段还没有课程</h3>
+                    <button
+                      type="button"
+                      className="lp-btn is-primary"
+                      onClick={() =>
+                        setVideoPickerState({
+                          isOpen: true,
+                          title: '选取课程视频',
+                          multiple: true,
+                          parentId: activeStage?.nodeId ?? null,
+                        })
+                      }
+                    >
+                      添加课程
+                    </button>
+                  </div>
+                ) : (
+                  directoryLessons.map((item) => {
+                    const open = selectedNodeId === item.node.nodeId;
+                    const video = item.video;
+                    const meta = [
+                      video?.channelName,
+                      video?.durationSeconds
+                        ? formatDuration(video.durationSeconds)
+                        : null,
+                      item.node.optional ? '选修' : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ');
+                    const indexLabel =
+                      item.orderIndex !== null
+                        ? String(item.orderIndex).padStart(2, '0')
+                        : item.node.kind === 'checkpoint'
+                          ? '终'
+                          : '—';
+                    const statusLabel = item.isNextUp
+                      ? '下一课'
+                      : item.status === 'completed'
+                        ? '已学'
+                        : item.status === 'in_progress'
+                          ? '在看'
+                          : item.status === 'locked'
+                            ? '待解锁'
+                            : item.node.kind === 'checkpoint'
+                              ? '里程碑'
+                              : '待学习';
+                    return (
+                      <article
+                        key={item.node.nodeId}
+                        className={[
+                          'lp-lesson',
+                          open ? 'is-open' : '',
+                          item.isNextUp ? 'is-next' : '',
+                          item.status === 'completed' ? 'is-done' : '',
+                          item.status === 'locked' ? 'is-locked' : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
+                      >
+                        <button
+                          type="button"
+                          className="lp-lesson-row"
+                          aria-expanded={open}
+                          onClick={() => selectNode(item.node.nodeId)}
+                        >
+                          <span className="lp-lesson-index">{indexLabel}</span>
+                          <span className="lp-lesson-title">
+                            {item.node.title}
+                          </span>
+                          <span className="lp-lesson-meta">{meta}</span>
+                          <span
+                            className={`lp-lesson-status is-${item.isNextUp ? 'next' : item.status}`}
+                          >
+                            {statusLabel}
+                          </span>
+                        </button>
+                        {open && (
+                          <div className="lp-lesson-panel">
+                            {video && (
+                              <button
+                                type="button"
+                                className="lp-lesson-thumb"
+                                onClick={() => playNode(item)}
+                                aria-label={`播放 ${item.node.title}`}
+                              >
+                                <img
+                                  src={
+                                    video.thumbnailUrl ??
+                                    thumbnailUrl(video.videoId, 'mq')
+                                  }
+                                  alt=""
+                                />
+                                {video.durationSeconds ? (
+                                  <span>
+                                    {formatDuration(video.durationSeconds)}
+                                  </span>
+                                ) : null}
+                              </button>
+                            )}
+                            <div className="lp-lesson-detail">
+                              <p className={item.node.note ? '' : 'is-muted'}>
+                                {item.node.note || '没有笔记'}
+                              </p>
+                              <div className="lp-lesson-actions">
+                                {video && (
+                                  <button
+                                    type="button"
+                                    className="lp-btn is-primary"
+                                    onClick={() => playNode(item)}
+                                  >
+                                    播放
+                                  </button>
+                                )}
+                                {video && (
+                                  <button
+                                    type="button"
+                                    className="lp-btn"
+                                    onClick={() => host.toggleWatched(video)}
+                                  >
+                                    {video.finished ? '撤销已看' : '标记已看'}
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  className="lp-btn"
+                                  onClick={() => openEditNodeModal(item)}
+                                >
+                                  编辑
+                                </button>
+                                <button
+                                  type="button"
+                                  className="lp-btn is-danger"
+                                  onClick={() =>
+                                    void deleteNode(item.node.nodeId)
+                                  }
+                                >
+                                  移除
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </article>
+                    );
+                  })
+                )}
+              </div>
+            </section>
+          </div>
+        ) : (
+          <div
+            ref={viewportRef}
+            className={`lp-viewport${panning ? ' is-panning' : ''}${canvasMode === 'overview' ? ' is-overview' : canvasMode === 'constellation' ? ' is-constellation' : ''}`}
+            onMouseDown={handleMouseDown}
+            onWheel={handleWheel}
+          >
+            {canvasMode === 'constellation' ? (
+              <LearningPathStarMapView
+                detail={detail}
+                layout={layout}
+                selectedNodeId={selectedNodeId}
+                focusRequest={starFocusRequest}
+                onSelectNode={(id) => {
+                  setSelectedNodeId(id);
+                  setCopilotOpen(false);
+                }}
+                onPlayNode={playNode}
+                onEditNode={(nodeId) => {
+                  const item = layout.nodes.find(
+                    (n) => n.node.nodeId === nodeId,
+                  );
+                  if (item) openEditNodeModal(item);
+                }}
+                onAddChildNode={(parentId) =>
+                  openAddNodeModal(parentId, 'video')
+                }
+                onDeleteNode={(nodeId) => void deleteNode(nodeId)}
+              />
+            ) : canvasMode === 'overview' ? (
+              <div className="lp-overview" aria-label="路径阶段总览">
+                <div className="lp-overview-heading">
+                  <div>
+                    <span className="lp-overview-eyebrow">PATH OVERVIEW</span>
+                    <h3>路径总览</h3>
+                  </div>
+                  <span>
+                    {stageOverview.length} 个阶段 · 已学 {finishedVideos} /{' '}
+                    {totalVideos} 课
+                  </span>
+                </div>
+                <div className="lp-overview-grid">
+                  {stageOverview.map((stage) => {
+                    const percent = stage.videoCount
+                      ? Math.round(
+                          (stage.completedCount / stage.videoCount) * 100,
+                        )
+                      : 0;
+                    return (
+                      <button
+                        type="button"
+                        key={stage.nodeId}
+                        className={`lp-overview-card${stage.isCurrent ? ' is-current' : ''}`}
+                        onClick={() => focusNode(stage.nodeId, 1)}
+                      >
+                        <span className="lp-overview-card-top">
+                          <span>
+                            阶段 {String(stage.index + 1).padStart(2, '0')}
+                          </span>
+                          <span>
+                            {stage.isCurrent
+                              ? '当前阶段'
+                              : percent === 100 && stage.videoCount > 0
+                                ? '已完成'
+                                : '待学习'}
+                          </span>
+                        </span>
+                        <strong>{stage.title}</strong>
+                        {stage.note && (
+                          <span className="lp-overview-note">{stage.note}</span>
+                        )}
+                        <span className="lp-overview-card-bottom">
+                          <span>
+                            {stage.completedCount} / {stage.videoCount} 课
+                          </span>
+                          {stage.optionalCount > 0 && (
+                            <span>{stage.optionalCount} 节选修</span>
+                          )}
+                        </span>
+                        <span
+                          className="lp-overview-progress"
+                          aria-hidden="true"
+                        >
+                          <span style={{ width: `${percent}%` }} />
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <>
+                <div
+                  className="lp-stage"
+                  style={{
+                    width: layout.width,
+                    height: layout.height,
+                    transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+                  }}
+                >
+                  <svg
+                    className="lp-edges-svg"
+                    width={layout.width}
+                    height={layout.height}
+                  >
+                    <defs>
+                      <marker
+                        id="lp-arrow-muted"
+                        viewBox="0 0 10 10"
+                        refX="8"
+                        refY="5"
+                        markerWidth="5"
+                        markerHeight="5"
+                        orient="auto-start-reverse"
+                      >
+                        <path
+                          d="M 0 1.5 L 8.5 5 L 0 8.5 z"
+                          fill="var(--lp-edge)"
+                        />
+                      </marker>
+                      <marker
+                        id="lp-arrow-active"
+                        viewBox="0 0 10 10"
+                        refX="8"
+                        refY="5"
+                        markerWidth="5"
+                        markerHeight="5"
+                        orient="auto-start-reverse"
+                      >
+                        <path
+                          d="M 0 1.5 L 8.5 5 L 0 8.5 z"
+                          fill="var(--lp-edge-active)"
+                        />
+                      </marker>
+                    </defs>
+                    {layout.edges.map((edge) => (
+                      <path
+                        key={edge.id}
+                        d={edge.pathD}
+                        fill="none"
+                        className={[
+                          'lp-edge-path',
+                          edge.kind === 'spine' ? 'is-spine' : '',
+                          edge.optional ? 'is-optional' : '',
+                          edge.kind === 'prerequisite' ? 'is-prerequisite' : '',
+                          edge.active ? 'is-active' : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
+                        markerEnd={
+                          edge.active
+                            ? 'url(#lp-arrow-active)'
+                            : 'url(#lp-arrow-muted)'
+                        }
+                      />
+                    ))}
+                  </svg>
+
+                  {layout.laneHeaders.map((header) => (
+                    <div
+                      key={`lane-${header.stageNodeId}`}
+                      className="lp-lane-header"
+                      style={{
+                        left: header.x,
+                        top: header.y,
+                        width: header.width,
+                        height: header.height,
+                      }}
+                    >
+                      <div className="lp-lane-header-top">
+                        <strong>{header.title}</strong>
+                        <span>
+                          {header.completedCount}/{header.totalCount}
+                        </span>
+                      </div>
+                      {header.note && <p>{header.note}</p>}
+                    </div>
+                  ))}
+
+                  {layout.nodes.map((item) => {
+                    const { node, video } = item;
+                    const isStageCard = node.kind === 'stage' && !video;
+                    return (
+                      <article
+                        key={node.nodeId}
+                        className={[
+                          'lp-node-card',
+                          isStageCard ? 'is-stage' : '',
+                          node.kind === 'checkpoint' ? 'is-checkpoint' : '',
+                          item.status === 'completed' ? 'is-completed' : '',
+                          item.isNextUp ? 'is-next-up' : '',
+                          item.status === 'locked' ? 'is-locked' : '',
+                          node.optional ? 'is-optional' : '',
+                          selectedNodeId === node.nodeId ? 'is-selected' : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
+                        style={{
+                          left: item.x,
+                          top: item.y,
+                          width: item.width,
+                          height: item.height,
+                        }}
+                        aria-current={item.isNextUp ? 'step' : undefined}
+                      >
+                        <div className="lp-node-top">
+                          <div className="lp-node-badges">
+                            <span className="lp-step-num">
+                              {item.orderIndex !== null
+                                ? `#${String(item.orderIndex).padStart(2, '0')}`
+                                : `S${item.stageIndex + 1}`}
+                            </span>
+                            {item.isNextUp && (
+                              <span className="lp-kind-tag is-next">
+                                下一课
+                              </span>
+                            )}
+                            {node.kind === 'checkpoint' && (
+                              <span className="lp-kind-tag">里程碑</span>
+                            )}
+                            {node.optional && (
+                              <span className="lp-kind-tag">选修</span>
+                            )}
+                            {item.status === 'completed' && (
+                              <span className="lp-kind-tag is-done">
+                                已完成
+                              </span>
+                            )}
+                            {item.status === 'locked' && (
+                              <span className="lp-kind-tag">待解锁</span>
+                            )}
+                          </div>
+
+                          {video && (
+                            <button
+                              type="button"
+                              className="lp-node-quick-play"
+                              title={`播放「${node.title}」`}
+                              aria-label={`播放「${node.title}」`}
+                              onClick={() => playNode(item)}
+                            >
+                              播放
+                            </button>
+                          )}
+                        </div>
+
+                        <button
+                          type="button"
+                          id={`lp-select-${node.nodeId}`}
+                          className="lp-node-select"
+                          aria-label={`${NODE_KIND_LABEL[node.kind]}：${node.title}。按回车查看详情，左右方向键切换节点`}
+                          aria-expanded={selectedNodeId === node.nodeId}
+                          aria-controls={
+                            selectedNodeId === node.nodeId
+                              ? 'lp-node-inspector'
+                              : undefined
+                          }
+                          onClick={() => selectNode(node.nodeId)}
+                          onKeyDown={(event) =>
+                            handleNodeKeyDown(event, node.nodeId)
+                          }
+                        >
+                          <span className="lp-node-main">
+                            <span className="lp-node-info">
+                              <span
+                                className="lp-node-title"
+                                title={node.title}
+                              >
+                                {node.title}
+                              </span>
+                              <span className="lp-node-meta">
+                                {video
+                                  ? `${video.channelName || video.videoId}${video.durationSeconds ? ` · ${formatDuration(video.durationSeconds)}` : ''}`
+                                  : '阶段主干节点'}
+                              </span>
+                            </span>
+                          </span>
+                        </button>
+
+                        <div className="lp-node-footer">
+                          {node.note && (
+                            <p className="lp-node-note" title={node.note}>
+                              {node.note}
+                            </p>
+                          )}
+                          <div className="lp-progress-track">
+                            <div
+                              className="lp-progress-fill"
+                              style={{
+                                width: `${Math.round(item.progressRatio * 100)}%`,
+                              }}
+                            />
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+
+                <div
+                  className="lp-canvas-dock"
+                  role="toolbar"
+                  aria-label="画布视图控制"
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = Math.max(
+                        0.25,
+                        Number((scale - 0.12).toFixed(2)),
+                      );
+                      setScale(next);
+                    }}
+                    title="缩小"
+                  >
+                    −
+                  </button>
+                  <span className="lp-zoom-readout">
+                    {Math.round(scale * 100)}%
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setScale((s) =>
+                        Math.min(1.65, Number((s + 0.12).toFixed(2))),
+                      )
+                    }
+                    title="放大"
+                  >
+                    +
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setScale(1);
+                      setPan({ x: 24, y: 24 });
+                    }}
+                    title="重置为 100%"
+                  >
+                    1:1
+                  </button>
+                  <button
+                    type="button"
+                    onClick={fitCanvas}
+                    title="自动适配整个路径树"
+                  >
+                    适配画布
+                  </button>
+                  {layout.nextUpNodeId && (
+                    <button
+                      type="button"
+                      onClick={() => focusNode(layout.nextUpNodeId!, 1)}
+                      title="定位到下一节待学视频"
+                    >
+                      定位下一课
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         {canvasMode === 'course' && selectedNode && (
           <aside
@@ -2971,6 +2687,12 @@ export default function LearningPathView({
           setVideoPickerState((prev) => ({ ...prev, isOpen: false }))
         }
         onConfirm={handleVideoPickerConfirm}
+      />
+
+      <LearningPathCreateDialog
+        open={createOpen}
+        bridges={bridges}
+        onClose={() => setCreateOpen(false)}
       />
 
       <CategoryImportDialog

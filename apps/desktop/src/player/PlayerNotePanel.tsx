@@ -135,6 +135,7 @@ export function PlayerDocumentEditor({
   document,
   suspendDocumentSave = false,
   onDocumentMarkdownChange,
+  onDepositToKnowledge,
 }: {
   videoId: string;
   videoTitle: string;
@@ -142,10 +143,14 @@ export function PlayerDocumentEditor({
   document?: PlayerExportedDocument | null;
   suspendDocumentSave?: boolean;
   onDocumentMarkdownChange?(markdown: string): void;
+  onDepositToKnowledge?(
+    markdown: string,
+  ): Promise<PlayerExportedDocument | void>;
 }) {
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const [markdown, setMarkdown] = useState('');
   const [saveStatus, setSaveStatus] = useState('保存在本机');
+  const [depositing, setDepositing] = useState(false);
   const editedRef = useRef(false);
   const editVersionRef = useRef(0);
   const loadedDocumentKeyRef = useRef<string | null>(null);
@@ -285,6 +290,22 @@ export function PlayerDocumentEditor({
     });
   };
 
+  const handleDeposit = async () => {
+    if (!onDepositToKnowledge || depositing || !markdown.trim()) return;
+    setDepositing(true);
+    setSaveStatus('正在沉淀至知识库…');
+    try {
+      const result = await onDepositToKnowledge(markdown);
+      if (result) {
+        setSaveStatus('已沉淀至知识库');
+      }
+    } catch {
+      setSaveStatus('沉淀失败，已保存在本机');
+    } finally {
+      setDepositing(false);
+    }
+  };
+
   return (
     <section className="player-video-notes" aria-label="字幕稿与视频笔记">
       <div className="player-video-notes-context">
@@ -295,11 +316,26 @@ export function PlayerDocumentEditor({
           <span>{document?.category ?? '字幕稿与观看笔记'}</span>
         </div>
         <div className="player-video-notes-context-actions">
-          {document?.openKnowledge && (
-            <button type="button" onClick={document.openKnowledge}>
+          {document?.openKnowledge ? (
+            <button
+              type="button"
+              className="player-open-knowledge-btn"
+              onClick={document.openKnowledge}
+              title="在知识库中打开此篇笔记"
+            >
               知识库打开
             </button>
-          )}
+          ) : onDepositToKnowledge ? (
+            <button
+              type="button"
+              className="player-save-knowledge-btn"
+              disabled={depositing || !markdown.trim()}
+              onClick={handleDeposit}
+              title="将文稿与观看笔记沉淀至知识库"
+            >
+              {depositing ? '沉淀中…' : '沉淀到知识库'}
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={insertTimestamp}
