@@ -77,6 +77,7 @@ export default function TaskCalendar({
   onToggleTaskCompletion,
   statusSavingIds,
   today,
+  detailOpen = false,
 }: {
   tasks: LearningTask[];
   onOpenTask(id: string): void;
@@ -85,6 +86,7 @@ export default function TaskCalendar({
   onToggleTaskCompletion(task: LearningTask): void;
   statusSavingIds: ReadonlySet<string>;
   today: string;
+  detailOpen?: boolean;
 }) {
   const [savedState] = useState(readCalendarState);
   const initial = parseDateKey(savedState.date)!;
@@ -498,95 +500,97 @@ export default function TaskCalendar({
             })}
           </div>
         </div>
-        <aside className="task-calendar-agenda">
-          <div
-            className="task-calendar-agenda-tabs"
-            role="group"
-            aria-label="日程内容"
-          >
-            <button
-              type="button"
-              aria-pressed={agendaTab === 'date'}
-              className={agendaTab === 'date' ? 'is-active' : ''}
-              onClick={() => {
-                setAgendaTab('date');
-                agendaTouched.current = true;
-              }}
-            >
-              {selectedDate === today ? '今天' : selectedDate}{' '}
-              <span>{selectedTasks.length}</span>
-            </button>
-            <button
-              type="button"
-              aria-pressed={agendaTab === 'unscheduled'}
-              className={agendaTab === 'unscheduled' ? 'is-active' : ''}
-              onClick={() => {
-                setAgendaTab('unscheduled');
-                agendaTouched.current = true;
-              }}
-            >
-              未排期 <span>{unscheduled.length}</span>
-            </button>
-          </div>
-          {agendaTab === 'date' ? (
-            <div className="task-calendar-agenda-pane">
-              <div className="task-calendar-agenda-head">
-                <input
-                  type="date"
-                  value={selectedDate}
-                  onChange={(event) => chooseDate(event.target.value)}
-                  aria-label="选择日程日期"
-                />
-                <button
-                  type="button"
-                  onClick={() => onCreateTask(selectedDate)}
-                >
-                  + 新建
-                </button>
-              </div>
-              <div className="task-calendar-agenda-list">
-                {selectedTasks.length ? (
-                  selectedTasks.map((task) => taskButton(task, false))
-                ) : (
-                  <div className="task-calendar-empty-state">
-                    <strong>这一天没有截止任务</strong>
-                    <span>可从未排期列表安排任务，或直接新建。</span>
-                    {unscheduled.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => setAgendaTab('unscheduled')}
-                      >
-                        查看未排期 {unscheduled.length} 项
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : (
+        {!detailOpen && (
+          <aside className="task-calendar-agenda">
             <div
-              className="task-calendar-agenda-pane task-calendar-unscheduled"
-              onDragOver={(event) => {
-                if (draggingId) event.preventDefault();
-              }}
-              onDrop={(event) => {
-                event.preventDefault();
-                if (draggingId) void dropTask(draggingId, null);
-              }}
+              className="task-calendar-agenda-tabs"
+              role="group"
+              aria-label="日程内容"
             >
-              <div className="task-calendar-agenda-subhead">
-                选择任务的“排期”，或拖到日历日期。
-              </div>
-              <div className="task-calendar-agenda-list">
-                {unscheduled.length ? (
-                  unscheduled.map((task) => taskButton(task, false))
-                ) : (
-                  <div className="task-muted">没有未安排日期的任务。</div>
-                )}
-              </div>
+              <button
+                type="button"
+                aria-pressed={agendaTab === 'date'}
+                className={agendaTab === 'date' ? 'is-active' : ''}
+                onClick={() => {
+                  setAgendaTab('date');
+                  agendaTouched.current = true;
+                }}
+              >
+                {selectedDate === today ? '今天' : selectedDate}{' '}
+                <span>{selectedTasks.length}</span>
+              </button>
+              <button
+                type="button"
+                aria-pressed={agendaTab === 'unscheduled'}
+                className={agendaTab === 'unscheduled' ? 'is-active' : ''}
+                onClick={() => {
+                  setAgendaTab('unscheduled');
+                  agendaTouched.current = true;
+                }}
+              >
+                未排期 <span>{unscheduled.length}</span>
+              </button>
             </div>
-          )}
-        </aside>
+            {agendaTab === 'date' ? (
+              <div className="task-calendar-agenda-pane">
+                <div className="task-calendar-agenda-head">
+                  <input
+                    type="date"
+                    value={selectedDate}
+                    onChange={(event) => chooseDate(event.target.value)}
+                    aria-label="选择日程日期"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => onCreateTask(selectedDate)}
+                  >
+                    + 新建
+                  </button>
+                </div>
+                <div className="task-calendar-agenda-list">
+                  {selectedTasks.length ? (
+                    selectedTasks.map((task) => taskButton(task, false))
+                  ) : (
+                    <div className="task-calendar-empty-state">
+                      <strong>这一天没有截止任务</strong>
+                      <span>可从未排期列表安排任务，或直接新建。</span>
+                      {unscheduled.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setAgendaTab('unscheduled')}
+                        >
+                          查看未排期 {unscheduled.length} 项
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div
+                className="task-calendar-agenda-pane task-calendar-unscheduled"
+                onDragOver={(event) => {
+                  if (draggingId) event.preventDefault();
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  if (draggingId) void dropTask(draggingId, null);
+                }}
+              >
+                <div className="task-calendar-agenda-subhead">
+                  选择任务的“排期”，或拖到日历日期。
+                </div>
+                <div className="task-calendar-agenda-list">
+                  {unscheduled.length ? (
+                    unscheduled.map((task) => taskButton(task, false))
+                  ) : (
+                    <div className="task-muted">没有未安排日期的任务。</div>
+                  )}
+                </div>
+              </div>
+            )}
+          </aside>
+        )}
       </div>
     </div>
   );

@@ -2132,6 +2132,7 @@ export default function TaskWorkspace({
             onToggleTaskCompletion={toggleTaskCompletion}
             statusSavingIds={statusSavingIds}
             today={todayKey}
+            detailOpen={Boolean(selected)}
           />
         ) : (
           <div className="task-list">
@@ -2154,15 +2155,18 @@ export default function TaskWorkspace({
       </main>
 
       {selected && (
-        <aside className="task-detail">
+        <aside
+          className={`task-detail${view === 'calendar' ? ' is-calendar-slot' : ''}`}
+        >
           <div className="task-detail-head">
             <strong>任务详情</strong>
             <button
               type="button"
+              className={view === 'calendar' ? 'task-detail-back' : undefined}
               onClick={() => setSelectedId(null)}
-              aria-label="关闭任务详情"
+              aria-label={view === 'calendar' ? '返回日程' : '关闭任务详情'}
             >
-              ×
+              {view === 'calendar' ? '返回日程' : '×'}
             </button>
           </div>
           <div className="task-detail-body">
