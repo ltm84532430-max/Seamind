@@ -966,7 +966,7 @@ export default function HabitWorkspace({
                   aria-expanded={calendarPanelOpen}
                   onClick={() => setCalendarPanelOpen((open) => !open)}
                 >
-                  {calendarPanelOpen ? '关闭日程' : '查看当日'}
+                  {calendarPanelOpen ? '关闭日程' : '当天日程'}
                 </button>
               </div>
             </div>
