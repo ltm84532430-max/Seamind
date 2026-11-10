@@ -477,12 +477,6 @@
   color: var(--muted);
   opacity: 0;
 }
-.task-calendar-day-count {
-  margin-left: auto;
-  color: var(--muted);
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-}
 .task-calendar-day:hover .task-calendar-day-add,
 .task-calendar-day-add:focus-visible {
   opacity: 1;
@@ -509,10 +503,47 @@
   border-color: var(--accent);
 }
 .task-calendar-item.is-compact {
-  gap: 2px;
-  padding: 2px 3px;
+  gap: 0;
+  min-height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.task-calendar-item.is-compact:hover {
   border-color: transparent;
-  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+}
+.task-workspace .task-calendar-item.is-compact button.task-calendar-item-open {
+  min-height: 20px;
+  padding: 2px 4px;
+  border-left: 2px solid var(--muted);
+  font-size: 10px;
+}
+.task-workspace
+  .task-calendar-item.is-compact.is-doing
+  button.task-calendar-item-open {
+  border-left-color: var(--accent);
+}
+.task-workspace
+  .task-calendar-item.is-compact.is-done
+  button.task-calendar-item-open {
+  border-left-color: color-mix(in srgb, var(--muted) 45%, var(--panel));
+  color: var(--muted);
+}
+.task-workspace
+  .task-calendar-item.is-compact.is-done
+  .task-calendar-item-title {
+  color: var(--muted);
+  text-decoration: none;
+}
+.task-workspace
+  .task-calendar-item.is-compact.is-overdue
+  .task-calendar-item-title {
+  color: var(--accent);
+}
+.task-workspace
+  .task-calendar-item.is-compact
+  button.task-calendar-item-open:hover {
+  color: inherit;
 }
 .task-workspace button.task-calendar-item-open {
   display: flex;
@@ -633,13 +664,7 @@
 .task-calendar-agenda-pane > .task-calendar-agenda-list {
   flex: 1 1 0;
 }
-.task-calendar-agenda-subhead {
-  flex: 0 0 auto;
-  padding: 9px 10px;
-  border-bottom: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 11px;
-}
+
 .task-calendar-empty-state {
   display: flex;
   flex-direction: column;
@@ -653,25 +678,55 @@
 }
 .task-calendar-item.is-agenda-item {
   flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 2px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
 }
-.task-calendar-schedule {
+.task-calendar-item.is-agenda-item:hover {
+  border-bottom-color: var(--line);
+}
+.task-workspace button.task-calendar-schedule {
   margin-left: auto;
-  padding: 3px 6px !important;
+  padding: 3px 6px;
+  border-color: transparent;
+  color: var(--muted);
+  background: transparent;
   white-space: nowrap;
+  opacity: 0;
+}
+.task-calendar-item.is-agenda-item:hover .task-calendar-schedule,
+.task-calendar-item.is-agenda-item:focus-within .task-calendar-schedule,
+.task-workspace button.task-calendar-schedule:focus-visible {
+  opacity: 1;
+}
+.task-workspace button.task-calendar-schedule:hover {
+  border-color: var(--line);
+  color: var(--ink);
 }
 .task-calendar-date-edit {
   display: flex;
-  flex: 0 0 100%;
+  flex: 1 0 100%;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
 }
 .task-calendar-date-edit input {
   flex: 1 1 0;
   width: 0;
+  min-width: 0;
 }
-.task-calendar-date-edit button {
-  padding: 3px 5px !important;
+.task-workspace .task-calendar-date-edit button {
+  padding: 3px 5px;
+  border-color: transparent;
+  color: var(--muted);
+  background: transparent;
+}
+.task-workspace .task-calendar-date-edit button:hover:not(:disabled) {
+  border-color: var(--line);
+  color: var(--ink);
 }
 .task-calendar-agenda-head {
   display: flex;
@@ -684,9 +739,9 @@
 .task-calendar-agenda-list {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 0;
   min-height: 0;
-  padding: 8px;
+  padding: 0 8px;
   overflow: auto;
 }
 .task-calendar-agenda-list > .task-muted {

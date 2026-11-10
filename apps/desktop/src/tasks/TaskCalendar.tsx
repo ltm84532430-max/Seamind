@@ -46,6 +46,20 @@ function readCalendarState(): {
   }
 }
 
+function formatAgendaHeading(date: string): string {
+  const parsed = parseDateKey(date);
+  if (!parsed) return date;
+  const weekday =
+    WEEKDAYS[
+      (new Date(
+        Date.UTC(parsed.year, parsed.month - 1, parsed.day),
+      ).getUTCDay() +
+        6) %
+        7
+    ];
+  return `${parsed.month}月${parsed.day}日 · ${weekday ?? ''}`;
+}
+
 function taskKind(task: LearningTask) {
   const kinds = new Set(task.resources.map((resource) => resource.kind));
   if (kinds.has('ebook') && kinds.has('youtube')) return '书籍 · 视频';
@@ -202,7 +216,15 @@ export default function TaskCalendar({
   const taskButton = (task: LearningTask, compact: boolean) => (
     <div
       key={task.id}
-      className={`task-calendar-item is-${task.status}${compact ? ' is-compact' : ' is-agenda-item'}`}
+      className={`task-calendar-item is-${task.status}${compact ? ' is-compact' : ' is-agenda-item'}${
+        compact &&
+        task.dueDate != null &&
+        task.dueDate < today &&
+        task.status !== 'done' &&
+        task.status !== 'cancelled'
+          ? ' is-overdue'
+          : ''
+      }`}
       draggable={!movingId && !statusSavingIds.has(task.id)}
       role="group"
       aria-label={`${task.title}，${STATUS[task.status]}，${taskKind(task)}`}
@@ -213,24 +235,26 @@ export default function TaskCalendar({
       }}
       onDragEnd={() => setDraggingId(null)}
     >
-      <button
-        type="button"
-        className={`task-calendar-item-toggle is-${task.status}`}
-        aria-label={
-          task.status === 'done'
-            ? `重新打开任务 ${task.title}`
-            : `标记任务完成 ${task.title}`
-        }
-        aria-pressed={task.status === 'done'}
-        title={task.status === 'done' ? '重新打开任务' : '标记为已完成'}
-        disabled={movingId === task.id || statusSavingIds.has(task.id)}
-        onClick={(event) => {
-          event.stopPropagation();
-          onToggleTaskCompletion(task);
-        }}
-      >
-        {task.status === 'done' ? '✓' : '○'}
-      </button>
+      {!compact && (
+        <button
+          type="button"
+          className={`task-calendar-item-toggle is-${task.status}`}
+          aria-label={
+            task.status === 'done'
+              ? `重新打开任务 ${task.title}`
+              : `标记任务完成 ${task.title}`
+          }
+          aria-pressed={task.status === 'done'}
+          title={task.status === 'done' ? '重新打开任务' : '标记为已完成'}
+          disabled={movingId === task.id || statusSavingIds.has(task.id)}
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggleTaskCompletion(task);
+          }}
+        >
+          {task.status === 'done' ? '✓' : '○'}
+        </button>
+      )}
       <button
         type="button"
         className="task-calendar-item-open"
@@ -242,7 +266,9 @@ export default function TaskCalendar({
         aria-label={`${task.title}，${STATUS[task.status]}，${taskKind(task)}`}
         disabled={movingId === task.id}
       >
-        <span className="task-calendar-item-mark" aria-hidden="true" />
+        {!compact && (
+          <span className="task-calendar-item-mark" aria-hidden="true" />
+        )}
         <span className="task-calendar-item-title">{task.title}</span>
         {!compact && (
           <span className="task-calendar-item-kind">{taskKind(task)}</span>
@@ -451,14 +477,6 @@ export default function TaskCalendar({
                     >
                       {cell.day}
                     </button>
-                    {entries.length > 0 && (
-                      <span
-                        className="task-calendar-day-count"
-                        aria-hidden="true"
-                      >
-                        {entries.length}
-                      </span>
-                    )}
                     <button
                       type="button"
                       className="task-calendar-day-add"
@@ -534,12 +552,7 @@ export default function TaskCalendar({
             {agendaTab === 'date' ? (
               <div className="task-calendar-agenda-pane">
                 <div className="task-calendar-agenda-head">
-                  <input
-                    type="date"
-                    value={selectedDate}
-                    onChange={(event) => chooseDate(event.target.value)}
-                    aria-label="选择日程日期"
-                  />
+                  <strong>{formatAgendaHeading(selectedDate)}</strong>
                   <button
                     type="button"
                     onClick={() => onCreateTask(selectedDate)}
@@ -577,9 +590,6 @@ export default function TaskCalendar({
                   if (draggingId) void dropTask(draggingId, null);
                 }}
               >
-                <div className="task-calendar-agenda-subhead">
-                  选择任务的“排期”，或拖到日历日期。
-                </div>
                 <div className="task-calendar-agenda-list">
                   {unscheduled.length ? (
                     unscheduled.map((task) => taskButton(task, false))
