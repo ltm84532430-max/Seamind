@@ -7,6 +7,21 @@ import {
   KNOWLEDGE_ACTION_ITEMS,
 } from './terminal-cheatsheet';
 import {
+  COMMAND_CATEGORY_FILTERS,
+  commandMatchesFocus,
+  commandTextForShell,
+  filterCommandLibrary,
+  moveFocusedCommand,
+  shellsWithCommand,
+} from './terminal-commands';
+import {
+  filterKnowledgeActions,
+  KNOWLEDGE_TARGET_LABEL,
+  knowledgeActionNote,
+  knowledgeCommandForShell,
+  knowledgeShells,
+} from './terminal-knowledge';
+import {
   TerminalSessionView,
   type TerminalSessionViewHandle,
 } from './TerminalSessionView';
@@ -16,6 +31,17 @@ import type {
   TerminalShellOption,
   SplitLayoutMode,
 } from './terminal-types';
+import {
+  COMMAND_LIBRARY_SHORTCUT_LABEL,
+  isCommandLibraryShortcut,
+  LAST_TERMINAL_TOOL_KEY,
+  readLastTerminalTool,
+  selectTerminalTool,
+  TERMINAL_TOOLS,
+  terminalEscapeTarget,
+  terminalTabShortcutIndex,
+  type TerminalToolId,
+} from './terminal-tools';
 import './terminal-workspace.css';
 
 interface TerminalWorkspaceProps {
@@ -72,16 +98,6 @@ function readCommandIds(key: string): string[] {
   }
 }
 
-function getCheatCommand(
-  item: (typeof LINUX_CHEAT_ITEMS)[number],
-  shell: TerminalShellType,
-) {
-  return (
-    item.commandByShell?.[shell] ??
-    (shell === 'bash' || shell === 'wsl' ? item.cmd : undefined)
-  );
-}
-
 export default function TerminalWorkspace({
   active,
   cwd,
@@ -104,12 +120,21 @@ export default function TerminalWorkspace({
   const [secondaryTabId, setSecondaryTabId] = useState<string>('tab-1');
   const [splitMode, setSplitMode] = useState<SplitLayoutMode>('single');
   const [splitRatio, setSplitRatio] = useState<number>(0.5);
-  const [drawerOpen, setDrawerOpen] = useState<boolean>(true);
-  const [drawerTab, setDrawerTab] = useState<'linux' | 'knowledge' | 'env'>(
-    'linux',
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerPinned, setDrawerPinned] = useState(false);
+  const [drawerTab, setDrawerTab] = useState<TerminalToolId>(() =>
+    readLastTerminalTool(
+      typeof localStorage === 'undefined' ? null : localStorage,
+    ),
   );
+  const [toolsMenuOpen, setToolsMenuOpen] = useState(false);
   const [linuxFilter, setLinuxFilter] = useState<string>('all');
   const [commandQuery, setCommandQuery] = useState('');
+  const [focusedCommandId, setFocusedCommandId] = useState<string | null>(null);
+  const [knowledgeQuery, setKnowledgeQuery] = useState('');
+  const [focusedKnowledgeId, setFocusedKnowledgeId] = useState<string | null>(
+    null,
+  );
   const [commandView, setCommandView] = useState<
     'all' | 'favorites' | 'recent'
   >('all');
@@ -133,6 +158,27 @@ export default function TerminalWorkspace({
   const terminalRefs = useRef<Map<string, TerminalSessionViewHandle>>(
     new Map(),
   );
+  const toolsMenuRef = useRef<HTMLDivElement>(null);
+  const shellMenuRef = useRef<HTMLDivElement>(null);
+  const commandSearchRef = useRef<HTMLInputElement>(null);
+  const commandPanelRef = useRef<HTMLDivElement>(null);
+  const knowledgeSearchRef = useRef<HTMLInputElement>(null);
+  const knowledgePanelRef = useRef<HTMLDivElement>(null);
+
+  const focusActiveTerminal = () => {
+    terminalRefs.current.get(activeTabId)?.focus();
+  };
+
+  const applyTool = (next: TerminalToolId) => {
+    const result = selectTerminalTool(
+      { open: drawerOpen, tool: drawerTab },
+      next,
+    );
+    setDrawerTab(result.tool);
+    setDrawerOpen(result.open);
+    setToolsMenuOpen(false);
+    if (!result.open) focusActiveTerminal();
+  };
 
   // Detect available shells from Tauri backend
   useEffect(() => {
@@ -147,6 +193,123 @@ export default function TerminalWorkspace({
         // Fallback to defaults
       });
   }, [active]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LAST_TERMINAL_TOOL_KEY, drawerTab);
+    } catch {
+      // 上次打开的工具仍可在当前进程中使用。
+    }
+  }, [drawerTab]);
+
+  useEffect(() => {
+    if (!showShellMenu && !toolsMenuOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (
+        showShellMenu &&
+        shellMenuRef.current &&
+        !shellMenuRef.current.contains(target)
+      ) {
+        setShowShellMenu(false);
+      }
+      if (
+        toolsMenuOpen &&
+        toolsMenuRef.current &&
+        !toolsMenuRef.current.contains(target)
+      ) {
+        setToolsMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, [showShellMenu, toolsMenuOpen]);
+
+  useEffect(() => {
+    if (!active) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const keyEvent = {
+        key: event.key,
+        altKey: event.altKey,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        shiftKey: event.shiftKey,
+      };
+      const tabIndex = terminalTabShortcutIndex(keyEvent);
+      if (tabIndex !== null) {
+        if (pendingCommand || editingTabId) return;
+        const tab = tabs[tabIndex];
+        if (!tab) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setActiveTabId(tab.id);
+        setShowShellMenu(false);
+        setToolsMenuOpen(false);
+        return;
+      }
+      if (isCommandLibraryShortcut(keyEvent)) {
+        if (pendingCommand || editingTabId) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setDrawerTab('linux');
+        setDrawerOpen(true);
+        setToolsMenuOpen(false);
+        setShowShellMenu(false);
+        requestAnimationFrame(() => commandSearchRef.current?.focus());
+        return;
+      }
+      if (event.key !== 'Escape') return;
+      const target = terminalEscapeTarget({
+        open: drawerOpen,
+        tool: drawerTab,
+        pinned: drawerPinned,
+        toolsMenu: toolsMenuOpen,
+        shellMenu: showShellMenu,
+        confirmOpen: pendingCommand !== null,
+        renaming: editingTabId !== null,
+      });
+      if (target === 'terminal') return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (target === 'confirm') setPendingCommand(null);
+      else if (target === 'shell-menu') setShowShellMenu(false);
+      else if (target === 'tools-menu') setToolsMenuOpen(false);
+      else if (target === 'rename') setEditingTabId(null);
+      else {
+        setDrawerOpen(false);
+        terminalRefs.current.get(activeTabId)?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [
+    active,
+    activeTabId,
+    drawerOpen,
+    drawerPinned,
+    drawerTab,
+    editingTabId,
+    pendingCommand,
+    showShellMenu,
+    tabs,
+    toolsMenuOpen,
+  ]);
+
+  useEffect(() => {
+    if (!active || !drawerOpen) return;
+    const search =
+      drawerTab === 'linux'
+        ? commandSearchRef.current
+        : drawerTab === 'knowledge'
+          ? knowledgeSearchRef.current
+          : null;
+    if (!search) return;
+    const frame = requestAnimationFrame(() => {
+      search.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [active, drawerOpen, drawerTab]);
 
   const activeTab = useMemo(
     () => tabs.find((t) => t.id === activeTabId) ?? tabs[0],
@@ -281,40 +444,69 @@ export default function TerminalWorkspace({
   };
 
   const activeShell = activeTab?.shell ?? 'powershell';
-  const filteredLinuxCheats = useMemo(() => {
-    const query = commandQuery.trim().toLocaleLowerCase();
-    return LINUX_CHEAT_ITEMS.filter((item) => {
-      const command = getCheatCommand(item, activeShell);
-      if (!command) return false;
-      if (linuxFilter !== 'all' && item.category !== linuxFilter) return false;
-      if (commandView === 'favorites' && !favoriteCommandIds.includes(item.id))
-        return false;
-      if (commandView === 'recent' && !recentCommandIds.includes(item.id))
-        return false;
-      return (
-        !query ||
-        [item.title, item.explanation, item.practicalScenario, command].some(
-          (value) => value.toLocaleLowerCase().includes(query),
-        )
-      );
-    }).sort((left, right) => {
-      if (commandView !== 'recent') return 0;
-      return (
-        recentCommandIds.indexOf(left.id) - recentCommandIds.indexOf(right.id)
-      );
-    });
-  }, [
-    activeShell,
-    commandQuery,
-    commandView,
-    favoriteCommandIds,
-    linuxFilter,
-    recentCommandIds,
-  ]);
-
-  const availableKnowledgeActions = KNOWLEDGE_ACTION_ITEMS.filter(
-    (item) => item.commandByShell?.[activeShell],
+  const sessionReady = activeTab?.status === 'ready';
+  const filteredLinuxCheats = useMemo(
+    () =>
+      filterCommandLibrary(LINUX_CHEAT_ITEMS, {
+        query: commandQuery,
+        category: linuxFilter,
+        view: commandView,
+        favoriteIds: favoriteCommandIds,
+        recentIds: recentCommandIds,
+      }),
+    [
+      commandQuery,
+      commandView,
+      favoriteCommandIds,
+      linuxFilter,
+      recentCommandIds,
+    ],
   );
+  const visibleCommandIds = useMemo(
+    () => filteredLinuxCheats.map((item) => item.id),
+    [filteredLinuxCheats],
+  );
+
+  useEffect(() => {
+    setFocusedCommandId((current) =>
+      commandMatchesFocus(visibleCommandIds, current),
+    );
+  }, [visibleCommandIds]);
+
+  useEffect(() => {
+    if (!focusedCommandId || !commandPanelRef.current) return;
+    const row = commandPanelRef.current.querySelector(
+      `[data-command-id="${CSS.escape(focusedCommandId)}"]`,
+    );
+    if (row instanceof HTMLElement) {
+      row.scrollIntoView({ block: 'nearest' });
+    }
+  }, [focusedCommandId]);
+
+  const filteredKnowledgeActions = useMemo(
+    () => filterKnowledgeActions(KNOWLEDGE_ACTION_ITEMS, knowledgeQuery),
+    [knowledgeQuery],
+  );
+  const visibleKnowledgeIds = useMemo(
+    () => filteredKnowledgeActions.map((item) => item.id),
+    [filteredKnowledgeActions],
+  );
+
+  useEffect(() => {
+    setFocusedKnowledgeId((current) =>
+      commandMatchesFocus(visibleKnowledgeIds, current),
+    );
+  }, [visibleKnowledgeIds]);
+
+  useEffect(() => {
+    if (!focusedKnowledgeId || !knowledgePanelRef.current) return;
+    const row = knowledgePanelRef.current.querySelector(
+      `[data-knowledge-id="${CSS.escape(focusedKnowledgeId)}"]`,
+    );
+    if (row instanceof HTMLElement) {
+      row.scrollIntoView({ block: 'nearest' });
+    }
+  }, [focusedKnowledgeId]);
 
   const relatedBooks = useMemo(() => {
     return books.filter((b) =>
@@ -322,43 +514,109 @@ export default function TerminalWorkspace({
     );
   }, [books]);
 
+  const applyFocusedCommand = (execute: boolean) => {
+    const item = filteredLinuxCheats.find(
+      (entry) => entry.id === focusedCommandId,
+    );
+    if (!item || !sessionReady) return;
+    const command = commandTextForShell(item, activeShell);
+    if (!command) return;
+    if (execute) {
+      runOrConfirmCommand(
+        item.title,
+        command,
+        Boolean(item.requiresConfirmation),
+        item.id,
+      );
+      return;
+    }
+    rememberCommand(item.id);
+    sendCommandToActive(command, false);
+  };
+
+  const onCommandListKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (pendingCommand) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const fromField =
+      target instanceof HTMLInputElement ||
+      Boolean(target.closest('[data-command-id]'));
+    if (!fromField) return;
+    if (target.closest('button')) {
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      setFocusedCommandId((current) =>
+        moveFocusedCommand(
+          visibleCommandIds,
+          current,
+          event.key === 'ArrowDown' ? 1 : -1,
+        ),
+      );
+      return;
+    }
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    applyFocusedCommand(event.shiftKey);
+  };
+
+  const applyKnowledgeAction = (
+    item: (typeof filteredKnowledgeActions)[number],
+    execute: boolean,
+  ) => {
+    if (!sessionReady) return;
+    const command = knowledgeCommandForShell(item, activeShell);
+    if (!command) return;
+    if (execute) {
+      runOrConfirmCommand(
+        item.title,
+        command,
+        Boolean(item.requiresConfirmation),
+        item.id,
+      );
+      return;
+    }
+    sendCommandToActive(command, false);
+  };
+
+  const onKnowledgeListKeyDown = (
+    event: React.KeyboardEvent<HTMLDivElement>,
+  ) => {
+    if (pendingCommand) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const fromField =
+      target instanceof HTMLInputElement ||
+      Boolean(target.closest('[data-knowledge-id]'));
+    if (!fromField) return;
+    if (target.closest('button')) {
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      setFocusedKnowledgeId((current) =>
+        moveFocusedCommand(
+          visibleKnowledgeIds,
+          current,
+          event.key === 'ArrowDown' ? 1 : -1,
+        ),
+      );
+      return;
+    }
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    const item = filteredKnowledgeActions.find(
+      (entry) => entry.id === focusedKnowledgeId,
+    );
+    if (!item) return;
+    applyKnowledgeAction(item, event.shiftKey);
+  };
+
   return (
     <main className="terminal-workspace" aria-label="终端与系统实验工作区">
       {/* 1. Header Toolbar */}
       <header className="terminal-workspace-header">
-        <div className="terminal-workspace-brand">
-          <span className="terminal-brand-badge">TERMINAL HUB</span>
-          <h1 className="terminal-brand-title">终端与系统实验</h1>
-          <span className="terminal-brand-sub">
-            多会话 PTY · Linux 原生环境 · 跨界面知识修正中枢
-          </span>
-        </div>
-
-        {/* 顶部遥测胶囊 */}
-        <div className="terminal-telemetry-capsules">
-          <div className="telemetry-pill">
-            <span className="pill-label">会话并发</span>
-            <strong className="pill-value">{tabs.length}</strong>
-          </div>
-          <div className="telemetry-pill">
-            <span className="pill-label">活动环境</span>
-            <strong className="pill-value">
-              {activeTab?.shell.toUpperCase()}
-            </strong>
-          </div>
-          <div className="telemetry-pill">
-            <span className="pill-label">分屏布局</span>
-            <strong className="pill-value">
-              {splitMode === 'single'
-                ? '单窗格'
-                : splitMode === 'vertical'
-                  ? '左右分屏'
-                  : '上下分屏'}
-            </strong>
-          </div>
-        </div>
-
-        {/* 右侧工具操作组 */}
         <div className="terminal-header-actions">
           {/* 分屏切换按钮 */}
           <div className="terminal-split-selector" aria-label="分屏布局切换">
@@ -400,15 +658,41 @@ export default function TerminalWorkspace({
             </button>
           </div>
 
-          {/* 抽屉折叠切换 */}
-          <button
-            type="button"
-            className={`terminal-drawer-toggle ${drawerOpen ? 'is-active' : ''}`}
-            onClick={() => setDrawerOpen((prev) => !prev)}
-            title="展开/收起 Linux 实验与知识联动抽屉"
-          >
-            {drawerOpen ? '收起抽屉' : '知识与实验抽屉'}
-          </button>
+          <div className="terminal-tools-container" ref={toolsMenuRef}>
+            <button
+              type="button"
+              className={`terminal-tools-btn ${drawerOpen || toolsMenuOpen ? 'is-active' : ''}`}
+              aria-expanded={toolsMenuOpen}
+              aria-haspopup="menu"
+              onClick={() => {
+                setToolsMenuOpen((open) => !open);
+                setShowShellMenu(false);
+              }}
+              title={`打开命令库或知识修正（${COMMAND_LIBRARY_SHORTCUT_LABEL} 打开命令库）`}
+              aria-keyshortcuts="Control+Shift+L"
+            >
+              工具
+            </button>
+            {toolsMenuOpen && (
+              <div className="terminal-tools-menu" role="menu">
+                {TERMINAL_TOOLS.map((tool) => {
+                  const selected = drawerOpen && drawerTab === tool.id;
+                  return (
+                    <button
+                      key={tool.id}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={selected}
+                      className={`terminal-tools-option ${selected ? 'is-active' : ''}`}
+                      onClick={() => applyTool(tool.id)}
+                    >
+                      {tool.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -447,7 +731,9 @@ export default function TerminalWorkspace({
                     {tab.title}
                   </span>
                 )}
-                <span className="tab-index-hint">{`Alt+${index + 1}`}</span>
+                {index < 9 && (
+                  <span className="tab-index-hint">{`Alt+${index + 1}`}</span>
+                )}
                 {tabs.length > 1 && (
                   <button
                     type="button"
@@ -465,22 +751,23 @@ export default function TerminalWorkspace({
         </div>
 
         {/* 新建标签菜单 */}
-        <div className="terminal-new-tab-container">
+        <div className="terminal-new-tab-container" ref={shellMenuRef}>
           <button
             type="button"
             className="terminal-new-tab-btn"
-            onClick={() => setShowShellMenu((prev) => !prev)}
+            onClick={() => {
+              setShowShellMenu((prev) => !prev);
+              setToolsMenuOpen(false);
+            }}
             disabled={tabs.length >= MAX_WORKSPACE_TABS}
+            aria-expanded={showShellMenu}
             title="新建终端会话"
           >
             + 新建终端
           </button>
 
           {showShellMenu && (
-            <div
-              className="terminal-shell-menu"
-              onMouseLeave={() => setShowShellMenu(false)}
-            >
+            <div className="terminal-shell-menu">
               <div className="shell-menu-header">选择会话环境</div>
               {tabs.length >= MAX_WORKSPACE_TABS && (
                 <div className="shell-menu-limit">
@@ -499,10 +786,16 @@ export default function TerminalWorkspace({
                   <div className="option-main">
                     <span className="option-badge">{opt.badge}</span>
                     <strong className="option-name">{opt.name}</strong>
+                    {!opt.available && (
+                      <span className="option-status">未检测到</span>
+                    )}
                   </div>
                   <span className="option-desc">{opt.description}</span>
                 </button>
               ))}
+              <p className="shell-menu-install">
+                安装 WSL：在终端运行 <code>wsl --install</code>
+              </p>
             </div>
           )}
         </div>
@@ -645,47 +938,73 @@ export default function TerminalWorkspace({
             className="terminal-knowledge-drawer"
             aria-label="终端命令与跨界面知识联动"
           >
-            {/* 抽屉分段控制 */}
-            <div className="drawer-segmented-tabs">
+            <div className="drawer-heading">
+              <div className="drawer-segmented-tabs" role="tablist">
+                {TERMINAL_TOOLS.map((tool) => (
+                  <button
+                    key={tool.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={drawerTab === tool.id}
+                    className={`drawer-tab-btn ${drawerTab === tool.id ? 'is-active' : ''}`}
+                    onClick={() => applyTool(tool.id)}
+                  >
+                    {tool.label}
+                  </button>
+                ))}
+              </div>
               <button
                 type="button"
-                className={`drawer-tab-btn ${drawerTab === 'linux' ? 'is-active' : ''}`}
-                onClick={() => setDrawerTab('linux')}
+                className={`drawer-pin-btn ${drawerPinned ? 'is-active' : ''}`}
+                aria-pressed={drawerPinned}
+                onClick={() => setDrawerPinned((pinned) => !pinned)}
+                title={
+                  drawerPinned
+                    ? '已钉住，Esc 留给终端'
+                    : '钉住后面板不会被 Esc 关掉'
+                }
               >
-                命令库
+                {drawerPinned ? '已钉住' : '钉住'}
               </button>
               <button
                 type="button"
-                className={`drawer-tab-btn ${drawerTab === 'knowledge' ? 'is-active' : ''}`}
-                onClick={() => setDrawerTab('knowledge')}
+                className="drawer-close-btn"
+                onClick={() => {
+                  setDrawerOpen(false);
+                  focusActiveTerminal();
+                }}
+                aria-label="关闭工具面板"
               >
-                知识修正
-              </button>
-              <button
-                type="button"
-                className={`drawer-tab-btn ${drawerTab === 'env' ? 'is-active' : ''}`}
-                onClick={() => setDrawerTab('env')}
-              >
-                环境矩阵
+                ×
               </button>
             </div>
 
-            {/* TAB 1: 按当前 Shell 过滤的命令卡片 */}
             {drawerTab === 'linux' && (
-              <div className="drawer-panel-scroll">
+              <div
+                className="drawer-panel-scroll"
+                ref={commandPanelRef}
+                onKeyDown={onCommandListKeyDown}
+              >
                 <div className="command-library-toolbar">
                   <input
+                    ref={commandSearchRef}
                     className="command-search"
                     type="search"
+                    role="combobox"
+                    aria-expanded={filteredLinuxCheats.length > 0}
+                    aria-controls="terminal-command-list"
+                    aria-autocomplete="list"
+                    aria-activedescendant={
+                      focusedCommandId
+                        ? `command-row-${focusedCommandId}`
+                        : undefined
+                    }
                     value={commandQuery}
                     onChange={(event) => setCommandQuery(event.target.value)}
                     placeholder="搜索命令、用途或场景"
-                    aria-label="搜索终端命令卡片"
+                    aria-label="搜索命令库"
                   />
-                  <div
-                    className="command-view-switch"
-                    aria-label="命令卡片筛选"
-                  >
+                  <div className="command-view-switch" aria-label="命令筛选">
                     {(
                       [
                         ['all', '全部'],
@@ -711,17 +1030,11 @@ export default function TerminalWorkspace({
                     当前环境：
                     {shells.find((shell) => shell.id === activeShell)?.name ??
                       activeShell}
+                    {' · Enter 填入 · Shift+Enter 运行'}
                   </div>
                 </div>
                 <div className="drawer-filter-bar">
-                  {[
-                    ['all', '全部'],
-                    ['fs', '文件权限'],
-                    ['text', '三剑客'],
-                    ['proc', '进程'],
-                    ['net', '网络'],
-                    ['sys', '系统'],
-                  ].map(([val, label]) => (
+                  {COMMAND_CATEGORY_FILTERS.map(([val, label]) => (
                     <button
                       key={val}
                       type="button"
@@ -733,90 +1046,169 @@ export default function TerminalWorkspace({
                   ))}
                 </div>
 
-                <div className="drawer-cards-stack">
+                <ul
+                  id="terminal-command-list"
+                  className="command-list"
+                  role="listbox"
+                  aria-label="命令库"
+                >
                   {filteredLinuxCheats.map((item) => {
-                    const command = getCheatCommand(item, activeShell);
-                    if (!command) return null;
+                    const command = commandTextForShell(item, activeShell);
+                    const focused = item.id === focusedCommandId;
+                    const categoryLabel =
+                      COMMAND_CATEGORY_FILTERS.find(
+                        ([id]) => id === item.category,
+                      )?.[1] ?? item.categoryLabel;
+                    const otherShells = shellsWithCommand(item, shells).filter(
+                      (shell) => shell.id !== activeShell,
+                    );
                     return (
-                      <article key={item.id} className="cheat-card">
-                        <div className="cheat-card-top">
-                          <span className="cheat-badge">
-                            [{item.category.toUpperCase()}]
-                          </span>
-                          <h4 className="cheat-title">{item.title}</h4>
-                          <button
-                            type="button"
+                      <li key={item.id}>
+                        <div
+                          id={`command-row-${item.id}`}
+                          className={
+                            focused ? 'command-row is-focused' : 'command-row'
+                          }
+                          role="option"
+                          aria-selected={focused}
+                          data-command-id={item.id}
+                          title={
+                            sessionReady
+                              ? '填入当前终端，不回车'
+                              : '终端还没就绪'
+                          }
+                          onMouseEnter={() => setFocusedCommandId(item.id)}
+                          onMouseDown={(event) => {
+                            if (
+                              event.target instanceof Element &&
+                              event.target.closest('button')
+                            ) {
+                              return;
+                            }
+                            event.preventDefault();
+                          }}
+                          onClick={(event) => {
+                            if (
+                              event.target instanceof Element &&
+                              event.target.closest('button')
+                            ) {
+                              return;
+                            }
+                            setFocusedCommandId(item.id);
+                            if (!command || !sessionReady) return;
+                            rememberCommand(item.id);
+                            sendCommandToActive(command, false);
+                          }}
+                        >
+                          <div className="command-row-main">
+                            <span className="command-row-tag">
+                              {categoryLabel}
+                            </span>
+                            <span className="command-row-title">
+                              {item.title}
+                            </span>
+                            <button
+                              type="button"
+                              className={
+                                favoriteCommandIds.includes(item.id)
+                                  ? 'command-favorite is-active'
+                                  : 'command-favorite'
+                              }
+                              onClick={() => toggleCommandFavorite(item.id)}
+                              aria-label={
+                                favoriteCommandIds.includes(item.id)
+                                  ? '取消收藏命令'
+                                  : '收藏命令'
+                              }
+                            >
+                              {favoriteCommandIds.includes(item.id)
+                                ? '已收藏'
+                                : '收藏'}
+                            </button>
+                          </div>
+                          <code
                             className={
-                              favoriteCommandIds.includes(item.id)
-                                ? 'command-favorite is-active'
-                                : 'command-favorite'
-                            }
-                            onClick={() => toggleCommandFavorite(item.id)}
-                            aria-label={
-                              favoriteCommandIds.includes(item.id)
-                                ? '取消收藏命令'
-                                : '收藏命令'
+                              command
+                                ? 'command-row-code'
+                                : 'command-row-code is-missing'
                             }
                           >
-                            {favoriteCommandIds.includes(item.id)
-                              ? '已收藏'
-                              : '收藏'}
-                          </button>
+                            {command ?? '当前环境没有这条命令'}
+                          </code>
+                          {focused && (
+                            <div className="command-row-detail">
+                              <p className="command-row-note">
+                                {item.explanation} {item.practicalScenario}
+                              </p>
+                              {command ? (
+                                <button
+                                  type="button"
+                                  className="command-row-run"
+                                  disabled={!sessionReady}
+                                  title={
+                                    item.requiresConfirmation
+                                      ? '运行前需要确认'
+                                      : '在当前终端运行'
+                                  }
+                                  onClick={() =>
+                                    runOrConfirmCommand(
+                                      item.title,
+                                      command,
+                                      Boolean(item.requiresConfirmation),
+                                      item.id,
+                                    )
+                                  }
+                                >
+                                  运行
+                                </button>
+                              ) : (
+                                <div className="command-row-actions">
+                                  <span className="command-row-shells">
+                                    {otherShells.length > 0
+                                      ? `可用环境：${otherShells
+                                          .map((shell) =>
+                                            shell.available
+                                              ? shell.name
+                                              : `${shell.name}（未检测到）`,
+                                          )
+                                          .join('、')}`
+                                      : '没有其他环境提供这条命令'}
+                                  </span>
+                                  {otherShells.map((shell) => (
+                                    <button
+                                      key={shell.id}
+                                      type="button"
+                                      className="command-row-shell"
+                                      disabled={
+                                        !shell.available ||
+                                        tabs.length >= MAX_WORKSPACE_TABS
+                                      }
+                                      title={
+                                        shell.available
+                                          ? `用${shell.name}新建标签`
+                                          : '未检测到'
+                                      }
+                                      onClick={() => addTab(shell.id)}
+                                    >
+                                      用{shell.name}新建标签
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
-                        <p className="cheat-expl">{item.explanation}</p>
-                        <pre className="cheat-code-box">
-                          <code>{command}</code>
-                        </pre>
-                        <div className="cheat-scenario">
-                          <span className="scenario-label">实战场景:</span>
-                          <span>{item.practicalScenario}</span>
-                        </div>
-                        <div className="cheat-actions">
-                          <button
-                            type="button"
-                            className="cheat-btn-fill"
-                            disabled={activeTab?.status !== 'ready'}
-                            onClick={() => {
-                              rememberCommand(item.id);
-                              sendCommandToActive(command, false);
-                            }}
-                            title="将命令写入终端输入区但不立即回车"
-                          >
-                            填入终端
-                          </button>
-                          <button
-                            type="button"
-                            className="cheat-btn-run"
-                            disabled={activeTab?.status !== 'ready'}
-                            onClick={() =>
-                              runOrConfirmCommand(
-                                item.title,
-                                command,
-                                Boolean(item.requiresConfirmation),
-                                item.id,
-                              )
-                            }
-                            title="直接发送命令并在终端执行"
-                          >
-                            执行命令
-                          </button>
-                        </div>
-                      </article>
+                      </li>
                     );
                   })}
-                </div>
+                </ul>
                 {filteredLinuxCheats.length === 0 && (
-                  <div className="command-empty-state">
-                    当前 Shell 没有匹配的命令卡片。可切换到 PowerShell、Git Bash
-                    或 WSL，或修改搜索条件。
-                  </div>
+                  <div className="command-empty-state">没有匹配的命令。</div>
                 )}
 
                 {relatedBooks.length > 0 && (
                   <div className="drawer-related-books">
-                    <div className="related-books-header">
-                      书架关联 Linux / C 读物
-                    </div>
+                    <div className="related-books-header">相关书架</div>
                     {relatedBooks.map((book) => (
                       <div
                         key={book.relativePath}
@@ -833,114 +1225,191 @@ export default function TerminalWorkspace({
               </div>
             )}
 
-            {/* TAB 2: 跨界面知识修正中枢 */}
             {drawerTab === 'knowledge' && (
-              <div className="drawer-panel-scroll">
+              <div
+                className="drawer-panel-scroll"
+                ref={knowledgePanelRef}
+                onKeyDown={onKnowledgeListKeyDown}
+              >
                 <div className="drawer-intro-card">
-                  <h4>跨界面知识修正机制</h4>
+                  <h4>知识修正</h4>
                   <p>
-                    在当前终端可直接使用 <code>Add-Content</code>、Python
-                    脚本或注入了 Seamind MCP 的 <code>agy</code> /{' '}
-                    <code>claude</code> / <code>codex</code> 对知识库 Markdown
-                    笔记、思维导图骨架及电子书笔记实施自动化校准。
+                    示例命令，在当前目录执行。路径是写死的，例如「计算机网络复习.md」和
+                    test.c。填入或运行不会打开知识库、导图或试卷。已经发出的命令要在终端里用
+                    Ctrl+C 中断。
                   </p>
                 </div>
-
-                <div className="drawer-cards-stack">
-                  {availableKnowledgeActions.map((item) => {
-                    const command = item.commandByShell?.[activeShell];
-                    if (!command) return null;
+                <div className="command-library-toolbar">
+                  <input
+                    ref={knowledgeSearchRef}
+                    className="command-search"
+                    type="search"
+                    role="combobox"
+                    aria-expanded={filteredKnowledgeActions.length > 0}
+                    aria-controls="terminal-knowledge-list"
+                    aria-autocomplete="list"
+                    aria-activedescendant={
+                      focusedKnowledgeId
+                        ? `knowledge-row-${focusedKnowledgeId}`
+                        : undefined
+                    }
+                    value={knowledgeQuery}
+                    onChange={(event) => setKnowledgeQuery(event.target.value)}
+                    placeholder="搜索知识动作"
+                    aria-label="搜索知识动作"
+                  />
+                  <div className="command-shell-context">
+                    当前环境：
+                    {shells.find((shell) => shell.id === activeShell)?.name ??
+                      activeShell}
+                    {' · Enter 填入 · Shift+Enter 运行'}
+                  </div>
+                </div>
+                <ul
+                  id="terminal-knowledge-list"
+                  className="command-list"
+                  role="listbox"
+                  aria-label="知识修正"
+                >
+                  {filteredKnowledgeActions.map((item) => {
+                    const command = knowledgeCommandForShell(item, activeShell);
+                    const focused = item.id === focusedKnowledgeId;
+                    const otherShells = knowledgeShells(item, shells).filter(
+                      (shell) => shell.id !== activeShell,
+                    );
                     return (
-                      <article key={item.id} className="knowledge-action-card">
-                        <div className="action-card-header">
-                          <span className="action-badge">
-                            [{item.categoryBadge}]
-                          </span>
-                          <span className="action-target">
-                            联动 {item.targetWorkspace}
-                          </span>
-                        </div>
-                        <h4 className="action-title">{item.title}</h4>
-                        <p className="action-desc">{item.description}</p>
-                        <pre className="action-code-box">
-                          <code>{command}</code>
-                        </pre>
-                        <div className="action-footer">
-                          <button
-                            type="button"
-                            className="action-fill-btn"
-                            disabled={activeTab?.status !== 'ready'}
-                            onClick={() => {
-                              rememberCommand(item.id);
-                              sendCommandToActive(command, false);
-                            }}
-                          >
-                            填入终端
-                          </button>
-                          <button
-                            type="button"
-                            className="action-run-btn"
-                            disabled={activeTab?.status !== 'ready'}
-                            onClick={() =>
-                              runOrConfirmCommand(
-                                item.title,
-                                command,
-                                Boolean(item.requiresConfirmation),
-                                item.id,
-                              )
+                      <li key={item.id}>
+                        <div
+                          id={`knowledge-row-${item.id}`}
+                          className={
+                            focused ? 'command-row is-focused' : 'command-row'
+                          }
+                          role="option"
+                          aria-selected={focused}
+                          data-knowledge-id={item.id}
+                          title={
+                            sessionReady
+                              ? '填入当前终端，不回车'
+                              : '终端还没就绪'
+                          }
+                          onMouseEnter={() => setFocusedKnowledgeId(item.id)}
+                          onMouseDown={(event) => {
+                            if (
+                              event.target instanceof Element &&
+                              event.target.closest('button')
+                            ) {
+                              return;
+                            }
+                            event.preventDefault();
+                          }}
+                          onClick={(event) => {
+                            if (
+                              event.target instanceof Element &&
+                              event.target.closest('button')
+                            ) {
+                              return;
+                            }
+                            setFocusedKnowledgeId(item.id);
+                            applyKnowledgeAction(item, false);
+                          }}
+                        >
+                          <div className="command-row-main">
+                            <span className="command-row-tag">
+                              {KNOWLEDGE_TARGET_LABEL[item.category]}
+                            </span>
+                            <span className="command-row-title">
+                              {item.title}
+                            </span>
+                          </div>
+                          <code
+                            className={
+                              command
+                                ? 'command-row-code'
+                                : 'command-row-code is-missing'
                             }
                           >
-                            运行修正
-                          </button>
+                            {command ?? '当前环境没有这条命令'}
+                          </code>
+                          {focused && (
+                            <div className="command-row-detail">
+                              <p className="command-row-note">
+                                {knowledgeActionNote(item)}
+                              </p>
+                              {command ? (
+                                <div className="command-row-actions">
+                                  <button
+                                    type="button"
+                                    className="command-row-fill"
+                                    disabled={!sessionReady}
+                                    title="填入当前终端，不回车"
+                                    onClick={() =>
+                                      applyKnowledgeAction(item, false)
+                                    }
+                                  >
+                                    填入
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="command-row-run"
+                                    disabled={!sessionReady}
+                                    title={
+                                      item.requiresConfirmation
+                                        ? '运行前需要确认'
+                                        : '在当前终端运行'
+                                    }
+                                    onClick={() =>
+                                      applyKnowledgeAction(item, true)
+                                    }
+                                  >
+                                    运行
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="command-row-actions">
+                                  <span className="command-row-shells">
+                                    {otherShells.length > 0
+                                      ? `可用环境：${otherShells
+                                          .map((shell) =>
+                                            shell.available
+                                              ? shell.name
+                                              : `${shell.name}（未检测到）`,
+                                          )
+                                          .join('、')}`
+                                      : '没有其他环境提供这条命令'}
+                                  </span>
+                                  {otherShells.map((shell) => (
+                                    <button
+                                      key={shell.id}
+                                      type="button"
+                                      className="command-row-shell"
+                                      disabled={
+                                        !shell.available ||
+                                        tabs.length >= MAX_WORKSPACE_TABS
+                                      }
+                                      title={
+                                        shell.available
+                                          ? `用${shell.name}新建标签`
+                                          : '未检测到'
+                                      }
+                                      onClick={() => addTab(shell.id)}
+                                    >
+                                      用{shell.name}新建标签
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
-                      </article>
+                      </li>
                     );
                   })}
-                </div>
-              </div>
-            )}
-
-            {/* TAB 3: 本机 Shell 环境矩阵 */}
-            {drawerTab === 'env' && (
-              <div className="drawer-panel-scroll">
-                <div className="env-matrix-list">
-                  {shells.map((sh) => (
-                    <div
-                      key={sh.id}
-                      className={`env-card ${sh.available ? 'is-online' : 'is-offline'}`}
-                    >
-                      <div className="env-card-header">
-                        <span className="env-badge">[{sh.badge}]</span>
-                        <strong className="env-name">{sh.name}</strong>
-                        <span
-                          className={`env-status-pill ${sh.available ? 'ok' : 'fail'}`}
-                        >
-                          {sh.available ? '已检测就绪' : '未检测到'}
-                        </span>
-                      </div>
-                      <p className="env-desc">{sh.description}</p>
-                      {sh.available && (
-                        <button
-                          type="button"
-                          className="env-spawn-btn"
-                          onClick={() => addTab(sh.id)}
-                        >
-                          以此环境新建标签
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-
-                <div className="env-tips-card">
-                  <h4>WSL 原生 Linux 接入提示</h4>
-                  <p>
-                    在 Windows 终端中运行 <code>wsl --install</code>{' '}
-                    即可快速获取 Ubuntu 环境。
-                    安装完成后，本板块将自动识别并提供原生 Linux
-                    终端环境进行实操。
-                  </p>
-                </div>
+                </ul>
+                {filteredKnowledgeActions.length === 0 && (
+                  <div className="command-empty-state">
+                    没有匹配的知识动作。
+                  </div>
+                )}
               </div>
             )}
           </aside>

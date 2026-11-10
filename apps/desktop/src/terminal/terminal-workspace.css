@@ -16,7 +16,7 @@
   --term-primary: #0284c7;
 
   display: grid;
-  grid-template-rows: 52px 36px minmax(0, 1fr);
+  grid-template-rows: 40px 36px minmax(0, 1fr);
   width: 100%;
   height: 100%;
   min-width: 0;
@@ -45,86 +45,20 @@
 .terminal-workspace-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
   min-width: 0;
-  height: 52px;
-  padding: 0 16px;
+  height: 40px;
+  padding: 0 12px;
   border-bottom: 1px solid var(--term-border);
   background: var(--term-surface);
 }
 
-.terminal-workspace-brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.terminal-brand-badge {
-  display: inline-flex;
-  align-items: center;
-  height: 20px;
-  padding: 0 6px;
-  border: 1px solid var(--term-border);
-  border-radius: 4px;
-  color: var(--term-muted);
-  font: 700 9px/1 var(--mono);
-  letter-spacing: 0.08em;
-  background: var(--term-subtle);
-  white-space: nowrap;
-}
-
-.terminal-brand-title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 700;
-  line-height: 1;
-  color: var(--term-ink);
-  white-space: nowrap;
-}
-
-.terminal-brand-sub {
-  color: var(--term-muted);
-  font-size: 11.5px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Telemetry Capsules */
-.terminal-telemetry-capsules {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.telemetry-pill {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 9px;
-  border: 1px solid var(--term-border);
-  border-radius: 4px;
-  background: var(--term-subtle);
-}
-
-.pill-label {
-  color: var(--term-muted);
-  font-size: 10.5px;
-}
-
-.pill-value {
-  font: 700 11px var(--mono);
-  color: var(--term-ink);
-}
-
-/* Header Right Actions */
 .terminal-header-actions {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
+  width: 100%;
+  min-width: 0;
 }
 
 .terminal-split-selector {
@@ -162,7 +96,12 @@
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
-.terminal-drawer-toggle {
+.terminal-tools-container {
+  position: relative;
+  flex: none;
+}
+
+.terminal-tools-btn {
   height: 28px;
   padding: 0 10px;
   border: 1px solid var(--term-border);
@@ -170,21 +109,49 @@
   color: var(--term-ink);
   background: var(--term-surface);
   font-size: 11.5px;
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s ease;
 }
 
-.terminal-drawer-toggle:hover {
+.terminal-tools-btn:hover,
+.terminal-tools-btn.is-active {
   border-color: var(--accent);
   color: var(--accent);
   background: var(--term-subtle);
 }
 
-.terminal-drawer-toggle.is-active {
-  border-color: var(--accent);
-  color: #fff;
-  background: var(--accent);
+.terminal-tools-menu {
+  position: absolute;
+  right: 0;
+  top: 32px;
+  z-index: 100;
+  display: grid;
+  gap: 3px;
+  width: 148px;
+  padding: 6px;
+  border: 1px solid var(--term-border);
+  border-radius: 6px;
+  background: var(--term-surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.terminal-tools-option {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--term-ink);
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.terminal-tools-option:hover,
+.terminal-tools-option.is-active {
+  border-color: var(--term-border);
+  background: var(--term-subtle);
+  font-weight: 600;
 }
 
 /* --------------------------------------------------------------------------
@@ -395,11 +362,30 @@
   color: var(--term-ink);
 }
 
+.option-status {
+  margin-left: auto;
+  color: var(--term-warning);
+  font-size: 10px;
+}
+
 .option-desc {
   margin-top: 3px;
   color: var(--term-muted);
   font-size: 10px;
   line-height: 1.35;
+}
+
+.shell-menu-install {
+  margin: 4px 0 0;
+  padding: 6px 8px 2px;
+  border-top: 1px solid var(--term-border);
+  color: var(--term-muted);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.shell-menu-install code {
+  font: 10px var(--mono);
 }
 
 /* --------------------------------------------------------------------------
@@ -653,26 +639,65 @@
   background: var(--term-surface);
 }
 
-.drawer-segmented-tabs {
+.drawer-heading {
   display: flex;
+  align-items: center;
+  gap: 4px;
   height: 36px;
   padding: 4px 8px;
-  gap: 4px;
   border-bottom: 1px solid var(--term-border);
   background: var(--term-subtle);
 }
 
+.drawer-segmented-tabs {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: 4px;
+}
+
 .drawer-tab-btn {
   flex: 1;
+  min-width: 0;
   height: 26px;
+  padding: 0 4px;
   border: 1px solid transparent;
   border-radius: 3px;
   color: var(--term-muted);
   background: transparent;
   font-size: 11px;
   font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
   transition: all 0.12s ease;
+}
+
+.drawer-pin-btn,
+.drawer-close-btn {
+  flex: none;
+  height: 26px;
+  border: 1px solid var(--term-border);
+  border-radius: 3px;
+  color: var(--term-muted);
+  background: var(--term-surface);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.drawer-pin-btn {
+  padding: 0 6px;
+  white-space: nowrap;
+}
+
+.drawer-pin-btn.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.drawer-close-btn {
+  width: 26px;
+  font-size: 14px;
+  line-height: 1;
 }
 
 .drawer-tab-btn:hover {
@@ -742,6 +767,120 @@
   color: var(--term-muted);
   line-height: 1.5;
   background: var(--term-subtle);
+}
+
+.command-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.command-row {
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.command-row.is-focused {
+  border-color: var(--term-border);
+  background: var(--term-subtle);
+}
+
+.command-row-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.command-row-tag {
+  flex: none;
+  padding: 1px 4px;
+  border: 1px solid var(--term-border);
+  border-radius: 2px;
+  color: var(--term-muted);
+  background: var(--term-surface);
+  font: 700 8.5px var(--mono);
+}
+
+.command-row-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--term-ink);
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-row-code {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--term-muted);
+  font: 10.5px var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-row-code.is-missing {
+  color: var(--term-warning);
+}
+
+.command-row-note {
+  margin: 6px 0 0;
+  color: var(--term-muted);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.command-row-shells {
+  flex: 1 1 100%;
+  color: var(--term-muted);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.command-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.command-row-fill,
+.command-row-run,
+.command-row-shell {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--term-border);
+  border-radius: 3px;
+  color: var(--term-ink);
+  background: var(--term-surface);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.command-row-run {
+  margin-top: 6px;
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.command-row-actions .command-row-run {
+  margin-top: 0;
+}
+
+.command-row-fill:disabled,
+.command-row-run:disabled,
+.command-row-shell:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .cheat-btn-fill:disabled,
@@ -875,8 +1014,7 @@
 }
 
 .cheat-card,
-.knowledge-action-card,
-.env-card {
+.knowledge-action-card {
   padding: 10px;
   border: 1px solid var(--term-border);
   border-radius: 5px;
@@ -890,8 +1028,7 @@
 }
 
 .cheat-card-top,
-.action-card-header,
-.env-card-header {
+.action-card-header {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -899,8 +1036,7 @@
 }
 
 .cheat-badge,
-.action-badge,
-.env-badge {
+.action-badge {
   padding: 1px 4px;
   border-radius: 2px;
   border: 1px solid var(--term-border);
@@ -918,8 +1054,7 @@
 }
 
 .cheat-expl,
-.action-desc,
-.env-desc {
+.action-desc {
   margin: 0 0 7px;
   color: var(--term-muted);
   font-size: 10.5px;
@@ -982,8 +1117,7 @@
 }
 
 .cheat-btn-run,
-.action-run-btn,
-.env-spawn-btn {
+.action-run-btn {
   height: 24px;
   padding: 0 10px;
   border: 1px solid #c54e35;
@@ -997,8 +1131,7 @@
 }
 
 .cheat-btn-run:hover,
-.action-run-btn:hover,
-.env-spawn-btn:hover {
+.action-run-btn:hover {
   opacity: 0.9;
 }
 
@@ -1008,8 +1141,7 @@
   font: 9.5px var(--mono);
 }
 
-.drawer-intro-card,
-.env-tips-card {
+.drawer-intro-card {
   margin-bottom: 12px;
   padding: 10px 12px;
   border: 1px solid var(--term-border);
@@ -1017,24 +1149,21 @@
   background: var(--term-subtle);
 }
 
-.drawer-intro-card h4,
-.env-tips-card h4 {
+.drawer-intro-card h4 {
   margin: 0 0 5px;
   font-size: 11.5px;
   font-weight: 650;
   color: var(--term-ink);
 }
 
-.drawer-intro-card p,
-.env-tips-card p {
+.drawer-intro-card p {
   margin: 0;
   color: var(--term-muted);
   font-size: 10.5px;
   line-height: 1.5;
 }
 
-.drawer-intro-card code,
-.env-tips-card code {
+.drawer-intro-card code {
   padding: 1px 4px;
   border: 1px solid var(--term-border);
   border-radius: 2px;
@@ -1088,38 +1217,6 @@
   color: var(--term-ink);
 }
 
-/* Env Matrix */
-.env-matrix-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-.env-name {
-  font-size: 12px;
-  color: var(--term-ink);
-}
-
-.env-status-pill {
-  margin-left: auto;
-  padding: 1px 5px;
-  border-radius: 3px;
-  font: 600 9px var(--mono);
-}
-
-.env-status-pill.ok {
-  border: 1px solid rgba(16, 185, 129, 0.3);
-  color: var(--term-success);
-  background: rgba(16, 185, 129, 0.08);
-}
-
-.env-status-pill.fail {
-  border: 1px solid rgba(224, 67, 50, 0.3);
-  color: var(--term-danger);
-  background: rgba(224, 67, 50, 0.08);
-}
-
 /* --------------------------------------------------------------------------
    5. Multi-Theme Calibration (Dark, Navy, Purple)
    -------------------------------------------------------------------------- */
@@ -1157,8 +1254,7 @@
 }
 
 .app-shell[data-theme='navy'] .cheat-btn-run,
-.app-shell[data-theme='navy'] .action-run-btn,
-.app-shell[data-theme='navy'] .env-spawn-btn {
+.app-shell[data-theme='navy'] .action-run-btn {
   background: #0284c7;
   border-color: #38bdf8;
   color: #fff;
@@ -1181,8 +1277,7 @@
 }
 
 .app-shell[data-theme='purple'] .cheat-btn-run,
-.app-shell[data-theme='purple'] .action-run-btn,
-.app-shell[data-theme='purple'] .env-spawn-btn {
+.app-shell[data-theme='purple'] .action-run-btn {
   background: #9333ea;
   border-color: #c084fc;
   color: #fff;
