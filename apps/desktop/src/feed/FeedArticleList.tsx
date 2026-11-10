@@ -13,6 +13,7 @@ interface FeedArticleListProps {
   onMarkAllRead: () => void;
   onOpenGalaxy: () => void;
   onPlayAudio?: (article: FeedArticle) => void;
+  translatedIds?: ReadonlySet<string>;
 }
 
 function formatRelativeTime(timestamp: number): string {
@@ -43,6 +44,7 @@ export const FeedArticleList: React.FC<FeedArticleListProps> = ({
   onMarkAllRead,
   onOpenGalaxy,
   onPlayAudio,
+  translatedIds,
 }) => {
   return (
     <section className="feed-article-pane">
@@ -270,6 +272,9 @@ export const FeedArticleList: React.FC<FeedArticleListProps> = ({
                   )}
                   {isUnread && (
                     <span className="feed-tag-pill is-unread">未读</span>
+                  )}
+                  {translatedIds?.has(article.id) && (
+                    <span className="feed-tag-pill is-translated">已译</span>
                   )}
                   {article.starred && (
                     <span className="feed-tag-pill is-starred">★ 星标</span>

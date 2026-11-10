@@ -121,10 +121,15 @@ pub async fn generate_epub_exam_batch(
             return Err("题目的来源小节无效，请重试该批。".into());
         }
         let mut used_source_ids = std::collections::HashSet::new();
-        let source_refs = item.source_ids.iter().filter(|id| used_source_ids.insert(**id)).map(|id| ExamSourceRef {
-            href: sources[*id].href.clone(),
-            label: sources[*id].label.clone(),
-        }).collect::<Vec<_>>();
+        let source_refs = item
+            .source_ids
+            .iter()
+            .filter(|id| used_source_ids.insert(**id))
+            .map(|id| ExamSourceRef {
+                href: sources[*id].href.clone(),
+                label: sources[*id].label.clone(),
+            })
+            .collect::<Vec<_>>();
         let category = match item.question_type {
             EpubExamQuestionType::SingleChoice
             | EpubExamQuestionType::MultipleChoice
@@ -194,7 +199,14 @@ pub async fn generate_epub_exam_batch(
     {
         return Err("AI 返回的题型配比与设置不一致，请重试该批。".into());
     }
-    if sources.iter().any(|source| !questions.iter().any(|question| question.source_refs.iter().any(|reference| reference.href == source.href))) {
+    if sources.iter().any(|source| {
+        !questions.iter().any(|question| {
+            question
+                .source_refs
+                .iter()
+                .any(|reference| reference.href == source.href)
+        })
+    }) {
         return Err("这一批未覆盖所有来源小节，请重试该批。".into());
     }
     Ok(questions)

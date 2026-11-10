@@ -1,10 +1,25 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createMarkdownPreviewMinimap } from '../workbench/markdown-minimap';
+import { FeedTranslationControls } from './FeedTranslationControls';
+import type { FeedProviderSettings } from './feed-translation-api';
 import type { FeedArticle } from './types';
+import { useFeedArticleTranslation } from './use-feed-article-translation';
 
 interface FeedReaderViewProps {
   article: FeedArticle | null;
   hasChannels?: boolean;
+  provider: FeedProviderSettings;
+  channelSelected: boolean;
+  channelBusy: boolean;
+  channelDone: number;
+  channelTotal: number;
+  channelStatus: string;
+  translationEpoch: number;
+  onTranslateChannel: () => void;
+  onCancelChannel: () => void;
+  onArticleBusyChange: (busy: boolean) => void;
+  onArticleTranslated: (articleId: string) => void;
+  onArticleTranslationCleared: (articleId: string) => void;
   onToggleRead: (articleId: string, currentStatus: 'read' | 'unread') => void;
   onToggleStar: (articleId: string, currentStarred: boolean) => void;
   onGenerateMindmap: (articleId: string, title: string) => void;
@@ -112,6 +127,18 @@ function extractArticleText(article: FeedArticle): string {
 export const FeedReaderView: React.FC<FeedReaderViewProps> = ({
   article,
   hasChannels = false,
+  provider,
+  channelSelected,
+  channelBusy,
+  channelDone,
+  channelTotal,
+  channelStatus,
+  translationEpoch,
+  onTranslateChannel,
+  onCancelChannel,
+  onArticleBusyChange,
+  onArticleTranslated,
+  onArticleTranslationCleared,
   onToggleRead,
   onToggleStar,
   onGenerateMindmap,
@@ -124,6 +151,17 @@ export const FeedReaderView: React.FC<FeedReaderViewProps> = ({
   const [generatingMap, setGeneratingMap] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const minimapHostRef = useRef<HTMLDivElement>(null);
+  const contentWrapRef = useRef<HTMLElement>(null);
+  const translation = useFeedArticleTranslation({
+    article,
+    provider,
+    wrapRef: contentWrapRef,
+    translationEpoch,
+    channelBusy,
+    onTranslated: onArticleTranslated,
+    onCleared: onArticleTranslationCleared,
+    onBusyChange: onArticleBusyChange,
+  });
 
   const articleMarkdown = useMemo(() => {
     return article ? extractArticleText(article) : '';
@@ -342,6 +380,24 @@ export const FeedReaderView: React.FC<FeedReaderViewProps> = ({
             </svg>
             <span>{generatingMap ? '导图生成中...' : '转思维导图'}</span>
           </button>
+          <FeedTranslationControls
+            phase={translation.phase}
+            translating={translation.translating}
+            progress={translation.progress}
+            bilingual={translation.bilingual}
+            channelSelected={channelSelected}
+            channelBusy={channelBusy}
+            channelDone={channelDone}
+            channelTotal={channelTotal}
+            onTranslate={() => void translation.translate(false)}
+            onRetranslate={() => void translation.translate(true)}
+            onToggle={translation.toggleBilingual}
+            onCopy={() => void translation.copyTranslation()}
+            onClear={() => void translation.clearTranslation()}
+            onCancelArticle={translation.cancel}
+            onTranslateChannel={onTranslateChannel}
+            onCancelChannel={onCancelChannel}
+          />
         </div>
 
         <div className="feed-reader-toolbar-right">
@@ -429,9 +485,16 @@ export const FeedReaderView: React.FC<FeedReaderViewProps> = ({
         </div>
       </div>
 
+      {(channelStatus || translation.notice) && (
+        <div className="feed-translation-status" role="status">
+          {channelStatus && <span>{channelStatus}</span>}
+          {translation.notice && <span>{translation.notice}</span>}
+        </div>
+      )}
+
       <div className="feed-reader-body-container">
         <div ref={scrollRef} className="feed-reader-scroll">
-          <article className="feed-reader-content-wrap">
+          <article ref={contentWrapRef} className="feed-reader-content-wrap">
             <h1 className="feed-article-headline">{article.title}</h1>
 
             <div className="feed-article-byline">
@@ -500,7 +563,10 @@ export const FeedReaderView: React.FC<FeedReaderViewProps> = ({
             ) : article.summary ? (
               <div className="feed-article-body">
                 <p>{article.summary}</p>
-                <p style={{ marginTop: '24px' }}>
+                <div
+                  className="feed-article-original-link"
+                  style={{ marginTop: '24px' }}
+                >
                   <button
                     type="button"
                     className="feed-header-btn is-primary"
@@ -508,11 +574,16 @@ export const FeedReaderView: React.FC<FeedReaderViewProps> = ({
                   >
                     本文章仅提供摘要，点击前往原文阅读全文
                   </button>
-                </p>
+                </div>
               </div>
             ) : (
               <div className="feed-article-body">
-                <p style={{ color: 'var(--muted)' }}>暂无正文内容</p>
+                <p
+                  className="feed-article-placeholder"
+                  style={{ color: 'var(--muted)' }}
+                >
+                  暂无正文内容
+                </p>
                 <button
                   type="button"
                   className="feed-header-btn is-primary"

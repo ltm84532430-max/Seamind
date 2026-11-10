@@ -891,7 +891,10 @@ fn classify_js_error_code(code: Option<&str>) -> &'static str {
     }
 }
 
-async fn open_capture_window(app: &AppHandle, label: &str) -> Result<WindowGuard, TranscriptFailure> {
+async fn open_capture_window(
+    app: &AppHandle,
+    label: &str,
+) -> Result<WindowGuard, TranscriptFailure> {
     let mut last_error = None;
     for (attempt, raw_url) in HOST_URLS.iter().enumerate() {
         let attempt_label = format!("{label}-{attempt}");
@@ -1203,7 +1206,10 @@ mod tests {
         let err = parse_result_value(embed_disabled).unwrap_err();
         // Embed-disabled must map to requestBlocked rather than videoUnavailable so yt-dlp/browser
         // fallbacks can still fetch captions for videos that only disallow third-party embeds.
-        assert_eq!(classify_js_error_code(Some("embedDisabled")), "requestBlocked");
+        assert_eq!(
+            classify_js_error_code(Some("embedDisabled")),
+            "requestBlocked"
+        );
         let _ = err;
     }
 }

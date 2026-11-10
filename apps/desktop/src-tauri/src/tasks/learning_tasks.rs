@@ -1378,15 +1378,16 @@ fn list_habit_categories(conn: &Connection) -> Result<Vec<HabitCategory>, String
     let mut stmt = conn
         .prepare("SELECT id,name,position,is_builtin FROM habit_categories ORDER BY position,name")
         .map_err(db_error)?;
-    let rows = stmt.query_map([], |row| {
-        Ok(HabitCategory {
-            id: row.get(0)?,
-            name: row.get(1)?,
-            position: row.get(2)?,
-            is_builtin: row.get::<_, i64>(3)? != 0,
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(HabitCategory {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                position: row.get(2)?,
+                is_builtin: row.get::<_, i64>(3)? != 0,
+            })
         })
-    })
-    .map_err(db_error)?;
+        .map_err(db_error)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
 }
 
@@ -1397,20 +1398,21 @@ fn list_habits(conn: &Connection) -> Result<Vec<Habit>, String> {
              FROM habits ORDER BY active DESC,category_id,title COLLATE NOCASE,id",
         )
         .map_err(db_error)?;
-    let rows = stmt.query_map([], |row| {
-        Ok(Habit {
-            id: row.get(0)?,
-            title: row.get(1)?,
-            note: row.get(2)?,
-            category_id: row.get(3)?,
-            interval_days: row.get(4)?,
-            start_date: row.get(5)?,
-            active: row.get::<_, i64>(6)? != 0,
-            created_at: row.get(7)?,
-            updated_at: row.get(8)?,
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(Habit {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                note: row.get(2)?,
+                category_id: row.get(3)?,
+                interval_days: row.get(4)?,
+                start_date: row.get(5)?,
+                active: row.get::<_, i64>(6)? != 0,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
         })
-    })
-    .map_err(db_error)?;
+        .map_err(db_error)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
 }
 
@@ -1573,7 +1575,10 @@ fn write_habit_category(
         )
         .optional()
         .map_err(db_error)?;
-    if name_owner.as_deref().is_some_and(|owner| owner != id.as_str()) {
+    if name_owner
+        .as_deref()
+        .is_some_and(|owner| owner != id.as_str())
+    {
         return Err("已经存在同名分类。".to_string());
     }
     let position: i64 = if existing_builtin.is_some() {
@@ -1693,7 +1698,14 @@ fn set_habit_occurrence(conn: &Connection, input: &HabitOccurrenceInput) -> Resu
          VALUES (?1,?2,?3,?4,?5,?6)
          ON CONFLICT(habit_id,due_date) DO UPDATE SET status=excluded.status,
            completed_at=excluded.completed_at,updated_at=excluded.updated_at",
-        params![id, input.habit_id, due_date, status, completed_at, timestamp],
+        params![
+            id,
+            input.habit_id,
+            due_date,
+            status,
+            completed_at,
+            timestamp
+        ],
     )
     .map_err(db_error)?;
     Ok(())
@@ -1714,10 +1726,7 @@ pub fn learning_tasks_habits_snapshot(
 }
 
 #[tauri::command(async)]
-pub fn learning_tasks_habits_save(
-    app: AppHandle,
-    input: HabitInput,
-) -> Result<Habit, String> {
+pub fn learning_tasks_habits_save(app: AppHandle, input: HabitInput) -> Result<Habit, String> {
     write_habit(&open(&app)?, &input, now())
 }
 
@@ -1747,10 +1756,7 @@ pub fn learning_tasks_habits_save_category(
 }
 
 #[tauri::command(async)]
-pub fn learning_tasks_habits_delete_category(
-    app: AppHandle,
-    id: String,
-) -> Result<(), String> {
+pub fn learning_tasks_habits_delete_category(app: AppHandle, id: String) -> Result<(), String> {
     delete_habit_category(&open(&app)?, &id)
 }
 

@@ -1326,22 +1326,16 @@ pub async fn literature_ai_discover(
         return Err("输入内容过长，请控制在 1000 字符以内。".to_string());
     }
 
-    let completion = crate::request_chat_completion(
-        &base_url,
-        &model,
-        AI_DISCOVERY_SYSTEM_PROMPT,
-        prompt,
-        6000,
-    )
-    .await?;
+    let completion =
+        crate::request_chat_completion(&base_url, &model, AI_DISCOVERY_SYSTEM_PROMPT, prompt, 6000)
+            .await?;
 
     let cleaned_json = crate::strip_json_code_fence(&completion);
-    let plan: AiLiteratureDiscoveryPlan = serde_json::from_str(cleaned_json).unwrap_or_else(|_| {
-        AiLiteratureDiscoveryPlan {
+    let plan: AiLiteratureDiscoveryPlan =
+        serde_json::from_str(cleaned_json).unwrap_or_else(|_| AiLiteratureDiscoveryPlan {
             queries: vec![prompt.to_string()],
             landmarks: Vec::new(),
-        }
-    });
+        });
 
     let mut combined: Vec<LiteratureSearchResult> = Vec::new();
     let mut landmark_reasons: std::collections::HashMap<String, String> =

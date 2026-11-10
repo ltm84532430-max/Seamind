@@ -1,9 +1,10 @@
-import React, {
+import {
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
 } from 'react';
@@ -12,10 +13,12 @@ import {
   createGalaxyPhysicsState,
   DEFAULT_GALAXY_PHYSICS_CONFIG,
   stepGalaxyPhysics,
+  type GalaxyPhysicsConfig,
   type GalaxyPhysicsState,
 } from '../graph/galaxy-physics';
 import type { CategoryStats, FeedArticle, FeedChannelWithStats } from './types';
 import { buildFeedGalaxyGraph, type FeedGalaxyNode } from './feed-galaxy-model';
+import '../ebook/book-galaxy-view.css';
 import './feed-galaxy-view.css';
 
 interface FeedGalaxyGraphViewProps {
@@ -25,6 +28,7 @@ interface FeedGalaxyGraphViewProps {
   onSelectCategory: (category: string) => void;
   onSelectChannel: (channelId: string) => void;
   onSelectArticle: (article: FeedArticle) => void;
+  onPlayAudio?: (article: FeedArticle) => void;
   loadChannelArticles: (channelId: string) => Promise<FeedArticle[]>;
 }
 
@@ -39,13 +43,11 @@ interface NodePointerState {
   startX: number;
   startY: number;
   moved: boolean;
-  offsetX: number;
-  offsetY: number;
 }
 
 const ROOT_ID = 'sun-root';
 const MAX_ZOOM = 3.5;
-const MIN_ZOOM = 0.22;
+const MIN_ZOOM = 0.18;
 
 function truncate(text: string, limit: number) {
   const characters = Array.from(text);
@@ -66,6 +68,13 @@ function formatDate(timestamp?: number) {
       }).format(date);
 }
 
+function nodeHaystack(node: FeedGalaxyNode) {
+  return [node.label, node.sublabel, node.url, node.categoryName, node.summary]
+    .filter(Boolean)
+    .join('\n')
+    .toLocaleLowerCase();
+}
+
 export function FeedGalaxyGraphView({
   categories,
   channels,
@@ -73,19 +82,33 @@ export function FeedGalaxyGraphView({
   onSelectCategory,
   onSelectChannel,
   onSelectArticle,
+  onPlayAudio,
   loadChannelArticles,
 }: FeedGalaxyGraphViewProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
-  const [dimensions, setDimensions] = useState({ width: 900, height: 650 });
-  const [pan, setPan] = useState<Point>({ x: 450, y: 325 });
-  const [scale, setScale] = useState(0.55);
+  const [dimensions, setDimensions] = useState({ width: 920, height: 640 });
+  const [pan, setPan] = useState<Point>({ x: 460, y: 320 });
+  const [scale, setScale] = useState(0.62);
   const [isPanning, setIsPanning] = useState(false);
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
-  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
-  const [selectedNodeId, setSelectedNodeId] = useState(ROOT_ID);
+  const [hoveredNode, setHoveredNode] = useState<{
+    node: FeedGalaxyNode;
+    clientX: number;
+    clientY: number;
+  } | null>(null);
+  const [pinnedCardNodeId, setPinnedCardNodeId] = useState<string | null>(null);
   const [searchFilter, setSearchFilter] = useState('');
   const [onlyUnread, setOnlyUnread] = useState(false);
   const [onlyAudio, setOnlyAudio] = useState(false);
+  const [showSatellites, setShowSatellites] = useState(true);
+  const [showOrbitGuides, setShowOrbitGuides] = useState(false);
+  const [controlsOpen, setControlsOpen] = useState(false);
+  const [nodeSizeScale, setNodeSizeScale] = useState(1);
+  const [labelFadeThreshold, setLabelFadeThreshold] = useState(0.68);
+  const [physicsConfig, setPhysicsConfig] = useState<GalaxyPhysicsConfig>(
+    DEFAULT_GALAXY_PHYSICS_CONFIG,
+  );
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(
     () => new Set(),
   );
@@ -100,14 +123,21 @@ export function FeedGalaxyGraphView({
     Record<string, string>
   >({});
   const [livePositions, setLivePositions] = useState<Record<string, Point>>({});
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fullscreenFallback, setFullscreenFallback] = useState(false);
 
   const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
   const dragRef = useRef<NodePointerState | null>(null);
   const physicsRef = useRef<GalaxyPhysicsState | null>(null);
+  const physicsConfigRef = useRef(physicsConfig);
+  physicsConfigRef.current = physicsConfig;
   const rafRef = useRef<number | null>(null);
   const hasInitializedView = useRef(false);
+  const dimensionsRef = useRef(dimensions);
+  dimensionsRef.current = dimensions;
   const positionsRef = useRef(livePositions);
   positionsRef.current = livePositions;
+
   const graph = useMemo(
     () =>
       buildFeedGalaxyGraph(
@@ -127,6 +157,53 @@ export function FeedGalaxyGraphView({
     [graph.nodes, graph.links],
   );
 
+  const searchQuery = searchFilter.trim().toLocaleLowerCase();
+
+  const visibleNodeIds = useMemo(() => {
+    const visible = new Set<string>([ROOT_ID]);
+    const collapsed = (node: FeedGalaxyNode) => {
+      let parentId = node.parentId;
+      while (parentId) {
+        if (collapsedCategories.has(parentId)) return true;
+        parentId = nodeById.get(parentId)?.parentId;
+      }
+      return false;
+    };
+    for (const node of graph.nodes) {
+      if (node.kind === 'sun') continue;
+      if (!showSatellites && node.kind === 'satellite') continue;
+      const revealedBySearch =
+        Boolean(searchQuery) && nodeHaystack(node).includes(searchQuery);
+      if (collapsed(node) && !revealedBySearch) continue;
+      visible.add(node.id);
+    }
+    return visible;
+  }, [collapsedCategories, graph.nodes, nodeById, searchQuery, showSatellites]);
+
+  const filteredNodeIds = useMemo(() => {
+    if (!searchQuery && !onlyUnread && !onlyAudio) return null;
+    const matches = new Set<string>([ROOT_ID]);
+    const direct = graph.nodes.filter((node) => {
+      if (node.kind === 'sun') return false;
+      if (searchQuery && !nodeHaystack(node).includes(searchQuery))
+        return false;
+      if (onlyUnread && node.unreadCount === 0) return false;
+      if (onlyAudio && node.audioCount === 0) return false;
+      return true;
+    });
+    for (const node of direct) {
+      let current: FeedGalaxyNode | undefined = node;
+      while (current) {
+        matches.add(current.id);
+        current = current.parentId ? nodeById.get(current.parentId) : undefined;
+      }
+    }
+    return matches;
+  }, [graph.nodes, nodeById, onlyAudio, onlyUnread, searchQuery]);
+
+  const visibleIdsRef = useRef(visibleNodeIds);
+  visibleIdsRef.current = visibleNodeIds;
+
   const syncPositions = useCallback((state: GalaxyPhysicsState) => {
     const next: Record<string, Point> = {};
     for (const body of state.bodyList) next[body.id] = { x: body.x, y: body.y };
@@ -143,7 +220,8 @@ export function FeedGalaxyGraphView({
       }
       const keepRunning = stepGalaxyPhysics(
         state,
-        DEFAULT_GALAXY_PHYSICS_CONFIG,
+        physicsConfigRef.current,
+        visibleIdsRef.current,
       );
       syncPositions(state);
       if (keepRunning) rafRef.current = requestAnimationFrame(tick);
@@ -177,8 +255,9 @@ export function FeedGalaxyGraphView({
       })),
     };
     const state = createGalaxyPhysicsState(seededGraph);
-    for (let index = 0; index < 8; index++)
-      stepGalaxyPhysics(state, DEFAULT_GALAXY_PHYSICS_CONFIG);
+    for (let index = 0; index < 8; index++) {
+      stepGalaxyPhysics(state, physicsConfigRef.current, visibleIdsRef.current);
+    }
     physicsRef.current = state;
     syncPositions(state);
     startSimulation();
@@ -190,15 +269,29 @@ export function FeedGalaxyGraphView({
     };
   }, [graph, startSimulation, syncPositions]);
 
+  useEffect(() => {
+    reheatSimulation(0.38);
+  }, [
+    physicsConfig.repelStrength,
+    physicsConfig.linkDistanceScale,
+    physicsConfig.linkTension,
+    physicsConfig.centerGravity,
+    onlyUnread,
+    onlyAudio,
+    showSatellites,
+    visibleNodeIds,
+    reheatSimulation,
+  ]);
+
   const fitView = useCallback(
     (width = dimensions.width, height = dimensions.height) => {
-      const graphWidth = Math.max(300, graph.bounds.maxX - graph.bounds.minX);
-      const graphHeight = Math.max(300, graph.bounds.maxY - graph.bounds.minY);
+      const graphWidth = Math.max(320, graph.bounds.maxX - graph.bounds.minX);
+      const graphHeight = Math.max(320, graph.bounds.maxY - graph.bounds.minY);
       const nextScale = Math.min(
         1.15,
         Math.max(
-          0.24,
-          Math.min((width - 72) / graphWidth, (height - 72) / graphHeight),
+          0.28,
+          Math.min((width - 96) / graphWidth, (height - 96) / graphHeight),
         ),
       );
       setScale(nextScale);
@@ -227,119 +320,128 @@ export function FeedGalaxyGraphView({
         fitView(next.width, next.height);
       } else {
         setPan((current) => ({
-          x: current.x + (next.width - dimensions.width) / 2,
-          y: current.y + (next.height - dimensions.height) / 2,
+          x: current.x + (next.width - dimensionsRef.current.width) / 2,
+          y: current.y + (next.height - dimensionsRef.current.height) / 2,
         }));
       }
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [dimensions.height, dimensions.width, fitView]);
+  }, [fitView]);
 
-  const visibleNodeIds = useMemo(() => {
-    const query = searchFilter.trim().toLocaleLowerCase();
-    const directMatches = query
-      ? graph.nodes.filter((node) =>
-          [node.label, node.sublabel, node.url, node.categoryName]
-            .filter(Boolean)
-            .some((value) => value!.toLocaleLowerCase().includes(query)),
-        )
-      : graph.nodes;
-    const visible = new Set<string>([ROOT_ID]);
+  useEffect(() => {
+    const syncFullscreenState = () => {
+      setIsFullscreen(
+        document.fullscreenElement === containerRef.current ||
+          fullscreenFallback,
+      );
+    };
+    document.addEventListener('fullscreenchange', syncFullscreenState);
+    return () =>
+      document.removeEventListener('fullscreenchange', syncFullscreenState);
+  }, [fullscreenFallback]);
 
-    for (const node of directMatches) {
-      if (onlyUnread && node.kind !== 'sun' && node.unreadCount === 0) continue;
-      if (onlyAudio && node.kind !== 'sun' && node.audioCount === 0) continue;
-      if (!query && isInsideCollapsedCategory(node)) continue;
-      if (node.kind === 'satellite' && !expandedChannelId) continue;
+  useEffect(() => {
+    if (!fullscreenFallback) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setFullscreenFallback(false);
+      setIsFullscreen(false);
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [fullscreenFallback]);
 
-      let current: FeedGalaxyNode | undefined = node;
-      while (current) {
-        visible.add(current.id);
-        current = current.parentId ? nodeById.get(current.parentId) : undefined;
-      }
+  const toggleFullscreen = useCallback(async () => {
+    const container = containerRef.current;
+    if (!container) return;
+    if (document.fullscreenElement === container) {
+      await document.exitFullscreen().catch(() => undefined);
+      return;
     }
-
-    if (query) {
-      for (const node of graph.nodes) {
-        if (node.kind === 'sun') visible.add(node.id);
-      }
+    if (fullscreenFallback) {
+      setFullscreenFallback(false);
+      setIsFullscreen(false);
+      return;
     }
-    return visible;
-  }, [
-    collapsedCategories,
-    expandedChannelId,
-    graph.nodes,
-    nodeById,
-    onlyAudio,
-    onlyUnread,
-    searchFilter,
-  ]);
-
-  function isInsideCollapsedCategory(node: FeedGalaxyNode) {
-    let parentId = node.parentId;
-    while (parentId) {
-      if (collapsedCategories.has(parentId)) return true;
-      parentId = nodeById.get(parentId)?.parentId;
+    try {
+      await container.requestFullscreen();
+      setIsFullscreen(true);
+    } catch {
+      setFullscreenFallback(true);
+      setIsFullscreen(true);
     }
-    return false;
-  }
-
-  const spotlightIds = useMemo(() => {
-    const activeId = draggingNodeId ?? hoveredNodeId ?? selectedNodeId;
-    if (!activeId || activeId === ROOT_ID) return null;
-    return activeId ? (adjacency.get(activeId) ?? new Set([activeId])) : null;
-  }, [adjacency, draggingNodeId, hoveredNodeId, selectedNodeId]);
-
-  const selectedNode = selectedNodeId
-    ? nodeById.get(selectedNodeId)
-    : undefined;
-  const selectedChannel = selectedNode?.channelId
-    ? channels.find((channel) => channel.id === selectedNode.channelId)
-    : undefined;
-  const selectedArticle = selectedNode?.articleId
-    ? articlesByChannel[selectedNode.channelId ?? '']?.find(
-        (article) => article.id === selectedNode.articleId,
-      )
-    : undefined;
-
-  const centerNode = useCallback(
-    (node: FeedGalaxyNode) => {
-      const position = positionsRef.current[node.id] ?? node;
-      setPan({
-        x: dimensions.width / 2 - position.x * scale,
-        y: dimensions.height / 2 - position.y * scale,
-      });
-      setSelectedNodeId(node.id);
-    },
-    [dimensions.height, dimensions.width, scale],
-  );
-
-  const focusSearchResult = () => {
-    const query = searchFilter.trim().toLocaleLowerCase();
-    if (!query) return;
-    const match = graph.nodes.find((node) =>
-      [node.label, node.sublabel, node.url, node.categoryName]
-        .filter(Boolean)
-        .some((value) => value!.toLocaleLowerCase().includes(query)),
-    );
-    if (match) centerNode(match);
-  };
+  }, [fullscreenFallback]);
 
   const clientToWorld = useCallback(
     (clientX: number, clientY: number) => {
       const rect = canvasRef.current?.getBoundingClientRect();
       const localX = clientX - (rect?.left ?? 0);
       const localY = clientY - (rect?.top ?? 0);
-      return { x: (localX - pan.x) / scale, y: (localY - pan.y) / scale };
+      return {
+        x: (localX - pan.x) / scale,
+        y: (localY - pan.y) / scale,
+        localX,
+        localY,
+      };
     },
     [pan.x, pan.y, scale],
   );
 
+  const focusNode = useCallback(
+    (nodeId: string, targetScale = 0.95) => {
+      const node = nodeById.get(nodeId);
+      const position = positionsRef.current[nodeId] ?? node;
+      if (!node || !position) return;
+      const canvasRect = canvasRef.current?.getBoundingClientRect();
+      setScale(targetScale);
+      setPan({
+        x: Math.round(
+          (canvasRect?.width ?? dimensions.width) / 2 -
+            position.x * targetScale,
+        ),
+        y: Math.round(
+          (canvasRect?.height ?? dimensions.height) / 2 -
+            position.y * targetScale,
+        ),
+      });
+      setPinnedCardNodeId(nodeId);
+    },
+    [dimensions.height, dimensions.width, nodeById],
+  );
+
+  const handleResetView = () => {
+    const state = createGalaxyPhysicsState(graph);
+    for (let index = 0; index < 8; index++) {
+      stepGalaxyPhysics(state, physicsConfigRef.current, visibleIdsRef.current);
+    }
+    physicsRef.current = state;
+    syncPositions(state);
+    startSimulation();
+    const rect = canvasRef.current?.getBoundingClientRect();
+    fitView(rect?.width ?? dimensions.width, rect?.height ?? dimensions.height);
+    setSearchFilter('');
+  };
+
+  const handleResetPhysicsDefaults = () => {
+    setPhysicsConfig(DEFAULT_GALAXY_PHYSICS_CONFIG);
+    setNodeSizeScale(1);
+    setLabelFadeThreshold(0.68);
+    setOnlyUnread(false);
+    setOnlyAudio(false);
+    setShowSatellites(true);
+    setShowOrbitGuides(false);
+  };
+
   const handleCanvasPointerDown = (
     event: ReactPointerEvent<HTMLDivElement>,
   ) => {
-    if ((event.target as HTMLElement).closest('.feed-galaxy-node')) return;
+    const target = event.target as HTMLElement;
+    if (target.closest('.galaxy-node-group')) return;
+    if (target.closest('.book-galaxy-controls-drawer')) return;
+    if (target.closest('.lp-star-video-card')) return;
+    if (target.closest('.lp-starmap-dock')) return;
     panStartRef.current = {
       x: event.clientX,
       y: event.clientY,
@@ -355,34 +457,22 @@ export function FeedGalaxyGraphView({
     node: FeedGalaxyNode,
   ) => {
     event.stopPropagation();
-    const body = physicsRef.current?.bodies.get(node.id);
-    if (!body || node.kind === 'sun') {
-      dragRef.current = {
-        node,
-        pointerId: event.pointerId,
-        startX: event.clientX,
-        startY: event.clientY,
-        moved: false,
-        offsetX: 0,
-        offsetY: 0,
-      };
-    } else {
+    dragRef.current = {
+      node,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+    };
+    if (node.kind !== 'sun') {
       const point = clientToWorld(event.clientX, event.clientY);
-      const offsetX = body.x - point.x;
-      const offsetY = body.y - point.y;
-      body.fx = body.x;
-      body.fy = body.y;
-      dragRef.current = {
-        node,
-        pointerId: event.pointerId,
-        startX: event.clientX,
-        startY: event.clientY,
-        moved: false,
-        offsetX,
-        offsetY,
-      };
-      setDraggingNodeId(node.id);
-      reheatSimulation(0.35);
+      const body = physicsRef.current?.bodies.get(node.id);
+      if (body) {
+        body.fx = point.x;
+        body.fy = point.y;
+        setDraggingNodeId(node.id);
+        reheatSimulation(0.35);
+      }
     }
     canvasRef.current?.setPointerCapture(event.pointerId);
   };
@@ -395,14 +485,15 @@ export function FeedGalaxyGraphView({
       if (
         Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) >=
         4
-      )
+      ) {
         drag.moved = true;
+      }
       if (drag.node.kind !== 'sun') {
         const point = clientToWorld(event.clientX, event.clientY);
         const body = physicsRef.current?.bodies.get(drag.node.id);
         if (body) {
-          body.fx = point.x + drag.offsetX;
-          body.fy = point.y + drag.offsetY;
+          body.fx = point.x;
+          body.fy = point.y;
           reheatSimulation(0.28);
         }
       }
@@ -419,10 +510,11 @@ export function FeedGalaxyGraphView({
     const drag = dragRef.current;
     if (drag) {
       const body = physicsRef.current?.bodies.get(drag.node.id);
-      if (body) {
+      if (body && drag.node.kind !== 'sun') {
         if (drag.node.kind === 'cluster') {
-          body.anchorX = body.x;
-          body.anchorY = body.y;
+          const sun = physicsRef.current?.bodies.get(ROOT_ID);
+          body.anchorX = body.x - (sun?.x ?? 0);
+          body.anchorY = body.y - (sun?.y ?? 0);
         } else if (body.parentId) {
           const parent = physicsRef.current?.bodies.get(body.parentId);
           if (parent) {
@@ -436,30 +528,37 @@ export function FeedGalaxyGraphView({
         body.fy = null;
         reheatSimulation(0.22);
       }
+      const wasClick = !drag.moved;
       dragRef.current = null;
       setDraggingNodeId(null);
-      setSelectedNodeId(drag.node.id);
-      if (!drag.moved && drag.node.kind === 'planet' && drag.node.channelId) {
-        // 点击订阅源按需展开最近文章；再次点击则收起文章节点。
-        void toggleChannelArticles(drag.node.channelId);
-      }
       try {
         event.currentTarget.releasePointerCapture(event.pointerId);
       } catch {
-        // 宿主视图可能已释放指针捕获，这里允许重复释放。
+        // 宿主视图可能已释放指针捕获。
+      }
+      if (wasClick) {
+        setPinnedCardNodeId((current) =>
+          current === drag.node.id ? null : drag.node.id,
+        );
       }
       return;
     }
     if (!isPanning) return;
+    const moved = Math.hypot(
+      event.clientX - panStartRef.current.x,
+      event.clientY - panStartRef.current.y,
+    );
     setIsPanning(false);
     try {
       event.currentTarget.releasePointerCapture(event.pointerId);
     } catch {
-      // 宿主视图可能已释放指针捕获，这里允许重复释放。
+      // 宿主视图可能已释放指针捕获。
     }
+    if (moved < 4) setPinnedCardNodeId(null);
   };
 
   const handleWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement).closest('.lp-star-video-card')) return;
     event.preventDefault();
     const nextScale = Math.min(
       MAX_ZOOM,
@@ -477,16 +576,17 @@ export function FeedGalaxyGraphView({
   };
 
   async function expandChannel(channelId: string) {
-    setSelectedNodeId(`feed:${channelId}`);
     setExpandedChannelId(channelId);
+    setPinnedCardNodeId(`feed:${channelId}`);
     setArticleLoadErrors((current) => {
       if (!current[channelId]) return current;
       const next = { ...current };
       delete next[channelId];
       return next;
     });
-    if (Object.prototype.hasOwnProperty.call(articlesByChannel, channelId))
+    if (Object.prototype.hasOwnProperty.call(articlesByChannel, channelId)) {
       return;
+    }
     setLoadingChannelId(channelId);
     try {
       const recentArticles = await loadChannelArticles(channelId);
@@ -514,7 +614,7 @@ export function FeedGalaxyGraphView({
     if (loadingChannelId === channelId) return;
     if (expandedChannelId === channelId && !articleLoadErrors[channelId]) {
       setExpandedChannelId(null);
-      setSelectedNodeId(`feed:${channelId}`);
+      setPinnedCardNodeId(`feed:${channelId}`);
       return;
     }
     await expandChannel(channelId);
@@ -531,406 +631,1053 @@ export function FeedGalaxyGraphView({
     reheatSimulation(0.32);
   };
 
+  const openArticle = (article: FeedArticle) => {
+    if (article.audioUrl && onPlayAudio) {
+      onPlayAudio(article);
+      return;
+    }
+    onSelectArticle(article);
+  };
+
   const nodePosition = (node: FeedGalaxyNode) => livePositions[node.id] ?? node;
+  const pinnedNode = pinnedCardNodeId
+    ? nodeById.get(pinnedCardNodeId)
+    : undefined;
+  const activeHoveredId =
+    draggingNodeId ?? hoveredNode?.node.id ?? pinnedCardNodeId ?? null;
+  const spotlightIds = activeHoveredId
+    ? (adjacency.get(activeHoveredId) ?? new Set([activeHoveredId]))
+    : null;
+
+  const orbitGuideRadii = useMemo(() => {
+    const radii = new Set<number>();
+    for (const node of graph.nodes) {
+      if (node.kind === 'cluster' && node.orbitRadius) {
+        radii.add(
+          Math.round(node.orbitRadius * physicsConfig.linkDistanceScale),
+        );
+      }
+    }
+    return [...radii].sort((a, b) => a - b);
+  }, [graph.nodes, physicsConfig.linkDistanceScale]);
+
+  const sunRadius = Math.round(32 * nodeSizeScale);
+  const clusterFontSize = Math.max(
+    9.5,
+    Math.min(13.5, 11.2 / Math.pow(scale, 0.28)),
+  );
+  const planetFontSize = Math.max(
+    8.5,
+    Math.min(11.5, 9.8 / Math.pow(scale, 0.28)),
+  );
+
+  const pinnedChannel = pinnedNode?.channelId
+    ? channels.find((channel) => channel.id === pinnedNode.channelId)
+    : undefined;
+  const pinnedArticle = pinnedNode?.articleId
+    ? articlesByChannel[pinnedNode.channelId ?? '']?.find(
+        (article) => article.id === pinnedNode.articleId,
+      )
+    : undefined;
+  const topUnreadChannels = graph.nodes
+    .filter((node) => node.kind === 'planet' && node.unreadCount > 0)
+    .sort((a, b) => b.unreadCount - a.unreadCount)
+    .slice(0, 6);
+  const focusUnread = () => {
+    const target = topUnreadChannels[0];
+    if (target) focusNode(target.id, 1);
+  };
+
+  const focusListedNode = (node: FeedGalaxyNode) => {
+    if (node.parentId && collapsedCategories.has(node.parentId)) {
+      const parentId = node.parentId;
+      setCollapsedCategories((current) => {
+        const next = new Set(current);
+        next.delete(parentId);
+        return next;
+      });
+    }
+    focusNode(node.id, 1.05);
+  };
+
+  const pinnedCardScreenPos = useMemo(() => {
+    if (!pinnedNode) return null;
+    const position = livePositions[pinnedNode.id] ?? pinnedNode;
+    const canvasRect = canvasRef.current?.getBoundingClientRect();
+    const containerRect = containerRef.current?.getBoundingClientRect();
+    const offsetX = (canvasRect?.left ?? 0) - (containerRect?.left ?? 0);
+    const offsetY = (canvasRect?.top ?? 0) - (containerRect?.top ?? 0);
+    const rawX = offsetX + pan.x + position.x * scale;
+    const rawY = offsetY + pan.y + position.y * scale;
+    const cardW = 348;
+    const cardH = pinnedNode.kind === 'satellite' ? 430 : 390;
+    const width = containerRect?.width ?? dimensions.width;
+    const height = containerRect?.height ?? dimensions.height;
+    const preferRight = rawX + 24 + cardW <= width - 14;
+    const left = preferRight
+      ? Math.max(14, rawX + 22)
+      : Math.max(14, Math.min(rawX - cardW - 22, width - cardW - 14));
+    const top = Math.max(54, Math.min(rawY - 60, height - cardH - 14));
+    return { left: Math.round(left), top: Math.round(top) };
+  }, [
+    dimensions.height,
+    dimensions.width,
+    livePositions,
+    pan.x,
+    pan.y,
+    pinnedNode,
+    scale,
+  ]);
+
+  const renderedCount = Math.max(0, visibleNodeIds.size - 1);
 
   return (
-    <section className="feed-galaxy-overlay" aria-label="RSS 订阅关系图">
-      <header className="feed-galaxy-header">
-        <div className="feed-galaxy-title-wrap">
-          <span className="feed-galaxy-overline">RSS / KNOWLEDGE GRAPH</span>
-          <strong className="feed-galaxy-title">订阅关系</strong>
-          <span className="feed-galaxy-stats">
-            {graph.stats.categoryCount} 分类 · {graph.stats.channelCount} 订阅源
-            · {graph.stats.unreadCount} 未读 · {graph.stats.audioCount} 音频
-          </span>
+    <section
+      ref={containerRef}
+      className={`book-galaxy-container feed-galaxy-root${fullscreenFallback ? ' is-fullscreen-fallback' : ''}`}
+      aria-label="RSS 订阅关系图"
+    >
+      <div className="book-galaxy-header">
+        <div className="book-galaxy-title-wrap">
+          <span className="book-galaxy-badge">订阅星系</span>
+          <span className="book-galaxy-title">订阅总览</span>
+          <div className="book-galaxy-stats">
+            <span className="book-galaxy-stat-pill">
+              节点: {renderedCount}/{Math.max(0, graph.nodes.length - 1)}
+            </span>
+            <span>·</span>
+            <span className="book-galaxy-stat-pill">
+              未读: {graph.stats.unreadCount}
+            </span>
+            <span>·</span>
+            <span className="book-galaxy-stat-pill">
+              订阅源: {graph.stats.channelCount}
+            </span>
+            <span>·</span>
+            <span className="book-galaxy-stat-pill">
+              音频: {graph.stats.audioCount}
+            </span>
+          </div>
         </div>
-        <div className="feed-galaxy-actions">
+        <div className="book-galaxy-actions">
           <input
+            type="text"
+            className="book-galaxy-search-input"
             value={searchFilter}
             onChange={(event) => setSearchFilter(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === 'Enter') focusSearchResult();
+              if (event.key !== 'Enter') return;
+              const match = graph.nodes.find(
+                (node) =>
+                  node.kind !== 'sun' &&
+                  nodeHaystack(node).includes(searchQuery),
+              );
+              if (match) focusNode(match.id, 0.95);
             }}
             aria-label="搜索分类、订阅源或文章"
-            placeholder="搜索分类、订阅源或文章…"
+            placeholder="检索分类、订阅源或文章…"
           />
           <button
             type="button"
-            className={onlyUnread ? 'is-active' : ''}
+            className={`book-galaxy-btn ${onlyUnread ? 'is-active' : ''}`}
+            title="未读节点保持高亮，已读节点变暗"
             aria-pressed={onlyUnread}
             onClick={() => setOnlyUnread((value) => !value)}
           >
-            未读
+            仅看未读
           </button>
           <button
             type="button"
-            className={onlyAudio ? 'is-active' : ''}
-            aria-pressed={onlyAudio}
-            onClick={() => setOnlyAudio((value) => !value)}
+            className={`book-galaxy-btn ${controlsOpen ? 'is-active' : ''}`}
+            title="打开力导向物理与视图参数"
+            onClick={() => setControlsOpen((value) => !value)}
           >
-            含播客
+            图谱参数
           </button>
-          <button type="button" onClick={() => fitView()}>
-            适应画布
+          <button
+            type="button"
+            className="book-galaxy-btn"
+            title="重排力导向布局并自适应居中缩放"
+            onClick={handleResetView}
+          >
+            重置视角
           </button>
-          <button type="button" className="is-primary" onClick={onClose}>
+          <button
+            type="button"
+            className={`book-galaxy-btn${isFullscreen ? ' is-active' : ''}`}
+            title={isFullscreen ? '退出全屏（Esc）' : '全屏显示星图'}
+            aria-label={isFullscreen ? '退出全屏' : '全屏显示星图'}
+            aria-pressed={isFullscreen}
+            onClick={() => void toggleFullscreen()}
+          >
+            {isFullscreen ? '退出全屏' : '全屏'}
+          </button>
+          <button
+            type="button"
+            className="book-galaxy-btn is-primary"
+            onClick={onClose}
+          >
             返回列表
           </button>
         </div>
-      </header>
+      </div>
 
-      <div className="feed-galaxy-body">
-        <div
-          ref={canvasRef}
-          className={`feed-galaxy-canvas ${isPanning ? 'is-panning' : ''}`}
-          onPointerDown={handleCanvasPointerDown}
-          onPointerMove={handleCanvasPointerMove}
-          onPointerUp={handleCanvasPointerUp}
-          onPointerCancel={handleCanvasPointerUp}
-          onWheel={handleWheel}
+      {controlsOpen && (
+        <aside
+          className="book-galaxy-controls-drawer"
+          aria-label="图谱物理与显示参数"
         >
-          <svg
-            className="feed-galaxy-svg"
-            width={dimensions.width}
-            height={dimensions.height}
-            role="group"
-            aria-label="RSS 分类和订阅源拓扑"
-          >
-            <g transform={`translate(${pan.x}, ${pan.y}) scale(${scale})`}>
-              {graph.links.map((link) => {
-                if (
-                  !visibleNodeIds.has(link.source) ||
-                  !visibleNodeIds.has(link.target)
-                )
-                  return null;
-                const sourceNode = nodeById.get(link.source);
-                const targetNode = nodeById.get(link.target);
-                if (!sourceNode || !targetNode) return null;
-                const source = nodePosition(sourceNode);
-                const target = nodePosition(targetNode);
-                const highlighted =
-                  !spotlightIds ||
-                  spotlightIds.has(link.source) ||
-                  spotlightIds.has(link.target);
-                return (
-                  <line
-                    key={`${link.source}:${link.target}`}
-                    className="feed-galaxy-link"
-                    x1={source.x}
-                    y1={source.y}
-                    x2={target.x}
-                    y2={target.y}
-                    style={{
-                      stroke: link.color ?? '#697784',
-                      opacity: highlighted ? 0.48 : 0.1,
-                    }}
+          <div className="book-galaxy-controls-head">
+            <span>GRAPH ENGINE · 图谱参数</span>
+            <button
+              type="button"
+              className="book-galaxy-controls-close"
+              onClick={() => setControlsOpen(false)}
+            >
+              关闭
+            </button>
+          </div>
+          <div className="book-galaxy-controls-section">
+            <div className="book-galaxy-controls-kicker">
+              拓扑过滤 · FILTERS
+            </div>
+            <label className="book-galaxy-toggle-row">
+              <span>仅高亮未读节点</span>
+              <input
+                type="checkbox"
+                checked={onlyUnread}
+                onChange={(event) => setOnlyUnread(event.target.checked)}
+              />
+            </label>
+            <label className="book-galaxy-toggle-row">
+              <span>仅高亮含音频的节点</span>
+              <input
+                type="checkbox"
+                checked={onlyAudio}
+                onChange={(event) => setOnlyAudio(event.target.checked)}
+              />
+            </label>
+            <label className="book-galaxy-toggle-row">
+              <span>显示文章卫星</span>
+              <input
+                type="checkbox"
+                checked={showSatellites}
+                onChange={(event) => setShowSatellites(event.target.checked)}
+              />
+            </label>
+            <label className="book-galaxy-toggle-row">
+              <span>显示同心轨道参考环</span>
+              <input
+                type="checkbox"
+                checked={showOrbitGuides}
+                onChange={(event) => setShowOrbitGuides(event.target.checked)}
+              />
+            </label>
+          </div>
+          <div className="book-galaxy-controls-section">
+            <div className="book-galaxy-controls-kicker">
+              视觉表现 · DISPLAY
+            </div>
+            <div className="book-galaxy-slider-row">
+              <div className="book-galaxy-slider-label">
+                <span>节点尺寸比例</span>
+                <strong>{nodeSizeScale.toFixed(2)}x</strong>
+              </div>
+              <input
+                type="range"
+                min="0.6"
+                max="1.6"
+                step="0.05"
+                value={nodeSizeScale}
+                onChange={(event) =>
+                  setNodeSizeScale(Number(event.target.value))
+                }
+              />
+            </div>
+            <div className="book-galaxy-slider-row">
+              <div className="book-galaxy-slider-label">
+                <span>标签显现缩放阈值 (LOD)</span>
+                <strong>{labelFadeThreshold.toFixed(2)}</strong>
+              </div>
+              <input
+                type="range"
+                min="0.35"
+                max="1.25"
+                step="0.05"
+                value={labelFadeThreshold}
+                onChange={(event) =>
+                  setLabelFadeThreshold(Number(event.target.value))
+                }
+              />
+            </div>
+          </div>
+          <div className="book-galaxy-controls-section">
+            <div className="book-galaxy-controls-kicker">力场引擎 · FORCES</div>
+            <div className="book-galaxy-slider-row">
+              <div className="book-galaxy-slider-label">
+                <span>节点电荷排斥力</span>
+                <strong>{physicsConfig.repelStrength.toFixed(2)}</strong>
+              </div>
+              <input
+                type="range"
+                min="0.3"
+                max="2.2"
+                step="0.05"
+                value={physicsConfig.repelStrength}
+                onChange={(event) =>
+                  setPhysicsConfig((current) => ({
+                    ...current,
+                    repelStrength: Number(event.target.value),
+                  }))
+                }
+              />
+            </div>
+            <div className="book-galaxy-slider-row">
+              <div className="book-galaxy-slider-label">
+                <span>弹簧连线距离</span>
+                <strong>{physicsConfig.linkDistanceScale.toFixed(2)}x</strong>
+              </div>
+              <input
+                type="range"
+                min="0.55"
+                max="1.6"
+                step="0.05"
+                value={physicsConfig.linkDistanceScale}
+                onChange={(event) =>
+                  setPhysicsConfig((current) => ({
+                    ...current,
+                    linkDistanceScale: Number(event.target.value),
+                  }))
+                }
+              />
+            </div>
+            <div className="book-galaxy-slider-row">
+              <div className="book-galaxy-slider-label">
+                <span>中心向心聚拢力</span>
+                <strong>{physicsConfig.centerGravity.toFixed(2)}</strong>
+              </div>
+              <input
+                type="range"
+                min="0.3"
+                max="1.8"
+                step="0.05"
+                value={physicsConfig.centerGravity}
+                onChange={(event) =>
+                  setPhysicsConfig((current) => ({
+                    ...current,
+                    centerGravity: Number(event.target.value),
+                  }))
+                }
+              />
+            </div>
+          </div>
+          <div className="book-galaxy-controls-foot">
+            <button
+              type="button"
+              className="book-galaxy-btn"
+              onClick={() => reheatSimulation(0.65)}
+            >
+              重新演化力场
+            </button>
+            <button
+              type="button"
+              className="book-galaxy-btn"
+              onClick={handleResetPhysicsDefaults}
+            >
+              恢复默认
+            </button>
+          </div>
+        </aside>
+      )}
+
+      <div
+        ref={canvasRef}
+        className={`book-galaxy-canvas ${isPanning ? 'is-panning' : ''} ${
+          draggingNodeId ? 'is-dragging-node' : ''
+        }`}
+        onPointerDown={handleCanvasPointerDown}
+        onPointerMove={handleCanvasPointerMove}
+        onPointerUp={handleCanvasPointerUp}
+        onPointerCancel={handleCanvasPointerUp}
+        onWheel={handleWheel}
+      >
+        <svg
+          className="book-galaxy-svg"
+          width={dimensions.width}
+          height={dimensions.height}
+          role="group"
+          aria-label="RSS 分类和订阅源拓扑"
+        >
+          <defs>
+            <radialGradient id="feedStarSunGrad" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="#ff7b54" />
+              <stop offset="70%" stopColor="#e05638" />
+              <stop offset="100%" stopColor="#992e18" />
+            </radialGradient>
+          </defs>
+          <g transform={`translate(${pan.x}, ${pan.y}) scale(${scale})`}>
+            {showOrbitGuides &&
+              orbitGuideRadii.map((radius) => (
+                <circle
+                  key={`orbit-ring-${radius}`}
+                  cx={0}
+                  cy={0}
+                  r={radius}
+                  className="galaxy-orbit-ring"
+                />
+              ))}
+
+            {graph.links.map((link) => {
+              if (
+                !visibleNodeIds.has(link.source) ||
+                !visibleNodeIds.has(link.target)
+              ) {
+                return null;
+              }
+              const sourceNode = nodeById.get(link.source);
+              const targetNode = nodeById.get(link.target);
+              if (!sourceNode || !targetNode) return null;
+              const source = nodePosition(sourceNode);
+              const target = nodePosition(targetNode);
+              const isSpotlightLink = spotlightIds
+                ? (link.source === activeHoveredId &&
+                    spotlightIds.has(link.target)) ||
+                  (link.target === activeHoveredId &&
+                    spotlightIds.has(link.source)) ||
+                  (nodeById.get(activeHoveredId || '')?.kind === 'cluster' &&
+                    spotlightIds.has(link.source) &&
+                    spotlightIds.has(link.target))
+                : false;
+              const isDimmedBySpotlight =
+                Boolean(spotlightIds) && !isSpotlightLink;
+              const isSearchDimmed =
+                Boolean(filteredNodeIds) &&
+                !filteredNodeIds?.has(link.source) &&
+                !filteredNodeIds?.has(link.target);
+              return (
+                <line
+                  key={`${link.source}:${link.target}`}
+                  x1={source.x}
+                  y1={source.y}
+                  x2={target.x}
+                  y2={target.y}
+                  className={`galaxy-link-orbit ${
+                    link.source === ROOT_ID ? 'is-root-spoke' : 'is-intra'
+                  } ${isSpotlightLink ? 'is-spotlight' : ''} ${
+                    isDimmedBySpotlight || isSearchDimmed ? 'is-dimmed' : ''
+                  }`}
+                  style={
+                    link.color
+                      ? ({ '--link-color': link.color } as CSSProperties)
+                      : undefined
+                  }
+                />
+              );
+            })}
+
+            {graph.nodes.map((node) => {
+              if (!visibleNodeIds.has(node.id)) return null;
+              const position = nodePosition(node);
+              const isSun = node.kind === 'sun';
+              const isCluster = node.kind === 'cluster';
+              const isPlanet = node.kind === 'planet';
+              const isStarredArticle =
+                node.kind === 'satellite' && node.starred;
+              const isMatch = filteredNodeIds
+                ? filteredNodeIds.has(node.id)
+                : true;
+              const isHoveredSelf = activeHoveredId === node.id;
+              const isPinnedSelf = pinnedCardNodeId === node.id;
+              const isSpotlightNeighbor = spotlightIds
+                ? spotlightIds.has(node.id)
+                : false;
+              const isDimmed =
+                (Boolean(spotlightIds) && !isSpotlightNeighbor) ||
+                (Boolean(filteredNodeIds) && !isMatch);
+              const hasUnread = node.unreadCount > 0;
+              const isCaughtUp =
+                isPlanet && node.totalCount > 0 && node.unreadCount === 0;
+              const degreeBoost = Math.min(3.5, (node.degree ?? 0) * 0.22);
+              const displayRadius = isSun
+                ? sunRadius
+                : isCluster
+                  ? (9.5 + degreeBoost) * nodeSizeScale
+                  : isPlanet
+                    ? ((hasUnread || isCaughtUp ? 6.2 : 4.8) +
+                        degreeBoost * 0.3) *
+                      nodeSizeScale
+                    : isStarredArticle
+                      ? 6.4 * nodeSizeScale
+                      : 3.1 * nodeSizeScale;
+              const t1 = labelFadeThreshold * 0.55;
+              const t2 = labelFadeThreshold;
+              const forceShowLabel =
+                isHoveredSelf ||
+                isPinnedSelf ||
+                isSpotlightNeighbor ||
+                hasUnread ||
+                isCaughtUp ||
+                (Boolean(filteredNodeIds) && isMatch);
+              let planetLabelOpacity = 0;
+              if (forceShowLabel) planetLabelOpacity = 1;
+              else if (scale >= t2) planetLabelOpacity = 0.88;
+              else if (scale > t1) {
+                planetLabelOpacity = ((scale - t1) / (t2 - t1)) * 0.85;
+              }
+              const showSatelliteLabel =
+                isHoveredSelf ||
+                isPinnedSelf ||
+                isSpotlightNeighbor ||
+                scale >= labelFadeThreshold * 1.15 ||
+                (isStarredArticle && scale >= labelFadeThreshold * 0.72);
+              const cleanPlanetText =
+                scale >= 0.88 ||
+                isHoveredSelf ||
+                isPinnedSelf ||
+                isSpotlightNeighbor
+                  ? truncate(node.label, 20)
+                  : node.shortCode || truncate(node.label, 10);
+              const prominent = hasUnread || isCaughtUp || isPinnedSelf;
+
+              return (
+                <g
+                  key={node.id}
+                  className={`galaxy-node-group is-${node.kind} ${
+                    isStarredArticle ? 'is-note' : ''
+                  } ${prominent || isStarredArticle ? 'has-note' : 'no-note'} ${
+                    isHoveredSelf || isPinnedSelf ? 'is-hovered' : ''
+                  } ${isSpotlightNeighbor ? 'is-neighbor' : ''} ${
+                    isDimmed ? 'is-dimmed' : ''
+                  }`}
+                  transform={`translate(${position.x}, ${position.y})`}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${node.label}，${node.unreadCount} 篇未读`}
+                  onPointerDown={(event) => handleNodePointerDown(event, node)}
+                  onDoubleClick={(event) => {
+                    event.stopPropagation();
+                    if (node.kind === 'planet' && node.channelId) {
+                      onSelectChannel(node.channelId);
+                      return;
+                    }
+                    if (node.kind === 'cluster' && node.categoryName) {
+                      onSelectCategory(node.categoryName);
+                      return;
+                    }
+                    if (node.kind !== 'satellite' || !node.articleId) return;
+                    const article = articlesByChannel[
+                      node.channelId ?? ''
+                    ]?.find((item) => item.id === node.articleId);
+                    if (article) openArticle(article);
+                  }}
+                  onMouseEnter={(event) => {
+                    if (dragRef.current) return;
+                    const rect = canvasRef.current?.getBoundingClientRect();
+                    setHoveredNode({
+                      node,
+                      clientX: event.clientX - (rect?.left ?? 0),
+                      clientY: event.clientY - (rect?.top ?? 0),
+                    });
+                  }}
+                  onMouseLeave={() => {
+                    if (dragRef.current) return;
+                    setHoveredNode(null);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    event.preventDefault();
+                    setPinnedCardNodeId(node.id);
+                  }}
+                >
+                  <circle
+                    cx={0}
+                    cy={0}
+                    r={Math.max(14, displayRadius + 6)}
+                    fill="transparent"
                   />
-                );
-              })}
-
-              {graph.nodes
-                .filter((node) => visibleNodeIds.has(node.id))
-                .map((node) => {
-                  const position = nodePosition(node);
-                  const highlighted =
-                    !spotlightIds || spotlightIds.has(node.id);
-                  const focused = selectedNodeId === node.id;
-                  const labelVisible =
-                    node.kind === 'sun' ||
-                    node.kind === 'cluster' ||
-                    scale >= 0.68 ||
-                    hoveredNodeId === node.id ||
-                    focused;
-                  const nodeClass = [
-                    'feed-galaxy-node',
-                    `is-${node.kind}`,
-                    focused ? 'is-selected' : '',
-                    !highlighted ? 'is-dimmed' : '',
-                  ]
-                    .filter(Boolean)
-                    .join(' ');
-
-                  return (
-                    <g
-                      key={node.id}
-                      className={nodeClass}
-                      transform={`translate(${position.x}, ${position.y})`}
-                      role="button"
-                      tabIndex={0}
-                      aria-label={`${node.label}，${node.unreadCount} 篇未读`}
-                      onPointerDown={(event) =>
-                        handleNodePointerDown(event, node)
-                      }
-                      onMouseEnter={() => setHoveredNodeId(node.id)}
-                      onMouseLeave={() => setHoveredNodeId(null)}
-                      onFocus={() => setHoveredNodeId(node.id)}
-                      onBlur={() => setHoveredNodeId(null)}
-                      onKeyDown={(event) => {
-                        if (event.key !== 'Enter' && event.key !== ' ') return;
-                        event.preventDefault();
-                        setSelectedNodeId(node.id);
-                        if (node.kind === 'planet' && node.channelId)
-                          void toggleChannelArticles(node.channelId);
-                      }}
-                    >
-                      {node.kind === 'sun' ? (
-                        <>
-                          <circle
-                            r={node.radius}
-                            className="feed-galaxy-root-mark"
-                          />
-                          <text className="feed-galaxy-root-count" y={4}>
-                            {node.unreadCount}
-                          </text>
-                        </>
-                      ) : node.kind === 'cluster' ? (
-                        <>
-                          <circle
-                            r={node.radius}
-                            className="feed-galaxy-cluster-mark"
-                            style={
-                              {
-                                '--node-color': node.color,
-                              } as React.CSSProperties
-                            }
-                          />
-                          <text className="feed-galaxy-cluster-count" y={4}>
-                            {node.channelCount}
-                          </text>
-                        </>
-                      ) : node.kind === 'planet' ? (
-                        <>
-                          <circle
-                            r={node.radius}
-                            className="feed-galaxy-feed-mark"
-                            style={
-                              {
-                                '--node-color': node.color,
-                              } as React.CSSProperties
-                            }
-                          />
-                          {node.unreadCount > 0 && (
-                            <circle
-                              className="feed-galaxy-unread-indicator"
-                              cx={node.radius - 1}
-                              cy={-node.radius + 1}
-                              r={3.5}
-                            />
-                          )}
-                        </>
+                  {isPlanet && hasUnread && (
+                    <circle cx={0} cy={0} className="galaxy-current-pulse" />
+                  )}
+                  {(isCaughtUp || isPinnedSelf) && !isSun && (
+                    <circle
+                      cx={0}
+                      cy={0}
+                      r={displayRadius + 3.5}
+                      className="galaxy-note-halo"
+                      style={{ '--node-color': node.color } as CSSProperties}
+                    />
+                  )}
+                  {isSun ? (
+                    <>
+                      <circle
+                        cx={0}
+                        cy={0}
+                        r={sunRadius}
+                        fill="url(#feedStarSunGrad)"
+                        className="galaxy-node-circle"
+                      />
+                      <text x={0} y={5} className="galaxy-sun-monogram">
+                        订阅
+                      </text>
+                      <text
+                        x={0}
+                        y={sunRadius + 18}
+                        className="galaxy-sun-title"
+                      >
+                        订阅总览
+                      </text>
+                    </>
+                  ) : (
+                    <>
+                      {isStarredArticle ? (
+                        <rect
+                          x={-displayRadius}
+                          y={-displayRadius}
+                          width={displayRadius * 2}
+                          height={displayRadius * 2}
+                          rx={1.5}
+                          fill={node.color}
+                          className="galaxy-node-circle galaxy-note-node-mark"
+                          style={
+                            { '--node-color': node.color } as CSSProperties
+                          }
+                        />
                       ) : (
-                        <>
-                          <circle
-                            r={node.radius}
-                            className={`feed-galaxy-article-mark ${node.readStatus === 'unread' ? 'is-unread' : ''} ${node.starred ? 'is-starred' : ''}`}
-                          />
-                          {node.audioUrl && (
-                            <circle
-                              className="feed-galaxy-audio-mark"
-                              cx={0}
-                              cy={0}
-                              r={2.2}
-                            />
-                          )}
-                        </>
+                        <circle
+                          cx={0}
+                          cy={0}
+                          r={displayRadius}
+                          fill={node.color}
+                          className="galaxy-node-circle"
+                          style={
+                            { '--node-color': node.color } as CSSProperties
+                          }
+                        />
                       )}
-                      {labelVisible && (
+                      {isCluster && (
                         <text
-                          className="feed-galaxy-node-label"
-                          y={node.radius + (node.kind === 'sun' ? 22 : 17)}
+                          x={0}
+                          y={displayRadius + 14}
+                          className="galaxy-node-label"
+                          style={{ fontSize: `${clusterFontSize}px` }}
                         >
-                          {truncate(
-                            node.label,
-                            node.kind === 'satellite' ? 23 : 18,
-                          )}
+                          {scale >= 0.65 ||
+                          isHoveredSelf ||
+                          isPinnedSelf ||
+                          isSpotlightNeighbor
+                            ? truncate(node.label, 18)
+                            : node.shortCode || truncate(node.label, 8)}
                         </text>
                       )}
-                    </g>
-                  );
-                })}
-            </g>
-          </svg>
-          <div
-            className="feed-galaxy-canvas-controls"
-            aria-label="图谱视角"
-            onPointerDown={(event) => event.stopPropagation()}
-          >
-            <button
-              type="button"
-              onClick={() =>
-                setScale((value) => Math.min(MAX_ZOOM, value * 1.15))
-              }
-              aria-label="放大"
-            >
-              +
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                setScale((value) => Math.max(MIN_ZOOM, value / 1.15))
-              }
-              aria-label="缩小"
-            >
-              −
-            </button>
-            <span>{Math.round(scale * 100)}%</span>
-          </div>
+                      {isPlanet && planetLabelOpacity > 0.04 && (
+                        <text
+                          x={0}
+                          y={displayRadius + 11}
+                          className={`galaxy-planet-badge ${
+                            prominent || isHoveredSelf ? 'is-prominent' : ''
+                          }`}
+                          style={{
+                            fontSize: `${planetFontSize}px`,
+                            opacity: planetLabelOpacity,
+                          }}
+                        >
+                          {cleanPlanetText}
+                        </text>
+                      )}
+                      {node.kind === 'satellite' && showSatelliteLabel && (
+                        <text
+                          x={0}
+                          y={displayRadius + 10}
+                          className="galaxy-node-sublabel"
+                          style={{ fontSize: `${planetFontSize * 0.9}px` }}
+                        >
+                          {truncate(node.label, 14)}
+                        </text>
+                      )}
+                    </>
+                  )}
+                </g>
+              );
+            })}
+          </g>
+        </svg>
+
+        <div className="book-galaxy-hud-hint">
+          <span>单击星点：弹出订阅卡片</span>
+          <span>·</span>
+          <span>双击星点：打开列表或文章</span>
+          <span>·</span>
+          <span>拖拽：物理牵引星簇</span>
+          <span>·</span>
+          <span>滚轮：缩放 ({Math.round(scale * 100)}%)</span>
         </div>
 
-        <aside className="feed-galaxy-details" aria-live="polite">
-          {selectedNode ? (
-            <>
-              <div className="feed-galaxy-detail-heading">
-                <span className="feed-galaxy-overline">
-                  {selectedNode.kind === 'sun'
-                    ? 'OVERVIEW'
-                    : selectedNode.kind === 'cluster'
-                      ? 'CATEGORY'
-                      : selectedNode.kind === 'planet'
-                        ? 'SUBSCRIPTION'
-                        : 'ARTICLE'}
-                </span>
-                <h2>{selectedNode.label}</h2>
-                {selectedNode.sublabel && <p>{selectedNode.sublabel}</p>}
-              </div>
+        <div className="lp-starmap-dock lp-starmap-dock-right">
+          <button
+            type="button"
+            onClick={() =>
+              setScale((value) =>
+                Math.max(MIN_ZOOM, Number((value - 0.12).toFixed(2))),
+              )
+            }
+            title="缩小星图"
+            aria-label="缩小"
+          >
+            −
+          </button>
+          <span className="lp-starmap-zoom-readout">
+            {Math.round(scale * 100)}%
+          </span>
+          <button
+            type="button"
+            onClick={() =>
+              setScale((value) =>
+                Math.min(MAX_ZOOM, Number((value + 0.12).toFixed(2))),
+              )
+            }
+            title="放大星图"
+            aria-label="放大"
+          >
+            +
+          </button>
+          <button type="button" onClick={handleResetView}>
+            适配全景
+          </button>
+          {topUnreadChannels.length > 0 && (
+            <button type="button" onClick={focusUnread}>
+              定位未读
+            </button>
+          )}
+        </div>
 
-              <dl className="feed-galaxy-detail-metrics">
+        {hoveredNode &&
+          !draggingNodeId &&
+          hoveredNode.node.id !== pinnedCardNodeId && (
+            <div
+              className="book-galaxy-tooltip"
+              style={{
+                left: Math.min(hoveredNode.clientX, dimensions.width - 280),
+                top: Math.min(hoveredNode.clientY, dimensions.height - 150),
+              }}
+            >
+              <div className="book-galaxy-tooltip-head">
+                <span>
+                  {hoveredNode.node.kind === 'sun'
+                    ? '订阅总览'
+                    : hoveredNode.node.label}
+                </span>
+                <span className="book-galaxy-badge">
+                  {hoveredNode.node.kind === 'sun'
+                    ? '星系核心'
+                    : hoveredNode.node.kind === 'cluster'
+                      ? hoveredNode.node.shortCode || '分类'
+                      : hoveredNode.node.kind === 'planet'
+                        ? hoveredNode.node.shortCode || '订阅源'
+                        : hoveredNode.node.starred
+                          ? '标星文章'
+                          : '文章'}
+                </span>
+              </div>
+              {hoveredNode.node.categoryName &&
+                hoveredNode.node.kind !== 'cluster' && (
+                  <div className="book-galaxy-tooltip-meta">
+                    所属分类：{hoveredNode.node.categoryName}
+                  </div>
+                )}
+              <div className="book-galaxy-tooltip-meta">
+                未读 {hoveredNode.node.unreadCount}
+                {hoveredNode.node.kind !== 'satellite'
+                  ? ` · 文章 ${hoveredNode.node.totalCount} · 音频 ${hoveredNode.node.audioCount}`
+                  : hoveredNode.node.audioUrl
+                    ? ' · 含音频'
+                    : ''}
+              </div>
+              <div
+                className={`book-galaxy-tooltip-status ${
+                  hoveredNode.node.unreadCount > 0
+                    ? 'is-has-note'
+                    : 'is-no-note'
+                }`}
+              >
+                <span>
+                  {hoveredNode.node.kind === 'planet' &&
+                  hoveredNode.node.unreadCount > 0
+                    ? '● 有未读文章（单击展开卡片）'
+                    : hoveredNode.node.kind === 'planet' &&
+                        hoveredNode.node.totalCount > 0
+                      ? '● 该订阅源已读完'
+                      : '单击星点查看操作'}
+                </span>
+              </div>
+            </div>
+          )}
+      </div>
+
+      {pinnedNode && pinnedCardScreenPos && (
+        <aside
+          className="lp-star-video-card"
+          style={
+            {
+              left: pinnedCardScreenPos.left,
+              top: pinnedCardScreenPos.top,
+              '--star-accent': pinnedNode.color,
+            } as CSSProperties
+          }
+          aria-label="星点订阅卡片"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          {pinnedNode.kind === 'sun' || pinnedNode.kind === 'cluster' ? (
+            <>
+              <div className="lp-star-vcard-stage-head">
+                <div>
+                  <span className="lp-star-vcard-pill">
+                    {pinnedNode.kind === 'sun'
+                      ? '订阅全星系'
+                      : pinnedNode.shortCode || '分类'}
+                  </span>
+                  <h4>{pinnedNode.label}</h4>
+                </div>
+                <button
+                  type="button"
+                  className="lp-star-vcard-close"
+                  onClick={() => setPinnedCardNodeId(null)}
+                  title="关闭卡片"
+                >
+                  ✕
+                </button>
+              </div>
+              {pinnedNode.sublabel && (
+                <p className="lp-star-vcard-note">{pinnedNode.sublabel}</p>
+              )}
+              <dl className="feed-galaxy-card-metrics">
                 <div>
                   <dt>未读</dt>
-                  <dd>{selectedNode.unreadCount.toLocaleString()}</dd>
+                  <dd>{pinnedNode.unreadCount.toLocaleString()}</dd>
                 </div>
                 <div>
                   <dt>文章</dt>
-                  <dd>{selectedNode.totalCount.toLocaleString()}</dd>
+                  <dd>{pinnedNode.totalCount.toLocaleString()}</dd>
                 </div>
-                {selectedNode.kind !== 'satellite' && (
-                  <div>
-                    <dt>音频</dt>
-                    <dd>{selectedNode.audioCount.toLocaleString()}</dd>
-                  </div>
-                )}
-                {selectedNode.kind === 'cluster' && (
+                <div>
+                  <dt>音频</dt>
+                  <dd>{pinnedNode.audioCount.toLocaleString()}</dd>
+                </div>
+                {pinnedNode.kind === 'cluster' && (
                   <div>
                     <dt>订阅源</dt>
-                    <dd>{selectedNode.channelCount ?? 0}</dd>
+                    <dd>{pinnedNode.channelCount ?? 0}</dd>
                   </div>
                 )}
               </dl>
-
-              {selectedNode.kind === 'cluster' && selectedNode.categoryName && (
-                <div className="feed-galaxy-detail-actions">
+              <div className="lp-star-vcard-playlist">
+                {(pinnedNode.kind === 'sun'
+                  ? topUnreadChannels
+                  : graph.nodes.filter(
+                      (node) =>
+                        node.parentId === pinnedNode.id &&
+                        node.kind === 'planet',
+                    )
+                ).map((node) => (
+                  <button
+                    key={node.id}
+                    type="button"
+                    className="lp-star-vcard-playitem"
+                    onClick={() => focusListedNode(node)}
+                  >
+                    <div className="lp-star-vcard-playitem-info">
+                      <strong>
+                        {node.shortCode ? `${node.shortCode} · ` : ''}
+                        {node.label}
+                      </strong>
+                      <span>
+                        未读 {node.unreadCount}
+                        {node.audioCount > 0
+                          ? ` · 音频 ${node.audioCount}`
+                          : ''}
+                      </span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+              <div className="lp-star-vcard-actions">
+                {pinnedNode.kind === 'cluster' && pinnedNode.categoryName && (
+                  <>
+                    <button
+                      type="button"
+                      className="book-galaxy-btn"
+                      onClick={() => toggleCategory(pinnedNode.categoryName!)}
+                    >
+                      {collapsedCategories.has(pinnedNode.id)
+                        ? '展开订阅源'
+                        : '收起订阅源'}
+                    </button>
+                    <button
+                      type="button"
+                      className="book-galaxy-btn is-primary"
+                      onClick={() => onSelectCategory(pinnedNode.categoryName!)}
+                    >
+                      打开分类列表
+                    </button>
+                  </>
+                )}
+                {pinnedNode.kind === 'sun' && topUnreadChannels[0] && (
                   <button
                     type="button"
-                    onClick={() => toggleCategory(selectedNode.categoryName!)}
+                    className="book-galaxy-btn is-primary"
+                    onClick={focusUnread}
                   >
-                    {collapsedCategories.has(selectedNode.id)
-                      ? '展开订阅源'
-                      : '收起订阅源'}
+                    定位未读最多的源
                   </button>
-                  <button
-                    type="button"
-                    className="is-primary"
-                    onClick={() => onSelectCategory(selectedNode.categoryName!)}
+                )}
+              </div>
+            </>
+          ) : pinnedNode.kind === 'planet' && pinnedChannel ? (
+            <>
+              <header className="lp-star-vcard-inst-head">
+                <div className="lp-star-vcard-top-badges">
+                  <span className="lp-star-vcard-pill">
+                    {pinnedNode.shortCode || '订阅源'}
+                  </span>
+                  <span
+                    className={`lp-star-vcard-status ${
+                      pinnedNode.unreadCount > 0
+                        ? 'is-in_progress'
+                        : 'is-completed'
+                    }`}
                   >
-                    打开分类列表
-                  </button>
+                    {pinnedNode.unreadCount > 0
+                      ? `${pinnedNode.unreadCount} 未读`
+                      : '已读完'}
+                  </span>
                 </div>
-              )}
-
-              {selectedNode.kind === 'planet' && selectedChannel && (
-                <>
-                  <div className="feed-galaxy-detail-section">
-                    <span>所属分类</span>
-                    <strong>{selectedChannel.category || '未分类'}</strong>
-                    <span>最近同步</span>
-                    <strong>{formatDate(selectedChannel.lastSyncAt)}</strong>
-                    {selectedChannel.syncStatus === 'error' && (
-                      <p className="feed-galaxy-sync-error">
-                        {selectedChannel.errorMessage || '上次同步失败'}
-                      </p>
-                    )}
-                  </div>
-                  {articleLoadErrors[selectedChannel.id] && (
-                    <p className="feed-galaxy-sync-error" role="alert">
-                      {articleLoadErrors[selectedChannel.id]}
-                    </p>
+                <button
+                  type="button"
+                  className="lp-star-vcard-close"
+                  onClick={() => setPinnedCardNodeId(null)}
+                  title="关闭卡片"
+                >
+                  ✕
+                </button>
+              </header>
+              <div className="feed-galaxy-card-body">
+                <h3 className="lp-star-vcard-title">{pinnedNode.label}</h3>
+                <p className="lp-star-vcard-submeta">{pinnedChannel.url}</p>
+                <p className="lp-star-vcard-note">
+                  所属分类：{pinnedChannel.category || '未分类'}
+                  <br />
+                  最近同步：{formatDate(pinnedChannel.lastSyncAt)}
+                  <br />
+                  文章 {pinnedNode.totalCount} · 音频 {pinnedNode.audioCount}
+                </p>
+                {pinnedChannel.syncStatus === 'error' && (
+                  <p className="feed-galaxy-card-error">
+                    {pinnedChannel.errorMessage || '上次同步失败'}
+                  </p>
+                )}
+                {articleLoadErrors[pinnedChannel.id] && (
+                  <p className="feed-galaxy-card-error" role="alert">
+                    {articleLoadErrors[pinnedChannel.id]}
+                  </p>
+                )}
+                {expandedChannelId === pinnedChannel.id &&
+                  articlesByChannel[pinnedChannel.id]?.length === 0 &&
+                  !articleLoadErrors[pinnedChannel.id] && (
+                    <p className="lp-star-vcard-note">该订阅源近期没有文章。</p>
                   )}
-                  {expandedChannelId === selectedChannel.id &&
-                    articlesByChannel[selectedChannel.id]?.length === 0 &&
-                    !articleLoadErrors[selectedChannel.id] && (
-                      <p className="feed-galaxy-empty-detail">
-                        该订阅源近期没有文章。
-                      </p>
-                    )}
-                  <div className="feed-galaxy-detail-actions">
-                    <button
-                      type="button"
-                      disabled={loadingChannelId === selectedChannel.id}
-                      onClick={() =>
-                        void toggleChannelArticles(selectedChannel.id)
-                      }
-                    >
-                      {loadingChannelId === selectedChannel.id
-                        ? '正在载入…'
-                        : articleLoadErrors[selectedChannel.id]
-                          ? '重试加载文章'
-                          : expandedChannelId === selectedChannel.id
-                            ? '收起最近文章'
-                            : '展开最近文章'}
-                    </button>
-                    <button
-                      type="button"
-                      className="is-primary"
-                      onClick={() => onSelectChannel(selectedChannel.id)}
-                    >
-                      打开订阅源
-                    </button>
-                  </div>
-                </>
-              )}
-
-              {selectedNode.kind === 'satellite' && selectedArticle && (
-                <>
-                  <div className="feed-galaxy-article-summary">
-                    {selectedArticle.imageUrl && (
-                      <img
-                        src={selectedArticle.imageUrl}
-                        alt=""
-                        loading="lazy"
-                      />
-                    )}
-                    <p>{selectedNode.summary || '该文章没有摘要。'}</p>
-                    <span>{formatDate(selectedArticle.publishedAt)}</span>
-                    <span>
-                      {selectedArticle.readStatus === 'unread'
-                        ? '未读'
-                        : '已读'}
-                      {selectedArticle.starred ? ' · 已收藏' : ''}
-                      {selectedArticle.audioUrl ? ' · 含音频' : ''}
-                    </span>
-                  </div>
-                  <div className="feed-galaxy-detail-actions">
-                    <button
-                      type="button"
-                      className="is-primary"
-                      onClick={() => onSelectArticle(selectedArticle)}
-                    >
-                      在阅读栏打开
-                    </button>
-                  </div>
-                </>
-              )}
+              </div>
+              <div className="lp-star-vcard-actions">
+                <button
+                  type="button"
+                  className="book-galaxy-btn"
+                  disabled={loadingChannelId === pinnedChannel.id}
+                  onClick={() => void toggleChannelArticles(pinnedChannel.id)}
+                >
+                  {loadingChannelId === pinnedChannel.id
+                    ? '正在载入…'
+                    : articleLoadErrors[pinnedChannel.id]
+                      ? '重试加载文章'
+                      : expandedChannelId === pinnedChannel.id
+                        ? '收起最近文章'
+                        : '展开最近文章'}
+                </button>
+                <button
+                  type="button"
+                  className="book-galaxy-btn is-primary"
+                  onClick={() => onSelectChannel(pinnedChannel.id)}
+                >
+                  打开订阅源
+                </button>
+              </div>
             </>
           ) : (
-            <p className="feed-galaxy-empty-detail">选择一个节点查看详情。</p>
+            pinnedArticle && (
+              <>
+                <header className="lp-star-vcard-inst-head">
+                  <div className="lp-star-vcard-top-badges">
+                    <span className="lp-star-vcard-pill">
+                      {pinnedNode.starred ? '标星文章' : '文章'}
+                    </span>
+                    <span
+                      className={`lp-star-vcard-status ${
+                        pinnedArticle.readStatus === 'unread'
+                          ? 'is-in_progress'
+                          : 'is-completed'
+                      }`}
+                    >
+                      {pinnedArticle.readStatus === 'unread' ? '未读' : '已读'}
+                      {pinnedArticle.audioUrl ? ' · 含音频' : ''}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="lp-star-vcard-close"
+                    onClick={() => setPinnedCardNodeId(null)}
+                    title="关闭卡片"
+                  >
+                    ✕
+                  </button>
+                </header>
+                <div className="feed-galaxy-card-body">
+                  {pinnedArticle.imageUrl && (
+                    <img
+                      className="feed-galaxy-card-cover"
+                      src={pinnedArticle.imageUrl}
+                      alt=""
+                      loading="lazy"
+                    />
+                  )}
+                  <h3 className="lp-star-vcard-title">{pinnedArticle.title}</h3>
+                  <p className="lp-star-vcard-submeta">
+                    {pinnedArticle.channelTitle} ·{' '}
+                    {formatDate(pinnedArticle.publishedAt)}
+                  </p>
+                  <p className="lp-star-vcard-note">
+                    {pinnedNode.summary || '该文章没有摘要。'}
+                  </p>
+                </div>
+                <div className="lp-star-vcard-actions">
+                  {pinnedArticle.audioUrl && onPlayAudio && (
+                    <button
+                      type="button"
+                      className="book-galaxy-btn"
+                      onClick={() => onPlayAudio(pinnedArticle)}
+                    >
+                      播放音频
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="book-galaxy-btn is-primary"
+                    onClick={() => onSelectArticle(pinnedArticle)}
+                  >
+                    打开文章
+                  </button>
+                </div>
+              </>
+            )
           )}
         </aside>
-      </div>
-
-      <footer className="feed-galaxy-footer">
-        滚轮缩放 · 拖动画布平移 · 拖动节点调整布局 · 点击订阅源展开最近文章 ·
-        选中文章后在阅读栏打开
-      </footer>
+      )}
     </section>
   );
 }

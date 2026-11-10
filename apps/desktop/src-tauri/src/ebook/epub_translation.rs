@@ -98,8 +98,8 @@ fn write_book_store(app: &AppHandle, store: &BookTranslationStore) -> Result<(),
         .ok_or_else(|| "无法获取本地译文存储目录。".to_string())?;
     fs::create_dir_all(parent).map_err(|error| format!("无法创建本地译文目录：{error}"))?;
 
-    let payload = serde_json::to_vec_pretty(store)
-        .map_err(|error| format!("无法序列化译文数据：{error}"))?;
+    let payload =
+        serde_json::to_vec_pretty(store).map_err(|error| format!("无法序列化译文数据：{error}"))?;
 
     let temp_name = format!(
         "{}.{}.tmp",
@@ -152,8 +152,8 @@ pub async fn translate_epub_paragraphs(
         "chapter": chapter_title.chars().take(200).collect::<String>(),
         "paragraphs": paragraphs,
     });
-    let user_content_str = serde_json::to_string(&user_content)
-        .map_err(|_| "翻译请求内容序列化失败。".to_string())?;
+    let user_content_str =
+        serde_json::to_string(&user_content).map_err(|_| "翻译请求内容序列化失败。".to_string())?;
 
     let response = request_chat_completion(
         &base_url,

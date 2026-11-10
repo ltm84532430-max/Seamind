@@ -1,8 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import type { FeedArticle } from './types';
 import {
   feedAsrApi,
+  mergeCaptionCue,
   type FeedAsrCaption,
+  type FeedAsrMode,
   type FeedAsrStatus,
 } from './feed-asr-api';
 
@@ -49,16 +52,40 @@ export const FeedAudioPlayerBar: React.FC<FeedAudioPlayerBarProps> = ({
   const [captionDownload, setCaptionDownload] = useState({
     downloadedBytes: 0,
     totalBytes: 0,
+    label: '',
   });
   const [captionCues, setCaptionCues] = useState<FeedAsrCaption[]>([]);
   const [partialCaption, setPartialCaption] = useState<FeedAsrCaption | null>(
     null,
   );
+  const [captionMode, setCaptionMode] = useState<FeedAsrMode>('podcast');
+  const [playbackSrc, setPlaybackSrc] = useState('');
   const [seekRevision, setSeekRevision] = useState(0);
   const captionSessionRef = useRef<string | null>(null);
+  const captionQueueRef = useRef<FeedAsrCaption[]>([]);
   const captionListenerReadyRef = useRef<Promise<void>>(Promise.resolve());
+  const applyCaptionRef = useRef<(caption: FeedAsrCaption) => void>(
+    () => undefined,
+  );
 
   const audioUrl = article?.audioUrl ?? '';
+
+  applyCaptionRef.current = (caption) => {
+    if (caption.error) {
+      setCaptionError(caption.error);
+      setCaptionEnabled(false);
+      return;
+    }
+    setCaptionError('');
+    if (caption.isFinal) {
+      if (caption.text.trim()) {
+        setCaptionCues((current) => mergeCaptionCue(current, caption));
+      }
+      setPartialCaption(null);
+      return;
+    }
+    if (caption.text.trim()) setPartialCaption(caption);
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -83,21 +110,15 @@ export const FeedAudioPlayerBar: React.FC<FeedAudioPlayerBarProps> = ({
     let unlisten: (() => void) | undefined;
     captionListenerReadyRef.current = feedAsrApi
       .listen((caption) => {
-        if (!mounted || caption.sessionId !== captionSessionRef.current) return;
-        if (caption.error) {
-          setCaptionError(caption.error);
-          setCaptionEnabled(false);
+        if (!mounted) return;
+        if (caption.sessionId !== captionSessionRef.current) {
+          captionQueueRef.current.push(caption);
+          if (captionQueueRef.current.length > 30) {
+            captionQueueRef.current.shift();
+          }
           return;
         }
-        setCaptionError('');
-        if (caption.isFinal) {
-          if (caption.text.trim()) {
-            setCaptionCues((current) => [...current, caption].slice(-40));
-          }
-          setPartialCaption(null);
-        } else {
-          setPartialCaption(caption);
-        }
+        applyCaptionRef.current(caption);
       })
       .then((stopListening) => {
         if (mounted) unlisten = stopListening;
@@ -118,10 +139,31 @@ export const FeedAudioPlayerBar: React.FC<FeedAudioPlayerBarProps> = ({
     setCaptionCues([]);
     setPartialCaption(null);
     setCaptionError('');
+    captionQueueRef.current = [];
   }, [article?.id]);
 
   useEffect(() => {
-    if (!captionEnabled || !isPlaying || !audioUrl || !article?.id) return;
+    let cancelled = false;
+    setPlaybackSrc('');
+    const articleId = article?.id;
+    if (!audioUrl || !articleId) return;
+    void feedAsrApi
+      .cachedAudio(audioUrl, articleId)
+      .then((path) => {
+        if (cancelled) return;
+        setPlaybackSrc(path ? convertFileSrc(path) : audioUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setPlaybackSrc(audioUrl);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [audioUrl, article?.id]);
+
+  useEffect(() => {
+    const articleId = article?.id;
+    if (!captionEnabled || !isPlaying || !audioUrl || !articleId) return;
 
     let cancelled = false;
     let sessionId: string | null = null;
@@ -133,6 +175,8 @@ export const FeedAudioPlayerBar: React.FC<FeedAudioPlayerBarProps> = ({
           audioUrl,
           audioRef.current?.currentTime ?? 0,
           SPEED_OPTIONS[speedIndex],
+          articleId,
+          captionMode,
         );
         sessionId = id;
         if (cancelled) {
@@ -140,6 +184,13 @@ export const FeedAudioPlayerBar: React.FC<FeedAudioPlayerBarProps> = ({
           return;
         }
         captionSessionRef.current = id;
+        const queued = captionQueueRef.current.filter(
+          (caption) => caption.sessionId === id,
+        );
+        captionQueueRef.current = captionQueueRef.current.filter(
+          (caption) => caption.sessionId !== id,
+        );
+        queued.forEach((caption) => applyCaptionRef.current(caption));
         setCaptionError('');
       } catch (error) {
         if (cancelled) return;
@@ -164,11 +215,12 @@ export const FeedAudioPlayerBar: React.FC<FeedAudioPlayerBarProps> = ({
     article?.id,
     speedIndex,
     seekRevision,
+    captionMode,
   ]);
 
   useEffect(() => {
     const el = audioRef.current;
-    if (!el || !audioUrl) return;
+    if (!el || !playbackSrc) return;
 
     el.currentTime = 0;
     setCurrentTime(0);
@@ -181,7 +233,7 @@ export const FeedAudioPlayerBar: React.FC<FeedAudioPlayerBarProps> = ({
         .then(() => setIsPlaying(true))
         .catch(() => setIsPlaying(false));
     }
-  }, [audioUrl, article?.id]);
+  }, [playbackSrc, article?.id]);
 
   useEffect(() => {
     setImageFailed(false);
@@ -237,6 +289,41 @@ export const FeedAudioPlayerBar: React.FC<FeedAudioPlayerBarProps> = ({
     setSpeedIndex((prev) => (prev + 1) % SPEED_OPTIONS.length);
   };
 
+  const selectCaptionMode = async (mode: FeedAsrMode) => {
+    if (mode === captionMode || captionBusy) return;
+    if (!captionEnabled) {
+      setCaptionMode(mode);
+      return;
+    }
+    setCaptionBusy(true);
+    setCaptionError('');
+    try {
+      let status = await feedAsrApi.getStatus();
+      const ready =
+        mode === 'streaming'
+          ? status.streamingModelInstalled
+          : status.modelInstalled;
+      if (!ready) {
+        setCaptionDownload({ downloadedBytes: 0, totalBytes: 0, label: '' });
+        status = await feedAsrApi.installModel((progress) => {
+          setCaptionDownload({
+            downloadedBytes: progress.downloadedBytes,
+            totalBytes: progress.totalBytes ?? 0,
+            label: progress.label ?? '',
+          });
+        }, mode);
+        setCaptionStatus(status);
+      }
+      setCaptionMode(mode);
+    } catch (error) {
+      setCaptionError(
+        error instanceof Error ? error.message : '切换字幕模式失败',
+      );
+    } finally {
+      setCaptionBusy(false);
+    }
+  };
+
   const toggleCaptions = async () => {
     if (captionEnabled) {
       setCaptionEnabled(false);
@@ -255,14 +342,19 @@ export const FeedAudioPlayerBar: React.FC<FeedAudioPlayerBarProps> = ({
         );
         return;
       }
-      if (!status.modelInstalled) {
-        setCaptionDownload({ downloadedBytes: 0, totalBytes: 0 });
+      const modelReady =
+        captionMode === 'streaming'
+          ? status.streamingModelInstalled
+          : status.modelInstalled;
+      if (!modelReady) {
+        setCaptionDownload({ downloadedBytes: 0, totalBytes: 0, label: '' });
         status = await feedAsrApi.installModel((progress) => {
           setCaptionDownload({
             downloadedBytes: progress.downloadedBytes,
             totalBytes: progress.totalBytes ?? 0,
+            label: progress.label ?? '',
           });
-        });
+        }, captionMode);
         setCaptionStatus(status);
       }
       setCaptionEnabled(true);
@@ -307,7 +399,7 @@ export const FeedAudioPlayerBar: React.FC<FeedAudioPlayerBarProps> = ({
     >
       <audio
         ref={audioRef}
-        src={audioUrl}
+        src={playbackSrc || undefined}
         preload="metadata"
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
@@ -328,20 +420,16 @@ export const FeedAudioPlayerBar: React.FC<FeedAudioPlayerBarProps> = ({
           <div className="feed-audio-live-captions-head">
             <span>实时字幕</span>
             <span className="feed-audio-live-captions-local">本机识别</span>
-            {captionBusy && captionDownload.totalBytes > 0 && (
+            {captionBusy && (
               <span className="feed-audio-live-captions-progress">
-                已下载{' '}
-                {Math.round(
-                  (captionDownload.downloadedBytes /
-                    captionDownload.totalBytes) *
-                    100,
-                )}
-                %
-              </span>
-            )}
-            {captionBusy && captionDownload.totalBytes === 0 && (
-              <span className="feed-audio-live-captions-progress">
-                正在准备本地模型…
+                {captionDownload.label || '正在准备本地模型…'}
+                {captionDownload.totalBytes > 0
+                  ? ` ${Math.round(
+                      (captionDownload.downloadedBytes /
+                        captionDownload.totalBytes) *
+                        100,
+                    )}%`
+                  : ''}
               </span>
             )}
           </div>
@@ -349,10 +437,10 @@ export const FeedAudioPlayerBar: React.FC<FeedAudioPlayerBarProps> = ({
             <p className="feed-audio-live-captions-error">{captionError}</p>
           ) : (
             <div className="feed-audio-live-captions-lines">
-              {captionCues.slice(-2).map((cue) => (
+              {captionCues.slice(-4).map((cue) => (
                 <button
                   type="button"
-                  key={`${cue.sessionId}-${cue.start}-${cue.end}`}
+                  key={`${cue.start.toFixed(2)}-${cue.text}`}
                   onClick={() => {
                     const audio = audioRef.current;
                     if (!audio) return;
@@ -372,11 +460,17 @@ export const FeedAudioPlayerBar: React.FC<FeedAudioPlayerBarProps> = ({
                 </div>
               ) : captionEnabled ? (
                 <p className="feed-audio-live-captions-waiting">
-                  {isPlaying ? '正在识别播放中的音频…' : '播放后开始识别'}
+                  {isPlaying
+                    ? captionMode === 'podcast'
+                      ? '正在听，说完一句就显示（大约 1–3 秒）'
+                      : '正在识别播放中的音频…'
+                    : '播放后开始识别'}
                 </p>
               ) : captionBusy ? (
                 <p className="feed-audio-live-captions-waiting">
-                  正在下载中英双语字幕模型，完成后会自动开始识别。
+                  {captionMode === 'podcast'
+                    ? '正在下载播客字幕模型（SenseVoice，约 160MB）和语音切分模型，完成后会自动开始。'
+                    : '正在下载低延迟流式模型，完成后会自动开始。'}
                 </p>
               ) : null}
             </div>
@@ -546,16 +640,36 @@ export const FeedAudioPlayerBar: React.FC<FeedAudioPlayerBarProps> = ({
             className={`feed-audio-caption-toggle${captionEnabled ? ' is-active' : ''}`}
             onClick={() => void toggleCaptions()}
             disabled={captionBusy}
-            title="首次启用会从 GitHub 下载本地中英模型，之后在本机识别音频"
+            title={
+              captionMode === 'podcast'
+                ? '播客模式：按语句切分后在本机识别，首次会下载约 160MB 模型'
+                : '低延迟模式：边播边出字。首次会下载流式模型，播客效果弱于播客模式'
+            }
             aria-pressed={captionEnabled}
           >
             {captionBusy
               ? '准备字幕中'
               : captionEnabled
                 ? '字幕开'
-                : captionStatus && !captionStatus.modelInstalled
+                : captionStatus &&
+                    (captionMode === 'streaming'
+                      ? !captionStatus.streamingModelInstalled
+                      : !captionStatus.modelInstalled)
                   ? '安装字幕模型'
                   : '实时字幕'}
+          </button>
+          <button
+            type="button"
+            className={`feed-audio-caption-toggle${captionMode === 'podcast' ? ' is-active' : ''}`}
+            onClick={() =>
+              void selectCaptionMode(
+                captionMode === 'podcast' ? 'streaming' : 'podcast',
+              )
+            }
+            disabled={captionBusy}
+            title="播客模式按句识别，低延迟模式边播边出字"
+          >
+            {captionMode === 'podcast' ? '播客句读' : '低延迟'}
           </button>
           <button
             type="button"

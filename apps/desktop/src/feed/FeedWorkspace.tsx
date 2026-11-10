@@ -1,5 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { feedApi } from './feed-api';
+import {
+  feedTranslationErrorMessage,
+  listFeedTranslationIndex,
+  translateChannelArticles,
+  type FeedChannelTranslationProgress,
+  type FeedProviderSettings,
+} from './feed-translation-api';
 import { FeedAddDialog } from './FeedAddDialog';
 import { FeedArticleList } from './FeedArticleList';
 import { FeedAudioPlayerBar } from './FeedAudioPlayerBar';
@@ -43,6 +50,7 @@ async function seedDefaultSourcesOnce(force = false): Promise<{
 }
 
 export interface FeedWorkspaceProps {
+  provider: FeedProviderSettings;
   onOpenMindmap?: (markdown: string, title: string) => void;
   onSelectedArticleChange?: (articleId: string | null, title: string) => void;
   onAnalyzeArticle?: (articleId: string) => void;
@@ -50,6 +58,7 @@ export interface FeedWorkspaceProps {
 }
 
 const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
+  provider,
   onOpenMindmap,
   onSelectedArticleChange,
   onAnalyzeArticle,
@@ -83,6 +92,42 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [loadingArticles, setLoadingArticles] = useState(false);
+  const [channelJob, setChannelJob] =
+    useState<FeedChannelTranslationProgress | null>(null);
+  const [channelStatus, setChannelStatus] = useState('');
+  const [translatedIds, setTranslatedIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [translationEpoch, setTranslationEpoch] = useState(0);
+  const cancelChannelRef = useRef(false);
+  const channelRunningRef = useRef(false);
+  const articleBusyRef = useRef(false);
+  const selectedArticleRef = useRef<FeedArticle | null>(null);
+  selectedArticleRef.current = selectedArticle;
+
+  useEffect(() => {
+    let cancelled = false;
+    void listFeedTranslationIndex()
+      .then((entries) => {
+        if (cancelled) return;
+        setTranslatedIds((current) => {
+          const next = new Set(current);
+          for (const entry of entries) next.add(entry.articleId);
+          return next;
+        });
+      })
+      .catch((error) => {
+        console.error('读取译文索引失败：', error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (channelRunningRef.current) return;
+    setChannelStatus('');
+  }, [selectedArticle?.id]);
 
   // Dialogs
   const [isAddOpen, setIsAddOpen] = useState(false);
@@ -466,6 +511,91 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
     handleToggleRead,
   ]);
 
+  const handleTranslateChannel = async () => {
+    if (
+      !selectedChannelId ||
+      articleBusyRef.current ||
+      channelRunningRef.current
+    ) {
+      return;
+    }
+    const channel = overview?.channels.find(
+      (item) => item.id === selectedChannelId,
+    );
+    if (!channel) return;
+    if (!provider.baseUrl.trim() || !provider.model.trim()) {
+      setChannelStatus('请先在模型设置中填写 API 地址和模型名称。');
+      return;
+    }
+    channelRunningRef.current = true;
+    cancelChannelRef.current = false;
+    setChannelStatus('正在整理此源的文章…');
+    setChannelJob({
+      done: 0,
+      total: 0,
+      title: '',
+      paragraphDone: 0,
+      paragraphTotal: 0,
+    });
+    try {
+      let batch = await feedApi.listArticles({
+        channelId: selectedChannelId,
+        readStatus: 'unread',
+        limit: 100,
+      });
+      const usedRecent = batch.length === 0;
+      if (usedRecent) {
+        batch = await feedApi.listArticles({
+          channelId: selectedChannelId,
+          limit: 100,
+        });
+      }
+      const result = await translateChannelArticles({
+        articles: batch,
+        channelTitle: channel.title,
+        provider,
+        shouldCancel: () => cancelChannelRef.current,
+        onArticleSaved: (articleId) => {
+          setTranslatedIds((current) => {
+            if (current.has(articleId)) return current;
+            const next = new Set(current);
+            next.add(articleId);
+            return next;
+          });
+          if (selectedArticleRef.current?.id === articleId) {
+            setTranslationEpoch((value) => value + 1);
+          }
+        },
+        onProgress: (progress) => {
+          setChannelJob(progress);
+          setChannelStatus(
+            `正在翻译 ${progress.done}/${progress.total} 篇 · ${progress.title}`,
+          );
+        },
+      });
+      if (result.cancelled) {
+        setChannelStatus(
+          result.translated.length > 0
+            ? `已取消。这一轮保存了 ${result.translated.length} 篇。`
+            : '已取消翻译。',
+        );
+      } else if (result.translated.length === 0) {
+        setChannelStatus(
+          usedRecent
+            ? '此源最近的文章都已有译文。'
+            : '此源的未读文章都已有译文。',
+        );
+      } else {
+        setChannelStatus(`此源已翻译 ${result.translated.length} 篇。`);
+      }
+    } catch (error) {
+      setChannelStatus(`翻译失败：${feedTranslationErrorMessage(error)}`);
+    } finally {
+      channelRunningRef.current = false;
+      setChannelJob(null);
+    }
+  };
+
   return (
     <div className="feed-workspace">
       <FeedSidebar
@@ -527,6 +657,7 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
         onMarkAllRead={handleMarkAllRead}
         onOpenGalaxy={() => setIsGalaxyOpen(true)}
         onPlayAudio={handlePlayAudio}
+        translatedIds={translatedIds}
       />
 
       {/* 播放器打开时与阅读区按相同权重上下分屏。 */}
@@ -534,6 +665,36 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
         <FeedReaderView
           article={selectedArticle}
           hasChannels={(overview?.channels?.length ?? 0) > 0}
+          provider={provider}
+          channelSelected={Boolean(selectedChannelId)}
+          channelBusy={Boolean(channelJob)}
+          channelDone={channelJob?.done ?? 0}
+          channelTotal={channelJob?.total ?? 0}
+          channelStatus={channelStatus}
+          translationEpoch={translationEpoch}
+          onTranslateChannel={() => void handleTranslateChannel()}
+          onCancelChannel={() => {
+            cancelChannelRef.current = true;
+          }}
+          onArticleBusyChange={(busy) => {
+            articleBusyRef.current = busy;
+          }}
+          onArticleTranslated={(articleId) => {
+            setTranslatedIds((current) => {
+              if (current.has(articleId)) return current;
+              const next = new Set(current);
+              next.add(articleId);
+              return next;
+            });
+          }}
+          onArticleTranslationCleared={(articleId) => {
+            setTranslatedIds((current) => {
+              if (!current.has(articleId)) return current;
+              const next = new Set(current);
+              next.delete(articleId);
+              return next;
+            });
+          }}
           onToggleRead={handleToggleRead}
           onToggleStar={handleToggleStar}
           onGenerateMindmap={handleGenerateMindmap}
@@ -587,6 +748,10 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
           categories={overview?.categories ?? []}
           channels={overview?.channels ?? []}
           loadChannelArticles={loadGalaxyChannelArticles}
+          onPlayAudio={(article) => {
+            handlePlayAudio(article);
+            setIsGalaxyOpen(false);
+          }}
           onClose={() => setIsGalaxyOpen(false)}
           onSelectCategory={(category) => {
             setSelectedChannelId(null);

@@ -25,6 +25,8 @@ mod feed;
 mod feed_asr;
 #[path = "feed/feed_store.rs"]
 mod feed_store;
+#[path = "feed/feed_translation.rs"]
+mod feed_translation;
 
 #[path = "library/library.rs"]
 mod library;
@@ -299,10 +301,16 @@ pub fn run() {
             feed::feed_set_article_starred,
             feed::feed_mark_all_read,
             feed::feed_article_to_mindmap,
+            feed_translation::translate_feed_paragraphs,
+            feed_translation::save_feed_article_translation,
+            feed_translation::get_feed_article_translation,
+            feed_translation::delete_feed_article_translation,
+            feed_translation::list_feed_translation_index,
             feed::feed_parse_opml,
             feed::feed_import_opml,
             feed::feed_export_opml,
             feed_asr::feed_asr_get_status,
+            feed_asr::feed_asr_cached_audio,
             feed_asr::feed_asr_install_model,
             feed_asr::feed_asr_start,
             feed_asr::feed_asr_stop,

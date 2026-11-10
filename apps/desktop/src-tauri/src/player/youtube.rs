@@ -1446,9 +1446,7 @@ fn select_caption_pair(
     let best_non_preferred_source = candidates
         .iter()
         .enumerate()
-        .filter(|(_, item)| {
-            base_lang_tag(&normalize_lang_tag(&item.clean_lang)) != preferred_base
-        })
+        .filter(|(_, item)| base_lang_tag(&normalize_lang_tag(&item.clean_lang)) != preferred_base)
         .min_by_key(|(_, item)| {
             let norm = normalize_lang_tag(&item.clean_lang);
             let base = base_lang_tag(&norm);
@@ -1487,7 +1485,9 @@ fn select_caption_pair(
     Some((single_idx, None))
 }
 
-fn read_validated_subtitle_file(file: &DownloadedSubFile) -> Result<String, (&'static str, String)> {
+fn read_validated_subtitle_file(
+    file: &DownloadedSubFile,
+) -> Result<String, (&'static str, String)> {
     let metadata = std::fs::metadata(&file.path)
         .map_err(|_| ("unexpectedResponse", "无法读取下载的字幕。".into()))?;
     if metadata.len() > 5 * 1024 * 1024 {
@@ -1498,7 +1498,10 @@ fn read_validated_subtitle_file(file: &DownloadedSubFile) -> Result<String, (&'s
     let trimmed = body.trim_start_matches('\u{feff}').trim_start();
     if file.is_json3 {
         if !trimmed.starts_with('{') {
-            return Err(("unexpectedResponse", "下载的文件不是有效的 JSON3 字幕。".into()));
+            return Err((
+                "unexpectedResponse",
+                "下载的文件不是有效的 JSON3 字幕。".into(),
+            ));
         }
     } else if !trimmed.starts_with("WEBVTT") {
         return Err(("unexpectedResponse", "下载的文件不是 VTT 字幕。".into()));
@@ -1510,8 +1513,8 @@ fn collect_downloaded_subtitles(
     directory: &std::path::Path,
     video_id: &str,
 ) -> Result<Vec<DownloadedSubFile>, (&'static str, String)> {
-    let entries = std::fs::read_dir(directory)
-        .map_err(|_| ("unknown", "无法读取临时字幕目录。".into()))?;
+    let entries =
+        std::fs::read_dir(directory).map_err(|_| ("unknown", "无法读取临时字幕目录。".into()))?;
     let mut files = Vec::new();
     for entry in entries.flatten() {
         let filename = entry.file_name().to_string_lossy().to_string();
@@ -1577,19 +1580,34 @@ fn classify_ytdlp_caption_stderr(
         || lower.contains("video unavailable")
         || lower.contains("this video is not available")
     {
-        return ("videoUnavailable", "视频当前不可访问，无法取得字幕轨道。".into());
+        return (
+            "videoUnavailable",
+            "视频当前不可访问，无法取得字幕轨道。".into(),
+        );
     }
     if lower.contains("429") || lower.contains("too many requests") {
-        return ("rateLimited", "YouTube 限制了字幕请求频率，请稍后再试。".into());
+        return (
+            "rateLimited",
+            "YouTube 限制了字幕请求频率，请稍后再试。".into(),
+        );
     }
     if !status_ok {
         return if browser.is_some() {
-            ("network", "浏览器会话字幕提取失败，请检查网络与 yt-dlp。".into())
+            (
+                "network",
+                "浏览器会话字幕提取失败，请检查网络与 yt-dlp。".into(),
+            )
         } else {
-            ("network", "本地 yt-dlp 字幕提取失败，请检查网络或代理设置。".into())
+            (
+                "network",
+                "本地 yt-dlp 字幕提取失败，请检查网络或代理设置。".into(),
+            )
         };
     }
-    ("transcriptsDisabled", "这个视频没有找到可用的字幕轨道。".into())
+    (
+        "transcriptsDisabled",
+        "这个视频没有找到可用的字幕轨道。".into(),
+    )
 }
 
 fn run_ytdlp_subtitle_pass(

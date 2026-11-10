@@ -640,7 +640,9 @@ async fn request_client_player(
     visitor_data: Option<&str>,
 ) -> Result<Value, TranscriptFailure> {
     let player_url = match api_key {
-        Some(key) => format!("https://www.youtube.com/youtubei/v1/player?key={key}&prettyPrint=false"),
+        Some(key) => {
+            format!("https://www.youtube.com/youtubei/v1/player?key={key}&prettyPrint=false")
+        }
         None => "https://www.youtube.com/youtubei/v1/player?prettyPrint=false".to_owned(),
     };
     let payload = build_player_payload(profile, video_id, visitor_data);
@@ -1281,7 +1283,10 @@ mod tests {
         assert_eq!(visitor.as_deref(), Some("Cgt2aXNpdG9yXzEyMw%3D%3D"));
         let catalog = parse_catalog("dQw4w9WgXcQ", &parsed, None, None, None, visitor).unwrap();
         assert!(has_direct_track(&catalog));
-        assert_eq!(catalog.tracks[0].public.name, "English (\"quoted } brace\")");
+        assert_eq!(
+            catalog.tracks[0].public.name,
+            "English (\"quoted } brace\")"
+        );
 
         let xpe_only = json!({
             "playabilityStatus": {"status": "OK"},

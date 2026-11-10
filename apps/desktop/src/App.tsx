@@ -6906,6 +6906,7 @@ export default function App() {
             }
           >
             <FeedWorkspace
+              provider={providerSettings}
               externalRevision={feedExternalRevision}
               onSelectedArticleChange={(id, title) => {
                 feedSelectedArticleIdRef.current = id;
