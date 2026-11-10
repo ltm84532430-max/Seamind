@@ -105,3 +105,27 @@ export function weekGrid(
     return { date, day: day.day, inMonth: day.month === parsed.month };
   });
 }
+
+/** 工具栏上的月份或周范围。同一月的周不重复月份，跨年时两端都写年份。 */
+export function formatCalendarPeriod(
+  mode: 'month' | 'week',
+  month: { year: number; month: number },
+  weekStart?: string,
+  weekEnd?: string,
+): string {
+  if (mode === 'month') return `${month.year}年${month.month}月`;
+  const start = weekStart ? parseDateKey(weekStart) : null;
+  const end = weekEnd ? parseDateKey(weekEnd) : null;
+  if (!start || !end) return `${weekStart ?? ''} – ${weekEnd ?? ''}`;
+  const sameYear = start.year === end.year;
+  const startLabel = sameYear
+    ? `${start.month}月${start.day}日`
+    : `${start.year}年${start.month}月${start.day}日`;
+  const endLabel =
+    sameYear && start.month === end.month
+      ? `${end.day}日`
+      : sameYear
+        ? `${end.month}月${end.day}日`
+        : `${end.year}年${end.month}月${end.day}日`;
+  return `${startLabel} – ${endLabel}`;
+}

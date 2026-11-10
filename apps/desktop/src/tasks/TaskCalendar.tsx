@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { LearningTask, TaskStatus } from './types';
 import {
+  formatCalendarPeriod,
   localToday,
   monthGrid,
   parseDateKey,
@@ -96,7 +98,11 @@ export default function TaskCalendar({
   const [editingDateId, setEditingDateId] = useState<string | null>(null);
   const [dateDraft, setDateDraft] = useState('');
   const [panelOpen, setPanelOpen] = useState(false);
+  const [navHost, setNavHost] = useState<HTMLElement | null>(null);
   const agendaTouched = useRef(savedState.restored);
+  useLayoutEffect(() => {
+    setNavHost(document.getElementById('task-calendar-toolbar-slot'));
+  }, []);
   const previousToday = useRef(today);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [movingId, setMovingId] = useState<string | null>(null);
@@ -286,68 +292,80 @@ export default function TaskCalendar({
     </div>
   );
 
+  const periodTitle = formatCalendarPeriod(
+    mode,
+    visibleMonth,
+    cells[0]?.date,
+    cells[6]?.date,
+  );
+  const navigation = (
+    <div className="task-calendar-toolbar-nav">
+      <div className="task-calendar-nav">
+        <button
+          type="button"
+          className="task-calendar-nav-button"
+          onClick={() => movePeriod(-1)}
+          aria-label={mode === 'week' ? '上周' : '上个月'}
+        >
+          ‹
+        </button>
+        <strong>{periodTitle}</strong>
+        <button
+          type="button"
+          className="task-calendar-nav-button"
+          onClick={() => movePeriod(1)}
+          aria-label={mode === 'week' ? '下周' : '下个月'}
+        >
+          ›
+        </button>
+        <button
+          type="button"
+          className="task-calendar-nav-button"
+          onClick={() => chooseDate(today)}
+        >
+          今天
+        </button>
+      </div>
+      <div className="task-calendar-view-actions">
+        <div
+          className="task-workspace-switch task-calendar-view-switch"
+          role="group"
+          aria-label="日历范围"
+        >
+          <button
+            type="button"
+            className={mode === 'week' ? 'is-active' : ''}
+            aria-pressed={mode === 'week'}
+            onClick={() => setMode('week')}
+          >
+            周
+          </button>
+          <button
+            type="button"
+            className={mode === 'month' ? 'is-active' : ''}
+            aria-pressed={mode === 'month'}
+            onClick={() => setMode('month')}
+          >
+            月
+          </button>
+        </div>
+        <button
+          type="button"
+          className="task-calendar-panel-toggle task-calendar-nav-button"
+          aria-expanded={panelOpen}
+          onClick={() => setPanelOpen((open) => !open)}
+        >
+          {panelOpen ? '关闭日程' : `日程 · 未排期 ${unscheduled.length}`}
+        </button>
+      </div>
+    </div>
+  );
+
   return (
     <div
       className={`task-calendar${mode === 'week' ? ' is-week' : ''}${panelOpen ? ' is-panel-open' : ''}`}
     >
-      <div className="task-calendar-topbar">
-        <div className="task-calendar-nav">
-          <button
-            type="button"
-            onClick={() => movePeriod(-1)}
-            aria-label={mode === 'week' ? '上周' : '上个月'}
-          >
-            ‹
-          </button>
-          <strong>
-            {mode === 'week'
-              ? `${cells[0]?.date ?? selectedDate} — ${cells[6]?.date ?? selectedDate}`
-              : `${visibleMonth.year} 年 ${visibleMonth.month} 月`}
-          </strong>
-          <button
-            type="button"
-            onClick={() => movePeriod(1)}
-            aria-label={mode === 'week' ? '下周' : '下个月'}
-          >
-            ›
-          </button>
-          <button type="button" onClick={() => chooseDate(today)}>
-            今天
-          </button>
-        </div>
-        <div className="task-calendar-view-actions">
-          <div
-            className="task-calendar-view-switch"
-            role="group"
-            aria-label="日历范围"
-          >
-            <button
-              type="button"
-              className={mode === 'week' ? 'is-active' : ''}
-              aria-pressed={mode === 'week'}
-              onClick={() => setMode('week')}
-            >
-              周
-            </button>
-            <button
-              type="button"
-              className={mode === 'month' ? 'is-active' : ''}
-              aria-pressed={mode === 'month'}
-              onClick={() => setMode('month')}
-            >
-              月
-            </button>
-          </div>
-          <button
-            type="button"
-            className="task-calendar-panel-toggle"
-            aria-expanded={panelOpen}
-            onClick={() => setPanelOpen((open) => !open)}
-          >
-            {panelOpen ? '关闭日程' : `日程 · 未排期 ${unscheduled.length}`}
-          </button>
-        </div>
-      </div>
+      {navHost ? createPortal(navigation, navHost) : null}
       <div className="task-calendar-content">
         <div className="task-calendar-grid-wrap">
           <div className="task-calendar-weekdays" aria-hidden="true">

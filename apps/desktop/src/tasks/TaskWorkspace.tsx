@@ -1776,6 +1776,12 @@ export default function TaskWorkspace({
                 </>
               )}
             </span>
+            {view === 'calendar' && (
+              <div
+                id="task-calendar-toolbar-slot"
+                className="task-calendar-toolbar-slot"
+              />
+            )}
           </div>
           <div className="task-toolbar-actions">
             <input

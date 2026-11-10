@@ -12,6 +12,7 @@ import type {
 import {
   dateKey,
   localToday,
+  formatCalendarPeriod,
   monthGrid,
   parseDateKey,
   shiftedDateByDays,
@@ -899,18 +900,23 @@ export default function HabitWorkspace({
               <div className="task-calendar-nav">
                 <button
                   type="button"
+                  className="task-calendar-nav-button"
                   onClick={() => movePeriod(-1)}
                   aria-label={calendarMode === 'week' ? '上周' : '上个月'}
                 >
                   ‹
                 </button>
                 <strong>
-                  {calendarMode === 'week'
-                    ? `${cells[0]?.date} — ${cells[6]?.date}`
-                    : `${visibleMonth.year} 年 ${visibleMonth.month} 月`}
+                  {formatCalendarPeriod(
+                    calendarMode,
+                    visibleMonth,
+                    cells[0]?.date,
+                    cells[6]?.date,
+                  )}
                 </strong>
                 <button
                   type="button"
+                  className="task-calendar-nav-button"
                   onClick={() => movePeriod(1)}
                   aria-label={calendarMode === 'week' ? '下周' : '下个月'}
                 >
@@ -918,6 +924,7 @@ export default function HabitWorkspace({
                 </button>
                 <button
                   type="button"
+                  className="task-calendar-nav-button"
                   onClick={() => {
                     const current = parseDateKey(today)!;
                     setVisibleMonth({
@@ -932,7 +939,7 @@ export default function HabitWorkspace({
               </div>
               <div className="task-calendar-view-actions">
                 <div
-                  className="task-calendar-view-switch"
+                  className="task-workspace-switch task-calendar-view-switch"
                   role="group"
                   aria-label="习惯日历范围"
                 >
@@ -955,7 +962,7 @@ export default function HabitWorkspace({
                 </div>
                 <button
                   type="button"
-                  className="task-calendar-panel-toggle"
+                  className="task-calendar-panel-toggle task-calendar-nav-button"
                   aria-expanded={calendarPanelOpen}
                   onClick={() => setCalendarPanelOpen((open) => !open)}
                 >

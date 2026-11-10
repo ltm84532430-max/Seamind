@@ -242,6 +242,33 @@
   margin-left: 6px;
   color: var(--muted);
 }
+.task-toolbar-heading:has(.task-calendar-toolbar-slot) {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+.task-calendar-toolbar-slot,
+.task-calendar-toolbar-nav,
+.task-calendar-nav {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.task-calendar-toolbar-nav {
+  gap: 8px;
+}
+.task-workspace button.task-calendar-nav-button {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0 6px;
+  border-color: transparent;
+  color: var(--muted);
+  background: transparent;
+}
+.task-workspace button.task-calendar-nav-button:hover:not(:disabled) {
+  border-color: var(--line);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel) 88%, var(--ink));
+}
 .task-toolbar-actions {
   display: flex;
   align-items: center;
@@ -327,14 +354,17 @@
   border-bottom: 1px solid var(--line);
 }
 .task-calendar-nav {
-  display: flex;
-  align-items: center;
-  gap: 7px;
+  gap: 2px;
 }
+.task-toolbar .task-calendar-nav strong,
 .task-calendar-nav strong {
-  min-width: 106px;
-  text-align: center;
+  min-width: 0;
+  padding: 0 4px;
+  color: var(--ink);
   font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
 }
 .task-calendar-hint {
   color: var(--muted);
@@ -389,13 +419,11 @@
 .task-calendar.is-week .task-calendar-day {
   min-height: min(42vh, 340px);
 }
-.task-calendar-view-actions,
-.task-calendar-view-switch {
+.task-calendar-view-actions {
   display: flex;
   align-items: center;
   gap: 4px;
 }
-.task-calendar-view-switch button.is-active,
 .task-calendar-agenda-tabs button.is-active {
   color: var(--accent);
   border-color: var(--accent);

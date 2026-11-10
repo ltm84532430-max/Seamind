@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   dateKey,
+  formatCalendarPeriod,
   localToday,
   monthGrid,
   parseDateKey,
@@ -63,5 +64,35 @@ describe('task deadline calendar', () => {
       '2026-11-01',
     ]);
     expect(shiftedDateByDays('2026-12-28', 7)).toBe('2027-01-04');
+  });
+
+  it('formats month and week labels for the toolbar', () => {
+    expect(formatCalendarPeriod('month', { year: 2026, month: 11 })).toBe(
+      '2026年11月',
+    );
+    expect(
+      formatCalendarPeriod(
+        'week',
+        { year: 2026, month: 11 },
+        '2026-11-09',
+        '2026-11-15',
+      ),
+    ).toBe('11月9日 – 15日');
+    expect(
+      formatCalendarPeriod(
+        'week',
+        { year: 2026, month: 11 },
+        '2026-10-26',
+        '2026-11-01',
+      ),
+    ).toBe('10月26日 – 11月1日');
+    expect(
+      formatCalendarPeriod(
+        'week',
+        { year: 2026, month: 12 },
+        '2026-12-28',
+        '2027-01-03',
+      ),
+    ).toBe('2026年12月28日 – 2027年1月3日');
   });
 });
