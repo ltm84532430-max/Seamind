@@ -1409,9 +1409,9 @@
     grid-template-columns: repeat(7, minmax(0, 1fr));
   }
   .task-calendar.is-week .task-calendar-day {
-    min-height: 94px;
+    min-height: 64px;
   }
-  .task-calendar.is-week .task-calendar-day-items {
+  .task-calendar.is-week .task-calendar-day-items > :nth-child(n + 2) {
     display: none;
   }
   .task-calendar-topbar {

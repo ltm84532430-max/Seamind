@@ -383,7 +383,7 @@ export default function TaskCalendar({
           aria-expanded={panelOpen}
           onClick={() => setPanelOpen((open) => !open)}
         >
-          {panelOpen ? '关闭日程' : `日程 · 未排期 ${unscheduled.length}`}
+          {panelOpen ? '关闭日程' : '当天日程'}
         </button>
       </div>
     </div>
