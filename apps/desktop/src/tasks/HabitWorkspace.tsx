@@ -965,19 +965,21 @@ export default function HabitWorkspace({
             </div>
             <div className="task-calendar-content">
               <div className="task-calendar-grid-wrap">
-                <div
-                  className="task-calendar-grid"
-                  role="region"
-                  aria-label="习惯日历"
-                  style={{
-                    gridTemplateRows: `28px repeat(${cells.length / 7}, minmax(76px, 1fr))`,
-                  }}
-                >
+                <div className="task-calendar-weekdays" aria-hidden="true">
                   {WEEKDAYS.map((day) => (
                     <div className="task-calendar-weekday" key={day}>
                       {day}
                     </div>
                   ))}
+                </div>
+                <div
+                  className="task-calendar-grid"
+                  role="region"
+                  aria-label="习惯日历"
+                  style={{
+                    gridTemplateRows: `repeat(${cells.length / 7}, minmax(76px, 1fr))`,
+                  }}
+                >
                   {cells.map((cell) => {
                     const entries = calendarHabits.filter((habit) =>
                       isDueOn(habit, cell.date),

@@ -347,18 +347,40 @@
   min-height: 0;
 }
 .task-calendar-grid-wrap {
+  display: flex;
   flex: 1 1 0;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
   overflow: auto;
 }
+.task-calendar-weekdays {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  display: grid;
+  flex: 0 0 28px;
+  box-sizing: border-box;
+  grid-template-columns: repeat(7, minmax(90px, 1fr));
+  align-items: center;
+  gap: 1px;
+  min-width: 630px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.task-calendar.is-week .task-calendar-weekdays {
+  min-width: 560px;
+  grid-template-columns: repeat(7, minmax(80px, 1fr));
+}
 .task-calendar-grid {
   display: grid;
   box-sizing: border-box;
-  height: 100%;
+  flex: 1 0 auto;
   grid-template-columns: repeat(7, minmax(90px, 1fr));
+  gap: 1px;
   min-width: 630px;
-  min-height: 100%;
+  min-height: calc(100% - 28px);
+  background: var(--line);
 }
 .task-calendar.is-week .task-calendar-grid {
   min-width: 560px;
@@ -382,8 +404,6 @@
   display: none;
 }
 .task-calendar-weekday {
-  padding: 6px 4px;
-  border-bottom: 1px solid var(--line);
   color: var(--muted);
   text-align: center;
   font-size: 11px;
@@ -393,23 +413,24 @@
   flex-direction: column;
   min-width: 0;
   min-height: 76px;
-  margin: -1px 0 0 -1px;
-  border: 1px solid var(--line);
   background: var(--panel);
 }
 .task-calendar-day.is-outside {
-  opacity: 0.55;
+  background: color-mix(in srgb, var(--ink) 3%, var(--panel));
 }
-.task-calendar-day.is-selected {
-  outline: 1px solid var(--accent);
-  outline-offset: -1px;
+.task-calendar-day.is-outside .task-calendar-day-number {
+  color: var(--muted);
+}
+.task-calendar-day.is-selected,
+.task-calendar-day.is-drop-target:hover {
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+}
+.task-calendar-day.is-outside.is-selected .task-calendar-day-number {
+  color: var(--ink);
 }
 .task-calendar-day.is-today .task-calendar-day-number {
   color: var(--accent);
   font-weight: 700;
-}
-.task-calendar-day.is-drop-target:hover {
-  background: color-mix(in srgb, var(--accent) 9%, var(--panel));
 }
 .task-calendar-day-head {
   display: flex;
@@ -1282,9 +1303,7 @@
   .task-board {
     grid-template-columns: repeat(3, minmax(220px, 80vw));
   }
-  .task-calendar-grid-wrap {
-    display: block;
-  }
+  .task-calendar.is-week .task-calendar-weekdays,
   .task-calendar.is-week .task-calendar-grid {
     min-width: 0;
     grid-template-columns: repeat(7, minmax(0, 1fr));

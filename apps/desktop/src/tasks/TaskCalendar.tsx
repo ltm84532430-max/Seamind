@@ -350,10 +350,17 @@ export default function TaskCalendar({
       </div>
       <div className="task-calendar-content">
         <div className="task-calendar-grid-wrap">
+          <div className="task-calendar-weekdays" aria-hidden="true">
+            {WEEKDAYS.map((day) => (
+              <div className="task-calendar-weekday" key={day}>
+                {day}
+              </div>
+            ))}
+          </div>
           <div
             className="task-calendar-grid"
             style={{
-              gridTemplateRows: `28px repeat(${cells.length / 7}, minmax(76px, 1fr))`,
+              gridTemplateRows: `repeat(${cells.length / 7}, minmax(76px, 1fr))`,
             }}
             role="region"
             aria-label={
@@ -362,11 +369,6 @@ export default function TaskCalendar({
                 : `${visibleMonth.year} 年 ${visibleMonth.month} 月任务日历`
             }
           >
-            {WEEKDAYS.map((day) => (
-              <div className="task-calendar-weekday" key={day}>
-                {day}
-              </div>
-            ))}
             {cells.map((cell) => {
               const entries = byDate.get(cell.date) ?? [];
               const validDay = parseDateKey(cell.date) !== null;
