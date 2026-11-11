@@ -332,7 +332,7 @@ const MAX_RESPONSE_BYTES: usize = 1_048_576;
 const MAX_PROVIDER_MODELS: usize = 500;
 const MAX_AGENT_MESSAGES: usize = 32;
 const MAX_AGENT_CONTEXT_BYTES: usize = 250_000;
-const MAX_AGENT_TOOLS: usize = 16;
+const MAX_AGENT_TOOLS: usize = 24;
 const MAX_AGENT_TOOLS_BYTES: usize = 48_000;
 const MAX_EPUB_SUMMARY_PROMPT_CHARS: usize = 60_000;
 const MAX_EPUB_HIGHLIGHT_PROMPT_CHARS: usize = 10_000;
@@ -385,23 +385,7 @@ fn has_api_key() -> Result<bool, String> {
 
 #[tauri::command]
 async fn list_provider_models(base_url: String) -> Result<Vec<String>, String> {
-    let api_key = {
-        #[cfg(windows)]
-        {
-            match api_key_entry()?.get_password() {
-                Ok(key) => key,
-                Err(keyring::Error::NoEntry) => {
-                    return Err("请先在模型设置中保存 API 密钥。".to_string());
-                }
-                Err(_) => return Err("读取 Windows 凭据失败。".to_string()),
-            }
-        }
-        #[cfg(not(windows))]
-        {
-            return Err("API 密钥安全存储目前仅支持 Windows。".to_string());
-        }
-    };
-
+    let api_key = load_stored_api_key()?;
     let url = models_url(&base_url)?;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
@@ -418,33 +402,16 @@ async fn list_provider_models(base_url: String) -> Result<Vec<String>, String> {
     if !status.is_success() {
         return Err(format!("模型列表请求返回 HTTP {}。", status.as_u16()));
     }
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
-    {
-        return Err("模型列表响应超过安全大小限制。".to_string());
-    }
-
-    let mut response = response;
-    let mut response_bytes = Vec::with_capacity(
-        response
-            .content_length()
-            .unwrap_or(0)
-            .min(MAX_RESPONSE_BYTES as u64) as usize,
-    );
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| "读取模型列表响应失败。".to_string())?
-    {
-        if response_bytes.len() + chunk.len() > MAX_RESPONSE_BYTES {
-            return Err("模型列表响应超过安全大小限制。".to_string());
-        }
-        response_bytes.extend_from_slice(&chunk);
-    }
-
+    let response_bytes = read_bounded_body(
+        response,
+        MAX_RESPONSE_BYTES,
+        "模型列表响应超过安全大小限制。",
+        "读取模型列表响应失败。",
+    )
+    .await?;
     let body: serde_json::Value = serde_json::from_slice(&response_bytes)
         .map_err(|_| "模型列表响应不是有效 JSON。".to_string())?;
+
     let items = body
         .get("data")
         .or_else(|| body.get("models"))
@@ -532,98 +499,23 @@ async fn generate_mindmap(
         return Err("请填写有效的模型名称。".to_string());
     }
 
-    let api_key = {
-        #[cfg(windows)]
-        {
-            match api_key_entry()?.get_password() {
-                Ok(key) => key,
-                Err(keyring::Error::NoEntry) => {
-                    return Err("请先在模型设置中保存 API 密钥。".to_string());
-                }
-                Err(_) => return Err("读取 Windows 凭据失败。".to_string()),
-            }
-        }
-        #[cfg(not(windows))]
-        {
-            return Err("API 密钥安全存储目前仅支持 Windows。".to_string());
-        }
-    };
-
-    let url = completion_url(&base_url)?;
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(90))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|_| "无法初始化 AI 网络连接。".to_string())?;
-
-    let request_body = serde_json::json!({
-        "model": model,
-        "stream": false,
-        "messages": [
+    let body = post_chat_completion(
+        &base_url,
+        model,
+        serde_json::json!([
             { "role": "system", "content": prompts::MINDMAP_SYSTEM_PROMPT },
             { "role": "system", "content": prompts::MINDMAP_NODE_CONSTRAINTS_PROMPT },
             { "role": "system", "content": prompts::MINDMAP_MATH_RULES_PROMPT },
             { "role": "user", "content": prompt }
-        ]
-    });
-
-    let response = client
-        .post(url)
-        .bearer_auth(api_key)
-        .json(&request_body)
-        .send()
-        .await
-        .map_err(|_| "连接 AI 服务失败，请检查网络和 API 地址。".to_string())?;
-
-    let status = response.status();
-    if !status.is_success() {
-        return Err(format!(
-            "AI 服务返回 HTTP {}，请检查 API 地址、密钥和模型名称。",
-            status.as_u16()
-        ));
-    }
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
-    {
-        return Err("AI 服务返回内容过大，请重试或缩小主题范围。".to_string());
-    }
-
-    let mut response = response;
-    let mut response_bytes = Vec::with_capacity(
-        response
-            .content_length()
-            .unwrap_or(0)
-            .min(MAX_RESPONSE_BYTES as u64) as usize,
-    );
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| "读取 AI 服务响应失败。".to_string())?
-    {
-        if response_bytes.len() + chunk.len() > MAX_RESPONSE_BYTES {
-            return Err("AI 服务返回内容过大，请重试或缩小主题范围。".to_string());
-        }
-        response_bytes.extend_from_slice(&chunk);
-    }
-    let body: serde_json::Value = serde_json::from_slice(&response_bytes)
-        .map_err(|_| "AI 服务返回的内容不是有效 JSON。".to_string())?;
-    let content = body
-        .pointer("/choices/0/message/content")
-        .and_then(|value| {
-            value.as_str().map(str::to_string).or_else(|| {
-                value.as_array().map(|parts| {
-                    parts
-                        .iter()
-                        .filter_map(|part| part.get("text").and_then(serde_json::Value::as_str))
-                        .collect::<Vec<_>>()
-                        .join("")
-                })
-            })
-        })
+        ]),
+        None,
+        None,
+        MINDMAP_FAULTS,
+    )
+    .await?;
+    let content = chat_message_text(body.pointer("/choices/0/message/content"))
         .filter(|content| !content.is_empty())
         .ok_or_else(|| "AI 服务没有返回可用的 Markdown 内容。".to_string())?;
-
     normalize_generated_markdown(&content)
 }
 
@@ -799,41 +691,132 @@ pub(crate) async fn request_chat_completion(
     user_content: &str,
     max_prompt_chars: usize,
 ) -> Result<String, String> {
-    if user_content.chars().count() > max_prompt_chars {
-        return Err("AI 请求内容超过长度上限。".to_string());
+    request_formatted_chat_completion(
+        base_url,
+        model,
+        system_prompt,
+        user_content,
+        max_prompt_chars,
+        None,
+    )
+    .await
+}
+
+fn load_stored_api_key() -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        match api_key_entry()?.get_password() {
+            Ok(key) => Ok(key),
+            Err(keyring::Error::NoEntry) => Err("请先在模型设置中保存 API 密钥。".to_string()),
+            Err(_) => Err("读取 Windows 凭据失败。".to_string()),
+        }
     }
+    #[cfg(not(windows))]
+    {
+        Err("API 密钥安全存储目前仅支持 Windows。".to_string())
+    }
+}
 
-    let api_key = {
-        #[cfg(windows)]
-        {
-            match api_key_entry()?.get_password() {
-                Ok(key) => key,
-                Err(keyring::Error::NoEntry) => {
-                    return Err("请先在模型设置中保存 API 密钥。".to_string());
-                }
-                Err(_) => return Err("读取 Windows 凭据失败。".to_string()),
-            }
-        }
-        #[cfg(not(windows))]
-        {
-            return Err("API 密钥安全存储目前仅支持 Windows。".to_string());
-        }
-    };
-
-    let url = completion_url(base_url)?;
-    let client = reqwest::Client::builder()
+fn chat_completion_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(90))
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|_| "无法初始化 AI 网络连接。".to_string())?;
-    let request_body = serde_json::json!({
+        .map_err(|_| "无法初始化 AI 网络连接。".to_string())
+}
+
+struct CompletionFaults {
+    http_status: &'static str,
+    oversized: &'static str,
+    invalid_json: &'static str,
+}
+
+const ONESHOT_FAULTS: CompletionFaults = CompletionFaults {
+    http_status: "AI 服务返回 HTTP {}，请检查 API 地址、密钥和模型名称。",
+    oversized: "AI 服务返回内容过大。",
+    invalid_json: "AI 服务响应不是有效 JSON。",
+};
+
+const MINDMAP_FAULTS: CompletionFaults = CompletionFaults {
+    http_status: "AI 服务返回 HTTP {}，请检查 API 地址、密钥和模型名称。",
+    oversized: "AI 服务返回内容过大，请重试或缩小主题范围。",
+    invalid_json: "AI 服务返回的内容不是有效 JSON。",
+};
+
+const AGENT_FAULTS: CompletionFaults = CompletionFaults {
+    http_status: "AI 服务返回 HTTP {}，请检查 API 地址、密钥、模型名称及工具调用支持。",
+    oversized: "AI 服务返回内容过大，请缩小请求范围后重试。",
+    invalid_json: "AI 服务返回的内容不是有效 JSON。",
+};
+
+/// Buffers one non-streaming body. A streaming completion would stop before this read.
+async fn read_bounded_body(
+    response: reqwest::Response,
+    max_bytes: usize,
+    oversized: &str,
+    read_failed: &str,
+) -> Result<Vec<u8>, String> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_bytes as u64)
+    {
+        return Err(oversized.to_string());
+    }
+    let mut response = response;
+    let mut response_bytes =
+        Vec::with_capacity(response.content_length().unwrap_or(0).min(max_bytes as u64) as usize);
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| read_failed.to_string())?
+    {
+        if response_bytes.len() + chunk.len() > max_bytes {
+            return Err(oversized.to_string());
+        }
+        response_bytes.extend_from_slice(&chunk);
+    }
+    Ok(response_bytes)
+}
+
+fn chat_message_text(value: Option<&serde_json::Value>) -> Option<String> {
+    let value = value?;
+    value.as_str().map(str::to_string).or_else(|| {
+        value.as_array().map(|parts| {
+            parts
+                .iter()
+                .filter_map(|part| part.get("text").and_then(serde_json::Value::as_str))
+                .collect::<Vec<_>>()
+                .join("")
+        })
+    })
+}
+
+/// Posts one OpenAI-compatible completion with `stream: false` and returns the JSON body.
+/// One-shot callers pass `tools = None`, so the request does not advertise tools.
+/// Streaming would branch before `read_bounded_body`; that path is not implemented.
+async fn post_chat_completion(
+    base_url: &str,
+    model: &str,
+    messages: serde_json::Value,
+    tools: Option<serde_json::Value>,
+    response_format: Option<serde_json::Value>,
+    faults: CompletionFaults,
+) -> Result<serde_json::Value, String> {
+    let api_key = load_stored_api_key()?;
+    let url = completion_url(base_url)?;
+    let client = chat_completion_client()?;
+    let mut request_body = serde_json::json!({
         "model": model,
         "stream": false,
-        "messages": [
-            { "role": "system", "content": system_prompt },
-            { "role": "user", "content": user_content },
-        ],
+        "messages": messages,
     });
+    if let Some(tools) = tools {
+        request_body["tools"] = tools;
+        request_body["tool_choice"] = serde_json::json!("auto");
+    }
+    if let Some(response_format) = response_format {
+        request_body["response_format"] = response_format;
+    }
     let response = client
         .post(url)
         .bearer_auth(api_key)
@@ -843,49 +826,44 @@ pub(crate) async fn request_chat_completion(
         .map_err(|_| "连接 AI 服务失败，请检查网络和 API 地址。".to_string())?;
     let status = response.status();
     if !status.is_success() {
-        return Err(format!(
-            "AI 服务返回 HTTP {}，请检查 API 地址、密钥和模型名称。",
-            status.as_u16()
-        ));
+        return Err(faults
+            .http_status
+            .replacen("{}", &status.as_u16().to_string(), 1));
     }
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
-    {
-        return Err("AI 服务返回内容过大。".to_string());
-    }
+    let response_bytes = read_bounded_body(
+        response,
+        MAX_RESPONSE_BYTES,
+        faults.oversized,
+        "读取 AI 服务响应失败。",
+    )
+    .await?;
+    serde_json::from_slice(&response_bytes).map_err(|_| faults.invalid_json.to_string())
+}
 
-    let mut response = response;
-    let mut response_bytes = Vec::with_capacity(
-        response
-            .content_length()
-            .unwrap_or(0)
-            .min(MAX_RESPONSE_BYTES as u64) as usize,
-    );
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| "读取 AI 服务响应失败。".to_string())?
-    {
-        if response_bytes.len() + chunk.len() > MAX_RESPONSE_BYTES {
-            return Err("AI 服务返回内容过大。".to_string());
-        }
-        response_bytes.extend_from_slice(&chunk);
+pub(crate) async fn request_formatted_chat_completion(
+    base_url: &str,
+    model: &str,
+    system_prompt: &str,
+    user_content: &str,
+    max_prompt_chars: usize,
+    response_format: Option<&serde_json::Value>,
+) -> Result<String, String> {
+    if user_content.chars().count() > max_prompt_chars {
+        return Err("AI 请求内容超过长度上限。".to_string());
     }
-    let body: serde_json::Value = serde_json::from_slice(&response_bytes)
-        .map_err(|_| "AI 服务响应不是有效 JSON。".to_string())?;
-    body.pointer("/choices/0/message/content")
-        .and_then(|value| {
-            value.as_str().map(str::to_string).or_else(|| {
-                value.as_array().map(|parts| {
-                    parts
-                        .iter()
-                        .filter_map(|part| part.get("text").and_then(serde_json::Value::as_str))
-                        .collect::<Vec<_>>()
-                        .join("")
-                })
-            })
-        })
+    let body = post_chat_completion(
+        base_url,
+        model,
+        serde_json::json!([
+            { "role": "system", "content": system_prompt },
+            { "role": "user", "content": user_content },
+        ]),
+        None,
+        response_format.cloned(),
+        ONESHOT_FAULTS,
+    )
+    .await?;
+    chat_message_text(body.pointer("/choices/0/message/content"))
         .filter(|content| !content.trim().is_empty())
         .ok_or_else(|| "AI 服务没有返回内容。".to_string())
 }
@@ -937,7 +915,18 @@ async fn agent_completion(
     if tool_bytes.len() > MAX_AGENT_TOOLS_BYTES {
         return Err("AI 工具清单过大。".to_string());
     }
+    // Keep this list equal to agentToolCatalog in apps/desktop/src/agent/capabilities.ts.
     let allowed_tools = [
+        "rss_get_current_article",
+        "rss_list_subscriptions",
+        "rss_add_subscription",
+        "epub_get_current_chapter",
+        "epub_propose_footnote",
+        "knowledge_get_book_note",
+        "knowledge_update_book_note",
+        "knowledge_query_book_galaxy",
+        "knowledge_sync_reader_chapter",
+        "knowledge_append_excerpt",
         "mindmap_get_current",
         "library_search",
         "library_read_document",
@@ -962,76 +951,15 @@ async fn agent_completion(
         tool_names.push(name);
     }
 
-    let api_key = {
-        #[cfg(windows)]
-        {
-            match api_key_entry()?.get_password() {
-                Ok(key) => key,
-                Err(keyring::Error::NoEntry) => {
-                    return Err("请先在模型设置中保存 API 密钥。".to_string());
-                }
-                Err(_) => return Err("读取 Windows 凭据失败。".to_string()),
-            }
-        }
-        #[cfg(not(windows))]
-        {
-            return Err("API 密钥安全存储目前仅支持 Windows。".to_string());
-        }
-    };
-
-    let url = completion_url(&base_url)?;
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(90))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|_| "无法初始化 AI 网络连接。".to_string())?;
-    let request_body = serde_json::json!({
-        "model": model,
-        "stream": false,
-        "messages": messages,
-        "tools": tools,
-        "tool_choice": "auto",
-    });
-
-    let response = client
-        .post(url)
-        .bearer_auth(api_key)
-        .json(&request_body)
-        .send()
-        .await
-        .map_err(|_| "连接 AI 服务失败，请检查网络和 API 地址。".to_string())?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(format!(
-            "AI 服务返回 HTTP {}，请检查 API 地址、密钥、模型名称及工具调用支持。",
-            status.as_u16()
-        ));
-    }
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
-    {
-        return Err("AI 服务返回内容过大，请缩小请求范围后重试。".to_string());
-    }
-    let mut response = response;
-    let mut response_bytes = Vec::with_capacity(
-        response
-            .content_length()
-            .unwrap_or(0)
-            .min(MAX_RESPONSE_BYTES as u64) as usize,
-    );
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| "读取 AI 服务响应失败。".to_string())?
-    {
-        if response_bytes.len() + chunk.len() > MAX_RESPONSE_BYTES {
-            return Err("AI 服务返回内容过大，请缩小请求范围后重试。".to_string());
-        }
-        response_bytes.extend_from_slice(&chunk);
-    }
-    let body: serde_json::Value = serde_json::from_slice(&response_bytes)
-        .map_err(|_| "AI 服务返回的内容不是有效 JSON。".to_string())?;
+    let body = post_chat_completion(
+        &base_url,
+        model,
+        serde_json::Value::Array(messages),
+        Some(serde_json::Value::Array(tools)),
+        None,
+        AGENT_FAULTS,
+    )
+    .await?;
     let message = body
         .pointer("/choices/0/message")
         .ok_or_else(|| "模型没有返回有效的助手消息。".to_string())?;

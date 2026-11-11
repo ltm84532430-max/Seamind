@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { runLearningPathAgentTurn } from '../agent/runtime';
-import type { LearningPathProposal } from '../agent/types';
+import {
+  LEARNING_PATH_BUDGET,
+  agentProfiles,
+  noteSessionResolution,
+  runAgentSession,
+} from '../agent/runtime';
+import type { AgentChatMessage, LearningPathProposal } from '../agent/types';
 import { CloseIcon } from './icons';
 import type { LearningPathStageOverview } from './learning-path-layout';
 import { extractProposalFromText } from './learning-path-parser';
@@ -260,6 +265,8 @@ export function LearningPathCreateDialog({
     'constellation' | 'linear' | 'radial'
   >('linear');
   const [aiRunning, setAiRunning] = useState(false);
+  const [aiPaused, setAiPaused] = useState(false);
+  const [aiHistory, setAiHistory] = useState<AgentChatMessage[]>([]);
   const [aiStatus, setAiStatus] = useState('');
   const [aiCandidateProposal, setAiCandidateProposal] =
     useState<LearningPathProposal | null>(null);
@@ -412,39 +419,70 @@ export function LearningPathCreateDialog({
     onClose();
   };
 
+  const noteLearningPathResolution = (decision: 'confirmed' | 'rejected') => {
+    setAiHistory((prev) =>
+      noteSessionResolution(
+        prev,
+        decision === 'confirmed'
+          ? '用户已确认并保存了这份学习路径提案。'
+          : '用户拒绝了这份学习路径提案，路径没有变化。',
+      ),
+    );
+    setAiPaused(false);
+  };
+
   const runQuickAi = async () => {
     if (!bridges?.aiProvider || !bridges.agentCapabilities) {
       host.notify('请先在模型设置中填写 API 地址、模型和密钥。', 'error');
       return;
     }
     const topic = aiTopic.trim();
-    if (!topic || aiRunning) return;
+    if (!topic || aiRunning || aiPaused) return;
     setAiRunning(true);
-    setAiStatus('正在生成路径…');
+    setAiStatus(
+      `第 1/${LEARNING_PATH_BUDGET.maxRounds} 轮 · 工具 0/${LEARNING_PATH_BUDGET.maxToolCalls}`,
+    );
     setAiCandidateProposal(null);
     const compiledPrompt = compileAcademicEngineeringPrompt(
       topic,
       aiTopologyMode,
     );
+    const seenTools = new Set<string>();
     try {
-      const result = await runLearningPathAgentTurn({
-        history: [],
+      const result = await runAgentSession({
+        profile: agentProfiles['learning-path'],
+        history: aiHistory,
         prompt: compiledPrompt,
         provider: bridges.aiProvider,
         capabilities: bridges.agentCapabilities,
-        activePathSummary: null,
+        contextMessages: [
+          {
+            role: 'system',
+            content:
+              '当前未选中特定学习路径；若用户要求新建，请使用 mode="create"。',
+          },
+        ],
         onEvent: (event) => {
-          if (event.kind === 'tool') {
-            setAiStatus(`${event.label}：${event.summary}`);
+          if (event.kind === 'tool' && event.status === 'running') {
+            seenTools.add(event.id);
           }
+          const tools = seenTools.size;
+          const progress = `第 ${event.round}/${LEARNING_PATH_BUDGET.maxRounds} 轮 · 工具 ${tools}/${LEARNING_PATH_BUDGET.maxToolCalls}`;
+          if (event.kind === 'model') setAiStatus(progress);
+          else setAiStatus(`${progress} · ${event.label}`);
         },
       });
+      setAiHistory(result.history);
       if (result.learningPathProposal) {
-        bridges.onPreviewLearningPathProposal?.(
-          result.learningPathProposal,
-          'ai',
-        );
-        setAiStatus('已生成预览，请在弹窗里确认。');
+        if (bridges.onPreviewLearningPathProposal) {
+          setAiPaused(true);
+          bridges.onPreviewLearningPathProposal(
+            result.learningPathProposal,
+            'ai',
+            { noteResolution: noteLearningPathResolution },
+          );
+        }
+        setAiStatus('已生成第一段预览，请在弹窗里确认。确认后可以继续追加。');
         setAiCandidateProposal(null);
       } else {
         const parsed = extractProposalFromText(topic, result.reply);
@@ -576,10 +614,10 @@ export function LearningPathCreateDialog({
                   <button
                     type="button"
                     className="lp-btn is-primary"
-                    disabled={!aiTopic.trim() || aiRunning}
+                    disabled={!aiTopic.trim() || aiRunning || aiPaused}
                     onClick={() => void runQuickAi()}
                   >
-                    {aiRunning ? '生成中…' : '生成预览'}
+                    {aiRunning ? '生成中…' : aiPaused ? '等待确认' : '生成预览'}
                   </button>
                   <button
                     type="button"
@@ -644,9 +682,12 @@ export function LearningPathCreateDialog({
                       type="button"
                       className="lp-btn is-primary"
                       onClick={() => {
-                        bridges?.onPreviewLearningPathProposal?.(
+                        if (!bridges?.onPreviewLearningPathProposal) return;
+                        setAiPaused(true);
+                        bridges.onPreviewLearningPathProposal(
                           aiCandidateProposal,
                           'ai',
+                          { noteResolution: noteLearningPathResolution },
                         );
                       }}
                     >

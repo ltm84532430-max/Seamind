@@ -88,12 +88,14 @@ import {
   loadEpubBookMetadata,
 } from './ebook/ebook-storage';
 import AgentPanel from './agent/AgentPanel';
-import { feedApi } from './feed/feed-api';
+import { createAgentCapabilities } from './agent/adapters';
 import {
-  agentToolCatalog,
+  agentToolCatalogForWorkspace,
   buildValidatedLearningPathNodes,
   executeAgentTool,
+  mcpToolSpecs,
 } from './agent/capabilities';
+import type { PendingCliProposal } from './agent/pending-proposal';
 import type {
   AgentCapabilities,
   ProposeLearningPathInput,
@@ -102,13 +104,12 @@ import type {
 import type {
   ActiveMindmapSnapshot,
   AgentAnalysisMode,
-  FavoritesCategorizationProposal,
   NodeEditProposal,
   LearningPathProposal,
 } from './agent/types';
+import ReaderActionProposalDialog from './agent/ReaderActionProposalDialog';
 import FavoritesProposalDialog, {
   applyFavoritesCategorizationProposal,
-  buildFavoritesCategorizationProposal,
 } from './player/FavoritesProposalDialog';
 import LearningPathProposalDialog from './player/LearningPathProposalDialog';
 import { playerApi } from './player/player-api';
@@ -119,7 +120,7 @@ import {
   type TranscriptKnowledgeExportPayload,
   type TranscriptKnowledgeExportResult,
 } from './player/transcript/export';
-import { searchYouTubeVideos } from './player/youtube-data';
+
 import {
   applyMarkdownNodeBranch,
   applyMarkdownNodeCommand,
@@ -317,21 +318,6 @@ interface CliAgentToolRequest {
   requestId: string;
   name: string;
   arguments: Record<string, unknown>;
-}
-
-interface CliAgentProposal {
-  requestId: string;
-  proposal: NodeEditProposal;
-}
-
-interface CliLearningPathProposal {
-  requestId: string;
-  proposal: LearningPathProposal;
-}
-
-interface CliFavoritesProposal {
-  requestId: string;
-  proposal: FavoritesCategorizationProposal;
 }
 
 interface EpubOutline {
@@ -598,20 +584,11 @@ export default function App() {
   const [apiKeyDraft, setApiKeyDraft] = useState('');
   const [apiKeySaved, setApiKeySaved] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState('');
-  const [cliAgentProposal, setCliAgentProposal] =
-    useState<CliAgentProposal | null>(null);
-  const [cliLearningPathProposal, setCliLearningPathProposal] =
-    useState<CliLearningPathProposal | null>(null);
-  const [cliLearningPathProposalBusy, setCliLearningPathProposalBusy] =
-    useState(false);
-  const [cliLearningPathProposalError, setCliLearningPathProposalError] =
-    useState('');
-  const [cliFavoritesProposal, setCliFavoritesProposal] =
-    useState<CliFavoritesProposal | null>(null);
-  const [cliFavoritesProposalBusy, setCliFavoritesProposalBusy] =
-    useState(false);
-  const [cliFavoritesProposalError, setCliFavoritesProposalError] =
-    useState('');
+  const [pendingCliProposal, setPendingCliProposal] =
+    useState<PendingCliProposal | null>(null);
+  const [pendingCliBusy, setPendingCliBusy] = useState(false);
+  const [pendingCliError, setPendingCliError] = useState('');
+  const [agentBridgeError, setAgentBridgeError] = useState('');
   const [playerOpenLearningPathRequest, setPlayerOpenLearningPathRequest] =
     useState<{ id: number; pathId: string } | null>(null);
   const [taskCreateRequest, setTaskCreateRequest] =
@@ -643,11 +620,15 @@ export default function App() {
   } | null>(null);
   const [sourceMapVersion, setSourceMapVersion] = useState(0);
   const [markdownEditorSession, setMarkdownEditorSession] = useState(0);
-  const cliAgentProposalRef = useRef<CliAgentProposal | null>(null);
-  const cliLearningPathProposalRef = useRef<CliLearningPathProposal | null>(
-    null,
-  );
-  const cliFavoritesProposalRef = useRef<CliFavoritesProposal | null>(null);
+  const pendingCliProposalRef = useRef<PendingCliProposal | null>(null);
+  const agentHostRef = useRef<{
+    loadLibrary: (openRecent: boolean) => Promise<unknown>;
+    openKnowledgeNote: (note: MapDocument) => Promise<unknown>;
+  }>({
+    loadLibrary: async () => undefined,
+    openKnowledgeNote: async () => undefined,
+  });
+  const mcpToolChain = useRef(Promise.resolve());
   const playerOpenLearningPathRequestIdRef = useRef(0);
   const playerOpenFavoritesRequestIdRef = useRef(0);
   const youtubeSearchResultsRef = useRef(new Map<string, VideoInput>());
@@ -1488,481 +1469,107 @@ export default function App() {
     };
   };
 
-  const agentCapabilities: AgentCapabilities = {
-    readCurrentFeedArticle: async () => {
-      if (activeWorkspace !== 'feed') throw new Error('请先打开订阅页面。');
-      const id = feedSelectedArticleIdRef.current;
-      if (!id) throw new Error('请先在订阅页面选择一篇文章。');
-      const article = await feedApi.getArticle(id);
-      if (!article) throw new Error('当前文章已不存在，请重新选择。');
-      return article;
-    },
-    listFeedSubscriptions: () => {
-      if (activeWorkspace !== 'feed') throw new Error('请先打开订阅页面。');
-      return feedApi.listChannels();
-    },
-    addFeedSubscription: async ({ url, category, title }) => {
-      if (activeWorkspace !== 'feed') throw new Error('请先打开订阅页面。');
-      const channels = await feedApi.listChannels();
-      if (channels.some((channel) => channel.url === url))
-        throw new Error('该 RSS 地址已在本机订阅。');
-      if (
-        !window.confirm(
-          `确认添加 RSS 订阅源？\n标题：${title || '使用订阅源标题'}\n分类：${category || '默认分类'}\n地址：${url}`,
-        )
-      )
-        throw new Error('用户取消了添加订阅。');
-      const channel = await feedApi.addChannel(url, category, title);
-      setFeedExternalRevision((revision) => revision + 1);
-      return channel;
-    },
-    readCurrentEpubChapter: () => {
-      if (activeWorkspace !== 'reader' || !readerAgentBridgeRef.current) {
-        throw new Error('请先在电子书阅读器中打开一本书。');
-      }
-      return readerAgentBridgeRef.current.readCurrentChapter();
-    },
-    proposeEpubFootnote: (input) => {
-      if (activeWorkspace !== 'reader' || !readerAgentBridgeRef.current) {
-        throw new Error('请先在电子书阅读器中打开一本书。');
-      }
-      return readerAgentBridgeRef.current.proposeFootnote(input);
-    },
-    readCurrentBookKnowledgeNote: async (input) => {
-      if (activeWorkspace !== 'reader' || !epubReader) {
-        throw new Error('请先在电子书阅读器中打开一本书。');
-      }
-      const snapshot = librarySnapshotRef.current;
-      if (!snapshot?.rootPath) {
-        throw new Error('文件库尚未就绪。');
-      }
-      const book = snapshot.books.find(
-        (candidate) =>
-          normalizeLibraryPath(candidate.relativePath) ===
-          normalizeLibraryPath(epubReader.relativePath),
-      ) ?? { relativePath: epubReader.relativePath, title: epubReader.title };
+  const mindmapTurnBrief = useMemo(() => {
+    const snapshot = getAgentMindmap();
+    return {
+      title: snapshot.title,
+      revision: snapshot.revision,
+      relativePath: snapshot.relativePath,
+      nodeCount: snapshot.nodeCount,
+      truncated: snapshot.truncated,
+    };
+  }, [
+    editorDraft.markdown,
+    editorDraft.revision,
+    editorDraft.title,
+    editorDraft.relativePath,
+    transformer,
+  ]);
 
-      const chapterQuery = input?.chapterTarget
-        ? { label: input.chapterTarget }
-        : currentEpubChapter
-          ? {
-              label: currentEpubChapter.chapterLabel,
-              href: currentEpubChapter.chapterHref,
-              hierarchy: currentEpubChapter.chapterHierarchy,
-              cfi: currentEpubChapter.cfi,
-            }
-          : null;
-
-      if (chapterQuery && chapterQuery.label) {
-        const chapterTarget = resolveBookChapterKnowledgeTarget(
-          snapshot,
-          book,
-          chapterQuery,
-        );
-        const currentDoc = workbench.controller.getState();
-        if (
-          currentDoc &&
-          currentDoc.kind === 'doc' &&
-          normalizeLibraryPath(currentDoc.relativePath) ===
-            normalizeLibraryPath(chapterTarget.relativePath)
-        ) {
-          return {
-            bookKey: epubReader.progressKey,
-            bookTitle: epubReader.title,
-            relativePath: currentDoc.relativePath,
-            category: currentDoc.category || chapterTarget.category,
-            title: currentDoc.title,
-            exists: true,
-            markdown: currentDoc.source,
-            isChapterLevel: true,
-            chapterLabel: chapterQuery.label,
-          };
-        }
-        if (chapterTarget.document) {
-          const opened = await invoke<OpenedDocument>('open_document', {
-            relativePath: chapterTarget.document.relativePath,
-          });
-          return {
-            bookKey: epubReader.progressKey,
-            bookTitle: epubReader.title,
-            relativePath: chapterTarget.document.relativePath,
-            category: chapterTarget.document.category || chapterTarget.category,
-            title: chapterTarget.document.title,
-            exists: true,
-            markdown: opened.markdown,
-            isChapterLevel: true,
-            chapterLabel: chapterQuery.label,
-          };
-        }
-        return {
-          bookKey: epubReader.progressKey,
-          bookTitle: epubReader.title,
-          relativePath: chapterTarget.relativePath,
-          category: chapterTarget.category,
-          title: chapterTarget.title,
-          exists: false,
-          markdown: createChapterKnowledgeStarter({
-            bookTitle: epubReader.title,
-            chapterTitle: chapterQuery.label,
-            parentChapter: chapterQuery.hierarchy?.[0],
-            chapterHref: chapterQuery.href,
-            cfi: chapterQuery.cfi,
-          }),
-          isChapterLevel: true,
-          chapterLabel: chapterQuery.label,
-        };
-      }
-
-      const target = resolveBookKnowledgeTarget(snapshot, book);
-      const currentDoc = workbench.controller.getState();
-      if (
-        currentDoc &&
-        currentDoc.kind === 'doc' &&
-        normalizeLibraryPath(currentDoc.relativePath) ===
-          normalizeLibraryPath(target.relativePath)
-      ) {
-        return {
-          bookKey: epubReader.progressKey,
-          bookTitle: epubReader.title,
-          relativePath: currentDoc.relativePath,
-          category: currentDoc.category || target.category,
-          title: currentDoc.title,
-          exists: true,
-          markdown: currentDoc.source,
-          isChapterLevel: false,
-        };
-      }
-      if (target.document) {
-        const opened = await invoke<OpenedDocument>('open_document', {
-          relativePath: target.document.relativePath,
+  const agentCapabilities: AgentCapabilities = createAgentCapabilities({
+    feed: {
+      getWorkspace: () => activeWorkspace,
+      getSelectedArticleId: () => feedSelectedArticleIdRef.current,
+      notifySubscriptionsChanged: () =>
+        setFeedExternalRevision((revision) => revision + 1),
+    },
+    reader: {
+      getWorkspace: () => activeWorkspace,
+      getReader: () => epubReader,
+      getReaderBridge: () => readerAgentBridgeRef.current,
+      getLibrarySnapshot: () => librarySnapshotRef.current,
+      getCurrentChapter: () => currentEpubChapter,
+      getOpenDocument: () => workbench.controller.getState(),
+      editOpenDocument: (markdown) => workbench.controller.edit(markdown),
+      saveOpenDocument: () => workbench.controller.save({ manual: true }),
+      createKnowledgeDocument: (options) =>
+        workbench.controller.createCustomDocument(options),
+      reloadLibrary: () =>
+        agentHostRef.current.loadLibrary(false).then(() => undefined),
+      openKnowledgeNote: (note) =>
+        agentHostRef.current.openKnowledgeNote(note).then(() => undefined),
+      navigateToChapter: ({ progressKey, href, label }) => {
+        setEpubChapterNavigation({
+          id: ++epubChapterNavigationIdRef.current,
+          progressKey,
+          href,
+          label,
         });
-        return {
-          bookKey: epubReader.progressKey,
-          bookTitle: epubReader.title,
-          relativePath: target.document.relativePath,
-          category: target.document.category || target.category,
-          title: target.document.title,
-          exists: true,
-          markdown: opened.markdown,
-          isChapterLevel: false,
-        };
-      }
-      return {
-        bookKey: epubReader.progressKey,
-        bookTitle: epubReader.title,
-        relativePath: target.relativePath,
-        category: target.category,
-        title: target.title,
-        exists: false,
-        markdown: createBookKnowledgeStarter({
-          title: epubReader.title,
+      },
+      notify: (message) => setSaveMessage(message),
+    },
+    mindmap: {
+      getCurrentMindmap: getAgentMindmap,
+      searchLibrary: (query, category) =>
+        invoke<MapDocument[]>('search_library', {
+          query,
+          category: category || null,
         }),
-        isChapterLevel: false,
-      };
+      readDocument: (relativePath) =>
+        invoke<OpenedDocument>('open_document', { relativePath }),
+      proposeNodeEdit: proposeAgentNodeEdit,
+      proposeNodeBranch: proposeAgentNodeBranch,
     },
-    updateBookKnowledgeNote: async ({
-      content,
-      mode,
-      rationale,
-      chapterTarget: targetLabel,
-    }) => {
-      if (activeWorkspace !== 'reader' || !epubReader) {
-        throw new Error('请先在电子书阅读器中打开一本书。');
-      }
-      const snapshot = librarySnapshotRef.current;
-      if (!snapshot?.rootPath) {
-        throw new Error('文件库尚未就绪。');
-      }
-      const book = snapshot.books.find(
-        (candidate) =>
-          normalizeLibraryPath(candidate.relativePath) ===
-          normalizeLibraryPath(epubReader.relativePath),
-      ) ?? { relativePath: epubReader.relativePath, title: epubReader.title };
-
-      const chapterQuery = targetLabel
-        ? { label: targetLabel }
-        : currentEpubChapter
-          ? {
-              label: currentEpubChapter.chapterLabel,
-              href: currentEpubChapter.chapterHref,
-              hierarchy: currentEpubChapter.chapterHierarchy,
-              cfi: currentEpubChapter.cfi,
-            }
-          : null;
-
-      const target =
-        chapterQuery && chapterQuery.label
-          ? resolveBookChapterKnowledgeTarget(snapshot, book, chapterQuery)
-          : resolveBookKnowledgeTarget(snapshot, book);
-
-      let baseMarkdown = '';
-      const currentDoc = workbench.controller.getState();
-      const isCurrentlyOpen =
-        currentDoc &&
-        currentDoc.kind === 'doc' &&
-        normalizeLibraryPath(currentDoc.relativePath) ===
-          normalizeLibraryPath(target.relativePath);
-
-      if (isCurrentlyOpen) {
-        baseMarkdown = currentDoc.source;
-      } else if (target.document) {
-        const opened = await invoke<OpenedDocument>('open_document', {
-          relativePath: target.document.relativePath,
-        });
-        baseMarkdown = opened.markdown;
-      } else if (chapterQuery && chapterQuery.label) {
-        baseMarkdown = createChapterKnowledgeStarter({
-          bookTitle: epubReader.title,
-          chapterTitle: chapterQuery.label,
-          parentChapter: chapterQuery.hierarchy?.[0],
-          chapterHref: chapterQuery.href,
-          cfi: chapterQuery.cfi,
-        });
-      } else {
-        baseMarkdown = createBookKnowledgeStarter({
-          title: epubReader.title,
-        });
-      }
-
-      const nextMarkdown =
-        mode === 'append'
-          ? `${baseMarkdown.trimEnd()}\n\n${content.trim()}\n`
-          : content.trim();
-
-      if (isCurrentlyOpen) {
-        workbench.controller.edit(nextMarkdown);
-        await workbench.controller.save({ manual: true });
-      } else if (target.document) {
-        await invoke<MapDocument>('save_document', {
-          input: {
-            id: target.document.id,
-            relativePath: target.document.relativePath,
-            title: target.document.title,
-            category: target.document.category || target.category,
-            mapType: '文档',
-            tags: target.document.tags,
-            markdown: nextMarkdown,
-            historySource: 'ai',
-            kind: 'doc',
-            origin: 'ebook',
-            sourceRef: {
-              bookRelativePath: book.relativePath,
-              chapterHref: chapterQuery?.href,
-              chapterCfi: chapterQuery?.cfi,
-            },
-          },
-        });
-        await loadLibrary(false);
-      } else {
-        await workbench.controller.createCustomDocument({
-          kind: 'doc',
-          category: target.category,
-          title: target.title,
-          source: nextMarkdown,
-          tags: ['读书笔记', '电子书'],
-          origin: 'ebook',
-          sourceRef: {
-            bookRelativePath: book.relativePath,
-            chapterHref: chapterQuery?.href,
-            chapterCfi: chapterQuery?.cfi,
-          },
-        });
-        saveEpubKnowledgePath(
-          snapshot.rootPath,
-          epubReader.relativePath,
-          target.relativePath,
-        );
-      }
-
-      setSaveMessage(
-        rationale ? `AI 更新读书笔记：${rationale}` : 'AI 已更新读书笔记',
-      );
-      return {
-        relativePath: target.relativePath,
-        title: target.title,
-        category: target.category,
-        updated: true,
-        isChapterLevel: Boolean(chapterQuery?.label),
-      };
-    },
-    queryBookGalaxy: async () => {
-      if (activeWorkspace !== 'reader' || !epubReader) {
-        throw new Error('当前环境未处于电子书阅读状态，无法查询星系图数据。');
-      }
-      const snapshot = librarySnapshotRef.current;
-      if (!snapshot?.rootPath) {
-        throw new Error('文件库尚未就绪。');
-      }
-      const coverDataUrl =
-        loadEpubBookMetadata(epubReader.progressKey)?.coverDataUrl ||
-        findStoredCoverByBookKey(epubReader.progressKey) ||
-        undefined;
-      const graph = buildBookGalaxyGraph(
-        epubReader.title,
-        epubReader.progressKey,
-        currentEpubChapter?.toc ?? [],
-        snapshot,
-        currentEpubChapter?.chapterHref,
-        coverDataUrl,
-      );
-      return {
-        bookTitle: graph.bookTitle,
-        totalChapters: graph.stats.totalChapters,
-        notesCount: graph.stats.notesCount,
-        completionPercentage: graph.stats.completionPercentage,
-        currentChapter: currentEpubChapter?.chapterLabel,
-        nodes: graph.nodes.map((n) => ({
-          id: n.id,
-          label: n.label,
-          kind: n.kind,
-          chapterIndex: n.chapterIndex,
-          hasNote: n.hasNote,
-          notePath: n.notePath,
-          isCurrent: n.isCurrent,
-        })),
-      };
-    },
-    syncReaderChapter: async ({ chapterTarget, reason }) => {
-      if (activeWorkspace !== 'reader' || !epubReader) {
-        throw new Error('当前环境无法跳转电子书章节。');
-      }
-      const snapshot = librarySnapshotRef.current;
-      if (!snapshot?.rootPath) throw new Error('文件库尚未就绪。');
-      const book = snapshot.books.find(
-        (candidate) =>
-          normalizeLibraryPath(candidate.relativePath) ===
-          normalizeLibraryPath(epubReader.relativePath),
-      );
-
-      const flatToc = currentEpubChapter?.toc
-        ? currentEpubChapter.toc.flatMap((t) => [t, ...(t.subitems ?? [])])
-        : [];
-      const query = chapterTarget.trim().toLowerCase();
-      const matched = flatToc.find((item) => {
-        const label = typeof item.label === 'string' ? item.label : '';
-        return (
-          label.toLowerCase().includes(query) ||
-          item.href.toLowerCase().includes(query)
-        );
-      });
-
-      const targetLabel = matched
-        ? typeof matched.label === 'string'
-          ? matched.label
-          : chapterTarget
-        : chapterTarget;
-      const targetHref = matched?.href;
-
-      setEpubChapterNavigation({
-        id: ++epubChapterNavigationIdRef.current,
-        progressKey: epubReader.progressKey,
-        href: targetHref,
-        label: targetLabel,
-      });
-
-      let notePath: string | undefined;
-      if (book) {
-        const target = resolveBookChapterKnowledgeTarget(snapshot, book, {
-          label: targetLabel,
-          href: targetHref,
-        });
-        if (target.document) {
-          await openKnowledgeNote(target.document);
-          notePath = target.document.relativePath;
-        }
-      }
-
-      if (reason) {
-        setSaveMessage(`AI 同步阅读章节：${reason}`);
-      }
-
-      return {
-        synced: true,
-        targetChapter: targetLabel,
-        notePath,
-      };
-    },
-    appendBookKnowledgeExcerpt: async ({
-      excerpt,
-      commentary,
-      chapterLabel,
-    }) => {
-      const heading = chapterLabel ? `### ${chapterLabel}\n` : '';
-      const noteBlock = [
-        heading,
-        `> [!QUOTE] 章节摘录`,
-        `> ${excerpt.trim().replace(/\n/g, '\n> ')}`,
-        commentary?.trim()
-          ? `\n**深度思考 / 见解**：\n${commentary.trim()}`
-          : '',
-      ]
-        .filter(Boolean)
-        .join('\n');
-
-      const result = await agentCapabilities.updateBookKnowledgeNote!({
-        content: noteBlock,
-        mode: 'append',
-        rationale: chapterLabel
-          ? `摘录沉淀至「${chapterLabel}」`
-          : '摘录沉淀至读书笔记',
-      });
-      return {
-        relativePath: result.relativePath,
-        title: result.title,
-        appended: result.updated,
-      };
-    },
-    getCurrentMindmap: getAgentMindmap,
-    searchLibrary: (query, category) =>
-      invoke<MapDocument[]>('search_library', {
-        query,
-        category: category || null,
-      }),
-    readDocument: (relativePath) =>
-      invoke<OpenedDocument>('open_document', { relativePath }),
-    proposeNodeEdit: proposeAgentNodeEdit,
-    proposeNodeBranch: proposeAgentNodeBranch,
-    searchYouTubeVideos: async (query, limit) => {
-      const videos = await searchYouTubeVideos(query, limit);
-      for (const video of videos)
+    player: {
+      rememberYouTubeVideo: (video) => {
         youtubeSearchResultsRef.current.set(video.videoId, video);
-      return videos;
+      },
+      listLearningPaths: async () => (await playerApi.overview()).learningPaths,
+      getLearningPath: (pathId) => playerApi.learningPathGet(pathId),
+      proposeLearningPath,
+      getFavoritesBoard: () => playerApi.favoritesSnapshot(),
     },
-    listLearningPaths: async () => (await playerApi.overview()).learningPaths,
-    getLearningPath: (pathId) => playerApi.learningPathGet(pathId),
-    proposeLearningPath,
-    getFavoritesBoard: () => playerApi.favoritesSnapshot(),
-    proposeFavoritesCategorization: async (input) => {
-      const snapshot = await playerApi.favoritesSnapshot();
-      return buildFavoritesCategorizationProposal(snapshot, input);
-    },
-  };
+  });
   agentCapabilitiesRef.current = agentCapabilities;
 
   useEffect(() => {
-    const tools = agentToolCatalog.map(
-      ({ name, description, permission, inputSchema, version }) => ({
-        name,
-        description,
-        inputSchema,
-        annotations: {
-          readOnlyHint: permission === 'read',
-          destructiveHint: permission === 'user_approval',
-          openWorldHint: false,
-        },
-        _meta: {
-          'seamind/version': version,
-          'seamind/permission': permission,
-          ...(permission === 'user_approval'
-            ? { 'anthropic/requiresUserInteraction': true }
-            : {}),
-        },
-      }),
-    );
-    void invoke('agent_bridge_set_tools', { tools }).catch((error: unknown) => {
-      console.error('Unable to register Seamind MCP tools', error);
-    });
+    const tools = agentToolCatalogForWorkspace(activeWorkspace);
+    if (!tools) return;
+    let cancelled = false;
+    const specs = mcpToolSpecs(tools);
+    mcpToolChain.current = mcpToolChain.current
+      .catch(() => undefined)
+      .then(() => invoke('agent_bridge_set_tools', { tools: specs }))
+      .then(() => {
+        if (!cancelled) setAgentBridgeError('');
+      })
+      .catch((error: unknown) => {
+        console.error('Unable to register Seamind MCP tools', error);
+        if (!cancelled) {
+          setAgentBridgeError(
+            errorMessage(
+              error,
+              'Seamind 工具注册失败，终端里的 Agent 暂时用不了这些工具。',
+            ),
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeWorkspace]);
 
+  useEffect(() => {
     let alive = true;
     let unlisten: (() => void) | undefined;
     void listen<CliAgentToolRequest>(
@@ -1984,70 +1591,78 @@ export default function App() {
             JSON.stringify(input ?? {}),
             capabilities,
           );
-          if (execution.favoritesCategorizationProposal) {
+          const blocked = (message: string) =>
+            invoke('agent_bridge_resolve', {
+              requestId,
+              result: {},
+              error: message,
+            }).catch(() => undefined);
+          if (pendingCliProposalRef.current) {
+            const waitingOnMindmap = Boolean(execution.proposal);
             if (
-              cliAgentProposalRef.current ||
-              cliLearningPathProposalRef.current ||
-              cliFavoritesProposalRef.current
+              execution.favoritesCategorizationProposal ||
+              execution.learningPathProposal ||
+              execution.proposal ||
+              execution.knowledgeNoteProposal ||
+              execution.readerChapterProposal
             ) {
-              await invoke('agent_bridge_resolve', {
-                requestId,
-                result: {},
-                error: 'Seamind 正在等待你确认另一条提案。',
-              }).catch(() => undefined);
+              await blocked(
+                waitingOnMindmap
+                  ? 'Seamind 正在等待你确认另一条导图修改提案。'
+                  : 'Seamind 正在等待你确认另一条提案。',
+              );
               return;
             }
-            const pending = {
+          }
+          if (execution.favoritesCategorizationProposal) {
+            const pending: PendingCliProposal = {
+              kind: 'favorites',
               requestId,
               proposal: execution.favoritesCategorizationProposal,
             };
-            cliFavoritesProposalRef.current = pending;
-            setCliFavoritesProposal(pending);
-            setCliFavoritesProposalError('');
+            pendingCliProposalRef.current = pending;
+            setPendingCliProposal(pending);
+            setPendingCliError('');
             setActiveWorkspace('player');
             setPlayerOpened(true);
             return;
           }
           if (execution.learningPathProposal) {
-            if (
-              cliAgentProposalRef.current ||
-              cliLearningPathProposalRef.current ||
-              cliFavoritesProposalRef.current
-            ) {
-              await invoke('agent_bridge_resolve', {
-                requestId,
-                result: {},
-                error: 'Seamind 正在等待你确认另一条提案。',
-              }).catch(() => undefined);
-              return;
-            }
-            const pending = {
+            const pending: PendingCliProposal = {
+              kind: 'learning-path',
               requestId,
               proposal: execution.learningPathProposal,
             };
-            cliLearningPathProposalRef.current = pending;
-            setCliLearningPathProposal(pending);
-            setCliLearningPathProposalError('');
+            pendingCliProposalRef.current = pending;
+            setPendingCliProposal(pending);
+            setPendingCliError('');
             setActiveWorkspace('player');
             setPlayerOpened(true);
             return;
           }
           if (execution.proposal) {
-            if (
-              cliAgentProposalRef.current ||
-              cliLearningPathProposalRef.current ||
-              cliFavoritesProposalRef.current
-            ) {
-              await invoke('agent_bridge_resolve', {
-                requestId,
-                result: {},
-                error: 'Seamind 正在等待你确认另一条导图修改提案。',
-              }).catch(() => undefined);
-              return;
-            }
-            const pending = { requestId, proposal: execution.proposal };
-            cliAgentProposalRef.current = pending;
-            setCliAgentProposal(pending);
+            const pending: PendingCliProposal = {
+              kind: 'mindmap',
+              requestId,
+              proposal: execution.proposal,
+            };
+            pendingCliProposalRef.current = pending;
+            setPendingCliProposal(pending);
+            setPendingCliError('');
+            return;
+          }
+          const readerProposal =
+            execution.knowledgeNoteProposal ?? execution.readerChapterProposal;
+          if (readerProposal) {
+            const pending: PendingCliProposal = {
+              kind: 'reader',
+              requestId,
+              proposal: readerProposal,
+            };
+            pendingCliProposalRef.current = pending;
+            setPendingCliProposal(pending);
+            setPendingCliError('');
+            setActiveWorkspace('reader');
             return;
           }
           const structuredContent = {
@@ -2125,167 +1740,222 @@ export default function App() {
     return draftRef.current.revision;
   };
 
-  const resolveCliAgentProposal = async (apply: boolean) => {
-    const pending = cliAgentProposalRef.current;
+  const resolvePendingCliProposal = async (apply: boolean) => {
+    const pending = pendingCliProposalRef.current;
     if (!pending) return;
-    cliAgentProposalRef.current = null;
-    setCliAgentProposal(null);
+    if (pending.kind !== 'mindmap' && pendingCliBusy) return;
     if (!apply) {
+      const error =
+        pending.kind === 'mindmap'
+          ? '用户在 Seamind 中拒绝了导图修改提案；导图没有变化。'
+          : pending.kind === 'learning-path'
+            ? '用户拒绝了学习路径提案；数据库没有变化。'
+            : pending.kind === 'favorites'
+              ? '用户取消了收藏视频智能归类提案；未做任何改动。'
+              : pending.proposal.kind === 'chapter'
+                ? '用户取消了章节跳转；阅读位置没有变化。'
+                : '用户取消了读书笔记修改；笔记没有变化。';
+      pendingCliProposalRef.current = null;
+      setPendingCliProposal(null);
+      setPendingCliError('');
       await invoke('agent_bridge_resolve', {
         requestId: pending.requestId,
         result: {},
-        error: '用户在 Seamind 中拒绝了导图修改提案；导图没有变化。',
-      }).catch(() => undefined);
-      return;
-    }
-    let appliedRevision: number | null;
-    try {
-      appliedRevision = await applyAgentProposal(pending.proposal);
-    } catch (error) {
-      await invoke('agent_bridge_resolve', {
-        requestId: pending.requestId,
-        result: {},
-        error: errorMessage(error, '无法保存下探分支资源。'),
-      }).catch(() => undefined);
-      return;
-    }
-    if (appliedRevision === null) {
-      await invoke('agent_bridge_resolve', {
-        requestId: pending.requestId,
-        result: {},
-        error: '当前导图在提案生成后发生了变化。请重新读取导图并提出新提案。',
-      }).catch(() => undefined);
-      return;
-    }
-    await invoke('agent_bridge_resolve', {
-      requestId: pending.requestId,
-      result: {
-        content: [
-          { type: 'text', text: '用户已在 Seamind 中确认并应用修改。' },
-        ],
-        structuredContent: {
-          status: 'applied',
-          title: pending.proposal.title,
-          relativePath: pending.proposal.baseRelativePath,
-          revision: appliedRevision,
-        },
-      },
-      error: null,
-    }).catch(() => undefined);
-  };
-
-  const resolveCliLearningPathProposal = async (apply: boolean) => {
-    const pending = cliLearningPathProposalRef.current;
-    if (!pending || cliLearningPathProposalBusy) return;
-    if (!apply) {
-      cliLearningPathProposalRef.current = null;
-      setCliLearningPathProposal(null);
-      setCliLearningPathProposalError('');
-      await invoke('agent_bridge_resolve', {
-        requestId: pending.requestId,
-        result: {},
-        error: '用户拒绝了学习路径提案；数据库没有变化。',
+        error,
       }).catch(() => undefined);
       return;
     }
 
-    setCliLearningPathProposalBusy(true);
-    setCliLearningPathProposalError('');
-    try {
-      const saved = await playerApi.learningPathSave(pending.proposal.input);
-      cliLearningPathProposalRef.current = null;
-      setCliLearningPathProposal(null);
-      setPlayerOpened(true);
-      setActiveWorkspace('player');
-      playerOpenLearningPathRequestIdRef.current += 1;
-      setPlayerOpenLearningPathRequest({
-        id: playerOpenLearningPathRequestIdRef.current,
-        pathId: saved.summary.pathId,
-      });
-      const structuredContent = {
-        status: 'applied',
-        permission: 'user_approval',
-        name: 'learning_path_propose',
-        pathId: saved.summary.pathId,
-        title: saved.summary.title,
-        nodeCount: saved.summary.nodeCount,
-        videoCount: saved.summary.videoCount,
-      };
+    if (pending.kind === 'mindmap') {
+      pendingCliProposalRef.current = null;
+      setPendingCliProposal(null);
+      let appliedRevision: number | null;
+      try {
+        appliedRevision = await applyAgentProposal(pending.proposal);
+      } catch (error) {
+        await invoke('agent_bridge_resolve', {
+          requestId: pending.requestId,
+          result: {},
+          error: errorMessage(error, '无法保存下探分支资源。'),
+        }).catch(() => undefined);
+        return;
+      }
+      if (appliedRevision === null) {
+        await invoke('agent_bridge_resolve', {
+          requestId: pending.requestId,
+          result: {},
+          error: '当前导图在提案生成后发生了变化。请重新读取导图并提出新提案。',
+        }).catch(() => undefined);
+        return;
+      }
       await invoke('agent_bridge_resolve', {
         requestId: pending.requestId,
         result: {
           content: [
-            {
-              type: 'text',
-              text: `用户已确认并保存学习路径「${saved.summary.title}」。`,
-            },
+            { type: 'text', text: '用户已在 Seamind 中确认并应用修改。' },
           ],
+          structuredContent: {
+            status: 'applied',
+            title: pending.proposal.title,
+            relativePath: pending.proposal.baseRelativePath,
+            revision: appliedRevision,
+          },
+        },
+        error: null,
+      }).catch(() => undefined);
+      return;
+    }
+
+    if (pending.kind === 'reader' && !agentCapabilitiesRef.current) {
+      setPendingCliError('Seamind 能力尚未初始化。');
+      return;
+    }
+
+    setPendingCliBusy(true);
+    setPendingCliError('');
+    try {
+      if (pending.kind === 'learning-path') {
+        const saved = await playerApi.learningPathSave(pending.proposal.input);
+        pendingCliProposalRef.current = null;
+        setPendingCliProposal(null);
+        setPlayerOpened(true);
+        setActiveWorkspace('player');
+        playerOpenLearningPathRequestIdRef.current += 1;
+        setPlayerOpenLearningPathRequest({
+          id: playerOpenLearningPathRequestIdRef.current,
+          pathId: saved.summary.pathId,
+        });
+        await invoke('agent_bridge_resolve', {
+          requestId: pending.requestId,
+          result: {
+            content: [
+              {
+                type: 'text',
+                text: `用户已确认并保存学习路径「${saved.summary.title}」。`,
+              },
+            ],
+            structuredContent: {
+              status: 'applied',
+              permission: 'user_approval',
+              name: 'learning_path_propose',
+              pathId: saved.summary.pathId,
+              title: saved.summary.title,
+              nodeCount: saved.summary.nodeCount,
+              videoCount: saved.summary.videoCount,
+            },
+          },
+          error: null,
+        }).catch(() => undefined);
+        return;
+      }
+      if (pending.kind === 'favorites') {
+        const result = await applyFavoritesCategorizationProposal(
+          pending.proposal,
+        );
+        pendingCliProposalRef.current = null;
+        setPendingCliProposal(null);
+        setPlayerOpened(true);
+        setActiveWorkspace('player');
+        playerOpenFavoritesRequestIdRef.current += 1;
+        setPlayerOpenFavoritesRequestId(
+          playerOpenFavoritesRequestIdRef.current,
+        );
+        await invoke('agent_bridge_resolve', {
+          requestId: pending.requestId,
+          result: {
+            content: [
+              {
+                type: 'text',
+                text: `用户已确认并应用收藏视频智能归类：新建 ${result.createdCategories} 个分类、归类 ${result.assignedVideos} 个视频。`,
+              },
+            ],
+            structuredContent: {
+              status: 'applied',
+              permission: 'user_approval',
+              name: 'favorites_propose_categorization',
+              createdCategories: result.createdCategories,
+              assignedVideos: result.assignedVideos,
+            },
+          },
+          error: null,
+        }).catch(() => undefined);
+        return;
+      }
+
+      const capabilities = agentCapabilitiesRef.current;
+      if (!capabilities) throw new Error('Seamind 能力尚未初始化。');
+      const proposal = pending.proposal;
+      let text = '用户已确认。';
+      let structuredContent: Record<string, unknown> = {
+        status: 'applied',
+        permission: 'user_approval',
+      };
+      if (proposal.kind === 'chapter') {
+        if (!capabilities.syncReaderChapter) {
+          throw new Error('请先在电子书阅读器中打开一本书。');
+        }
+        const synced = await capabilities.syncReaderChapter({
+          chapterTarget: proposal.chapterTarget,
+          reason: proposal.reason,
+        });
+        text = `用户已确认并跳转到「${synced.targetChapter}」。`;
+        structuredContent = {
+          ...structuredContent,
+          name: 'knowledge_sync_reader_chapter',
+          ...synced,
+        };
+      } else if (proposal.kind === 'update') {
+        if (!capabilities.updateBookKnowledgeNote) {
+          throw new Error('请先在电子书阅读器中打开一本书。');
+        }
+        const saved = await capabilities.updateBookKnowledgeNote({
+          content: proposal.content,
+          mode: proposal.mode,
+          rationale: proposal.rationale,
+          chapterTarget: proposal.chapterTarget,
+        });
+        text = `用户已确认并${proposal.mode === 'append' ? '追加' : '更新'}读书笔记「${saved.title}」。`;
+        structuredContent = {
+          ...structuredContent,
+          name: 'knowledge_update_book_note',
+          ...saved,
+        };
+      } else {
+        if (!capabilities.appendBookKnowledgeExcerpt) {
+          throw new Error('请先在电子书阅读器中打开一本书。');
+        }
+        const saved = await capabilities.appendBookKnowledgeExcerpt({
+          excerpt: proposal.excerpt,
+          commentary: proposal.commentary,
+          chapterLabel: proposal.chapterLabel,
+        });
+        text = `用户已确认并把摘录写入「${saved.title}」。`;
+        structuredContent = {
+          ...structuredContent,
+          name: 'knowledge_append_excerpt',
+          ...saved,
+        };
+      }
+      pendingCliProposalRef.current = null;
+      setPendingCliProposal(null);
+      await invoke('agent_bridge_resolve', {
+        requestId: pending.requestId,
+        result: {
+          content: [{ type: 'text', text }],
           structuredContent,
         },
         error: null,
       }).catch(() => undefined);
     } catch (error) {
-      setCliLearningPathProposalError(
-        errorMessage(error, '保存学习路径失败。'),
-      );
+      const fallback =
+        pending.kind === 'learning-path'
+          ? '保存学习路径失败。'
+          : pending.kind === 'favorites'
+            ? '应用收藏视频分类提案失败。'
+            : '应用阅读操作失败。';
+      setPendingCliError(errorMessage(error, fallback));
     } finally {
-      setCliLearningPathProposalBusy(false);
-    }
-  };
-
-  const resolveCliFavoritesProposal = async (apply: boolean) => {
-    const pending = cliFavoritesProposalRef.current;
-    if (!pending || cliFavoritesProposalBusy) return;
-    if (!apply) {
-      cliFavoritesProposalRef.current = null;
-      setCliFavoritesProposal(null);
-      setCliFavoritesProposalError('');
-      await invoke('agent_bridge_resolve', {
-        requestId: pending.requestId,
-        result: {},
-        error: '用户取消了收藏视频智能归类提案；未做任何改动。',
-      }).catch(() => undefined);
-      return;
-    }
-
-    setCliFavoritesProposalBusy(true);
-    setCliFavoritesProposalError('');
-    try {
-      const result = await applyFavoritesCategorizationProposal(
-        pending.proposal,
-      );
-      cliFavoritesProposalRef.current = null;
-      setCliFavoritesProposal(null);
-      setPlayerOpened(true);
-      setActiveWorkspace('player');
-      playerOpenFavoritesRequestIdRef.current += 1;
-      setPlayerOpenFavoritesRequestId(playerOpenFavoritesRequestIdRef.current);
-      const structuredContent = {
-        status: 'applied',
-        permission: 'user_approval',
-        name: 'favorites_propose_categorization',
-        createdCategories: result.createdCategories,
-        assignedVideos: result.assignedVideos,
-      };
-      await invoke('agent_bridge_resolve', {
-        requestId: pending.requestId,
-        result: {
-          content: [
-            {
-              type: 'text',
-              text: `用户已确认并应用收藏视频智能归类：新建 ${result.createdCategories} 个分类、归类 ${result.assignedVideos} 个视频。`,
-            },
-          ],
-          structuredContent,
-        },
-        error: null,
-      }).catch(() => undefined);
-    } catch (error) {
-      setCliFavoritesProposalError(
-        errorMessage(error, '应用收藏视频分类提案失败。'),
-      );
-    } finally {
-      setCliFavoritesProposalBusy(false);
+      setPendingCliBusy(false);
     }
   };
 
@@ -3285,6 +2955,8 @@ export default function App() {
     if (!(await canLeaveMindmapDraft())) return;
     await workbench.controller.openMarkdown(note);
   };
+  agentHostRef.current.loadLibrary = loadLibrary;
+  agentHostRef.current.openKnowledgeNote = openKnowledgeNote;
 
   const createKnowledgeNote = async (
     folder: string,
@@ -5588,6 +5260,11 @@ export default function App() {
       }
     >
       <InstallerComponentSetup />
+      {agentBridgeError ? (
+        <p className="agent-bridge-error" role="alert">
+          {agentBridgeError}
+        </p>
+      ) : null}
       <header className="topbar">
         <nav className="workspace-switcher" aria-label="工作区">
           <button
@@ -6735,7 +6412,7 @@ export default function App() {
                 providerLabel={providerLabel(providerSettings.baseUrl)}
                 capabilities={agentCapabilities}
                 target={selectedAiTarget}
-                mapTitle={editorDraft.title}
+                mapBrief={mindmapTurnBrief}
                 mapMarkdown={editorDraft.markdown}
                 currentRevision={editorDraft.revision}
                 onApplyProposal={applyAgentProposal}
@@ -6752,7 +6429,7 @@ export default function App() {
                 providerLabel={providerLabel(providerSettings.baseUrl)}
                 capabilities={agentCapabilities}
                 target={selectedAiTarget}
-                mapTitle={editorDraft.title}
+                mapBrief={mindmapTurnBrief}
                 mapMarkdown={editorDraft.markdown}
                 currentRevision={editorDraft.revision}
                 onApplyProposal={applyAgentProposal}
@@ -8201,7 +7878,7 @@ export default function App() {
           </section>
         </div>
       )}
-      {cliAgentProposal && (
+      {pendingCliProposal?.kind === 'mindmap' && (
         <div className="settings-backdrop agent-cli-approval-backdrop">
           <section
             className="settings-dialog agent-cli-approval-dialog"
@@ -8212,39 +7889,39 @@ export default function App() {
             <div className="agent-cli-approval-kicker">CLI · SEAMIND MCP</div>
             <h2 id="agent-cli-approval-title">确认导图修改</h2>
             <p>
-              {cliAgentProposal.proposal.operation === 'rename'
-                ? `将「${cliAgentProposal.proposal.previousLabel}」改为「${cliAgentProposal.proposal.nextLabel}」`
-                : cliAgentProposal.proposal.operation === 'add_child'
-                  ? `在「${cliAgentProposal.proposal.previousLabel}」下添加「${cliAgentProposal.proposal.nextLabel}」`
-                  : cliAgentProposal.proposal.operation === 'add_sibling'
-                    ? `在「${cliAgentProposal.proposal.previousLabel}」旁添加「${cliAgentProposal.proposal.nextLabel}」`
-                    : cliAgentProposal.proposal.operation === 'add_branch'
-                      ? `在「${cliAgentProposal.proposal.previousLabel}」下插入${cliAgentProposal.proposal.analysisMode === 'visualization' ? '可视化' : '下探'}分支「${cliAgentProposal.proposal.nextLabel}」`
-                      : cliAgentProposal.proposal.operation === 'delete'
-                        ? `删除「${cliAgentProposal.proposal.previousLabel}」及其子节点`
-                        : `更新「${cliAgentProposal.proposal.previousLabel}」的备注`}
+              {pendingCliProposal.proposal.operation === 'rename'
+                ? `将「${pendingCliProposal.proposal.previousLabel}」改为「${pendingCliProposal.proposal.nextLabel}」`
+                : pendingCliProposal.proposal.operation === 'add_child'
+                  ? `在「${pendingCliProposal.proposal.previousLabel}」下添加「${pendingCliProposal.proposal.nextLabel}」`
+                  : pendingCliProposal.proposal.operation === 'add_sibling'
+                    ? `在「${pendingCliProposal.proposal.previousLabel}」旁添加「${pendingCliProposal.proposal.nextLabel}」`
+                    : pendingCliProposal.proposal.operation === 'add_branch'
+                      ? `在「${pendingCliProposal.proposal.previousLabel}」下插入${pendingCliProposal.proposal.analysisMode === 'visualization' ? '可视化' : '下探'}分支「${pendingCliProposal.proposal.nextLabel}」`
+                      : pendingCliProposal.proposal.operation === 'delete'
+                        ? `删除「${pendingCliProposal.proposal.previousLabel}」及其子节点`
+                        : `更新「${pendingCliProposal.proposal.previousLabel}」的备注`}
             </p>
-            {cliAgentProposal.proposal.htmlAssets?.length ? (
+            {pendingCliProposal.proposal.htmlAssets?.length ? (
               <p className="agent-cli-approval-rationale">
-                确认后保存 {cliAgentProposal.proposal.htmlAssets.length} 个隔离
-                HTML 组件。
+                确认后保存 {pendingCliProposal.proposal.htmlAssets.length}{' '}
+                个隔离 HTML 组件。
               </p>
             ) : null}
-            {cliAgentProposal.proposal.rationale && (
+            {pendingCliProposal.proposal.rationale && (
               <p className="agent-cli-approval-rationale">
-                {cliAgentProposal.proposal.rationale}
+                {pendingCliProposal.proposal.rationale}
               </p>
             )}
             <details>
               <summary>查看修改内容</summary>
               <pre>
-                {cliAgentProposal.proposal.operation === 'add_branch'
-                  ? cliAgentProposal.proposal.branchMarkdown || '(分支为空)'
-                  : cliAgentProposal.proposal.operation === 'set_note'
-                    ? `− ${cliAgentProposal.proposal.previousNote || '(空备注)'}\n+ ${cliAgentProposal.proposal.nextNote || '(空备注)'}`
-                    : cliAgentProposal.proposal.operation === 'delete'
-                      ? `− ${cliAgentProposal.proposal.previousLabel}（及其子节点）`
-                      : `− ${cliAgentProposal.proposal.previousLabel}\n+ ${cliAgentProposal.proposal.nextLabel}`}
+                {pendingCliProposal.proposal.operation === 'add_branch'
+                  ? pendingCliProposal.proposal.branchMarkdown || '(分支为空)'
+                  : pendingCliProposal.proposal.operation === 'set_note'
+                    ? `− ${pendingCliProposal.proposal.previousNote || '(空备注)'}\n+ ${pendingCliProposal.proposal.nextNote || '(空备注)'}`
+                    : pendingCliProposal.proposal.operation === 'delete'
+                      ? `− ${pendingCliProposal.proposal.previousLabel}（及其子节点）`
+                      : `− ${pendingCliProposal.proposal.previousLabel}\n+ ${pendingCliProposal.proposal.nextLabel}`}
               </pre>
             </details>
             <p className="agent-cli-approval-note">
@@ -8254,14 +7931,14 @@ export default function App() {
               <button
                 type="button"
                 className="agent-cli-reject-button"
-                onClick={() => void resolveCliAgentProposal(false)}
+                onClick={() => void resolvePendingCliProposal(false)}
               >
                 拒绝
               </button>
               <button
                 type="button"
                 className="agent-cli-apply-button"
-                onClick={() => void resolveCliAgentProposal(true)}
+                onClick={() => void resolvePendingCliProposal(true)}
               >
                 应用并自动保存
               </button>
@@ -8269,24 +7946,33 @@ export default function App() {
           </section>
         </div>
       )}
-      {cliLearningPathProposal && (
+      {pendingCliProposal?.kind === 'learning-path' && (
         <LearningPathProposalDialog
-          proposal={cliLearningPathProposal.proposal}
+          proposal={pendingCliProposal.proposal}
           sourceLabel="cli"
-          busy={cliLearningPathProposalBusy}
-          error={cliLearningPathProposalError}
-          onCancel={() => void resolveCliLearningPathProposal(false)}
-          onConfirm={() => void resolveCliLearningPathProposal(true)}
+          busy={pendingCliBusy}
+          error={pendingCliError}
+          onCancel={() => void resolvePendingCliProposal(false)}
+          onConfirm={() => void resolvePendingCliProposal(true)}
         />
       )}
-      {cliFavoritesProposal && (
+      {pendingCliProposal?.kind === 'reader' && (
+        <ReaderActionProposalDialog
+          proposal={pendingCliProposal.proposal}
+          busy={pendingCliBusy}
+          error={pendingCliError}
+          onCancel={() => void resolvePendingCliProposal(false)}
+          onConfirm={() => void resolvePendingCliProposal(true)}
+        />
+      )}
+      {pendingCliProposal?.kind === 'favorites' && (
         <FavoritesProposalDialog
-          proposal={cliFavoritesProposal.proposal}
+          proposal={pendingCliProposal.proposal}
           sourceLabel="cli"
-          busy={cliFavoritesProposalBusy}
-          error={cliFavoritesProposalError}
-          onCancel={() => void resolveCliFavoritesProposal(false)}
-          onConfirm={() => void resolveCliFavoritesProposal(true)}
+          busy={pendingCliBusy}
+          error={pendingCliError}
+          onCancel={() => void resolvePendingCliProposal(false)}
+          onConfirm={() => void resolvePendingCliProposal(true)}
         />
       )}
       {terminalCommandConfirmation && (

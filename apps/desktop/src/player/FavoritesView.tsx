@@ -2,8 +2,15 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { DragEvent } from 'react';
 import type { AgentCapabilities } from '../agent/capabilities';
 import type { AgentProviderSettings } from '../agent/runtime';
-import { runFavoritesCategorizeAgentTurn } from '../agent/runtime';
-import type { FavoritesCategorizationProposal } from '../agent/types';
+import {
+  agentProfiles,
+  noteSessionResolution,
+  runAgentSession,
+} from '../agent/runtime';
+import type {
+  AgentChatMessage,
+  FavoritesCategorizationProposal,
+} from '../agent/types';
 import { formatAgo, formatDuration, formatViews } from './format';
 import {
   ALL_FAVORITES_FILTER,
@@ -126,6 +133,8 @@ export default function FavoritesView({
   const [aiProposal, setAiProposal] =
     useState<FavoritesCategorizationProposal | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
+  const [aiStatus, setAiStatus] = useState('');
+  const [aiHistory, setAiHistory] = useState<AgentChatMessage[]>([]);
   const [aiError, setAiError] = useState('');
 
   // Drag and drop states
@@ -498,25 +507,57 @@ export default function FavoritesView({
       host.notify('AI 能力尚未就绪', 'error');
       return;
     }
+    if (aiProposal) return;
     setAiBusy(true);
     setAiError('');
+    setAiStatus(
+      `第 1/${agentProfiles.favorites.maxRounds} 轮 · 工具 0/${agentProfiles.favorites.maxToolCalls}`,
+    );
+    const seenTools = new Set<string>();
     try {
-      const result = await runFavoritesCategorizeAgentTurn({
+      const result = await runAgentSession({
+        profile: agentProfiles.favorites,
+        history: aiHistory,
         prompt:
           '请读取我当前所有的收藏视频与已有分类，将尚未分类的视频按单主分类划分整理并提议精简分类，提交归类提案。',
         provider: bridges.aiProvider,
         capabilities: bridges.agentCapabilities,
+        onEvent: (event) => {
+          if (event.kind === 'tool' && event.status === 'running') {
+            seenTools.add(event.id);
+          }
+          const progress = `第 ${event.round}/${agentProfiles.favorites.maxRounds} 轮 · 工具 ${seenTools.size}/${agentProfiles.favorites.maxToolCalls}`;
+          setAiStatus(
+            event.kind === 'tool' ? `${progress} · ${event.label}` : progress,
+          );
+        },
       });
-      if (result.proposal) {
-        setAiProposal(result.proposal);
+      setAiHistory(result.history);
+      if (result.favoritesCategorizationProposal) {
+        setAiProposal(result.favoritesCategorizationProposal);
+        setAiStatus('归类预览已准备好，确认或放弃后可以继续。');
       } else {
+        setAiStatus('');
         host.notify(result.reply || 'AI 未提出新的归类建议');
       }
     } catch (caught) {
       setAiError(errorText(caught, 'AI 归类失败'));
+      setAiStatus('');
     } finally {
       setAiBusy(false);
     }
+  };
+
+  const noteFavoritesResolution = (decision: 'confirmed' | 'rejected') => {
+    setAiHistory((prev) =>
+      noteSessionResolution(
+        prev,
+        decision === 'confirmed'
+          ? '用户已确认并应用了这份收藏分类提案。'
+          : '用户拒绝了这份收藏分类提案，收藏没有变化。',
+      ),
+    );
+    setAiStatus('');
   };
 
   const confirmAiProposal = async () => {
@@ -525,6 +566,7 @@ export default function FavoritesView({
     setAiError('');
     try {
       const summary = await applyFavoritesCategorizationProposal(aiProposal);
+      noteFavoritesResolution('confirmed');
       setAiProposal(null);
       await loadSnapshot();
       void host.reloadOverview();
@@ -866,11 +908,11 @@ export default function FavoritesView({
             <button
               type="button"
               className="fav-btn"
-              disabled={aiBusy}
+              disabled={aiBusy || Boolean(aiProposal)}
               onClick={() => void runAiCategorization()}
               title="调用 AI 智能分析视频标题与频道，提出单主分类整理建议"
             >
-              {aiBusy ? '正在分析…' : 'AI 智能归类'}
+              {aiBusy ? aiStatus || '正在分析…' : 'AI 智能归类'}
             </button>
             {bridges?.onSendTerminalCommand && (
               <button
@@ -1606,7 +1648,10 @@ export default function FavoritesView({
           busy={aiBusy}
           error={aiError}
           onConfirm={() => void confirmAiProposal()}
-          onCancel={() => setAiProposal(null)}
+          onCancel={() => {
+            noteFavoritesResolution('rejected');
+            setAiProposal(null);
+          }}
         />
       )}
     </div>

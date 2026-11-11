@@ -88,6 +88,31 @@ export interface FavoritesCategorizationProposal {
   rationale: string;
 }
 
+export interface KnowledgeNoteUpdateProposal {
+  kind: 'update';
+  content: string;
+  mode: 'append' | 'overwrite';
+  chapterTarget?: string;
+  rationale: string;
+}
+
+export interface KnowledgeExcerptProposal {
+  kind: 'excerpt';
+  excerpt: string;
+  commentary?: string;
+  chapterLabel?: string;
+}
+
+export type KnowledgeNoteProposal =
+  | KnowledgeNoteUpdateProposal
+  | KnowledgeExcerptProposal;
+
+export interface ReaderChapterProposal {
+  kind: 'chapter';
+  chapterTarget: string;
+  reason: string;
+}
+
 export interface AgentToolCall {
   id: string;
   type: 'function';

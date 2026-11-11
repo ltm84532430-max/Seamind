@@ -162,6 +162,28 @@ export default function PlayerWorkspace({
     useState<LearningPathProposal | null>(null);
   const [proposalBusy, setProposalBusy] = useState(false);
   const [proposalError, setProposalError] = useState('');
+  const learningPathResolutionRef = useRef<
+    ((decision: 'confirmed' | 'rejected') => void) | null
+  >(null);
+  const previewLearningPathProposal = useCallback(
+    (
+      proposal: LearningPathProposal,
+      _source: 'ai',
+      session?: {
+        noteResolution(decision: 'confirmed' | 'rejected'): void;
+      },
+    ) => {
+      learningPathResolutionRef.current = session?.noteResolution ?? null;
+      setLearningPathProposal(proposal);
+      setProposalError('');
+    },
+    [],
+  );
+  const finishLearningPathResolution = (decision: 'confirmed' | 'rejected') => {
+    const note = learningPathResolutionRef.current;
+    learningPathResolutionRef.current = null;
+    note?.(decision);
+  };
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try {
@@ -669,10 +691,7 @@ export default function PlayerWorkspace({
               aiProvider: provider,
               agentCapabilities: capabilities,
               onSendTerminalCommand,
-              onPreviewLearningPathProposal: (proposal) => {
-                setLearningPathProposal(proposal);
-                setProposalError('');
-              },
+              onPreviewLearningPathProposal: previewLearningPathProposal,
               onExportMarkdownToMindmap,
             }}
           />
@@ -683,10 +702,7 @@ export default function PlayerWorkspace({
           aiProvider: provider,
           agentCapabilities: capabilities,
           onSendTerminalCommand,
-          onPreviewLearningPathProposal: (proposal) => {
-            setLearningPathProposal(proposal);
-            setProposalError('');
-          },
+          onPreviewLearningPathProposal: previewLearningPathProposal,
           onExportMarkdownToMindmap,
         };
         listView = (
@@ -712,6 +728,7 @@ export default function PlayerWorkspace({
       const saved = await playerApi.learningPathSave(
         learningPathProposal.input,
       );
+      finishLearningPathResolution('confirmed');
       setLearningPathProposal(null);
       await reloadOverview();
       setPathReloadToken((v) => v + 1);
@@ -842,7 +859,10 @@ export default function PlayerWorkspace({
             sourceLabel="ai"
             busy={proposalBusy}
             error={proposalError}
-            onCancel={() => setLearningPathProposal(null)}
+            onCancel={() => {
+              finishLearningPathResolution('rejected');
+              setLearningPathProposal(null);
+            }}
             onConfirm={() => void confirmLearningPathProposal()}
           />
         )}

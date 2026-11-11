@@ -127,12 +127,14 @@ describe('Book Knowledge Target & Tools', () => {
       }),
       api,
     );
-    expect(updateRes.result.updated).toBe(true);
-    expect(updateBookKnowledgeNote).toHaveBeenCalledWith({
+    expect(updateRes.permission).toBe('user_approval');
+    expect(updateRes.knowledgeNoteProposal).toEqual({
+      kind: 'update',
       content: '### 第6章 循环深入\n- while 循环求和示例',
       mode: 'append',
       rationale: '记录第6章循环分析',
     });
+    expect(updateBookKnowledgeNote).not.toHaveBeenCalled();
 
     const appendRes = await executeAgentTool(
       'knowledge_append_excerpt',
@@ -143,12 +145,14 @@ describe('Book Knowledge Target & Tools', () => {
       }),
       api,
     );
-    expect(appendRes.result.appended).toBe(true);
-    expect(appendBookKnowledgeExcerpt).toHaveBeenCalledWith({
+    expect(appendRes.permission).toBe('user_approval');
+    expect(appendRes.knowledgeNoteProposal).toEqual({
+      kind: 'excerpt',
       excerpt: 'while (status == 1) { sum = sum + num; }',
       commentary: '此段展示使用 scanf 的返回值控制输入循环终止。',
       chapterLabel: '第6章 C控制语句：循环',
     });
+    expect(appendBookKnowledgeExcerpt).not.toHaveBeenCalled();
   });
 
   it('executes chapter-aware agent tools: query_galaxy and sync_reader_chapter', async () => {
@@ -203,12 +207,13 @@ describe('Book Knowledge Target & Tools', () => {
       api,
     );
     expect(syncRes.name).toBe('knowledge_sync_reader_chapter');
-    expect(syncRes.result.synced).toBe(true);
-    expect(syncRes.result.targetChapter).toBe('8.1');
-    expect(syncReaderChapter).toHaveBeenCalledWith({
+    expect(syncRes.permission).toBe('user_approval');
+    expect(syncRes.readerChapterProposal).toEqual({
+      kind: 'chapter',
       chapterTarget: '8.1',
       reason: '跳转到单字符IO小节并打开对应的研读笔记',
     });
+    expect(syncReaderChapter).not.toHaveBeenCalled();
   });
 
   it('formats chapter level category, title and partitioned file path', () => {

@@ -2,7 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, KeyboardEvent, MouseEvent, WheelEvent } from 'react';
 import '../ebook/book-galaxy-view.css';
 import type { AgentCapabilities } from '../agent/capabilities';
-import { runLearningPathAgentTurn } from '../agent/runtime';
+import {
+  LEARNING_PATH_BUDGET,
+  noteSessionResolution,
+  runAgentSession,
+  agentProfiles,
+} from '../agent/runtime';
 import type {
   AgentCallEvent,
   AgentChatMessage,
@@ -133,6 +138,9 @@ export interface LearningPathExternalBridges {
   onPreviewLearningPathProposal?: (
     proposal: LearningPathProposal,
     source: 'ai',
+    session?: {
+      noteResolution(decision: 'confirmed' | 'rejected'): void;
+    },
   ) => void;
   onExportMarkdownToMindmap?: (title: string, markdown: string) => void;
 }
@@ -195,6 +203,7 @@ export default function LearningPathView({
   const [aiEvents, setAiEvents] = useState<AgentCallEvent[]>([]);
   const [aiReply, setAiReply] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
+  const [aiPaused, setAiPaused] = useState(false);
 
   const [editor, setEditor] = useState<NodeEditorDraft | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -838,9 +847,21 @@ export default function LearningPathView({
     bridges?.onSendTerminalCommand?.(cmd, true);
   };
 
+  const noteLearningPathResolution = (decision: 'confirmed' | 'rejected') => {
+    setAiHistory((prev) =>
+      noteSessionResolution(
+        prev,
+        decision === 'confirmed'
+          ? '用户已确认并保存了这份学习路径提案。'
+          : '用户拒绝了这份学习路径提案，路径没有变化。',
+      ),
+    );
+    setAiPaused(false);
+  };
+
   const submitCopilotPrompt = async (event: FormEvent) => {
     event.preventDefault();
-    if (!detail || !aiPrompt.trim() || aiBusy) return;
+    if (!detail || !aiPrompt.trim() || aiBusy || aiPaused) return;
     if (!bridges?.aiProvider || !bridges.agentCapabilities) {
       host.notify(
         '请先在顶部「模型设置」配置 API 模型，或使用上方 CLI 按钮调用终端模型。',
@@ -860,19 +881,26 @@ export default function LearningPathView({
         mode: 'append_nodes',
       },
     );
+    const activePathSummary = {
+      pathId: detail.summary.pathId,
+      title: detail.summary.title,
+      nodeCount: detail.summary.nodeCount,
+      videoCount: detail.summary.videoCount,
+      finishedCount: detail.summary.finishedCount,
+    };
     try {
-      const turn = await runLearningPathAgentTurn({
+      const turn = await runAgentSession({
+        profile: agentProfiles['learning-path'],
         history: aiHistory,
         prompt: compiledTurnPrompt,
         provider: bridges.aiProvider,
         capabilities: bridges.agentCapabilities,
-        activePathSummary: {
-          pathId: detail.summary.pathId,
-          title: detail.summary.title,
-          nodeCount: detail.summary.nodeCount,
-          videoCount: detail.summary.videoCount,
-          finishedCount: detail.summary.finishedCount,
-        },
+        contextMessages: [
+          {
+            role: 'system',
+            content: `当前正在查看的学习路径：${JSON.stringify(activePathSummary)}。若用户要求在此路径上补充或修改，请优先调用 learning_path_get 读取完整节点后再使用 append_nodes 或 replace。`,
+          },
+        ],
         onEvent: (ev) => {
           setAiEvents((prev) => {
             const idx = prev.findIndex((item) => item.id === ev.id);
@@ -889,10 +917,16 @@ export default function LearningPathView({
       setAiReply(turn.reply);
       setAiPrompt('');
       if (turn.learningPathProposal) {
-        bridges.onPreviewLearningPathProposal?.(
-          turn.learningPathProposal,
-          'ai',
-        );
+        if (bridges.onPreviewLearningPathProposal) {
+          setAiPaused(true);
+          bridges.onPreviewLearningPathProposal(
+            turn.learningPathProposal,
+            'ai',
+            {
+              noteResolution: noteLearningPathResolution,
+            },
+          );
+        }
         setActiveAiCandidate(null);
       } else {
         const parsed = extractProposalFromText(
@@ -935,6 +969,11 @@ export default function LearningPathView({
     );
   }
 
+  const aiRound = aiEvents.reduce(
+    (max, event) => (event.kind === 'model' ? Math.max(max, event.round) : max),
+    0,
+  );
+  const aiToolCount = aiEvents.filter((event) => event.kind === 'tool').length;
   const finishedVideos = layout.orderedPlayableNodes.filter(
     (n) => n.status === 'completed',
   ).length;
@@ -2383,9 +2422,13 @@ export default function LearningPathView({
                   <button
                     type="submit"
                     className="lp-btn is-primary"
-                    disabled={aiBusy || !aiPrompt.trim()}
+                    disabled={aiBusy || aiPaused || !aiPrompt.trim()}
                   >
-                    {aiBusy ? '正在多批次检索规划…' : '生成修改预览'}
+                    {aiBusy
+                      ? `第 ${aiRound || 1}/${LEARNING_PATH_BUDGET.maxRounds} 轮 · 工具 ${aiToolCount}/${LEARNING_PATH_BUDGET.maxToolCalls}`
+                      : aiPaused
+                        ? '等待确认这一段'
+                        : '生成修改预览'}
                   </button>
                 </div>
               </form>
@@ -2395,7 +2438,7 @@ export default function LearningPathView({
                   {aiEvents.map((ev) => (
                     <div key={ev.id} className="lp-copilot-event">
                       {ev.kind === 'model'
-                        ? `第 ${ev.round} 轮模型推理（${ev.status === 'running' ? '思考中…' : '完成'}）`
+                        ? `第 ${ev.round}/${LEARNING_PATH_BUDGET.maxRounds} 轮模型推理 · 工具 ${aiToolCount}/${LEARNING_PATH_BUDGET.maxToolCalls}（${ev.status === 'running' ? '思考中…' : '完成'}）`
                         : `${ev.label} · ${ev.summary}`}
                     </div>
                   ))}
@@ -2410,9 +2453,12 @@ export default function LearningPathView({
                     className="lp-btn is-primary"
                     style={{ width: '100%', justifyContent: 'center' }}
                     onClick={() => {
-                      bridges?.onPreviewLearningPathProposal?.(
+                      if (!bridges?.onPreviewLearningPathProposal) return;
+                      setAiPaused(true);
+                      bridges.onPreviewLearningPathProposal(
                         activeAiCandidate,
                         'ai',
+                        { noteResolution: noteLearningPathResolution },
                       );
                     }}
                   >

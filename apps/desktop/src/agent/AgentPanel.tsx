@@ -2,7 +2,14 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import type { AgentAnalysisMode } from './types';
 import type { AgentCapabilities } from './capabilities';
-import { estimateTokenCount, runAgentTurn } from './runtime';
+import { buildMindmapTurnContext } from './mindmap-context';
+import type { MindmapTurnBrief } from './mindmap-context';
+import {
+  agentProfiles,
+  estimateTokenCount,
+  noteSessionResolution,
+  runAgentSession,
+} from './runtime';
 import type {
   AgentCallEvent,
   AgentChatMessage,
@@ -28,7 +35,7 @@ interface AgentPanelProps {
   providerLabel: string;
   capabilities: AgentCapabilities;
   target: AgentTarget | null;
-  mapTitle: string;
+  mapBrief: Omit<MindmapTurnBrief, 'target'>;
   mapMarkdown: string;
   currentRevision: number;
   onApplyProposal(proposal: NodeEditProposal): Promise<number | null>;
@@ -525,7 +532,7 @@ export default function AgentPanel({
   providerLabel,
   capabilities,
   target,
-  mapTitle,
+  mapBrief,
   mapMarkdown,
   currentRevision,
   onApplyProposal,
@@ -580,15 +587,30 @@ export default function AgentPanel({
     }));
 
     try {
-      const result = await runAgentTurn({
+      const liveMap = capabilities.getCurrentMindmap();
+      const contextMessage = buildMindmapTurnContext({
+        title: liveMap.title,
+        revision: liveMap.revision,
+        relativePath: liveMap.relativePath,
+        nodeCount: liveMap.nodeCount,
+        truncated: liveMap.truncated,
+        target,
+      });
+      const result = await runAgentSession({
+        profile:
+          mode === 'drilldown'
+            ? agentProfiles.drilldown
+            : agentProfiles.visualization,
         history: conversation.history,
         prompt,
         provider,
         capabilities,
-        mode,
-        target,
-        mapTitle,
-        mapMarkdown,
+        contextMessages: [
+          {
+            role: 'system',
+            content: contextMessage,
+          },
+        ],
         onEvent: (callEvent) => {
           updateConversation(requestScope, (current) => {
             if (!current.activeTurn) return current;
@@ -688,10 +710,10 @@ export default function AgentPanel({
             content: '分支已插入，文件库会按当前自动保存设置同步。',
           },
         ],
-        history: [
-          ...current.history,
-          { role: 'assistant' as const, content: '用户已确认并应用下探分支。' },
-        ].slice(-12),
+        history: noteSessionResolution(
+          current.history,
+          '用户已确认并应用了这份导图修改。',
+        ),
       }));
     } catch (caught) {
       updateConversation(scopeKey, (current) => ({
@@ -720,10 +742,10 @@ export default function AgentPanel({
         ...current.messages,
         { id: makeId(), role: 'assistant', content: '已撤销上一次 AI 分支。' },
       ],
-      history: [
-        ...current.history,
-        { role: 'assistant' as const, content: '用户撤销了上一次 AI 分支。' },
-      ].slice(-12),
+      history: noteSessionResolution(
+        current.history,
+        '用户撤销了上一次已应用的导图修改。',
+      ),
     }));
   };
 
@@ -734,11 +756,12 @@ export default function AgentPanel({
 
   const modeLabel = mode === 'drilldown' ? '节点下探' : '可视化分析';
   const markdownSize = new TextEncoder().encode(mapMarkdown).byteLength;
+  const contextPreview = target
+    ? buildMindmapTurnContext({ ...mapBrief, target })
+    : '';
   const contextEstimate =
     conversation.lastUsage?.contextTokensEstimate ??
-    estimateTokenCount(
-      JSON.stringify({ mapTitle, target, markdown: mapMarkdown }),
-    );
+    estimateTokenCount(contextPreview);
   const contextWindow = resolveModelContextWindow(
     provider.baseUrl,
     provider.model,
@@ -781,7 +804,9 @@ export default function AgentPanel({
           API · {providerLabel} · {provider.model || '未设置模型'}
         </span>
         <span title={markdownSize.toLocaleString() + ' 字节 Markdown 原文'}>
-          全图上下文 · 约 {contextEstimate.toLocaleString()} tokens（本地估算）
+          {target
+            ? `目标摘要 · 约 ${contextEstimate.toLocaleString()} tokens（本地估算）`
+            : `导图原文 ${markdownSize.toLocaleString()} 字节 · 选择节点后发送目标摘要`}
         </span>
         <span title={contextWindowTitle}>
           {contextWindow
@@ -856,7 +881,7 @@ export default function AgentPanel({
           </article>
         )}
         {busy && !conversation.activeTurn && (
-          <div className="agent-working">模型正在分析整张导图…</div>
+          <div className="agent-working">模型正在读取导图并分析…</div>
         )}
       </div>
 
@@ -917,13 +942,10 @@ export default function AgentPanel({
                   ...current,
                   proposal: null,
                   error: '',
-                  history: [
-                    ...current.history,
-                    {
-                      role: 'assistant' as const,
-                      content: '用户放弃了分支提案，导图没有变化。',
-                    },
-                  ].slice(-12),
+                  history: noteSessionResolution(
+                    current.history,
+                    '用户放弃了这份导图修改，导图没有变化。',
+                  ),
                   messages: [
                     ...current.messages,
                     {
@@ -997,7 +1019,7 @@ export default function AgentPanel({
           </svg>
         </button>
         <div className="ai-hint-footer">
-          Ctrl + Enter 发送 · 整张导图作为上下文 · 插入前需确认
+          Ctrl + Enter 发送 · 先读取当前导图 · 插入前需确认
         </div>
       </form>
     </section>

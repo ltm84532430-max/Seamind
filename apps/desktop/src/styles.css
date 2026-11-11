@@ -798,6 +798,15 @@ select option {
   font-size: 10px;
   line-height: 1.5;
 }
+.agent-bridge-error {
+  margin: 0;
+  padding: 8px 16px;
+  border-bottom: 1px solid #edc6bd;
+  color: #a33f2c;
+  background: #fff7f5;
+  font-size: 12px;
+  line-height: 1.5;
+}
 .agent-cli-approval-dialog {
   display: grid;
   gap: 14px;
@@ -5018,7 +5027,8 @@ select option {
 .app-shell[data-theme='dark'] .agent-apply-button {
   border-color: #bd6a57;
 }
-.app-shell[data-theme='dark'] .agent-error {
+.app-shell[data-theme='dark'] .agent-error,
+.app-shell[data-theme='dark'] .agent-bridge-error {
   border-color: #71443a;
   color: #f0b3a5;
   background: #2b201e;
