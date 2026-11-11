@@ -457,6 +457,87 @@
   background: var(--exam-bg);
 }
 
+.exam-center-list > .exam-galaxy {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+}
+
+.exam-galaxy-dock {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 12;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 3px;
+  background: rgba(15, 20, 29, 0.92);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.exam-galaxy-dock button {
+  height: 24px;
+  min-width: 24px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  color: #e2e8f0;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.exam-galaxy-dock button:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.exam-galaxy-dock span {
+  padding: 0 6px;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.app-shell[data-theme='light'] .exam-galaxy-dock {
+  border-color: rgba(15, 23, 42, 0.12);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+}
+
+.app-shell[data-theme='light'] .exam-galaxy-dock button,
+.app-shell[data-theme='light'] .exam-galaxy-dock span {
+  color: #1e293b;
+}
+
+.exam-galaxy-swatch {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #94a3b8;
+}
+
+.exam-galaxy-swatch.is-due {
+  background: #e05638;
+}
+
+.exam-galaxy-swatch.is-soon {
+  background: #d97706;
+}
+
+.exam-galaxy-empty {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 64px);
+  transform: translateX(-50%);
+  color: #94a3b8;
+  font-size: 12px;
+}
+
 .exam-center-list-toolbar {
   display: flex;
   align-items: center;

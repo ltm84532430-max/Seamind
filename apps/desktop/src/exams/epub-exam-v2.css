@@ -351,6 +351,162 @@
     max-height: calc(100vh - 250px);
   }
 }
+.exam-paper-scroll {
+  height: min(920px, calc(100vh - 250px));
+  min-height: 550px;
+  overflow: auto;
+  background: #e7e1d6;
+  border: 1px solid #d5cfc3;
+}
+.exam-paper-sheet {
+  box-sizing: border-box;
+  width: min(820px, 100%);
+  margin: 28px auto;
+  padding: 42px 56px 64px;
+  background: #fffef9;
+  color: #1c1915;
+  box-shadow: 0 10px 28px rgba(48, 36, 18, 0.12);
+  font-family:
+    'Source Han Serif SC', 'Noto Serif SC', 'Songti SC', SimSun, serif;
+}
+.exam-paper-masthead {
+  margin-bottom: 28px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid #1c1915;
+  text-align: center;
+}
+.exam-paper-masthead p,
+.exam-paper-masthead h1 {
+  margin: 0;
+}
+.exam-paper-masthead p:first-child {
+  letter-spacing: 0.42em;
+  font-size: 13px;
+}
+.exam-paper-masthead h1 {
+  margin-top: 8px;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.exam-paper-masthead p:nth-child(3) {
+  margin-top: 6px;
+  font-size: 15px;
+}
+.exam-paper-masthead-meta {
+  display: flex;
+  justify-content: center;
+  gap: 28px;
+  margin-top: 12px !important;
+  font-size: 13px;
+}
+.exam-paper-section {
+  margin-top: 26px;
+}
+.exam-paper-section h2 {
+  margin: 0 0 6px;
+  font-size: 16px;
+  font-weight: 700;
+}
+.exam-paper-section h2 span {
+  margin-left: 8px;
+  font-weight: 500;
+  font-size: 13px;
+}
+.exam-paper-instruction {
+  margin: 0 0 12px;
+  color: #3f3a33;
+  font-size: 13px;
+  text-indent: 2em;
+}
+.exam-paper-items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.exam-paper-item {
+  padding: 12px 0 8px;
+}
+.exam-paper-prompt {
+  margin: 0 0 10px;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.exam-paper-number {
+  margin-right: 6px;
+  font-weight: 700;
+}
+.exam-paper-points {
+  margin-right: 4px;
+}
+.exam-paper-options {
+  display: grid;
+  gap: 6px 18px;
+  margin: 0 0 8px 1.6em;
+}
+.exam-paper-options.is-row {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.exam-paper-options.is-pair {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.exam-paper-options.is-stack {
+  grid-template-columns: 1fr;
+}
+.exam-paper-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: #1c1915;
+  font-size: 14px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+.exam-paper-option input {
+  margin-top: 4px;
+  accent-color: #9a3412;
+}
+.exam-paper-option.is-selected .exam-paper-option-text {
+  font-weight: 700;
+}
+.exam-paper-answer-editor {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 8px;
+  padding: 0 4px;
+  border: 0;
+  border-bottom: 1px solid #c8c0b2;
+  resize: vertical;
+  color: #1c1915;
+  background-color: transparent;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent 27px,
+    #d9d1c4 28px
+  );
+  font:
+    15px/28px 'Source Han Serif SC',
+    'Noto Serif SC',
+    'Songti SC',
+    SimSun,
+    serif;
+}
+.exam-paper-item .epub-exam-code-editor,
+.exam-paper-item .epub-exam-code-samples,
+.exam-paper-item .epub-exam-ai-solution,
+.exam-paper-item .epub-exam-rubric,
+.exam-paper-item .epub-exam-grade {
+  color: #1c1915;
+}
+.exam-paper-item .epub-exam-answer-label,
+.exam-paper-item .epub-exam-leaf-sources {
+  color: #6b645b;
+}
+
 @media (max-width: 900px) {
   .epub-exam-workspace-shell,
   .epub-exam-workspace-shell.is-sidebar-collapsed,
@@ -373,4 +529,166 @@
     min-width: 42px;
     flex-basis: 42px;
   }
+  .exam-paper-sheet {
+    margin: 12px auto;
+    padding: 28px 22px 40px;
+  }
+  .exam-paper-options.is-row,
+  .exam-paper-options.is-pair {
+    grid-template-columns: 1fr;
+  }
+}
+.exam-paper-print-frame {
+  width: 100%;
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+.exam-paper-print-frame td {
+  padding: 0;
+  border: 0;
+  vertical-align: top;
+}
+.exam-paper-print-frame thead {
+  display: none;
+}
+.exam-paper-running-head {
+  display: none;
+  margin: 0;
+  text-align: center;
+}
+.exam-paper-item.is-focused {
+  background: rgba(154, 52, 18, 0.06);
+  box-shadow: inset 3px 0 0 #9a3412;
+}
+.exam-rich-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.exam-rich-text .katex {
+  font-size: 1.05em;
+}
+.epub-exam-heatmap-cell.is-current {
+  outline: 2px solid #9a3412;
+  outline-offset: 1px;
+}
+.exam-paper-review-kicker,
+.exam-paper-review-sources,
+.exam-paper-review-prompt,
+.exam-paper-review-block p {
+  margin: 0 0 8px;
+  line-height: 1.6;
+}
+.exam-paper-review-kicker,
+.exam-paper-review-sources {
+  color: #6b645b;
+  font-size: 12px;
+}
+.exam-paper-review-block {
+  margin-top: 10px;
+}
+.exam-paper-review-block strong {
+  display: block;
+  margin-bottom: 4px;
+}
+.exam-paper-review-code {
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+  overflow: auto;
+  max-height: 220px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+@page exam-paper {
+  size: A4;
+  margin: 18mm 14mm 16mm;
+  @bottom-center {
+    content: counter(page) ' / ' counter(pages);
+    font-family:
+      'Source Han Serif SC', 'Noto Serif SC', 'Songti SC', SimSun, serif;
+    font-size: 9pt;
+    color: #444;
+  }
+}
+html[data-print-exam='paper'] .topbar,
+html[data-print-exam='paper'] .statusbar,
+html[data-print-exam='paper'] .agent-bridge-error,
+html[data-print-exam='paper'] .seamind-terminal-drawer,
+html[data-print-exam='paper'] .workspace,
+html[data-print-exam='paper'] .ebook-workspace-stage,
+html[data-print-exam='paper'] .player-workspace-stage,
+html[data-print-exam='paper'] .terminal-workspace-stage,
+html[data-print-exam='paper'] .epub-exam-sidebar,
+html[data-print-exam='paper'] .epub-exam-analytics,
+html[data-print-exam='paper'] .epub-exam-page-header,
+html[data-print-exam='paper'] .epub-exam-note-banner,
+html[data-print-exam='paper'] .epub-exam-attempt-accordion,
+html[data-print-exam='paper'] .epub-exam-view-toolbar,
+html[data-print-exam='paper'] .epub-exam-page-footer,
+html[data-print-exam='paper'] .epub-exam-error-banner,
+html[data-print-exam='paper'] .epub-exam-grade-retry,
+html[data-print-exam='paper'] .epub-exam-code-run,
+html[data-print-exam='paper'] .epub-exam-code-results {
+  display: none !important;
+}
+html[data-print-exam='paper'] .app-shell,
+html[data-print-exam='paper'] .exam-workspace-stage,
+html[data-print-exam='paper'] .epub-exam-workspace-shell,
+html[data-print-exam='paper'] .epub-exam-stage,
+html[data-print-exam='paper'] .epub-exam-stage-inner,
+html[data-print-exam='paper'] .exam-paper-scroll {
+  display: block !important;
+  width: auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow: visible !important;
+  background: #fff !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+html[data-print-exam='paper'] .epub-exam-stage-inner,
+html[data-print-exam='paper'] .exam-paper-sheet {
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+html[data-print-exam='paper'] .exam-paper-sheet {
+  page: exam-paper;
+  width: auto !important;
+  color: #1c1915 !important;
+  background: #fff !important;
+  box-shadow: none !important;
+}
+html[data-print-exam='paper'] .exam-paper-sheet :where(*) {
+  color: #1c1915 !important;
+}
+html[data-print-exam='paper']
+  .exam-paper-sheet
+  :where(textarea, pre, .epub-exam-code-samples) {
+  background-color: transparent !important;
+  border-color: #c8c0b2 !important;
+}
+html[data-print-exam='paper'] .exam-paper-print-frame thead {
+  display: table-header-group;
+}
+html[data-print-exam='paper'] .exam-paper-running-head {
+  display: block;
+  padding-bottom: 3mm;
+  border-bottom: 0.4pt solid #c8c0b2;
+  margin-bottom: 4mm;
+  color: #444;
+  font-size: 9pt;
+}
+html[data-print-exam='paper'] .exam-paper-section > h2,
+html[data-print-exam='paper'] .exam-paper-instruction,
+html[data-print-exam='paper'] .exam-paper-prompt {
+  break-after: avoid;
+}
+html[data-print-exam='paper'] .exam-paper-option,
+html[data-print-exam='paper'] .exam-paper-masthead {
+  break-inside: avoid;
+}
+html[data-print-exam='paper'] .exam-paper-answer-editor {
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
 }

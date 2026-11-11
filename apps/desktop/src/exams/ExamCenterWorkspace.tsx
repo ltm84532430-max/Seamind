@@ -659,7 +659,7 @@ export default function ExamCenterWorkspace({
                 aria-pressed={viewMode === 'graph'}
                 onClick={() => setViewMode('graph')}
               >
-                关系图
+                星系
               </button>
               <button
                 type="button"

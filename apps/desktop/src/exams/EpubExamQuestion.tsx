@@ -5,6 +5,8 @@ import type {
   EpubExamQuestion,
   EpubExamSelfReview,
 } from './epub-exams';
+import type { ExamChoiceLayout } from './exam-paper';
+import { ExamRichText } from './ExamRichText';
 import { ExamScrollMinimap } from './ExamScrollMinimap';
 
 export interface ExamCodeResult {
@@ -40,6 +42,14 @@ interface Props {
   onReview: (value: EpubExamSelfReview) => void;
   onRunCode: () => void;
   onOverride: (earned: number) => void;
+  variant?: 'leaf' | 'paper';
+  sectionNumber?: number;
+  showItemPoints?: boolean;
+  choiceLayout?: ExamChoiceLayout;
+  choiceKeys?: Array<string | null>;
+  answerLines?: number;
+  focused?: boolean;
+  onFocus?: (id: string) => void;
 }
 
 function typeLabel(type: EpubExamQuestion['type']) {
@@ -57,6 +67,7 @@ function typeLabel(type: EpubExamQuestion['type']) {
 export default function EpubExamQuestion(props: Props) {
   const leafRef = useRef<HTMLElement>(null);
   const { question, answer, submitted, busy, grade } = props;
+  const isPaper = props.variant === 'paper';
   const choices =
     question.type === 'trueFalse'
       ? (question.options ?? ['正确', '错误'])
@@ -70,18 +81,41 @@ export default function EpubExamQuestion(props: Props) {
   const paper = (
     <article
       ref={leafRef}
-      className="epub-exam-leaf"
+      className={`${isPaper ? 'exam-paper-item' : 'epub-exam-leaf'}${isPaper && props.focused ? ' is-focused' : ''}`}
       id={`exam-question-${question.id}`}
+      onClick={
+        isPaper && props.onFocus
+          ? () => props.onFocus?.(question.id)
+          : undefined
+      }
     >
       {props.showPrompt && (
         <>
-          <header className="epub-exam-leaf-header">
-            <span>第 {props.index + 1} 题</span>
-            <span>{typeLabel(question.type)}</span>
-            <span>{question.points || 2} 分</span>
-          </header>
-          <h2 className="epub-exam-leaf-prompt">{question.prompt}</h2>
-          {!!question.sourceRefs?.length && (
+          {isPaper ? (
+            <h3 className="exam-paper-prompt">
+              <span className="exam-paper-number">
+                {props.sectionNumber ?? props.index + 1}.
+              </span>
+              {props.showItemPoints && (
+                <span className="exam-paper-points">
+                  （{question.points || 2}分）
+                </span>
+              )}
+              <ExamRichText text={question.prompt} />
+            </h3>
+          ) : (
+            <>
+              <header className="epub-exam-leaf-header">
+                <span>第 {props.index + 1} 题</span>
+                <span>{typeLabel(question.type)}</span>
+                <span>{question.points || 2} 分</span>
+              </header>
+              <h2 className="epub-exam-leaf-prompt">
+                <ExamRichText text={question.prompt} />
+              </h2>
+            </>
+          )}
+          {!!question.sourceRefs?.length && !isPaper && (
             <div className="epub-exam-leaf-sources">
               来源：{question.sourceRefs.map((ref) => ref.label).join(' · ')}
             </div>
@@ -125,7 +159,14 @@ export default function EpubExamQuestion(props: Props) {
                 className={
                   question.type === 'cProgramming'
                     ? 'epub-exam-code-editor'
-                    : 'epub-exam-answer-editor'
+                    : isPaper
+                      ? 'exam-paper-answer-editor'
+                      : 'epub-exam-answer-editor'
+                }
+                style={
+                  isPaper && question.type !== 'cProgramming'
+                    ? { minHeight: (props.answerLines || 4) * 28 }
+                    : undefined
                 }
                 spellCheck={question.type !== 'cProgramming'}
                 value={
@@ -191,8 +232,15 @@ export default function EpubExamQuestion(props: Props) {
               )}
             </>
           ) : (
-            <div className="epub-exam-options-grid">
-              {choices.map((option) => {
+            <div
+              className={
+                isPaper
+                  ? `exam-paper-options is-${props.choiceLayout ?? 'stack'}`
+                  : 'epub-exam-options-grid'
+              }
+            >
+              {choices.map((option, optionIndex) => {
+                const choiceKey = props.choiceKeys?.[optionIndex];
                 const selected =
                   question.type === 'multipleChoice'
                     ? Array.isArray(answer) && answer.includes(option)
@@ -200,7 +248,7 @@ export default function EpubExamQuestion(props: Props) {
                 return (
                   <label
                     key={option}
-                    className={`epub-exam-option-item${selected ? ' is-selected' : ''}`}
+                    className={`${isPaper ? 'exam-paper-option' : 'epub-exam-option-item'}${selected ? ' is-selected' : ''}`}
                   >
                     <input
                       type={
@@ -226,22 +274,45 @@ export default function EpubExamQuestion(props: Props) {
                         else props.onAnswer(option);
                       }}
                     />
-                    <span className="epub-exam-option-text">{option}</span>
+                    <span
+                      className={
+                        isPaper
+                          ? 'exam-paper-option-text'
+                          : 'epub-exam-option-text'
+                      }
+                    >
+                      {choiceKey ? `${choiceKey}. ` : ''}
+                      <ExamRichText text={option} />
+                    </span>
                   </label>
                 );
               })}
             </div>
           )}
-          {submitted && (
+          {submitted && !isPaper && (
             <>
               <div className="epub-exam-ai-solution">
                 <strong>参考答案与解析</strong>
-                <pre>
-                  {Array.isArray(question.answer)
-                    ? question.answer.join('、')
-                    : question.answer}
-                </pre>
-                <p>{question.explanation}</p>
+                {question.type === 'cProgramming' ? (
+                  <pre>
+                    {Array.isArray(question.answer)
+                      ? question.answer.join('、')
+                      : question.answer}
+                  </pre>
+                ) : (
+                  <p>
+                    <ExamRichText
+                      text={
+                        Array.isArray(question.answer)
+                          ? question.answer.join('、')
+                          : question.answer
+                      }
+                    />
+                  </p>
+                )}
+                <p>
+                  <ExamRichText text={question.explanation} />
+                </p>
               </div>
               {!!question.rubric?.length && (
                 <div className="epub-exam-rubric">
@@ -306,6 +377,7 @@ export default function EpubExamQuestion(props: Props) {
       )}
     </article>
   );
+  if (isPaper) return paper;
   return (
     <div className="epub-exam-leaf-shell">
       {paper}
