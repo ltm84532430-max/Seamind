@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type RefObject,
@@ -50,6 +51,30 @@ function writeBilingualVisible(visible: boolean) {
   }
 }
 
+function translationNodesReady(
+  root: HTMLElement,
+  count: number,
+  visible: boolean,
+): boolean {
+  if (root.classList.contains('seamind-bilingual-hidden') === visible) {
+    return false;
+  }
+  for (let index = 0; index < count; index += 1) {
+    const anchor = root.querySelector<HTMLElement>(
+      `[data-trans-idx="${index}"]`,
+    );
+    const next = anchor?.nextElementSibling;
+    if (
+      !next ||
+      !next.classList.contains('seamind-bilingual-trans') ||
+      next.getAttribute('data-for-trans-idx') !== String(index)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function useFeedArticleTranslation(options: {
   article: FeedArticle | null;
   provider: FeedProviderSettings;
@@ -84,6 +109,19 @@ export function useFeedArticleTranslation(options: {
   const onTranslatedRef = useRef(onTranslated);
   articleRef.current = article;
   onTranslatedRef.current = onTranslated;
+  const sourceKey = [
+    article?.id ?? '',
+    article?.content ?? '',
+    article?.title ?? '',
+    article?.summary ?? '',
+  ].join('\u0000');
+  const sourceKeyRef = useRef(sourceKey);
+  if (sourceKeyRef.current !== sourceKey) {
+    sourceKeyRef.current = sourceKey;
+    recordRef.current = null;
+    textsRef.current = [];
+    hashRef.current = '';
+  }
 
   const paint = useCallback(
     (
@@ -109,6 +147,22 @@ export function useFeedArticleTranslation(options: {
     },
     [],
   );
+
+  useLayoutEffect(() => {
+    const root = wrapRef.current;
+    const current = articleRef.current;
+    const record = recordRef.current;
+    const texts = textsRef.current;
+    if (!root || !current || !record || texts.length === 0) return;
+    if (
+      record.articleId !== current.id ||
+      record.contentHash !== hashRef.current
+    ) {
+      return;
+    }
+    if (translationNodesReady(root, texts.length, bilingual)) return;
+    paintFeedTranslations(root, texts, record.paragraphs, bilingual);
+  });
 
   useEffect(() => {
     const current = article;

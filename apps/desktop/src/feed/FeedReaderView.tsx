@@ -167,6 +167,13 @@ export const FeedReaderView: React.FC<FeedReaderViewProps> = ({
     return article ? extractArticleText(article) : '';
   }, [article]);
 
+  // React 19 assigns innerHTML when this object's identity changes, which
+  // removes the translation nodes inserted into the article body.
+  const articleHtml = useMemo(
+    () => (article?.content ? { __html: article.content } : null),
+    [article?.id, article?.content],
+  );
+
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = 0;
@@ -555,10 +562,10 @@ export const FeedReaderView: React.FC<FeedReaderViewProps> = ({
               </div>
             )}
 
-            {article.content ? (
+            {articleHtml ? (
               <div
                 className="feed-article-body"
-                dangerouslySetInnerHTML={{ __html: article.content }}
+                dangerouslySetInnerHTML={articleHtml}
               />
             ) : article.summary ? (
               <div className="feed-article-body">

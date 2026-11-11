@@ -1,7 +1,4 @@
-import {
-  injectBilingualStyles,
-  injectTranslationsIntoDoc,
-} from '../ebook/epub-translation-dom';
+import { injectBilingualStyles } from '../ebook/epub-translation-dom';
 import {
   isTranslatableText,
   normalizeBlockText,
@@ -127,6 +124,29 @@ function materializeFlat(body: HTMLElement, expected: string[]): HTMLElement[] {
   return wrapDeep(body);
 }
 
+function placeTranslation(
+  element: HTMLElement,
+  id: number,
+  translation: string,
+) {
+  const text = translation.trim();
+  if (!text) return;
+  const existing = element.nextElementSibling;
+  if (
+    existing instanceof HTMLElement &&
+    existing.classList.contains('seamind-bilingual-trans') &&
+    existing.getAttribute('data-for-trans-idx') === String(id)
+  ) {
+    existing.textContent = text;
+    return;
+  }
+  const transNode = element.ownerDocument.createElement('div');
+  transNode.className = 'seamind-bilingual-trans';
+  transNode.setAttribute('data-for-trans-idx', String(id));
+  transNode.textContent = text;
+  element.insertAdjacentElement('afterend', transNode);
+}
+
 export function clearFeedTranslationNodes(root: HTMLElement) {
   root
     .querySelectorAll('.seamind-bilingual-trans')
@@ -174,11 +194,12 @@ export function paintFeedTranslations(
 ): boolean {
   const anchors = assignFeedAnchors(root, texts);
   if (anchors.length !== texts.length) return false;
+  const byId = new Map(paragraphs.map((item) => [item.id, item.translation]));
   anchors.forEach((element, index) => {
     element.setAttribute('data-trans-idx', String(index));
+    placeTranslation(element, index, byId.get(index) ?? '');
   });
   injectBilingualStyles(root.ownerDocument);
-  injectTranslationsIntoDoc(root.ownerDocument, paragraphs);
   root.classList.toggle('seamind-bilingual-hidden', !visible);
   return true;
 }
