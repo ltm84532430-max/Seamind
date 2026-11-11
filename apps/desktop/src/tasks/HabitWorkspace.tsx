@@ -1,7 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { FormEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import type { CSSProperties, FormEvent, ReactNode } from 'react';
 import { habitApi, TASKS_CHANGED_EVENT } from './task-api';
 import HabitStatistics from './HabitStatistics';
+import {
+  compareHabitsByCategory,
+  nextCheckStatus,
+  normalizeHabitScope,
+} from './habit-list-model';
 import type {
   Habit,
   HabitCategory,
@@ -22,7 +34,7 @@ import {
 import './habit-workspace.css';
 
 type HabitView = 'list' | 'calendar' | 'stats';
-type HabitScope = 'today' | 'all' | 'inactive';
+type HabitScope = 'today' | 'library';
 type HabitUiState = {
   date: string;
   scope: HabitScope;
@@ -67,9 +79,7 @@ function readHabitUiState(): HabitUiState {
         typeof saved.date === 'string' && parseDateKey(saved.date)
           ? saved.date
           : fallback.date,
-      scope: ['today', 'all', 'inactive'].includes(saved.scope)
-        ? (saved.scope as HabitScope)
-        : fallback.scope,
+      scope: normalizeHabitScope(saved.scope),
       category:
         typeof saved.category === 'string' ? saved.category : fallback.category,
       view: ['list', 'calendar', 'stats'].includes(saved.view)
@@ -122,16 +132,6 @@ function nextDueOnOrAfter(habit: Habit, date: string): string {
   );
 }
 
-function nextDueAfter(habit: Habit, date: string): string {
-  const start = dateOrdinal(habit.startDate);
-  const current = dateOrdinal(date);
-  if (start == null || current == null || current < start)
-    return habit.startDate;
-  const elapsed = current - start;
-  const offset = habit.intervalDays - (elapsed % habit.intervalDays);
-  return dateFromOrdinal(current + offset);
-}
-
 function occurrenceKey(habitId: string, date: string) {
   return `${habitId}:${date}`;
 }
@@ -145,11 +145,24 @@ function formatDate(value: string) {
   return parsed ? `${parsed.month}月${parsed.day}日` : value;
 }
 
+function formatAgendaHeading(date: string): string {
+  const parsed = parseDateKey(date);
+  if (!parsed) return date;
+  const weekday =
+    WEEKDAYS[
+      (new Date(
+        Date.UTC(parsed.year, parsed.month - 1, parsed.day),
+      ).getUTCDay() +
+        6) %
+        7
+    ];
+  return `${parsed.month}月${parsed.day}日 · ${weekday ?? ''}`;
+}
+
 function formatCompletionTime(timestamp: number) {
   return new Date(timestamp * 1000).toLocaleTimeString('zh-CN', {
     hour: '2-digit',
     minute: '2-digit',
-    second: '2-digit',
   });
 }
 
@@ -170,135 +183,249 @@ function habitDraft(habit?: Habit): HabitDraft {
   };
 }
 
-function HabitRow({
+function HabitRowMenu({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [style, setStyle] = useState<CSSProperties>({
+    position: 'fixed',
+    visibility: 'hidden',
+  });
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const rect = buttonRef.current?.getBoundingClientRect();
+    const panel = panelRef.current;
+    if (!rect || !panel) return;
+    const width = 148;
+    const height = panel.offsetHeight;
+    const left = Math.max(
+      8,
+      Math.min(rect.right - width, window.innerWidth - width - 8),
+    );
+    const openUp =
+      window.innerHeight - rect.bottom < height + 8 && rect.top > height + 8;
+    setStyle({
+      position: 'fixed',
+      left,
+      top: openUp ? rect.top - height - 4 : rect.bottom + 4,
+      width,
+      zIndex: 40,
+      visibility: 'visible',
+    });
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (
+        buttonRef.current?.contains(target) ||
+        panelRef.current?.contains(target)
+      )
+        return;
+      setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('mousedown', onPointer);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onPointer);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="habit-row-menu">
+      <button
+        ref={buttonRef}
+        type="button"
+        className="habit-row-menu-button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={label}
+        onClick={() => setOpen((value) => !value)}
+      >
+        ⋯
+      </button>
+      {open && (
+        <div
+          ref={panelRef}
+          className="habit-row-menu-panel"
+          role="menu"
+          style={style}
+          onClick={(event) => {
+            if ((event.target as HTMLElement).closest('button')) setOpen(false);
+          }}
+        >
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HabitCheckRow({
   habit,
   categoryName,
-  date,
   occurrence,
-  due,
+  canMark,
   busy,
-  allowRepeat = false,
+  targeted,
   onMark,
   onEdit,
   onSetActive,
 }: {
   habit: Habit;
   categoryName: string;
-  date: string;
   occurrence?: HabitOccurrence;
-  due: boolean;
+  canMark: boolean;
   busy: boolean;
-  allowRepeat?: boolean;
+  targeted: boolean;
   onMark(status: HabitOccurrenceStatus | null): void;
   onEdit(): void;
   onSetActive(active: boolean): void;
 }) {
-  const canMark = due && date <= localToday() && habit.active;
-  const stateLabel = !habit.active
-    ? '已暂停'
-    : occurrence?.status === 'done'
-      ? '已完成'
-      : occurrence?.status === 'skipped'
-        ? '已跳过'
-        : due
-          ? date > localToday()
-            ? '未到期'
-            : '待打卡'
-          : `下次 ${formatDate(nextDueOnOrAfter(habit, localToday()))}`;
-  const scheduleLabel = occurrence
-    ? `下次 ${formatDate(nextDueAfter(habit, date))}`
-    : due
-      ? `到期 ${formatDate(date)}`
-      : `下次 ${formatDate(nextDueOnOrAfter(habit, localToday()))}`;
+  const status = occurrence?.status;
+  const meta =
+    canMark && status === 'done' && occurrence?.completedAt != null
+      ? formatCompletionTime(occurrence.completedAt)
+      : !canMark && status === 'done'
+        ? `已完成${occurrence?.completedAt != null ? ` ${formatCompletionTime(occurrence.completedAt)}` : ''}`
+        : !canMark && status === 'skipped'
+          ? '已跳过'
+          : repeatLabel(habit.intervalDays);
+  const checkLabel =
+    status === 'done'
+      ? `撤销${habit.title}`
+      : status === 'skipped'
+        ? `完成${habit.title}`
+        : `完成${habit.title}`;
 
   return (
     <article
-      className={`habit-row${occurrence?.status === 'done' ? ' is-done' : ''}${!habit.active ? ' is-paused' : ''}`}
+      className={`habit-check-row${status === 'done' ? ' is-done' : ''}${status === 'skipped' ? ' is-skipped' : ''}${targeted ? ' is-targeted' : ''}${canMark ? '' : ' is-readonly'}`}
+      data-habit-agenda={habit.id}
     >
-      <span
-        className={`habit-row-state${occurrence?.status ? ` is-${occurrence.status}` : due ? ' is-due' : ''}`}
-      >
-        {stateLabel}
-      </span>
+      {canMark && (
+        <button
+          type="button"
+          className={`habit-check${status ? ` is-${status}` : ''}`}
+          aria-pressed={status === 'done'}
+          aria-label={checkLabel}
+          disabled={busy}
+          onClick={() => onMark(nextCheckStatus(status))}
+        >
+          {status === 'done' ? '✓' : status === 'skipped' ? '—' : ''}
+        </button>
+      )}
       <div className="habit-row-main">
         <div className="habit-row-title-line">
           <strong>{habit.title}</strong>
           <span className="habit-category-badge">{categoryName}</span>
         </div>
         <div className="habit-row-meta">
-          <span>{repeatLabel(habit.intervalDays)}</span>
-          <span>开始于 {formatDate(habit.startDate)}</span>
-          <span>{scheduleLabel}</span>
-          {occurrence?.status === 'done' && occurrence.completedAt != null && (
-            <span>完成于 {formatCompletionTime(occurrence.completedAt)}</span>
-          )}
-          {habit.note && <span className="habit-row-note">{habit.note}</span>}
+          <span>{meta}</span>
         </div>
       </div>
-      <div className="habit-row-actions">
-        {habit.active &&
-          due &&
-          canMark &&
-          (occurrence?.status === 'done' ? (
-            <>
-              {allowRepeat && (
-                <button
-                  type="button"
-                  className="task-primary"
-                  disabled={busy || !canMark}
-                  onClick={() => onMark('done')}
-                  title="更新今天最后一次打卡时间"
-                >
-                  再打卡
-                </button>
-              )}
-              <button
-                type="button"
-                disabled={busy || !canMark}
-                onClick={() => onMark(null)}
-                title="撤销本次记录"
-              >
-                撤销
-              </button>
-            </>
-          ) : occurrence?.status === 'skipped' ? (
+      {canMark && (
+        <HabitRowMenu label={`${habit.title}的更多操作`}>
+          {status !== 'skipped' && (
             <button
               type="button"
-              disabled={busy || !canMark}
+              role="menuitem"
+              disabled={busy}
+              onClick={() => onMark('skipped')}
+            >
+              跳过
+            </button>
+          )}
+          {status != null && (
+            <button
+              type="button"
+              role="menuitem"
+              disabled={busy}
               onClick={() => onMark(null)}
             >
-              恢复
+              撤销
             </button>
-          ) : (
-            <>
-              <button
-                type="button"
-                className="task-primary"
-                disabled={busy || !canMark}
-                onClick={() => onMark('done')}
-              >
-                完成
-              </button>
-              <button
-                type="button"
-                disabled={busy || !canMark}
-                onClick={() => onMark('skipped')}
-              >
-                跳过
-              </button>
-            </>
-          ))}
-        <button type="button" disabled={busy} onClick={onEdit}>
-          编辑
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => onSetActive(!habit.active)}
-        >
-          {habit.active ? '暂停' : '启用'}
-        </button>
-      </div>
+          )}
+          {status === 'done' && (
+            <button
+              type="button"
+              role="menuitem"
+              disabled={busy}
+              onClick={() => onMark('done')}
+            >
+              更新完成时间
+            </button>
+          )}
+          <button
+            type="button"
+            role="menuitem"
+            disabled={busy}
+            onClick={onEdit}
+          >
+            编辑
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={busy}
+            onClick={() => onSetActive(false)}
+          >
+            暂停
+          </button>
+        </HabitRowMenu>
+      )}
+    </article>
+  );
+}
+
+function HabitDefinitionRow({
+  habit,
+  categoryName,
+  nextDue,
+  busy,
+  onEdit,
+  onSetActive,
+}: {
+  habit: Habit;
+  categoryName: string;
+  nextDue: string;
+  busy: boolean;
+  onEdit(): void;
+  onSetActive(active: boolean): void;
+}) {
+  return (
+    <article
+      className={`habit-definition-row${!habit.active ? ' is-paused' : ''}`}
+    >
+      <button type="button" className="habit-definition-open" onClick={onEdit}>
+        <span className="habit-row-title-line">
+          <strong>{habit.title}</strong>
+          <span className="habit-category-badge">{categoryName}</span>
+        </span>
+        <span className="habit-row-meta">
+          <span>{repeatLabel(habit.intervalDays)}</span>
+          <span>下次 {formatDate(nextDue)}</span>
+        </span>
+      </button>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => onSetActive(!habit.active)}
+      >
+        {habit.active ? '暂停' : '启用'}
+      </button>
     </article>
   );
 }
@@ -327,6 +454,7 @@ export default function HabitWorkspace({
     savedUi.calendarMode,
   );
   const [calendarPanelOpen, setCalendarPanelOpen] = useState(false);
+  const [agendaFocusId, setAgendaFocusId] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState(EMPTY_SNAPSHOT);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -517,47 +645,24 @@ export default function HabitWorkspace({
     (habit) =>
       occurrencesByKey.get(occurrenceKey(habit.id, today))?.status === 'done',
   ).length;
-  const todaySkipped = todayDue.filter(
-    (habit) =>
-      occurrencesByKey.get(occurrenceKey(habit.id, today))?.status ===
-      'skipped',
-  ).length;
-  const todayCompletedHabits = searchedActiveHabits.filter(
-    (habit) =>
-      isDueOn(habit, today) &&
-      occurrencesByKey.get(occurrenceKey(habit.id, today))?.status === 'done',
+  const sortHabits = useCallback(
+    (habits: Habit[]) =>
+      [...habits].sort((left, right) =>
+        compareHabitsByCategory(snapshot.categories, left, right),
+      ),
+    [snapshot.categories],
   );
-  const todaySkippedHabits = searchedActiveHabits.filter(
-    (habit) =>
-      isDueOn(habit, today) &&
-      occurrencesByKey.get(occurrenceKey(habit.id, today))?.status ===
-        'skipped',
+  const todayHabits = sortHabits(todayDue);
+  const libraryActive = sortHabits(
+    searchedHabits.filter((habit) => habit.active),
   );
-  // 同一习惯当天再次打卡会更新原记录的完成时间，并从待打卡列表移入今日完成区。
-  const visibleHabits = searchedHabits.filter((habit) => {
-    if (scope === 'today' && (!habit.active || !isDueOn(habit, today)))
-      return false;
-    if (scope === 'all' && !habit.active) return false;
-    if (scope === 'inactive' && habit.active) return false;
-    if (
-      scope !== 'inactive' &&
-      habit.active &&
-      isDueOn(habit, today) &&
-      occurrencesByKey.get(occurrenceKey(habit.id, today))?.status != null
-    )
-      return false;
-    return true;
-  });
-  const calendarHabits = scope === 'inactive' ? [] : searchedActiveHabits;
-  const statisticsHabitIds = searchedHabits
-    .filter((habit) =>
-      scope === 'inactive'
-        ? !habit.active
-        : habit.active && (scope !== 'today' || isDueOn(habit, today)),
-    )
-    .map((habit) => habit.id);
-  const selectedDateHabits = calendarHabits.filter((habit) =>
-    isDueOn(habit, selectedDate),
+  const libraryPaused = sortHabits(
+    searchedHabits.filter((habit) => !habit.active),
+  );
+  const calendarHabits = searchedActiveHabits;
+  const statisticsHabitIds = searchedHabits.map((habit) => habit.id);
+  const selectedDateHabits = sortHabits(
+    calendarHabits.filter((habit) => isDueOn(habit, selectedDate)),
   );
 
   const chooseDate = (date: string) => {
@@ -565,7 +670,26 @@ export default function HabitWorkspace({
     if (!parsed) return;
     setSelectedDate(date);
     setVisibleMonth({ year: parsed.year, month: parsed.month });
+    setAgendaFocusId(null);
   };
+
+  const showAgenda = (date: string, habitId: string | null) => {
+    const parsed = parseDateKey(date);
+    if (!parsed) return;
+    setSelectedDate(date);
+    setVisibleMonth({ year: parsed.year, month: parsed.month });
+    setAgendaFocusId(habitId);
+    setCalendarPanelOpen(true);
+  };
+
+  useEffect(() => {
+    if (!agendaFocusId || view !== 'calendar') return;
+    document
+      .querySelector<HTMLElement>(
+        `[data-habit-agenda="${CSS.escape(agendaFocusId)}"]`,
+      )
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [agendaFocusId, selectedDate, view, calendarPanelOpen]);
 
   const movePeriod = (delta: number) => {
     chooseDate(
@@ -654,27 +778,21 @@ export default function HabitWorkspace({
     }
   };
 
-  const renderHabitRow = (
-    habit: Habit,
-    date: string,
-    due: boolean,
-    allowRepeat = false,
-  ) => {
-    const occurrence = occurrencesByKey.get(occurrenceKey(habit.id, date));
+  const categoryNameOf = (habit: Habit) =>
+    (habit.categoryId && categoriesById.get(habit.categoryId)?.name) ||
+    '未分类';
+
+  const renderCheckRow = (habit: Habit, date: string) => {
     const key = occurrenceKey(habit.id, date);
     return (
-      <HabitRow
-        key={`${habit.id}:${date}`}
+      <HabitCheckRow
+        key={key}
         habit={habit}
-        categoryName={
-          (habit.categoryId && categoriesById.get(habit.categoryId)?.name) ||
-          '未分类'
-        }
-        date={date}
-        occurrence={occurrence}
-        due={due}
+        categoryName={categoryNameOf(habit)}
+        occurrence={occurrencesByKey.get(key)}
+        canMark={date <= today}
         busy={savingKeys.has(key)}
-        allowRepeat={allowRepeat}
+        targeted={agendaFocusId === habit.id && date === selectedDate}
         onMark={(status) => void markOccurrence(habit, date, status)}
         onEdit={() => setDraft(habitDraft(habit))}
         onSetActive={(active) => void setHabitActive(habit, active)}
@@ -682,33 +800,37 @@ export default function HabitWorkspace({
     );
   };
 
+  const renderDefinitionRow = (habit: Habit) => (
+    <HabitDefinitionRow
+      key={habit.id}
+      habit={habit}
+      categoryName={categoryNameOf(habit)}
+      nextDue={nextDueOnOrAfter(habit, today)}
+      busy={saving}
+      onEdit={() => setDraft(habitDraft(habit))}
+      onSetActive={(active) => void setHabitActive(habit, active)}
+    />
+  );
+
   return (
     <div className="task-workspace habit-workspace">
       <aside className="task-sidebar habit-sidebar" aria-label="习惯导航">
         <header className="task-sidebar-heading">
-          <div className="task-sidebar-title">习惯管理</div>
+          <div className="task-sidebar-title">习惯</div>
         </header>
         <button
           type="button"
           className={`task-filter${scope === 'today' ? ' is-active' : ''}`}
           onClick={() => setScope('today')}
         >
-          今日到期 <span>{todayDue.length}</span>
+          今天 <span>{todayDue.length}</span>
         </button>
         <button
           type="button"
-          className={`task-filter${scope === 'all' ? ' is-active' : ''}`}
-          onClick={() => setScope('all')}
+          className={`task-filter${scope === 'library' ? ' is-active' : ''}`}
+          onClick={() => setScope('library')}
         >
-          全部习惯 <span>{searchedActiveHabits.length}</span>
-        </button>
-        <button
-          type="button"
-          className={`task-filter${scope === 'inactive' ? ' is-active' : ''}`}
-          onClick={() => setScope('inactive')}
-        >
-          已暂停{' '}
-          <span>{searchedHabits.filter((habit) => !habit.active).length}</span>
+          全部 <span>{searchedHabits.length}</span>
         </button>
         <div className="habit-category-heading">
           <span className="task-section-label">分类</span>
@@ -726,10 +848,9 @@ export default function HabitWorkspace({
             const count = snapshot.habits.filter(
               (habit) =>
                 habit.categoryId === category.id &&
-                (scope === 'inactive'
-                  ? !habit.active
-                  : habit.active &&
-                    (scope !== 'today' || isDueOn(habit, today))) &&
+                (scope === 'today'
+                  ? habit.active && isDueOn(habit, today)
+                  : true) &&
                 (!term ||
                   `${habit.title} ${habit.note ?? ''}`
                     .toLocaleLowerCase()
@@ -748,36 +869,10 @@ export default function HabitWorkspace({
                   </span>
                   <span>{count}</span>
                 </button>
-                {!category.isBuiltin && (
-                  <button
-                    type="button"
-                    className="habit-category-delete"
-                    title={`删除${category.name}分类`}
-                    aria-label={`删除${category.name}分类`}
-                    onClick={() => void deleteCategory(category)}
-                  >
-                    ×
-                  </button>
-                )}
               </div>
             );
           })}
         </div>
-        <form className="habit-category-create" onSubmit={createCategory}>
-          <input
-            aria-label="新分类名称"
-            maxLength={32}
-            placeholder="新分类名称"
-            value={newCategory}
-            onChange={(event) => setNewCategory(event.target.value)}
-          />
-          <button
-            type="submit"
-            disabled={savingCategory || !newCategory.trim()}
-          >
-            添加
-          </button>
-        </form>
       </aside>
 
       <main className="task-main habit-main">
@@ -796,7 +891,7 @@ export default function HabitWorkspace({
               </button>
             </div>
             <span className="task-toolbar-count">
-              今日完成 {todayDone} / {todayDue.length}
+              今日 {todayDone}/{todayDue.length}
             </span>
           </div>
           <div className="task-toolbar-actions">
@@ -837,25 +932,6 @@ export default function HabitWorkspace({
           </div>
         </header>
 
-        <div className="habit-summary" aria-label="今日习惯进度">
-          <span>
-            今日到期 <strong>{todayDue.length}</strong>
-          </span>
-          <span>
-            已完成 <strong>{todayDone}</strong>
-          </span>
-          <span>
-            已跳过 <strong>{todaySkipped}</strong>
-          </span>
-          <span>
-            待处理{' '}
-            <strong>
-              {Math.max(0, todayDue.length - todayDone - todaySkipped)}
-            </strong>
-          </span>
-          <span className="habit-summary-date">按本机日历日期统计</span>
-        </div>
-
         {error && (
           <div className="task-message is-error" role="alert">
             {error}
@@ -880,15 +956,8 @@ export default function HabitWorkspace({
             today={today}
             categoryFilter={categoryFilter}
             habitIds={statisticsHabitIds}
-            scopeLabel={
-              scope === 'today'
-                ? '今日到期'
-                : scope === 'inactive'
-                  ? '已暂停'
-                  : '全部活跃'
-            }
             onSelectDate={(date) => {
-              chooseDate(date);
+              showAgenda(date, null);
               setView('calendar');
             }}
           />
@@ -925,14 +994,7 @@ export default function HabitWorkspace({
                 <button
                   type="button"
                   className="task-calendar-nav-button"
-                  onClick={() => {
-                    const current = parseDateKey(today)!;
-                    setVisibleMonth({
-                      year: current.year,
-                      month: current.month,
-                    });
-                    setSelectedDate(today);
-                  }}
+                  onClick={() => chooseDate(today)}
                 >
                   今天
                 </button>
@@ -988,8 +1050,10 @@ export default function HabitWorkspace({
                   }}
                 >
                   {cells.map((cell) => {
-                    const entries = calendarHabits.filter((habit) =>
-                      isDueOn(habit, cell.date),
+                    const entries = sortHabits(
+                      calendarHabits.filter((habit) =>
+                        isDueOn(habit, cell.date),
+                      ),
                     );
                     return (
                       <div
@@ -1002,14 +1066,14 @@ export default function HabitWorkspace({
                             !(event.target instanceof HTMLElement) ||
                             !event.target.closest('button')
                           )
-                            chooseDate(cell.date);
+                            showAgenda(cell.date, null);
                         }}
                       >
                         <div className="task-calendar-day-head">
                           <button
                             type="button"
                             className="task-calendar-day-number"
-                            onClick={() => chooseDate(cell.date)}
+                            onClick={() => showAgenda(cell.date, null)}
                             aria-label={`选择 ${cell.date}`}
                             aria-pressed={cell.date === selectedDate}
                             aria-current={
@@ -1044,11 +1108,6 @@ export default function HabitWorkspace({
                           >
                             {cell.day}
                           </button>
-                          {entries.length > 0 && (
-                            <span className="habit-day-count">
-                              {entries.length}
-                            </span>
-                          )}
                         </div>
                         <div className="task-calendar-day-items">
                           {entries.slice(0, 3).map((habit) => {
@@ -1061,7 +1120,7 @@ export default function HabitWorkspace({
                                 className={`habit-calendar-marker${occurrence ? ` is-${occurrence.status}` : ''}`}
                                 title={`${habit.title} · ${occurrence?.status === 'done' ? '已完成' : occurrence?.status === 'skipped' ? '已跳过' : '待打卡'}`}
                                 key={habit.id}
-                                onClick={() => chooseDate(cell.date)}
+                                onClick={() => showAgenda(cell.date, habit.id)}
                               >
                                 <span>{habit.title}</span>
                               </button>
@@ -1080,27 +1139,15 @@ export default function HabitWorkspace({
               </div>
               <aside className="task-calendar-agenda habit-agenda">
                 <div className="task-calendar-agenda-head">
-                  <strong>
-                    {selectedDate === today ? '今天' : formatDate(selectedDate)}
-                  </strong>
-                  <input
-                    type="date"
-                    value={selectedDate}
-                    onChange={(event) => chooseDate(event.target.value)}
-                    aria-label="选择日期"
-                  />
+                  <strong>{formatAgendaHeading(selectedDate)}</strong>
                 </div>
                 <div className="task-calendar-agenda-list">
                   {selectedDateHabits.length ? (
                     selectedDateHabits.map((habit) =>
-                      renderHabitRow(habit, selectedDate, true),
+                      renderCheckRow(habit, selectedDate),
                     )
                   ) : (
-                    <div className="task-muted">
-                      {scope === 'inactive'
-                        ? '已暂停习惯不生成日程；可在清单中管理。'
-                        : '这一天没有到期习惯。'}
-                    </div>
+                    <div className="task-muted">这一天没有到期习惯。</div>
                   )}
                 </div>
               </aside>
@@ -1110,75 +1157,77 @@ export default function HabitWorkspace({
           <section className="habit-list-view">
             <div className="habit-list-toolbar">
               <div className="habit-list-date">
-                <strong>
-                  {scope === 'today'
-                    ? '今日清单'
-                    : scope === 'inactive'
-                      ? '已暂停习惯'
-                      : '全部习惯'}
-                </strong>
+                <strong>{scope === 'today' ? '今天' : '全部习惯'}</strong>
                 <span>
                   {categoryFilter === 'all'
                     ? '全部分类'
-                    : (categoriesById.get(categoryFilter)?.name ??
-                      '所选分类')}{' '}
-                  · {today}
+                    : (categoriesById.get(categoryFilter)?.name ?? '所选分类')}
+                  {scope === 'today' ? ` · ${formatAgendaHeading(today)}` : ''}
                 </span>
               </div>
             </div>
-            {scope !== 'inactive' && (
-              <section
-                className="habit-today-completed"
-                aria-label="今日完成的习惯"
-              >
-                <header>
-                  <strong>今日完成</strong>
-                  <span>{todayCompletedHabits.length}</span>
-                </header>
-                {todayCompletedHabits.length ? (
-                  <div className="habit-today-completed-list">
-                    {todayCompletedHabits.map((habit) =>
-                      renderHabitRow(habit, today, true, true),
-                    )}
-                  </div>
-                ) : (
-                  <div className="habit-today-completed-empty">
-                    今天完成的习惯会移到这里；再次打卡会更新今天最后一次完成时间。
-                  </div>
-                )}
-              </section>
+            {scope === 'library' && (
+              <details className="habit-category-admin">
+                <summary>管理分类</summary>
+                <div className="habit-category-admin-body">
+                  {snapshot.categories.map((category) => (
+                    <div className="habit-category-admin-row" key={category.id}>
+                      <span>{category.name}</span>
+                      {!category.isBuiltin && (
+                        <button
+                          type="button"
+                          onClick={() => void deleteCategory(category)}
+                        >
+                          删除
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  <form
+                    className="habit-category-admin-create"
+                    onSubmit={createCategory}
+                  >
+                    <input
+                      aria-label="新分类名称"
+                      maxLength={32}
+                      placeholder="新分类名称"
+                      value={newCategory}
+                      onChange={(event) => setNewCategory(event.target.value)}
+                    />
+                    <button
+                      type="submit"
+                      disabled={savingCategory || !newCategory.trim()}
+                    >
+                      添加
+                    </button>
+                  </form>
+                </div>
+              </details>
             )}
             <div className="habit-list">
-              {visibleHabits.length ? (
-                visibleHabits.map((habit) =>
-                  renderHabitRow(habit, today, isDueOn(habit, today)),
+              {scope === 'today' ? (
+                todayHabits.length ? (
+                  todayHabits.map((habit) => renderCheckRow(habit, today))
+                ) : (
+                  <div className="task-empty">今天没有到期的习惯。</div>
                 )
+              ) : libraryActive.length || libraryPaused.length ? (
+                <>
+                  {libraryActive.map((habit) => renderDefinitionRow(habit))}
+                  {libraryPaused.length > 0 && (
+                    <div className="habit-library-paused">
+                      <header>
+                        <strong>已暂停</strong>
+                        <span>{libraryPaused.length}</span>
+                      </header>
+                      {libraryPaused.map((habit) => renderDefinitionRow(habit))}
+                    </div>
+                  )}
+                </>
               ) : (
-                <div className="task-empty">
-                  {scope === 'today'
-                    ? '今天没有待处理的习惯。'
-                    : scope === 'inactive'
-                      ? '当前筛选下没有已暂停习惯。'
-                      : '当前筛选下没有待处理习惯。'}
-                </div>
+                <div className="task-empty">当前筛选下没有习惯。</div>
               )}
             </div>
-            {scope !== 'inactive' && todaySkippedHabits.length > 0 && (
-              <section
-                className="habit-today-skipped"
-                aria-label="今日跳过的习惯"
-              >
-                <header>
-                  <strong>今日跳过</strong>
-                  <span>{todaySkippedHabits.length}</span>
-                </header>
-                <div className="habit-today-skipped-list">
-                  {todaySkippedHabits.map((habit) =>
-                    renderHabitRow(habit, today, true),
-                  )}
-                </div>
-              </section>
-            )}
           </section>
         )}
       </main>
@@ -1285,6 +1334,16 @@ export default function HabitWorkspace({
                   </label>
                 )}
               </div>
+              <label className="habit-draft-active">
+                <input
+                  type="checkbox"
+                  checked={draft.active}
+                  onChange={(event) =>
+                    setDraft({ ...draft, active: event.target.checked })
+                  }
+                />
+                启用
+              </label>
               <label>
                 备注
                 <textarea

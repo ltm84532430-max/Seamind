@@ -290,13 +290,11 @@ export default function HabitStatistics({
   today,
   categoryFilter,
   habitIds,
-  scopeLabel,
   onSelectDate,
 }: {
   today: string;
   categoryFilter: string;
   habitIds: string[];
-  scopeLabel: string;
   onSelectDate(date: string): void;
 }) {
   const [periodDays, setPeriodDays] = useState<(typeof PERIODS)[number]>(365);
@@ -348,7 +346,7 @@ export default function HabitStatistics({
     };
   }, [fromDate, today, currentRange]);
 
-  useEffect(() => setHabitFilter('all'), [categoryFilter, scopeLabel]);
+  useEffect(() => setHabitFilter('all'), [categoryFilter]);
   useEffect(() => {
     if (habitFilter !== 'all' && !habitIds.includes(habitFilter))
       setHabitFilter('all');
@@ -424,9 +422,7 @@ export default function HabitStatistics({
               value={habitFilter}
               onChange={(event) => setHabitFilter(event.target.value)}
             >
-              <option value="all">
-                {categoryName} · {scopeLabel}
-              </option>
+              <option value="all">{categoryName}</option>
               {availableHabits.map((habit) => (
                 <option key={habit.id} value={habit.id}>
                   {habit.title}
