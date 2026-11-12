@@ -36,7 +36,6 @@ import './habit-workspace.css';
 type HabitView = 'list' | 'calendar' | 'stats';
 type HabitScope = 'today' | 'library';
 type HabitUiState = {
-  date: string;
   scope: HabitScope;
   category: string;
   view: HabitView;
@@ -65,7 +64,6 @@ type HabitCalendarMode = 'month' | 'week';
 
 function readHabitUiState(): HabitUiState {
   const fallback: HabitUiState = {
-    date: localToday(),
     scope: 'today',
     category: 'all',
     view: 'list',
@@ -75,10 +73,6 @@ function readHabitUiState(): HabitUiState {
   try {
     const saved = JSON.parse(sessionStorage.getItem(HABIT_UI_KEY) ?? '{}');
     return {
-      date:
-        typeof saved.date === 'string' && parseDateKey(saved.date)
-          ? saved.date
-          : fallback.date,
       scope: normalizeHabitScope(saved.scope),
       category:
         typeof saved.category === 'string' ? saved.category : fallback.category,
@@ -440,12 +434,14 @@ export default function HabitWorkspace({
   const todayRef = useRef(today);
   const reloadRef = useRef<(() => Promise<void>) | null>(null);
   const snapshotRequestRef = useRef(0);
-  const initialDate = parseDateKey(savedUi.date)!;
-  const [visibleMonth, setVisibleMonth] = useState({
-    year: initialDate.year,
-    month: initialDate.month,
+  const [visibleMonth, setVisibleMonth] = useState(() => {
+    const parsed = parseDateKey(today);
+    const now = new Date();
+    return parsed
+      ? { year: parsed.year, month: parsed.month }
+      : { year: now.getFullYear(), month: now.getMonth() + 1 };
   });
-  const [selectedDate, setSelectedDate] = useState(savedUi.date);
+  const [selectedDate, setSelectedDate] = useState(today);
   const [scope, setScope] = useState<HabitScope>(savedUi.scope);
   const [categoryFilter, setCategoryFilter] = useState(savedUi.category);
   const [view, setView] = useState<HabitView>(savedUi.view);
@@ -454,6 +450,7 @@ export default function HabitWorkspace({
     savedUi.calendarMode,
   );
   const [calendarPanelOpen, setCalendarPanelOpen] = useState(false);
+  const [focusedDate, setFocusedDate] = useState<string | null>(null);
   const [agendaFocusId, setAgendaFocusId] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState(EMPTY_SNAPSHOT);
   const [loading, setLoading] = useState(true);
@@ -477,7 +474,6 @@ export default function HabitWorkspace({
       sessionStorage.setItem(
         HABIT_UI_KEY,
         JSON.stringify({
-          date: selectedDate,
           scope,
           category: categoryFilter,
           view,
@@ -488,7 +484,7 @@ export default function HabitWorkspace({
     } catch {
       // 禁用存储时仍保留当前工作台状态。
     }
-  }, [selectedDate, scope, categoryFilter, view, query, calendarMode]);
+  }, [scope, categoryFilter, view, query, calendarMode]);
   const rangeStart = cells[0]?.date ?? today;
   const rangeEnd = cells[cells.length - 1]?.date ?? today;
   const reload = useCallback(async () => {
@@ -664,6 +660,11 @@ export default function HabitWorkspace({
   const selectedDateHabits = sortHabits(
     calendarHabits.filter((habit) => isDueOn(habit, selectedDate)),
   );
+  const focusedHabits = sortHabits(
+    focusedDate
+      ? calendarHabits.filter((habit) => isDueOn(habit, focusedDate))
+      : [],
+  );
 
   const chooseDate = (date: string) => {
     const parsed = parseDateKey(date);
@@ -672,6 +673,39 @@ export default function HabitWorkspace({
     setVisibleMonth({ year: parsed.year, month: parsed.month });
     setAgendaFocusId(null);
   };
+  const openDay = (date: string) => {
+    if (!parseDateKey(date)) return;
+    chooseDate(date);
+    setFocusedDate(date);
+  };
+  const stepFocusedDay = (delta: number) => {
+    if (!focusedDate) return;
+    const next = shiftedDateByDays(focusedDate, delta);
+    if (!parseDateKey(next)) return;
+    chooseDate(next);
+    setFocusedDate(next);
+  };
+  const closeDay = () => {
+    if (focusedDate) chooseDate(focusedDate);
+    setFocusedDate(null);
+  };
+  useEffect(() => {
+    if (!focusedDate) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (
+        event.target instanceof HTMLElement &&
+        event.target.closest('input, textarea, select')
+      ) {
+        return;
+      }
+      if (document.querySelector('[role="dialog"], [role="menu"]')) return;
+      chooseDate(focusedDate);
+      setFocusedDate(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [focusedDate]);
 
   const showAgenda = (date: string, habitId: string | null) => {
     const parsed = parseDateKey(date);
@@ -689,7 +723,7 @@ export default function HabitWorkspace({
         `[data-habit-agenda="${CSS.escape(agendaFocusId)}"]`,
       )
       ?.scrollIntoView({ block: 'nearest' });
-  }, [agendaFocusId, selectedDate, view, calendarPanelOpen]);
+  }, [agendaFocusId, selectedDate, view, calendarPanelOpen, focusedDate]);
 
   const movePeriod = (delta: number) => {
     chooseDate(
@@ -904,21 +938,33 @@ export default function HabitWorkspace({
             <button
               type="button"
               className={view === 'list' ? 'is-active' : ''}
-              onClick={() => setView('list')}
+              onClick={() => {
+                closeDay();
+                setView('list');
+              }}
             >
               清单
             </button>
             <button
               type="button"
               className={view === 'calendar' ? 'is-active' : ''}
-              onClick={() => setView('calendar')}
+              onClick={() => {
+                if (view !== 'calendar') {
+                  closeDay();
+                  chooseDate(today);
+                }
+                setView('calendar');
+              }}
             >
               日历
             </button>
             <button
               type="button"
               className={view === 'stats' ? 'is-active' : ''}
-              onClick={() => setView('stats')}
+              onClick={() => {
+                closeDay();
+                setView('stats');
+              }}
             >
               统计
             </button>
@@ -963,7 +1009,7 @@ export default function HabitWorkspace({
           />
         ) : view === 'calendar' ? (
           <section
-            className={`task-calendar habit-calendar${calendarMode === 'week' ? ' is-week' : ''}${calendarPanelOpen ? ' is-panel-open' : ''}`}
+            className={`task-calendar habit-calendar${calendarMode === 'week' ? ' is-week' : ''}${calendarPanelOpen ? ' is-panel-open' : ''}${focusedDate ? ' is-day-focus' : ''}`}
           >
             <div className="task-calendar-topbar">
               <div className="task-calendar-nav">
@@ -994,7 +1040,10 @@ export default function HabitWorkspace({
                 <button
                   type="button"
                   className="task-calendar-nav-button"
-                  onClick={() => chooseDate(today)}
+                  onClick={() => {
+                    chooseDate(today);
+                    if (focusedDate) setFocusedDate(today);
+                  }}
                 >
                   今天
                 </button>
@@ -1009,7 +1058,10 @@ export default function HabitWorkspace({
                     type="button"
                     className={calendarMode === 'week' ? 'is-active' : ''}
                     aria-pressed={calendarMode === 'week'}
-                    onClick={() => setCalendarMode('week')}
+                    onClick={() => {
+                      closeDay();
+                      setCalendarMode('week');
+                    }}
                   >
                     周
                   </button>
@@ -1017,7 +1069,10 @@ export default function HabitWorkspace({
                     type="button"
                     className={calendarMode === 'month' ? 'is-active' : ''}
                     aria-pressed={calendarMode === 'month'}
-                    onClick={() => setCalendarMode('month')}
+                    onClick={() => {
+                      closeDay();
+                      setCalendarMode('month');
+                    }}
                   >
                     月
                   </button>
@@ -1033,124 +1088,194 @@ export default function HabitWorkspace({
               </div>
             </div>
             <div className="task-calendar-content">
-              <div className="task-calendar-grid-wrap">
-                <div className="task-calendar-weekdays" aria-hidden="true">
-                  {WEEKDAYS.map((day) => (
-                    <div className="task-calendar-weekday" key={day}>
-                      {day}
-                    </div>
-                  ))}
-                </div>
-                <div
-                  className="task-calendar-grid"
-                  role="region"
-                  aria-label="习惯日历"
-                  style={{
-                    gridTemplateRows: `repeat(${cells.length / 7}, minmax(76px, 1fr))`,
-                  }}
+              {focusedDate ? (
+                <section
+                  className="task-calendar-day-focus"
+                  aria-label={`${formatAgendaHeading(focusedDate)}的习惯`}
                 >
-                  {cells.map((cell) => {
-                    const entries = sortHabits(
-                      calendarHabits.filter((habit) =>
-                        isDueOn(habit, cell.date),
-                      ),
-                    );
-                    return (
-                      <div
-                        className={`task-calendar-day${cell.inMonth ? '' : ' is-outside'}${cell.date === today ? ' is-today' : ''}${cell.date === selectedDate ? ' is-selected' : ''}`}
-                        role="group"
-                        aria-label={`${cell.date}，${entries.length} 项习惯`}
-                        key={cell.date}
-                        onClick={(event) => {
-                          if (
-                            !(event.target instanceof HTMLElement) ||
-                            !event.target.closest('button')
-                          )
-                            showAgenda(cell.date, null);
-                        }}
+                  <div className="task-calendar-day-focus-head">
+                    <button
+                      type="button"
+                      className="task-calendar-nav-button"
+                      onClick={() => stepFocusedDay(-1)}
+                      aria-label="前一天"
+                    >
+                      ‹
+                    </button>
+                    <strong className="task-calendar-day-focus-title">
+                      {formatAgendaHeading(focusedDate)} ·{' '}
+                      {focusedHabits.length} 项
+                    </strong>
+                    <div className="task-calendar-day-focus-actions">
+                      <button
+                        type="button"
+                        onClick={closeDay}
+                        aria-label={
+                          calendarMode === 'week' ? '返回周历' : '返回月历'
+                        }
                       >
-                        <div className="task-calendar-day-head">
-                          <button
-                            type="button"
-                            className="task-calendar-day-number"
-                            onClick={() => showAgenda(cell.date, null)}
-                            aria-label={`选择 ${cell.date}`}
-                            aria-pressed={cell.date === selectedDate}
-                            aria-current={
-                              cell.date === today ? 'date' : undefined
-                            }
-                            data-habit-date={cell.date}
-                            onKeyDown={(event) => {
-                              const offset = {
-                                ArrowLeft: -1,
-                                ArrowRight: 1,
-                                ArrowUp: -7,
-                                ArrowDown: 7,
-                              }[
-                                event.key as
-                                  | 'ArrowLeft'
-                                  | 'ArrowRight'
-                                  | 'ArrowUp'
-                                  | 'ArrowDown'
-                              ];
-                              if (offset == null) return;
-                              event.preventDefault();
-                              const next = shiftedDateByDays(cell.date, offset);
-                              chooseDate(next);
-                              requestAnimationFrame(() =>
-                                document
-                                  .querySelector<HTMLButtonElement>(
-                                    `[data-habit-date="${next}"]`,
-                                  )
-                                  ?.focus(),
-                              );
+                        返回
+                      </button>
+                      <button
+                        type="button"
+                        className="task-calendar-nav-button"
+                        onClick={() => stepFocusedDay(1)}
+                        aria-label="后一天"
+                      >
+                        ›
+                      </button>
+                    </div>
+                  </div>
+                  <div className="task-calendar-agenda-list">
+                    {focusedHabits.length ? (
+                      focusedHabits.map((habit) =>
+                        renderCheckRow(habit, focusedDate),
+                      )
+                    ) : (
+                      <div className="task-muted">这一天没有到期习惯。</div>
+                    )}
+                  </div>
+                </section>
+              ) : (
+                <>
+                  <div className="task-calendar-grid-wrap">
+                    <div className="task-calendar-weekdays" aria-hidden="true">
+                      {WEEKDAYS.map((day) => (
+                        <div className="task-calendar-weekday" key={day}>
+                          {day}
+                        </div>
+                      ))}
+                    </div>
+                    <div
+                      className="task-calendar-grid"
+                      role="region"
+                      aria-label="习惯日历"
+                      style={{
+                        gridTemplateRows: `repeat(${cells.length / 7}, minmax(76px, 1fr))`,
+                      }}
+                    >
+                      {cells.map((cell) => {
+                        const entries = sortHabits(
+                          calendarHabits.filter((habit) =>
+                            isDueOn(habit, cell.date),
+                          ),
+                        );
+                        return (
+                          <div
+                            className={`task-calendar-day${cell.inMonth ? '' : ' is-outside'}${cell.date === today ? ' is-today' : ''}${cell.date === selectedDate ? ' is-selected' : ''}`}
+                            role="group"
+                            aria-label={`${cell.date}，${entries.length} 项习惯`}
+                            key={cell.date}
+                            onClick={(event) => {
+                              if (
+                                !(event.target instanceof HTMLElement) ||
+                                !event.target.closest('button')
+                              )
+                                showAgenda(cell.date, null);
+                            }}
+                            onDoubleClick={(event) => {
+                              const target = event.target;
+                              if (
+                                !(target instanceof HTMLElement) ||
+                                target.closest('.habit-calendar-marker')
+                              ) {
+                                return;
+                              }
+                              openDay(cell.date);
                             }}
                           >
-                            {cell.day}
-                          </button>
-                        </div>
-                        <div className="task-calendar-day-items">
-                          {entries.slice(0, 3).map((habit) => {
-                            const occurrence = occurrencesByKey.get(
-                              occurrenceKey(habit.id, cell.date),
-                            );
-                            return (
+                            <div className="task-calendar-day-head">
                               <button
                                 type="button"
-                                className={`habit-calendar-marker${occurrence ? ` is-${occurrence.status}` : ''}`}
-                                title={`${habit.title} · ${occurrence?.status === 'done' ? '已完成' : occurrence?.status === 'skipped' ? '已跳过' : '待打卡'}`}
-                                key={habit.id}
-                                onClick={() => showAgenda(cell.date, habit.id)}
+                                className="task-calendar-day-number"
+                                onClick={() => showAgenda(cell.date, null)}
+                                aria-label={`选择 ${cell.date}`}
+                                aria-pressed={cell.date === selectedDate}
+                                aria-current={
+                                  cell.date === today ? 'date' : undefined
+                                }
+                                data-habit-date={cell.date}
+                                onKeyDown={(event) => {
+                                  const offset = {
+                                    ArrowLeft: -1,
+                                    ArrowRight: 1,
+                                    ArrowUp: -7,
+                                    ArrowDown: 7,
+                                  }[
+                                    event.key as
+                                      | 'ArrowLeft'
+                                      | 'ArrowRight'
+                                      | 'ArrowUp'
+                                      | 'ArrowDown'
+                                  ];
+                                  if (offset == null) return;
+                                  event.preventDefault();
+                                  const next = shiftedDateByDays(
+                                    cell.date,
+                                    offset,
+                                  );
+                                  chooseDate(next);
+                                  requestAnimationFrame(() =>
+                                    document
+                                      .querySelector<HTMLButtonElement>(
+                                        `[data-habit-date="${next}"]`,
+                                      )
+                                      ?.focus(),
+                                  );
+                                }}
                               >
-                                <span>{habit.title}</span>
+                                {cell.day}
                               </button>
-                            );
-                          })}
-                          {entries.length > 3 && (
-                            <span className="task-calendar-more">
-                              另有 {entries.length - 3} 项
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-              <aside className="task-calendar-agenda habit-agenda">
-                <div className="task-calendar-agenda-head">
-                  <strong>{formatAgendaHeading(selectedDate)}</strong>
-                </div>
-                <div className="task-calendar-agenda-list">
-                  {selectedDateHabits.length ? (
-                    selectedDateHabits.map((habit) =>
-                      renderCheckRow(habit, selectedDate),
-                    )
-                  ) : (
-                    <div className="task-muted">这一天没有到期习惯。</div>
-                  )}
-                </div>
-              </aside>
+                            </div>
+                            <div className="task-calendar-day-items">
+                              {entries.slice(0, 3).map((habit) => {
+                                const occurrence = occurrencesByKey.get(
+                                  occurrenceKey(habit.id, cell.date),
+                                );
+                                return (
+                                  <button
+                                    type="button"
+                                    className={`habit-calendar-marker${occurrence ? ` is-${occurrence.status}` : ''}`}
+                                    title={`${habit.title} · ${occurrence?.status === 'done' ? '已完成' : occurrence?.status === 'skipped' ? '已跳过' : '待打卡'}`}
+                                    key={habit.id}
+                                    onClick={() =>
+                                      showAgenda(cell.date, habit.id)
+                                    }
+                                  >
+                                    <span>{habit.title}</span>
+                                  </button>
+                                );
+                              })}
+                              {entries.length > 3 && (
+                                <span
+                                  className="task-calendar-more"
+                                  title="双击查看这一天"
+                                >
+                                  另有 {entries.length - 3} 项
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  <aside className="task-calendar-agenda habit-agenda">
+                    <div className="task-calendar-agenda-head">
+                      <strong>{formatAgendaHeading(selectedDate)}</strong>
+                    </div>
+                    <div className="task-calendar-agenda-list">
+                      {selectedDateHabits.length ? (
+                        selectedDateHabits.map((habit) =>
+                          renderCheckRow(habit, selectedDate),
+                        )
+                      ) : (
+                        <div className="task-muted">这一天没有到期习惯。</div>
+                      )}
+                    </div>
+                  </aside>
+                </>
+              )}
             </div>
           </section>
         ) : (

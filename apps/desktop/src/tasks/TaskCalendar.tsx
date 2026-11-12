@@ -114,6 +114,7 @@ export default function TaskCalendar({
   const [editingDateId, setEditingDateId] = useState<string | null>(null);
   const [dateDraft, setDateDraft] = useState('');
   const [panelOpen, setPanelOpen] = useState(false);
+  const [focusedDate, setFocusedDate] = useState<string | null>(null);
   const [navHost, setNavHost] = useState<HTMLElement | null>(null);
   const agendaTouched = useRef(savedState.restored);
   useLayoutEffect(() => {
@@ -193,6 +194,49 @@ export default function TaskCalendar({
     setAgendaTab('date');
     agendaTouched.current = true;
   };
+  const openDay = (date: string) => {
+    if (!parseDateKey(date)) return;
+    chooseDate(date);
+    setFocusedDate(date);
+  };
+  const stepFocusedDay = (delta: number) => {
+    if (!focusedDate) return;
+    const next = shiftedDateByDays(focusedDate, delta);
+    if (!parseDateKey(next)) return;
+    chooseDate(next);
+    setFocusedDate(next);
+  };
+  const closeDay = () => {
+    if (focusedDate) chooseDate(focusedDate);
+    setFocusedDate(null);
+  };
+  const showUnscheduled = () => {
+    setFocusedDate(null);
+    setAgendaTab('unscheduled');
+    setPanelOpen(true);
+    agendaTouched.current = true;
+  };
+  useEffect(() => {
+    if (!focusedDate) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (editingDateId) {
+        setEditingDateId(null);
+        return;
+      }
+      if (
+        event.target instanceof HTMLElement &&
+        event.target.closest('input, textarea, select')
+      ) {
+        return;
+      }
+      if (document.querySelector('[role="dialog"], [role="menu"]')) return;
+      chooseDate(focusedDate);
+      setFocusedDate(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [editingDateId, focusedDate]);
   const dropTask = async (id: string, date: string | null) => {
     setDraggingId(null);
     const task = tasks.find((item) => item.id === id);
@@ -320,6 +364,24 @@ export default function TaskCalendar({
     </div>
   );
 
+  const focusedTasks = focusedDate ? (byDate.get(focusedDate) ?? []) : [];
+  const renderDateTaskList = (entries: LearningTask[]) => (
+    <div className="task-calendar-agenda-list">
+      {entries.length ? (
+        entries.map((task) => taskButton(task, false))
+      ) : (
+        <div className="task-calendar-empty-state">
+          <strong>这一天没有截止任务</strong>
+          <span>可从未排期列表安排任务，或直接新建。</span>
+          {unscheduled.length > 0 && (
+            <button type="button" onClick={showUnscheduled}>
+              查看未排期 {unscheduled.length} 项
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
   const periodTitle = formatCalendarPeriod(
     mode,
     visibleMonth,
@@ -349,7 +411,10 @@ export default function TaskCalendar({
         <button
           type="button"
           className="task-calendar-nav-button"
-          onClick={() => chooseDate(today)}
+          onClick={() => {
+            chooseDate(today);
+            if (focusedDate) setFocusedDate(today);
+          }}
         >
           今天
         </button>
@@ -364,7 +429,10 @@ export default function TaskCalendar({
             type="button"
             className={mode === 'week' ? 'is-active' : ''}
             aria-pressed={mode === 'week'}
-            onClick={() => setMode('week')}
+            onClick={() => {
+              closeDay();
+              setMode('week');
+            }}
           >
             周
           </button>
@@ -372,7 +440,10 @@ export default function TaskCalendar({
             type="button"
             className={mode === 'month' ? 'is-active' : ''}
             aria-pressed={mode === 'month'}
-            onClick={() => setMode('month')}
+            onClick={() => {
+              closeDay();
+              setMode('month');
+            }}
           >
             月
           </button>
@@ -391,215 +462,257 @@ export default function TaskCalendar({
 
   return (
     <div
-      className={`task-calendar${mode === 'week' ? ' is-week' : ''}${panelOpen ? ' is-panel-open' : ''}`}
+      className={`task-calendar${mode === 'week' ? ' is-week' : ''}${panelOpen ? ' is-panel-open' : ''}${focusedDate ? ' is-day-focus' : ''}`}
     >
       {navHost ? createPortal(navigation, navHost) : null}
       <div className="task-calendar-content">
-        <div className="task-calendar-grid-wrap">
-          <div className="task-calendar-weekdays" aria-hidden="true">
-            {WEEKDAYS.map((day) => (
-              <div className="task-calendar-weekday" key={day}>
-                {day}
-              </div>
-            ))}
-          </div>
-          <div
-            className="task-calendar-grid"
-            style={{
-              gridTemplateRows: `repeat(${cells.length / 7}, minmax(76px, 1fr))`,
-            }}
-            role="region"
-            aria-label={
-              mode === 'week'
-                ? `${cells[0]?.date} 至 ${cells[6]?.date} 任务周历`
-                : `${visibleMonth.year} 年 ${visibleMonth.month} 月任务日历`
-            }
+        {focusedDate ? (
+          <section
+            className="task-calendar-day-focus"
+            aria-label={`${formatAgendaHeading(focusedDate)}的任务`}
           >
-            {cells.map((cell) => {
-              const entries = byDate.get(cell.date) ?? [];
-              const validDay = parseDateKey(cell.date) !== null;
-              return (
-                <div
-                  key={cell.date}
-                  className={`task-calendar-day${cell.inMonth ? '' : ' is-outside'}${cell.date === today ? ' is-today' : ''}${cell.date === selectedDate ? ' is-selected' : ''}${draggingId ? ' is-drop-target' : ''}`}
-                  role="group"
-                  aria-label={`${cell.date}，${entries.length} 项任务`}
-                  onClick={(event) => {
-                    if (
-                      !(event.target instanceof HTMLElement) ||
-                      !event.target.closest('button')
-                    )
-                      chooseDate(cell.date);
-                  }}
-                  onDragOver={(event) => {
-                    if (draggingId && validDay) event.preventDefault();
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    if (draggingId) void dropTask(draggingId, cell.date);
-                  }}
+            <div className="task-calendar-day-focus-head">
+              <button
+                type="button"
+                className="task-calendar-nav-button"
+                onClick={() => stepFocusedDay(-1)}
+                aria-label="前一天"
+              >
+                ‹
+              </button>
+              <strong className="task-calendar-day-focus-title">
+                {formatAgendaHeading(focusedDate)} · {focusedTasks.length} 项
+              </strong>
+              <div className="task-calendar-day-focus-actions">
+                <button
+                  type="button"
+                  onClick={closeDay}
+                  aria-label={mode === 'week' ? '返回周历' : '返回月历'}
                 >
-                  <div className="task-calendar-day-head">
-                    <button
-                      type="button"
-                      className="task-calendar-day-number"
-                      onClick={() => chooseDate(cell.date)}
-                      disabled={!validDay}
-                      aria-label={`选择 ${cell.date}`}
-                      aria-pressed={cell.date === selectedDate}
-                      aria-current={cell.date === today ? 'date' : undefined}
-                      data-task-date={cell.date}
-                      onKeyDown={(event) => {
-                        const offset = {
-                          ArrowLeft: -1,
-                          ArrowRight: 1,
-                          ArrowUp: -7,
-                          ArrowDown: 7,
-                        }[
-                          event.key as
-                            | 'ArrowLeft'
-                            | 'ArrowRight'
-                            | 'ArrowUp'
-                            | 'ArrowDown'
-                        ];
-                        if (offset == null) return;
-                        event.preventDefault();
-                        const next = shiftedDateByDays(cell.date, offset);
-                        chooseDate(next);
-                        requestAnimationFrame(() =>
-                          document
-                            .querySelector<HTMLButtonElement>(
-                              `[data-task-date="${next}"]`,
-                            )
-                            ?.focus(),
-                        );
-                      }}
-                    >
-                      {cell.day}
-                    </button>
-                    <button
-                      type="button"
-                      className="task-calendar-day-add"
-                      onClick={() => {
-                        chooseDate(cell.date);
-                        onCreateTask(cell.date);
-                      }}
-                      disabled={!validDay}
-                      aria-label={`${cell.date} 新建任务`}
-                    >
-                      +
-                    </button>
-                  </div>
-                  <div className="task-calendar-day-items">
-                    {entries
-                      .slice(0, CELL_LIMIT)
-                      .map((task) => taskButton(task, true))}
-                    {entries.length > CELL_LIMIT && (
-                      <button
-                        type="button"
-                        className="task-calendar-more"
-                        onClick={() => chooseDate(cell.date)}
-                      >
-                        另有 {entries.length - CELL_LIMIT} 项
-                      </button>
-                    )}
-                  </div>
-                  {entries.length === 0 && (
-                    <button
-                      type="button"
-                      className="task-calendar-empty-day"
-                      onClick={() => chooseDate(cell.date)}
-                      disabled={!validDay}
-                      aria-label={`选择 ${cell.date}`}
-                    />
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-        {!detailOpen && (
-          <aside className="task-calendar-agenda">
-            <div
-              className="task-calendar-agenda-tabs"
-              role="group"
-              aria-label="日程内容"
-            >
-              <button
-                type="button"
-                aria-pressed={agendaTab === 'date'}
-                className={agendaTab === 'date' ? 'is-active' : ''}
-                onClick={() => {
-                  setAgendaTab('date');
-                  agendaTouched.current = true;
-                }}
-              >
-                {selectedDate === today ? '今天' : selectedDate}{' '}
-                <span>{selectedTasks.length}</span>
-              </button>
-              <button
-                type="button"
-                aria-pressed={agendaTab === 'unscheduled'}
-                className={agendaTab === 'unscheduled' ? 'is-active' : ''}
-                onClick={() => {
-                  setAgendaTab('unscheduled');
-                  agendaTouched.current = true;
-                }}
-              >
-                未排期 <span>{unscheduled.length}</span>
-              </button>
+                  返回
+                </button>
+                <button type="button" onClick={() => onCreateTask(focusedDate)}>
+                  + 新建
+                </button>
+                <button
+                  type="button"
+                  className="task-calendar-nav-button"
+                  onClick={() => stepFocusedDay(1)}
+                  aria-label="后一天"
+                >
+                  ›
+                </button>
+              </div>
             </div>
-            {agendaTab === 'date' ? (
-              <div className="task-calendar-agenda-pane">
-                <div className="task-calendar-agenda-head">
-                  <strong>{formatAgendaHeading(selectedDate)}</strong>
-                  <button
-                    type="button"
-                    onClick={() => onCreateTask(selectedDate)}
-                  >
-                    + 新建
-                  </button>
-                </div>
-                <div className="task-calendar-agenda-list">
-                  {selectedTasks.length ? (
-                    selectedTasks.map((task) => taskButton(task, false))
-                  ) : (
-                    <div className="task-calendar-empty-state">
-                      <strong>这一天没有截止任务</strong>
-                      <span>可从未排期列表安排任务，或直接新建。</span>
-                      {unscheduled.length > 0 && (
+            {renderDateTaskList(focusedTasks)}
+          </section>
+        ) : (
+          <>
+            <div className="task-calendar-grid-wrap">
+              <div className="task-calendar-weekdays" aria-hidden="true">
+                {WEEKDAYS.map((day) => (
+                  <div className="task-calendar-weekday" key={day}>
+                    {day}
+                  </div>
+                ))}
+              </div>
+              <div
+                className="task-calendar-grid"
+                style={{
+                  gridTemplateRows: `repeat(${cells.length / 7}, minmax(76px, 1fr))`,
+                }}
+                role="region"
+                aria-label={
+                  mode === 'week'
+                    ? `${cells[0]?.date} 至 ${cells[6]?.date} 任务周历`
+                    : `${visibleMonth.year} 年 ${visibleMonth.month} 月任务日历`
+                }
+              >
+                {cells.map((cell) => {
+                  const entries = byDate.get(cell.date) ?? [];
+                  const validDay = parseDateKey(cell.date) !== null;
+                  return (
+                    <div
+                      key={cell.date}
+                      className={`task-calendar-day${cell.inMonth ? '' : ' is-outside'}${cell.date === today ? ' is-today' : ''}${cell.date === selectedDate ? ' is-selected' : ''}${draggingId ? ' is-drop-target' : ''}`}
+                      role="group"
+                      aria-label={`${cell.date}，${entries.length} 项任务`}
+                      onClick={(event) => {
+                        if (
+                          !(event.target instanceof HTMLElement) ||
+                          !event.target.closest('button')
+                        )
+                          chooseDate(cell.date);
+                      }}
+                      onDoubleClick={(event) => {
+                        const target = event.target;
+                        if (
+                          !(target instanceof HTMLElement) ||
+                          target.closest(
+                            '.task-calendar-item, .task-calendar-day-add',
+                          )
+                        ) {
+                          return;
+                        }
+                        openDay(cell.date);
+                      }}
+                      onDragOver={(event) => {
+                        if (draggingId && validDay) event.preventDefault();
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        if (draggingId) void dropTask(draggingId, cell.date);
+                      }}
+                    >
+                      <div className="task-calendar-day-head">
                         <button
                           type="button"
-                          onClick={() => setAgendaTab('unscheduled')}
+                          className="task-calendar-day-number"
+                          onClick={() => chooseDate(cell.date)}
+                          disabled={!validDay}
+                          aria-label={`选择 ${cell.date}`}
+                          aria-pressed={cell.date === selectedDate}
+                          aria-current={
+                            cell.date === today ? 'date' : undefined
+                          }
+                          data-task-date={cell.date}
+                          onKeyDown={(event) => {
+                            const offset = {
+                              ArrowLeft: -1,
+                              ArrowRight: 1,
+                              ArrowUp: -7,
+                              ArrowDown: 7,
+                            }[
+                              event.key as
+                                | 'ArrowLeft'
+                                | 'ArrowRight'
+                                | 'ArrowUp'
+                                | 'ArrowDown'
+                            ];
+                            if (offset == null) return;
+                            event.preventDefault();
+                            const next = shiftedDateByDays(cell.date, offset);
+                            chooseDate(next);
+                            requestAnimationFrame(() =>
+                              document
+                                .querySelector<HTMLButtonElement>(
+                                  `[data-task-date="${next}"]`,
+                                )
+                                ?.focus(),
+                            );
+                          }}
                         >
-                          查看未排期 {unscheduled.length} 项
+                          {cell.day}
                         </button>
+                        <button
+                          type="button"
+                          className="task-calendar-day-add"
+                          onClick={() => {
+                            chooseDate(cell.date);
+                            onCreateTask(cell.date);
+                          }}
+                          disabled={!validDay}
+                          aria-label={`${cell.date} 新建任务`}
+                        >
+                          +
+                        </button>
+                      </div>
+                      <div className="task-calendar-day-items">
+                        {entries
+                          .slice(0, CELL_LIMIT)
+                          .map((task) => taskButton(task, true))}
+                        {entries.length > CELL_LIMIT && (
+                          <button
+                            type="button"
+                            className="task-calendar-more"
+                            title="双击查看这一天"
+                            onClick={() => chooseDate(cell.date)}
+                          >
+                            另有 {entries.length - CELL_LIMIT} 项
+                          </button>
+                        )}
+                      </div>
+                      {entries.length === 0 && (
+                        <button
+                          type="button"
+                          className="task-calendar-empty-day"
+                          onClick={() => chooseDate(cell.date)}
+                          disabled={!validDay}
+                          aria-label={`选择 ${cell.date}`}
+                        />
                       )}
                     </div>
-                  )}
-                </div>
+                  );
+                })}
               </div>
-            ) : (
-              <div
-                className="task-calendar-agenda-pane task-calendar-unscheduled"
-                onDragOver={(event) => {
-                  if (draggingId) event.preventDefault();
-                }}
-                onDrop={(event) => {
-                  event.preventDefault();
-                  if (draggingId) void dropTask(draggingId, null);
-                }}
-              >
-                <div className="task-calendar-agenda-list">
-                  {unscheduled.length ? (
-                    unscheduled.map((task) => taskButton(task, false))
-                  ) : (
-                    <div className="task-muted">没有未安排日期的任务。</div>
-                  )}
+            </div>
+            {!detailOpen && (
+              <aside className="task-calendar-agenda">
+                <div
+                  className="task-calendar-agenda-tabs"
+                  role="group"
+                  aria-label="日程内容"
+                >
+                  <button
+                    type="button"
+                    aria-pressed={agendaTab === 'date'}
+                    className={agendaTab === 'date' ? 'is-active' : ''}
+                    onClick={() => {
+                      setAgendaTab('date');
+                      agendaTouched.current = true;
+                    }}
+                  >
+                    {selectedDate === today ? '今天' : selectedDate}{' '}
+                    <span>{selectedTasks.length}</span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={agendaTab === 'unscheduled'}
+                    className={agendaTab === 'unscheduled' ? 'is-active' : ''}
+                    onClick={() => {
+                      setAgendaTab('unscheduled');
+                      agendaTouched.current = true;
+                    }}
+                  >
+                    未排期 <span>{unscheduled.length}</span>
+                  </button>
                 </div>
-              </div>
+                {agendaTab === 'date' ? (
+                  <div className="task-calendar-agenda-pane">
+                    <div className="task-calendar-agenda-head">
+                      <strong>{formatAgendaHeading(selectedDate)}</strong>
+                      <button
+                        type="button"
+                        onClick={() => onCreateTask(selectedDate)}
+                      >
+                        + 新建
+                      </button>
+                    </div>
+                    {renderDateTaskList(selectedTasks)}
+                  </div>
+                ) : (
+                  <div
+                    className="task-calendar-agenda-pane task-calendar-unscheduled"
+                    onDragOver={(event) => {
+                      if (draggingId) event.preventDefault();
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      if (draggingId) void dropTask(draggingId, null);
+                    }}
+                  >
+                    <div className="task-calendar-agenda-list">
+                      {unscheduled.length ? (
+                        unscheduled.map((task) => taskButton(task, false))
+                      ) : (
+                        <div className="task-muted">没有未安排日期的任务。</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </aside>
             )}
-          </aside>
+          </>
         )}
       </div>
     </div>

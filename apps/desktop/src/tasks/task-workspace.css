@@ -376,6 +376,41 @@
   min-width: 0;
   min-height: 0;
 }
+.task-calendar-day-focus {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel);
+}
+.task-calendar-day-focus-head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.task-calendar-day-focus-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.task-calendar-day-focus-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+.task-calendar-day-focus > .task-calendar-agenda-list {
+  flex: 1 1 0;
+}
 .task-calendar-grid-wrap {
   display: flex;
   flex: 1 1 0;
@@ -1325,6 +1360,9 @@
   .task-calendar.is-panel-open .task-calendar-agenda {
     visibility: visible;
     pointer-events: auto;
+  }
+  .task-calendar.is-day-focus .task-calendar-panel-toggle {
+    display: none;
   }
 }
 

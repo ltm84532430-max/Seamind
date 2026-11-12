@@ -363,7 +363,8 @@
   white-space: nowrap;
 }
 
-.habit-agenda .task-calendar-agenda-list {
+.habit-agenda .task-calendar-agenda-list,
+.habit-calendar .task-calendar-day-focus .task-calendar-agenda-list {
   gap: 0;
   padding: 0 8px;
 }
