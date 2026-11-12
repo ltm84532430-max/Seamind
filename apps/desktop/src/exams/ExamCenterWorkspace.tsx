@@ -10,7 +10,13 @@ import { reviewUrgencyRank, scheduleExamReview } from './review-schedule';
 import type { ExamReviewSchedule } from './review-schedule';
 import './exam-center.css';
 
-type ViewFilter = 'all' | 'due' | 'upcoming' | 'inProgress';
+type ViewFilter =
+  | 'all'
+  | 'overdue'
+  | 'today'
+  | 'mastered'
+  | 'upcoming'
+  | 'inProgress';
 type ViewMode = 'graph' | 'list';
 
 interface Props {
@@ -51,31 +57,10 @@ function urgencyLabel(schedule: ExamReviewSchedule): string {
   }
 }
 
-function memoryTier(schedule: ExamReviewSchedule): {
-  tier: string;
-  label: string;
-  colorClass: string;
-} {
-  if (schedule.completedRounds === 0) {
-    return { tier: 'D', label: '初学期', colorClass: 'tier-d' };
-  }
-  if (schedule.urgency === 'overdue') {
-    return { tier: '!', label: '待救援', colorClass: 'tier-risk' };
-  }
-  const interval = schedule.intervalDays ?? 1;
-  if (interval >= 30) {
-    return { tier: 'S', label: '永久强化', colorClass: 'tier-s' };
-  }
-  if (interval >= 14) {
-    return { tier: 'A', label: '稳固体', colorClass: 'tier-a' };
-  }
-  if (interval >= 7) {
-    return { tier: 'B', label: '深化期', colorClass: 'tier-b' };
-  }
-  if (interval >= 3) {
-    return { tier: 'C', label: '成型期', colorClass: 'tier-c' };
-  }
-  return { tier: 'D', label: '初建期', colorClass: 'tier-d' };
+function difficultyLabel(value?: string): string {
+  if (value === 'easy') return '易';
+  if (value === 'hard') return '难';
+  return '中';
 }
 
 function ReviewCurve({
@@ -90,7 +75,7 @@ function ReviewCurve({
   if (!schedule.intervalDays || !lastCompletedAt) {
     return (
       <div className="exam-center-curve-empty">
-        <p>尚未记录有效交卷成绩，首轮交卷后将在此激活艾宾浩斯动态留存模型。</p>
+        <p>交卷一次后，这里显示复习间隔。</p>
       </div>
     );
   }
@@ -150,7 +135,7 @@ function ReviewCurve({
     <div className="exam-center-curve">
       <svg
         role="img"
-        aria-label={`艾宾浩斯复习节奏：当前记忆留存预估 ${currentPct}%`}
+        aria-label={`复习间隔：距上次交卷已过 ${Math.round(elapsedDays)} 天，当前约 ${currentPct}%`}
         viewBox={`0 0 ${svgWidth} ${svgHeight}`}
         preserveAspectRatio="none"
       >
@@ -358,11 +343,10 @@ export default function ExamCenterWorkspace({
             .includes(needle)
         )
           return false;
-        if (
-          filter === 'due' &&
-          !['overdue', 'today'].includes(schedule.urgency)
-        )
+        if (filter === 'overdue' && schedule.urgency !== 'overdue')
           return false;
+        if (filter === 'today' && schedule.urgency !== 'today') return false;
+        if (filter === 'mastered' && exam.status !== 'submitted') return false;
         if (filter === 'upcoming' && schedule.urgency !== 'upcoming')
           return false;
         if (filter === 'inProgress' && exam.status !== 'inProgress')
@@ -442,9 +426,8 @@ export default function ExamCenterWorkspace({
     <main className="exam-center" aria-label="试卷与复习工作区">
       <header className="exam-center-header">
         <div className="exam-center-title">
-          <div className="exam-center-title-badge">COGNITIVE HUB</div>
-          <h1>试卷与复习</h1>
-          <span>艾宾浩斯记忆与认知巩固中枢</span>
+          <h1>试卷</h1>
+          <span>按书、到期和掌握查看</span>
         </div>
         <div className="exam-center-header-actions">
           {dueCount > 0 && (
@@ -464,7 +447,7 @@ export default function ExamCenterWorkspace({
               }}
               title="直接开始作答今天最紧迫的试卷"
             >
-              <span>开启今日冲刺 ({dueCount})</span>
+              <span>开始今日待交 ({dueCount})</span>
             </button>
           )}
           <button
@@ -485,115 +468,97 @@ export default function ExamCenterWorkspace({
         </div>
       </header>
 
-      {/* 机构级 5 列 KPI 遥测仪表栏 */}
-      <section className="exam-center-summary" aria-label="记忆资产与复习概况">
+      <section className="exam-center-summary" aria-label="试卷筛选">
         <button
           type="button"
           className={`exam-summary-card ${filter === 'all' ? 'is-active' : ''}`}
+          aria-pressed={filter === 'all'}
           onClick={() => setFilter('all')}
         >
           <div className="exam-summary-header">
-            <span>记忆资产总量</span>
-            <span className="exam-summary-tag">全集</span>
+            <span>全部</span>
           </div>
           <strong className="exam-summary-num">{exams.length}</strong>
-          <small className="exam-summary-sub">共 {totalQuestions} 道题目</small>
+          <small className="exam-summary-sub">共 {totalQuestions} 题</small>
         </button>
 
         <button
           type="button"
-          className={`exam-summary-card is-danger ${filter === 'due' ? 'is-active' : ''}`}
-          onClick={() => setFilter('due')}
+          className={`exam-summary-card is-danger ${filter === 'overdue' ? 'is-active' : ''}`}
+          aria-pressed={filter === 'overdue'}
+          onClick={() => setFilter('overdue')}
         >
           <div className="exam-summary-header">
-            <span>紧急遗忘告警</span>
-            <span className="exam-summary-tag is-danger">临界</span>
+            <span>逾期</span>
           </div>
           <strong className="exam-summary-num text-danger">
             {overdueCount}
           </strong>
-          <small className="exam-summary-sub">跌破 60% 遗忘阈值</small>
+          <small className="exam-summary-sub">已过复习日</small>
         </button>
 
         <button
           type="button"
-          className={`exam-summary-card is-warning ${filter === 'due' ? 'is-active' : ''}`}
-          onClick={() => setFilter('due')}
+          className={`exam-summary-card ${filter === 'today' ? 'is-active' : ''}`}
+          aria-pressed={filter === 'today'}
+          onClick={() => setFilter('today')}
         >
           <div className="exam-summary-header">
-            <span>今日到期负荷</span>
-            <span className="exam-summary-tag is-warning">今日</span>
+            <span>今日到期</span>
           </div>
-          <strong className="exam-summary-num text-warning">
-            {todayCount}
-          </strong>
+          <strong className="exam-summary-num">{todayCount}</strong>
           <small className="exam-summary-sub">
             {estimatedWorkloadMinutes
-              ? `预计耗时 ~${estimatedWorkloadMinutes} 分钟`
-              : '今日无排程'}
+              ? `约 ${estimatedWorkloadMinutes} 分钟`
+              : '今日没有待交'}
           </small>
         </button>
 
-        <div className="exam-summary-card">
+        <button
+          type="button"
+          className={`exam-summary-card ${filter === 'mastered' ? 'is-active' : ''}`}
+          aria-pressed={filter === 'mastered'}
+          onClick={() => setFilter('mastered')}
+        >
           <div className="exam-summary-header">
-            <span>记忆留存健康度</span>
-            <span className={`exam-summary-tag is-${retentionStats.status}`}>
-              {retentionStats.label}
-            </span>
+            <span>掌握</span>
           </div>
           <strong className="exam-summary-num">{retentionStats.rate}%</strong>
-          <div className="exam-summary-meter">
-            <div
-              className="exam-summary-meter-fill"
-              style={{ width: `${retentionStats.rate}%` }}
-            />
-          </div>
-        </div>
+          <small className="exam-summary-sub">
+            已交{' '}
+            {entries.filter((item) => item.exam.status === 'submitted').length}{' '}
+            套
+          </small>
+        </button>
 
         <button
           type="button"
           className={`exam-summary-card ${filter === 'upcoming' ? 'is-active' : ''}`}
+          aria-pressed={filter === 'upcoming'}
           onClick={() => setFilter('upcoming')}
         >
           <div className="exam-summary-header">
-            <span>近期巩固排程</span>
-            <span className="exam-summary-tag">3日内</span>
+            <span>三日内</span>
           </div>
           <strong className="exam-summary-num">{upcomingCount}</strong>
-          <small className="exam-summary-sub">稳步进入强化期</small>
+          <small className="exam-summary-sub">即将复习</small>
         </button>
       </section>
 
       <div className="exam-center-body">
-        {/* 左侧智能视图与书籍知识库 */}
-        <aside className="exam-center-filters" aria-label="试卷筛选">
-          <div className="exam-filter-section-title">智能视图</div>
-          {(
-            [
-              ['all', '全部试卷', exams.length, 'normal'],
-              [
-                'due',
-                '紧急待复习',
-                overdueCount + todayCount,
-                overdueCount > 0 ? 'danger' : 'warning',
-              ],
-              ['upcoming', '近期到期 (3日内)', upcomingCount, 'normal'],
-              ['inProgress', '重做 / 作答中', inProgressCount, 'primary'],
-            ] as const
-          ).map(([value, label, count, badgeType]) => (
-            <button
-              key={value}
-              type="button"
-              className={`exam-filter-btn ${filter === value ? 'is-active' : ''}`}
-              aria-pressed={filter === value}
-              onClick={() => setFilter(value)}
-            >
-              <span>{label}</span>
-              <span className={`exam-badge is-${badgeType}`}>{count}</span>
-            </button>
-          ))}
+        <aside className="exam-center-filters" aria-label="书籍">
+          <div className="exam-filter-section-title">状态</div>
+          <button
+            type="button"
+            className={`exam-filter-btn ${filter === 'inProgress' ? 'is-active' : ''}`}
+            aria-pressed={filter === 'inProgress'}
+            onClick={() => setFilter('inProgress')}
+          >
+            <span>作答中</span>
+            <span className="exam-badge">{inProgressCount}</span>
+          </button>
 
-          <div className="exam-filter-section-title">书籍知识库</div>
+          <div className="exam-filter-section-title">书籍</div>
           <div className="exam-center-book-list" aria-label="按书籍筛选试卷">
             <button
               type="button"
@@ -601,7 +566,7 @@ export default function ExamCenterWorkspace({
               aria-pressed={!bookFilter}
               onClick={() => onBookFilterChange('')}
             >
-              <span>全部书籍合集</span>
+              <span>全部书籍</span>
               <span className="exam-badge">{exams.length}</span>
             </button>
             {bookGroups.map((group) => {
@@ -683,7 +648,7 @@ export default function ExamCenterWorkspace({
           )}
 
           {loading && !exams.length ? (
-            <p className="exam-center-empty">正在加载认知强化档案…</p>
+            <p className="exam-center-empty">正在加载试卷…</p>
           ) : viewMode === 'graph' && bookGroups.length ? (
             <ExamGraphView
               bookKey={graphBookKey}
@@ -697,10 +662,8 @@ export default function ExamCenterWorkspace({
             />
           ) : !visible.length ? (
             <div className="exam-center-empty">
-              <h2>{exams.length ? '没有匹配的试卷' : '尚无试卷档案'}</h2>
-              <p>
-                在电子书阅读器中选定章节后一键生成试卷，交卷后此处将自动生成艾宾浩斯复习排程。
-              </p>
+              <h2>{exams.length ? '没有匹配的试卷' : '还没有试卷'}</h2>
+              <p>在电子书里选定章节后可以生成试卷。交卷后会排下一次复习。</p>
               <button type="button" onClick={onOpenShelf}>
                 前往电子书阅读器
               </button>
@@ -708,64 +671,54 @@ export default function ExamCenterWorkspace({
           ) : (
             <div className="exam-center-list-surface">
               <div ref={listScrollRef} className="exam-center-list-scroll">
-                {visible.map(({ exam, schedule }) => (
-                  <button
-                    type="button"
-                    key={exam.id}
-                    className={`exam-center-row ${selected?.exam.id === exam.id ? 'is-selected' : ''}`}
-                    onClick={() => setSelectedId(exam.id)}
-                    onDoubleClick={() => setOpenedExam(exam)}
-                    aria-pressed={selected?.exam.id === exam.id}
-                  >
-                    <div className="exam-center-row-top">
-                      <span className="exam-row-section-pill">
-                        {exam.sourceSectionLabel ? '章节试卷' : '整书测试'}
-                      </span>
-                      <strong className="exam-row-title">
+                <div className="exam-center-table" role="table">
+                  <div className="exam-center-table-head" role="row">
+                    <span>范围</span>
+                    <span>书</span>
+                    <span>题量</span>
+                    <span>轮次</span>
+                    <span>到期</span>
+                    <span>操作</span>
+                  </div>
+                  {visible.map(({ exam, schedule }) => (
+                    <button
+                      type="button"
+                      key={exam.id}
+                      role="row"
+                      className={`exam-center-row ${selected?.exam.id === exam.id ? 'is-selected' : ''}`}
+                      onClick={() => setSelectedId(exam.id)}
+                      onDoubleClick={() => setOpenedExam(exam)}
+                      aria-pressed={selected?.exam.id === exam.id}
+                    >
+                      <span className="exam-row-title">
                         {exam.sourceSectionLabel || exam.bookTitle}
-                      </strong>
-                      <span
-                        className={`exam-center-urgency-badge is-${schedule.urgency}`}
-                      >
-                        <i className="urgency-dot" />
-                        {urgencyLabel(schedule)}
                       </span>
-                    </div>
-
-                    <div className="exam-center-row-mid">
-                      <span className="exam-row-book-name">
-                        《{exam.bookTitle}》
-                      </span>
-                      <span className="exam-row-stat-pill">
-                        {exam.difficulty
-                          ? `${exam.difficulty.toUpperCase()} 难度`
-                          : '标准难度'}
-                      </span>
-                    </div>
-
-                    <div className="exam-center-row-meta">
-                      <span>{exam.questionCount} 道题</span>
-                      <span className="meta-sep">/</span>
-                      <span>已交卷 {schedule.completedRounds} 轮</span>
-                      <span className="meta-sep">/</span>
+                      <span>{exam.bookTitle}</span>
+                      <span>{exam.questionCount}</span>
                       <span>
-                        建议复习:{' '}
-                        {schedule.dueAt ? formatDay(schedule.dueAt) : '待交卷'}
+                        {schedule.completedRounds > 0
+                          ? `${schedule.completedRounds} 轮`
+                          : '未交'}
+                      </span>
+                      <span
+                        className={
+                          schedule.urgency === 'overdue' ? 'is-overdue' : ''
+                        }
+                      >
+                        {schedule.dueAt ? urgencyLabel(schedule) : '待交卷'}
                       </span>
                       <span
                         className="exam-row-action-link"
-                        onClick={(e) => {
-                          e.stopPropagation();
+                        onClick={(event) => {
+                          event.stopPropagation();
                           setOpenedExam(exam);
                         }}
                       >
-                        {exam.status === 'inProgress'
-                          ? '继续作答 →'
-                          : '进入复习 →'}
+                        {exam.status === 'inProgress' ? '继续' : '打开'}
                       </span>
-                    </div>
-                  </button>
-                ))}
+                    </button>
+                  ))}
+                </div>
               </div>
               <ExamScrollMinimap
                 scrollRef={listScrollRef}
@@ -780,37 +733,38 @@ export default function ExamCenterWorkspace({
           {selected ? (
             <>
               <div className="exam-center-detail-heading">
-                <span className="exam-detail-kicker">EXAM INSPECTOR</span>
+                <span className="exam-detail-kicker">本卷</span>
                 <span
-                  className={`exam-center-urgency-badge is-${selected.schedule.urgency}`}
+                  className={`exam-center-urgency-badge${selected.schedule.urgency === 'overdue' ? ' is-overdue' : ''}`}
                 >
-                  <i className="urgency-dot" />
                   {urgencyLabel(selected.schedule)}
                 </span>
               </div>
               <h2 className="exam-detail-title">
-                {selected.exam.sourceSectionLabel || '整章全真模拟'}
+                {selected.exam.sourceSectionLabel || selected.exam.bookTitle}
               </h2>
               <p className="exam-center-detail-book">
-                所属书籍：<strong>《{selected.exam.bookTitle}》</strong>
+                《{selected.exam.bookTitle}》
               </p>
 
-              {/* 核心指标四宫格 */}
               <div className="exam-stat-grid">
                 <div className="exam-stat-cell">
-                  <span>试题总量</span>
+                  <span>题量</span>
                   <strong>
                     {selected.exam.questionCount} <small>题</small>
                   </strong>
                 </div>
                 <div className="exam-stat-cell">
-                  <span>交卷轮次</span>
+                  <span>掌握</span>
                   <strong>
-                    第 {selected.schedule.completedRounds} <small>轮</small>
+                    {selected.exam.status === 'submitted'
+                      ? `${selected.exam.masteredCount ?? 0}`
+                      : '—'}{' '}
+                    <small>/ {selected.exam.questionCount}</small>
                   </strong>
                 </div>
                 <div className="exam-stat-cell">
-                  <span>建议间隔</span>
+                  <span>间隔</span>
                   <strong>
                     {selected.schedule.intervalDays
                       ? `${selected.schedule.intervalDays}`
@@ -819,10 +773,11 @@ export default function ExamCenterWorkspace({
                   </strong>
                 </div>
                 <div className="exam-stat-cell">
-                  <span>记忆层级</span>
-                  <strong className={memoryTier(selected.schedule).colorClass}>
-                    {memoryTier(selected.schedule).tier}{' '}
-                    <small>{memoryTier(selected.schedule).label}</small>
+                  <span>到期</span>
+                  <strong>
+                    {selected.schedule.dueAt
+                      ? formatDay(selected.schedule.dueAt).slice(5)
+                      : '—'}
                   </strong>
                 </div>
               </div>
@@ -835,8 +790,8 @@ export default function ExamCenterWorkspace({
                 >
                   <span>
                     {selected.exam.status === 'inProgress'
-                      ? '继续作答试卷'
-                      : '立即开始复习'}
+                      ? '继续作答'
+                      : '打开试卷'}
                   </span>
                 </button>
                 <button
@@ -845,7 +800,7 @@ export default function ExamCenterWorkspace({
                   disabled={!selectedBook}
                   onClick={() => selectedBook && onOpenBook(selectedBook)}
                 >
-                  <span>打开原书对应章节</span>
+                  <span>对照原文</span>
                 </button>
               </div>
 
@@ -872,36 +827,29 @@ export default function ExamCenterWorkspace({
                 </div>
                 {selected.exam.difficulty && (
                   <div>
-                    <dt>试卷难度定级</dt>
-                    <dd>{selected.exam.difficulty.toUpperCase()}</dd>
+                    <dt>难度</dt>
+                    <dd>{difficultyLabel(selected.exam.difficulty)}</dd>
                   </div>
                 )}
               </dl>
 
               <section className="exam-center-curve-panel">
                 <div className="exam-curve-header">
-                  <h3>艾宾浩斯记忆留存曲线</h3>
-                  <span className="exam-curve-tag">EXPONENTIAL DECAY</span>
+                  <h3>复习间隔</h3>
                 </div>
                 <ReviewCurve
                   schedule={selected.schedule}
                   now={now}
                   lastCompletedAt={selected.exam.lastCompletedAt}
                 />
-              </section>
-
-              <div className="exam-center-method-card">
-                <h4>记忆强化跃迁机制</h4>
-                <p>
-                  按时完成复习并自评掌握后，下一次记忆间隔将逐级跃升至{' '}
-                  <strong>1 → 3 → 7 → 14 → 30 → 60 天</strong>
-                  ；若未达掌握标准，系统将自动回退至 1 天进行强化。
+                <p className="exam-center-interval-note">
+                  掌握后间隔按 1、3、7、14、30、60 天延长；未掌握则回到 1 天。
                 </p>
-              </div>
+              </section>
             </>
           ) : (
             <div className="exam-center-empty">
-              <p>请在左侧列表中选择一份试卷查看认知全景与复习排程。</p>
+              <p>选择一份试卷，查看题量、间隔和到期。</p>
             </div>
           )}
         </aside>

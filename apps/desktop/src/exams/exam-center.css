@@ -112,8 +112,6 @@
 
 .exam-center-sprint-btn:hover {
   background: #c84d34;
-  transform: translateY(-1px);
-  box-shadow: 0 3px 8px rgba(197, 78, 53, 0.35);
 }
 
 .exam-refresh-btn,
@@ -529,6 +527,10 @@
   background: #d97706;
 }
 
+.exam-galaxy-swatch.is-done {
+  background: #34d399;
+}
+
 .exam-galaxy-empty {
   position: absolute;
   left: 50%;
@@ -627,64 +629,66 @@
   padding: 10px 14px;
 }
 
-/* Institutional List Card Row */
+.exam-center-table-head,
 .exam-center-row {
-  display: block;
-  width: 100%;
-  margin-bottom: 8px;
-  padding: 12px 14px;
-  border: 1px solid var(--exam-border);
-  border-radius: 6px;
-  border-left: 3px solid var(--exam-border);
+  display: grid;
+  grid-template-columns:
+    minmax(140px, 1.6fr) minmax(100px, 1.2fr)
+    56px 64px 108px 52px;
+  gap: 8px;
+  align-items: center;
+}
+
+.exam-center-table-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0 12px 8px;
+  color: var(--exam-muted);
+  font-size: 11px;
   background: var(--exam-surface);
+}
+
+.exam-center-row {
+  width: 100%;
+  margin: 0;
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--exam-border-subtle);
+  border-radius: 0;
+  background: transparent;
   text-align: left;
   cursor: pointer;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
-  transition: all 0.15s ease;
+  box-shadow: none;
 }
 
-.exam-center-row:hover {
-  border-color: var(--exam-border);
-  border-left-color: var(--accent);
-  transform: translateY(-1px);
-  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.04);
-}
-
-.exam-center-row.is-selected {
-  border-color: var(--accent);
-  border-left-color: var(--accent);
-  background: var(--exam-surface);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-}
-
-.exam-center-row-top {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.exam-row-section-pill {
-  display: inline-flex;
-  align-items: center;
-  height: 18px;
-  padding: 0 6px;
-  border-radius: 3px;
-  border: 1px solid var(--exam-border);
-  color: var(--exam-muted);
-  font: 600 9px var(--mono);
-  background: var(--exam-subtle);
-}
-
-.exam-row-title {
-  flex: 1;
+.exam-center-row > span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--exam-muted);
+  font-size: 12px;
+}
+
+.exam-center-row:hover {
+  background: var(--exam-subtle);
+}
+
+.exam-center-row.is-selected {
+  background: #f3f6f7;
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.exam-center-row .is-overdue {
+  color: var(--exam-danger);
+  font-weight: 650;
+}
+
+.exam-center-row > .exam-row-title {
+  color: var(--exam-ink);
   font-size: 13px;
   font-weight: 650;
-  color: var(--exam-ink);
 }
 
 .exam-center-urgency-badge {
@@ -715,64 +719,18 @@
 }
 .exam-center-urgency-badge.is-overdue .urgency-dot {
   background: var(--exam-danger);
-  box-shadow: 0 0 6px var(--exam-danger);
 }
 
-.exam-center-urgency-badge.is-today {
-  border-color: rgba(217, 119, 6, 0.35);
-  color: var(--exam-warning);
-  background: rgba(217, 119, 6, 0.08);
-}
-.exam-center-urgency-badge.is-today .urgency-dot {
-  background: var(--exam-warning);
-}
-
-.exam-center-urgency-badge.is-inProgress {
-  border-color: rgba(2, 132, 199, 0.35);
-  color: var(--exam-primary);
-  background: rgba(2, 132, 199, 0.08);
-}
-.exam-center-urgency-badge.is-inProgress .urgency-dot {
-  background: var(--exam-primary);
-}
-
-.exam-center-row-mid {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 5px;
-}
-
-.exam-row-book-name {
+.exam-center-interval-note {
+  margin: 8px 0 0;
   color: var(--exam-muted);
-  font-size: 11px;
-}
-
-.exam-row-stat-pill {
-  color: var(--exam-muted);
-  font: 10px var(--mono);
-}
-
-.exam-center-row-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--exam-border-subtle);
-  color: var(--exam-muted);
-  font: 11px var(--mono);
-}
-
-.meta-sep {
-  color: var(--exam-border);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .exam-row-action-link {
-  margin-left: auto;
   color: var(--accent);
   font-weight: 600;
-  transition: opacity 0.15s ease;
 }
 
 .exam-row-action-link:hover {

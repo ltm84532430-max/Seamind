@@ -440,11 +440,13 @@ export function ExamGraphView({
         </svg>
         <div className="book-galaxy-hud-hint">
           <i className="exam-galaxy-swatch is-due" />
-          <span>到期</span>
+          <span>逾期</span>
           <i className="exam-galaxy-swatch is-soon" />
-          <span>即将</span>
+          <span>今日</span>
           <i className="exam-galaxy-swatch is-open" />
-          <span>待交卷</span>
+          <span>未交</span>
+          <i className="exam-galaxy-swatch is-done" />
+          <span>已交</span>
           <span>·</span>
           <span>单击查看</span>
           <span>·</span>

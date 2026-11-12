@@ -1,9 +1,9 @@
 .exam-scroll-minimap-host {
   display: flex;
-  width: 58px;
-  min-width: 58px;
+  width: 32px;
+  min-width: 32px;
   min-height: 0;
-  flex: 0 0 58px;
+  flex: 0 0 32px;
   overflow: hidden;
   border-left: 1px solid #dce2e5;
 }

@@ -698,6 +698,15 @@ function EpubExamWorkspaceInner({
   const attemptsList = exam?.attempts ?? [];
   const attemptsCount = attemptsList.length;
   const questionsList = exam?.questions ?? [];
+  const answeredCount = questionsList.filter((question) => {
+    const value = answers[question.id];
+    return (
+      value !== undefined &&
+      value !== '' &&
+      (!Array.isArray(value) || value.length > 0)
+    );
+  }).length;
+  const examSubmitted = exam?.status === 'submitted';
 
   return (
     <div
@@ -710,12 +719,12 @@ function EpubExamWorkspaceInner({
       >
         <div className="epub-exam-sidebar-header">
           <div className="epub-exam-sidebar-book-meta">
-            <span className="epub-exam-sidebar-kicker">BOOK EXAMS</span>
-            <h2 title={exam?.bookTitle || '当前书籍'}>
-              {exam?.bookTitle || '书籍试卷流'}
-            </h2>
+            <h2 title={exam?.bookTitle || '当前书籍'}>本书试卷</h2>
             <div className="epub-exam-sidebar-stats">
-              <span>共 {sortedBookExams.length} 套试卷</span>
+              <span>{exam?.bookTitle || '当前书籍'}</span>
+            </div>
+            <div className="epub-exam-sidebar-stats">
+              <span>共 {sortedBookExams.length} 套</span>
               <span>·</span>
               <span>已交 {bookStats.submittedExams} 套</span>
             </div>
@@ -724,8 +733,8 @@ function EpubExamWorkspaceInner({
             type="button"
             className="epub-exam-sidebar-collapse-btn"
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            title={sidebarCollapsed ? '展开试卷侧栏' : '收起试卷侧栏'}
-            aria-label={sidebarCollapsed ? '展开试卷侧栏' : '收起试卷侧栏'}
+            title={sidebarCollapsed ? '展开本书试卷' : '收起本书试卷'}
+            aria-label={sidebarCollapsed ? '展开本书试卷' : '收起本书试卷'}
           >
             {sidebarCollapsed ? '▶' : '◀'}
           </button>
@@ -849,7 +858,7 @@ function EpubExamWorkspaceInner({
           </div>
         ) : (
           <div className="epub-exam-stage-inner">
-            <header className="epub-exam-page-header">
+            <header className="epub-exam-page-header is-office">
               <button
                 type="button"
                 className="epub-exam-back-btn"
@@ -857,25 +866,15 @@ function EpubExamWorkspaceInner({
                 disabled={busy}
                 title="保存并返回试卷列表"
               >
-                ← 返回试卷列表
+                ← 返回
               </button>
 
               <div className="epub-exam-header-main">
-                <div className="epub-exam-header-kicker-row">
-                  <span className="epub-exam-kicker">
-                    LOCAL EXAM · {exam.questionCount ?? questionsList.length}{' '}
-                    QUESTIONS
-                  </span>
-                  <span className={`epub-exam-status-tag is-${exam.status}`}>
-                    {exam.status === 'submitted' ? '已交卷' : '未交卷'}
-                  </span>
-                </div>
-                <h1>{exam.sourceSectionLabel || '当前章节试卷'}</h1>
-                <p className="epub-exam-header-meta">
-                  {exam.bookTitle || '试卷'} ·{' '}
-                  {formatEpubExamDate(exam.createdAt)} ·{' '}
-                  {getDifficultyLabel(exam.difficulty)}难度 · 第{' '}
-                  {attemptsCount + 1} 次作答
+                <h1>{exam.sourceSectionLabel || '当前试卷'}</h1>
+                <p className="epub-exam-office-line">
+                  {examSubmitted ? '已交卷' : '未交卷'} · {questionsList.length}{' '}
+                  题 · 已答 {answeredCount} · 第 {attemptsCount + 1} 次 ·{' '}
+                  {getDifficultyLabel(exam.difficulty)}
                 </p>
               </div>
 
@@ -908,63 +907,6 @@ function EpubExamWorkspaceInner({
               </p>
             )}
 
-            <div className="epub-exam-note-banner">
-              <span className="epub-exam-note-icon">ℹ</span>
-              <span>
-                {exam.status === 'submitted'
-                  ? displayMode === 'paper'
-                    ? '参考答案、解析和自评在右侧学情看板；卷面只保留题目和作答。'
-                    : 'AI 答案和深度解析已显示；请针对各题自评掌握度，系统将实时更新右侧热力看板。'
-                  : attemptsCount > 0
-                    ? `第 ${attemptsCount + 1} 次作答中；提交前 AI 答案隐藏，作答将实时自动保存到本机。`
-                    : '提交前 AI 答案保持隐藏；作答过程自动静默保存在本机。'}
-              </span>
-            </div>
-
-            {/* Attempt history accordion */}
-            {attemptsCount > 0 && (
-              <details className="epub-exam-attempt-accordion">
-                <summary>
-                  <span>查看历史作答记录 ({attemptsCount} 次)</span>
-                  <span className="epub-exam-accordion-arrow">▼</span>
-                </summary>
-                <div className="epub-exam-attempt-list">
-                  {attemptsList.map((attempt: EpubExamAttempt, attIdx) => (
-                    <section
-                      className="epub-exam-attempt-card"
-                      key={`${attempt.completedAt}-${attIdx}`}
-                    >
-                      <h3>
-                        第 {attIdx + 1} 次 ·{' '}
-                        {formatEpubExamDate(attempt.completedAt)}
-                      </h3>
-                      <ol>
-                        {questionsList.map((question, qIdx) => (
-                          <li key={question.id}>
-                            <strong>
-                              {qIdx + 1}. {question.prompt}
-                            </strong>
-                            <p>
-                              我的答案：
-                              {formatExamAnswer(
-                                attempt?.answers?.[question.id],
-                              )}
-                            </p>
-                            <p>
-                              自评：
-                              {formatSelfReview(
-                                attempt?.selfReviews?.[question.id],
-                              )}
-                            </p>
-                          </li>
-                        ))}
-                      </ol>
-                    </section>
-                  ))}
-                </div>
-              </details>
-            )}
-
             <div className="epub-exam-view-toolbar">
               <div
                 className="epub-exam-view-modes"
@@ -990,7 +932,7 @@ function EpubExamWorkspaceInner({
                   className={displayMode === 'workspace' ? 'is-active' : ''}
                   onClick={() => setDisplayMode('workspace')}
                 >
-                  题目 / 工作区
+                  分栏
                 </button>
               </div>
               {displayMode === 'paper' && (
@@ -1030,6 +972,48 @@ function EpubExamWorkspaceInner({
                 </nav>
               )}
             </div>
+            {examSubmitted && attemptsCount > 0 && (
+              <details className="epub-exam-attempt-accordion">
+                <summary>
+                  <span>历史作答 ({attemptsCount} 次)</span>
+                  <span className="epub-exam-accordion-arrow">▼</span>
+                </summary>
+                <div className="epub-exam-attempt-list">
+                  {attemptsList.map((attempt: EpubExamAttempt, attIdx) => (
+                    <section
+                      className="epub-exam-attempt-card"
+                      key={`${attempt.completedAt}-${attIdx}`}
+                    >
+                      <h3>
+                        第 {attIdx + 1} 次 ·{' '}
+                        {formatEpubExamDate(attempt.completedAt)}
+                      </h3>
+                      <ol>
+                        {questionsList.map((question, qIdx) => (
+                          <li key={question.id}>
+                            <strong>
+                              {qIdx + 1}. {question.prompt}
+                            </strong>
+                            <p>
+                              我的答案：
+                              {formatExamAnswer(
+                                attempt?.answers?.[question.id],
+                              )}
+                            </p>
+                            <p>
+                              自评：
+                              {formatSelfReview(
+                                attempt?.selfReviews?.[question.id],
+                              )}
+                            </p>
+                          </li>
+                        ))}
+                      </ol>
+                    </section>
+                  ))}
+                </div>
+              </details>
+            )}
             {displayMode === 'paper' ? (
               <ExamPaperSheet
                 exam={exam}
@@ -1163,19 +1147,18 @@ function EpubExamWorkspaceInner({
       {/* RIGHT SIDEBAR: Analytics & Heatmap Dashboard */}
       <aside
         className={`epub-exam-analytics${analyticsCollapsed ? ' is-collapsed' : ''}`}
-        aria-label="学情热力图与总结看板"
+        aria-label="答题卡"
       >
         <div className="epub-exam-analytics-header">
           <div className="epub-exam-analytics-title">
-            <span className="epub-exam-sidebar-kicker">ANALYTICS</span>
-            <h2>学情分析看板</h2>
+            <h2>答题卡</h2>
           </div>
           <button
             type="button"
             className="epub-exam-sidebar-collapse-btn"
             onClick={() => setAnalyticsCollapsed(!analyticsCollapsed)}
-            title={analyticsCollapsed ? '展开学情看板' : '收起学情看板'}
-            aria-label={analyticsCollapsed ? '展开学情看板' : '收起学情看板'}
+            title={analyticsCollapsed ? '展开答题卡' : '收起答题卡'}
+            aria-label={analyticsCollapsed ? '展开答题卡' : '收起答题卡'}
           >
             {analyticsCollapsed ? '◀' : '▶'}
           </button>
@@ -1183,7 +1166,7 @@ function EpubExamWorkspaceInner({
 
         {!analyticsCollapsed && (
           <div className="epub-exam-analytics-body">
-            {displayMode === 'paper' && exam && (
+            {examSubmitted && displayMode === 'paper' && exam && (
               <ExamPaperReview
                 exam={exam}
                 focusId={paperFocusId}
@@ -1201,12 +1184,14 @@ function EpubExamWorkspaceInner({
             {/* MODULE 1: Current Exam Question Matrix Heatmap */}
             <section className="epub-exam-analytics-card">
               <div className="epub-exam-card-title-row">
-                <h3>答题卡热力矩阵</h3>
+                <h3>题号</h3>
                 <span className="epub-exam-card-badge">
                   {questionsList.length} 题
                 </span>
               </div>
-              <p className="epub-exam-card-hint">点击题号快速跳转到对应题目</p>
+              <p className="epub-exam-card-hint">
+                已答 {answeredCount} / {questionsList.length}
+              </p>
 
               <div className="epub-exam-heatmap-grid">
                 {questionsList.map((q, idx) => {
@@ -1278,171 +1263,183 @@ function EpubExamWorkspaceInner({
               </div>
             </section>
 
-            {/* MODULE 2: Sequential Chapter Mastery Heatmap */}
             <section className="epub-exam-analytics-card">
               <div className="epub-exam-card-title-row">
-                <h3>全书章节考点掌握度</h3>
-                <span className="epub-exam-card-badge">
-                  {sortedBookExams.length} 套
-                </span>
+                <h3>本卷小结</h3>
               </div>
               <p className="epub-exam-card-hint">
-                色块反映各章节掌握度，点击可即时切换
+                {examSubmitted ? '已交卷' : '未交卷'} · 已答 {answeredCount} /{' '}
+                {questionsList.length}
+                {examSubmitted
+                  ? ` · 掌握 ${Object.values(selfReviews).filter((item) => item === 'mastered').length}`
+                  : ''}
               </p>
-
-              <div className="epub-exam-chapter-matrix">
-                {sortedBookExams.map((item, idx) => {
-                  const isActive = item.id === activeExamId;
-                  const isSubmitted = item.status === 'submitted';
-                  const itemQCount = item.questionCount ?? 0;
-                  const mastered =
-                    item.id === activeExamId && exam
-                      ? Object.values(selfReviews).filter(
-                          (r) => r === 'mastered',
-                        ).length
-                      : (item.masteredCount ?? 0);
-                  const review =
-                    item.id === activeExamId && exam
-                      ? Object.values(selfReviews).filter((r) => r === 'review')
-                          .length
-                      : (item.reviewCount ?? 0);
-
-                  let cellClass = 'is-not-submitted';
-                  if (isSubmitted) {
-                    const rate = itemQCount > 0 ? mastered / itemQCount : 0;
-                    if (review > 0) {
-                      cellClass = 'is-level-review';
-                    } else if (rate >= 0.8) {
-                      cellClass = 'is-level-high';
-                    } else if (rate >= 0.4) {
-                      cellClass = 'is-level-med';
-                    } else {
-                      cellClass = 'is-level-low';
-                    }
-                  }
-
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      className={`epub-exam-chapter-cell ${cellClass}${isActive ? ' is-active' : ''}`}
-                      onClick={() => void handleSwitchExam(item.id)}
-                      title={`[第${idx + 1}套] ${item.sourceSectionLabel || ''}\n${isSubmitted ? `已掌握: ${mastered}/${itemQCount}` : '未交卷'}`}
-                    >
-                      <span>{idx + 1}</span>
-                    </button>
-                  );
-                })}
-              </div>
             </section>
 
-            {/* MODULE 3: KPI Metrics & Breakdown Bar */}
-            <section className="epub-exam-analytics-card">
-              <div className="epub-exam-card-title-row">
-                <h3>学情指标</h3>
-              </div>
+            {examSubmitted && (
+              <>
+                {/* MODULE 2: Sequential Chapter Mastery Heatmap */}
+                <section className="epub-exam-analytics-card">
+                  <div className="epub-exam-card-title-row">
+                    <h3>本书套次</h3>
+                    <span className="epub-exam-card-badge">
+                      {sortedBookExams.length} 套
+                    </span>
+                  </div>
+                  <p className="epub-exam-card-hint">点击套次切换试卷</p>
 
-              <div className="epub-exam-kpi-grid">
-                <div className="epub-exam-kpi-box">
-                  <span className="epub-exam-kpi-val">
-                    {bookStats.masteryRate}%
-                  </span>
-                  <span className="epub-exam-kpi-label">综合掌握率</span>
-                </div>
-                <div className="epub-exam-kpi-box">
-                  <span className="epub-exam-kpi-val">
-                    {bookStats.answeredQuestions}
-                    <small>/{bookStats.totalQuestions}</small>
-                  </span>
-                  <span className="epub-exam-kpi-label">已练题目</span>
-                </div>
-                <div className="epub-exam-kpi-box">
-                  <span className="epub-exam-kpi-val is-danger">
-                    {bookStats.totalReview}
-                  </span>
-                  <span className="epub-exam-kpi-label">待强化错题</span>
-                </div>
-              </div>
+                  <div className="epub-exam-chapter-matrix">
+                    {sortedBookExams.map((item, idx) => {
+                      const isActive = item.id === activeExamId;
+                      const isSubmitted = item.status === 'submitted';
+                      const itemQCount = item.questionCount ?? 0;
+                      const mastered =
+                        item.id === activeExamId && exam
+                          ? Object.values(selfReviews).filter(
+                              (r) => r === 'mastered',
+                            ).length
+                          : (item.masteredCount ?? 0);
+                      const review =
+                        item.id === activeExamId && exam
+                          ? Object.values(selfReviews).filter(
+                              (r) => r === 'review',
+                            ).length
+                          : (item.reviewCount ?? 0);
 
-              {/* Segmented bar */}
-              <div className="epub-exam-progress-bar-wrap">
-                <div className="epub-exam-progress-bar">
-                  <div
-                    className="epub-exam-bar-seg is-mastered"
-                    style={{
-                      width: `${bookStats.totalQuestions > 0 ? (bookStats.totalMastered / bookStats.totalQuestions) * 100 : 0}%`,
-                    }}
-                    title={`已掌握: ${bookStats.totalMastered}`}
-                  />
-                  <div
-                    className="epub-exam-bar-seg is-partial"
-                    style={{
-                      width: `${bookStats.totalQuestions > 0 ? (bookStats.totalPartial / bookStats.totalQuestions) * 100 : 0}%`,
-                    }}
-                    title={`部分掌握: ${bookStats.totalPartial}`}
-                  />
-                  <div
-                    className="epub-exam-bar-seg is-review"
-                    style={{
-                      width: `${bookStats.totalQuestions > 0 ? (bookStats.totalReview / bookStats.totalQuestions) * 100 : 0}%`,
-                    }}
-                    title={`需复习: ${bookStats.totalReview}`}
-                  />
-                </div>
-                <div className="epub-exam-bar-legend">
-                  <span>掌握 {bookStats.totalMastered}</span>
-                  <span>部分 {bookStats.totalPartial}</span>
-                  <span>复习 {bookStats.totalReview}</span>
-                </div>
-              </div>
-            </section>
+                      let cellClass = 'is-not-submitted';
+                      if (isSubmitted) {
+                        const rate = itemQCount > 0 ? mastered / itemQCount : 0;
+                        if (review > 0) {
+                          cellClass = 'is-level-review';
+                        } else if (rate >= 0.8) {
+                          cellClass = 'is-level-high';
+                        } else if (rate >= 0.4) {
+                          cellClass = 'is-level-med';
+                        } else {
+                          cellClass = 'is-level-low';
+                        }
+                      }
 
-            {/* MODULE 4: Focus Weak Points */}
-            <section className="epub-exam-analytics-card">
-              <div className="epub-exam-card-title-row">
-                <h3>薄弱考点聚焦</h3>
-                {weakQuestions.length > 0 && (
-                  <span className="epub-exam-card-badge is-alert">
-                    {weakQuestions.length} 项
-                  </span>
-                )}
-              </div>
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className={`epub-exam-chapter-cell ${cellClass}${isActive ? ' is-active' : ''}`}
+                          onClick={() => void handleSwitchExam(item.id)}
+                          title={`[第${idx + 1}套] ${item.sourceSectionLabel || ''}\n${isSubmitted ? `已掌握: ${mastered}/${itemQCount}` : '未交卷'}`}
+                        >
+                          <span>{idx + 1}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
 
-              {weakQuestions.length === 0 ? (
-                <div className="epub-exam-empty-focus">
-                  <span className="epub-exam-check-icon">✓</span>
-                  <p>
-                    {exam?.status === 'submitted'
-                      ? '当前试卷未标记任何薄弱题，知识点掌握扎实！'
-                      : '提交并自评后，标记为“需复习”的考点将自动汇集在此。'}
-                  </p>
-                </div>
-              ) : (
-                <div className="epub-exam-focus-list">
-                  {weakQuestions.map((q) => {
-                    const qIndex = questionsList.findIndex(
-                      (item) => item.id === q.id,
-                    );
-                    const displayNum = qIndex >= 0 ? qIndex + 1 : 1;
-                    return (
-                      <button
-                        key={q.id}
-                        type="button"
-                        className="epub-exam-focus-item"
-                        onClick={() => scrollToQuestion(q.id)}
-                        title="点击定位到该题查看 AI 解析"
-                      >
-                        <span className="epub-exam-focus-dot">!</span>
-                        <div className="epub-exam-focus-text">
-                          <strong>第 {displayNum} 题</strong>
-                          <p>{q.prompt}</p>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </section>
+                {/* MODULE 3: KPI Metrics & Breakdown Bar */}
+                <section className="epub-exam-analytics-card">
+                  <div className="epub-exam-card-title-row">
+                    <h3>掌握</h3>
+                  </div>
+
+                  <div className="epub-exam-kpi-grid">
+                    <div className="epub-exam-kpi-box">
+                      <span className="epub-exam-kpi-val">
+                        {bookStats.masteryRate}%
+                      </span>
+                      <span className="epub-exam-kpi-label">掌握率</span>
+                    </div>
+                    <div className="epub-exam-kpi-box">
+                      <span className="epub-exam-kpi-val">
+                        {bookStats.answeredQuestions}
+                        <small>/{bookStats.totalQuestions}</small>
+                      </span>
+                      <span className="epub-exam-kpi-label">已练</span>
+                    </div>
+                    <div className="epub-exam-kpi-box">
+                      <span className="epub-exam-kpi-val is-danger">
+                        {bookStats.totalReview}
+                      </span>
+                      <span className="epub-exam-kpi-label">需复习</span>
+                    </div>
+                  </div>
+
+                  {/* Segmented bar */}
+                  <div className="epub-exam-progress-bar-wrap">
+                    <div className="epub-exam-progress-bar">
+                      <div
+                        className="epub-exam-bar-seg is-mastered"
+                        style={{
+                          width: `${bookStats.totalQuestions > 0 ? (bookStats.totalMastered / bookStats.totalQuestions) * 100 : 0}%`,
+                        }}
+                        title={`已掌握: ${bookStats.totalMastered}`}
+                      />
+                      <div
+                        className="epub-exam-bar-seg is-partial"
+                        style={{
+                          width: `${bookStats.totalQuestions > 0 ? (bookStats.totalPartial / bookStats.totalQuestions) * 100 : 0}%`,
+                        }}
+                        title={`部分掌握: ${bookStats.totalPartial}`}
+                      />
+                      <div
+                        className="epub-exam-bar-seg is-review"
+                        style={{
+                          width: `${bookStats.totalQuestions > 0 ? (bookStats.totalReview / bookStats.totalQuestions) * 100 : 0}%`,
+                        }}
+                        title={`需复习: ${bookStats.totalReview}`}
+                      />
+                    </div>
+                    <div className="epub-exam-bar-legend">
+                      <span>掌握 {bookStats.totalMastered}</span>
+                      <span>部分 {bookStats.totalPartial}</span>
+                      <span>复习 {bookStats.totalReview}</span>
+                    </div>
+                  </div>
+                </section>
+
+                {/* MODULE 4: Focus Weak Points */}
+                <section className="epub-exam-analytics-card">
+                  <div className="epub-exam-card-title-row">
+                    <h3>薄弱题</h3>
+                    {weakQuestions.length > 0 && (
+                      <span className="epub-exam-card-badge is-alert">
+                        {weakQuestions.length} 项
+                      </span>
+                    )}
+                  </div>
+
+                  {weakQuestions.length === 0 ? (
+                    <div className="epub-exam-empty-focus">
+                      <span className="epub-exam-check-icon">✓</span>
+                      <p>还没有标成需复习的题。</p>
+                    </div>
+                  ) : (
+                    <div className="epub-exam-focus-list">
+                      {weakQuestions.map((q) => {
+                        const qIndex = questionsList.findIndex(
+                          (item) => item.id === q.id,
+                        );
+                        const displayNum = qIndex >= 0 ? qIndex + 1 : 1;
+                        return (
+                          <button
+                            key={q.id}
+                            type="button"
+                            className="epub-exam-focus-item"
+                            onClick={() => scrollToQuestion(q.id)}
+                            title="点击定位到该题查看 AI 解析"
+                          >
+                            <span className="epub-exam-focus-dot">!</span>
+                            <div className="epub-exam-focus-text">
+                              <strong>第 {displayNum} 题</strong>
+                              <p>{q.prompt}</p>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </section>
+              </>
+            )}
           </div>
         )}
       </aside>
