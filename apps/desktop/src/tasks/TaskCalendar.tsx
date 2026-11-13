@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { LearningTask, TaskStatus } from './types';
 import {
+  computeCalendarCellVisibleCount,
   formatCalendarPeriod,
   localToday,
   monthGrid,
@@ -10,6 +11,8 @@ import {
   shiftedDateByMonth,
   weekGrid,
 } from './calendar-model';
+import { TASK_PRIORITY_LABELS } from './task-list-model';
+import { useCalendarRowHeight } from './useCalendarRowHeight';
 
 const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 const STATUS: Record<TaskStatus, string> = {
@@ -18,7 +21,6 @@ const STATUS: Record<TaskStatus, string> = {
   done: '已完成',
   cancelled: '已取消',
 };
-const CELL_LIMIT = 3;
 const CALENDAR_STATE_KEY = 'seamind:task-calendar:v1';
 type CalendarMode = 'month' | 'week';
 type AgendaTab = 'date' | 'unscheduled';
@@ -92,6 +94,9 @@ export default function TaskCalendar({
   statusSavingIds,
   today,
   detailOpen = false,
+  showCancelled = false,
+  filterHint,
+  onClearFilter,
 }: {
   tasks: LearningTask[];
   onOpenTask(id: string): void;
@@ -101,6 +106,9 @@ export default function TaskCalendar({
   statusSavingIds: ReadonlySet<string>;
   today: string;
   detailOpen?: boolean;
+  showCancelled?: boolean;
+  filterHint?: string;
+  onClearFilter?: () => void;
 }) {
   const [savedState] = useState(readCalendarState);
   const initial = parseDateKey(savedState.date)!;
@@ -130,6 +138,12 @@ export default function TaskCalendar({
         : monthGrid(visibleMonth.year, visibleMonth.month),
     [mode, selectedDate, visibleMonth],
   );
+  const calendarGridRef = useRef<HTMLDivElement | null>(null);
+  const calendarRowHeight = useCalendarRowHeight(
+    calendarGridRef,
+    cells.length / 7,
+    !focusedDate,
+  );
   useEffect(() => {
     try {
       sessionStorage.setItem(
@@ -154,7 +168,7 @@ export default function TaskCalendar({
     const byDate = new Map<string, LearningTask[]>();
     const unscheduled: LearningTask[] = [];
     for (const task of tasks) {
-      if (task.status === 'cancelled') continue;
+      if (task.status === 'cancelled' && !showCancelled) continue;
       if (!task.dueDate || !parseDateKey(task.dueDate)) {
         unscheduled.push(task);
       } else {
@@ -166,7 +180,7 @@ export default function TaskCalendar({
     for (const list of byDate.values()) list.sort(compareTasks);
     unscheduled.sort(compareTasks);
     return { byDate, unscheduled };
-  }, [tasks]);
+  }, [showCancelled, tasks]);
   const selectedTasks = byDate.get(selectedDate) ?? [];
   useEffect(() => {
     if (
@@ -312,6 +326,11 @@ export default function TaskCalendar({
       >
         {!compact && (
           <span className="task-calendar-item-mark" aria-hidden="true" />
+        )}
+        {!compact && task.priority > 0 && (
+          <span className={`task-priority-badge is-p${task.priority}`}>
+            {TASK_PRIORITY_LABELS[task.priority] ?? `P${task.priority}`}
+          </span>
         )}
         <span className="task-calendar-item-title">{task.title}</span>
         {!compact && (
@@ -465,6 +484,16 @@ export default function TaskCalendar({
       className={`task-calendar${mode === 'week' ? ' is-week' : ''}${panelOpen ? ' is-panel-open' : ''}${focusedDate ? ' is-day-focus' : ''}`}
     >
       {navHost ? createPortal(navigation, navHost) : null}
+      {filterHint && (
+        <div className="task-calendar-filter-hint" role="status">
+          <span>{filterHint}</span>
+          {onClearFilter && (
+            <button type="button" onClick={onClearFilter}>
+              查看全部日程
+            </button>
+          )}
+        </div>
+      )}
       <div className="task-calendar-content">
         {focusedDate ? (
           <section
@@ -517,6 +546,7 @@ export default function TaskCalendar({
                 ))}
               </div>
               <div
+                ref={calendarGridRef}
                 className="task-calendar-grid"
                 style={{
                   gridTemplateRows: `repeat(${cells.length / 7}, minmax(76px, 1fr))`,
@@ -530,6 +560,11 @@ export default function TaskCalendar({
               >
                 {cells.map((cell) => {
                   const entries = byDate.get(cell.date) ?? [];
+                  const visibleLimit = computeCalendarCellVisibleCount(
+                    mode,
+                    calendarRowHeight,
+                    entries.length,
+                  );
                   const validDay = parseDateKey(cell.date) !== null;
                   return (
                     <div
@@ -619,16 +654,16 @@ export default function TaskCalendar({
                       </div>
                       <div className="task-calendar-day-items">
                         {entries
-                          .slice(0, CELL_LIMIT)
+                          .slice(0, visibleLimit)
                           .map((task) => taskButton(task, true))}
-                        {entries.length > CELL_LIMIT && (
+                        {entries.length > visibleLimit && (
                           <button
                             type="button"
                             className="task-calendar-more"
                             title="双击查看这一天"
                             onClick={() => chooseDate(cell.date)}
                           >
-                            另有 {entries.length - CELL_LIMIT} 项
+                            另有 {entries.length - visibleLimit} 项
                           </button>
                         )}
                       </div>

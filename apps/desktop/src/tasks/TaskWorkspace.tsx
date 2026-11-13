@@ -15,7 +15,17 @@ import { parseYouTubeTarget } from '../player/video-links';
 import { dateStamp, downloadTextFile } from '../player/download';
 import HabitWorkspace from './HabitWorkspace';
 import TaskCalendar from './TaskCalendar';
+import { useConfirmDialog } from './ConfirmDialog';
+import { TaskSidebarToggleIcon } from './TaskSidebarToggleIcon';
 import { localToday } from './calendar-model';
+import {
+  collectTaskDescendantIds,
+  compareTasksBy,
+  countPlanActiveTasks,
+  extractSortedVideoIds,
+  TASK_PRIORITY_LABELS,
+} from './task-list-model';
+import type { TaskQuickFilter, TaskSortBy } from './task-list-model';
 import { ebookImportCandidates, videoImportCandidate } from './legacy-import';
 import type { ImportCandidate } from './legacy-import';
 import {
@@ -182,30 +192,6 @@ function readTaskView(): 'board' | 'list' | 'calendar' {
   } catch {
     return 'board';
   }
-}
-
-function TaskSidebarToggleIcon({ collapsed }: { collapsed: boolean }) {
-  return (
-    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <rect
-        x="2"
-        y="2.5"
-        width="12"
-        height="11"
-        rx="1"
-        stroke="currentColor"
-        strokeWidth="1.25"
-      />
-      <path d="M6.2 2.5v11" stroke="currentColor" strokeWidth="1.25" />
-      <path
-        d={collapsed ? 'm8.8 6.2 1.8 1.8-1.8 1.8' : 'm10.6 6.2-1.8 1.8 1.8 1.8'}
-        stroke="currentColor"
-        strokeWidth="1.25"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
 }
 
 function blankTask(planId: string | null, resource?: TaskResource): TaskInput {
@@ -464,6 +450,11 @@ export default function TaskWorkspace({
   const [workspaceMode, setWorkspaceMode] = useState<'tasks' | 'habits'>(
     readWorkspaceMode,
   );
+  const [habitsMounted, setHabitsMounted] = useState(
+    () => readWorkspaceMode() === 'habits',
+  );
+  const [sortBy, setSortBy] = useState<TaskSortBy>('position');
+  const [quickFilter, setQuickFilter] = useState<TaskQuickFilter>('all');
   const [todayKey, setTodayKey] = useState(localToday);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     readTaskSidebarCollapsed,
@@ -476,6 +467,10 @@ export default function TaskWorkspace({
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [newPlan, setNewPlan] = useState('');
+  const [renamingPlanId, setRenamingPlanId] = useState<string | null>(null);
+  const [renamePlanTitle, setRenamePlanTitle] = useState('');
+  const [savingPlan, setSavingPlan] = useState(false);
+  const { askConfirm, confirmDialog } = useConfirmDialog();
   const [draft, setDraft] = useState<TaskInput | null>(null);
   const [resourceDrafts, setResourceDrafts] = useState<TaskResourceDraft[]>([]);
   const [draftError, setDraftError] = useState('');
@@ -501,6 +496,7 @@ export default function TaskWorkspace({
   }, [statusUndo]);
 
   useEffect(() => {
+    if (workspaceMode === 'habits') setHabitsMounted(true);
     try {
       sessionStorage.setItem(TASK_WORKSPACE_MODE_KEY, workspaceMode);
     } catch {
@@ -591,17 +587,18 @@ export default function TaskWorkspace({
     };
   }, [reload, refreshConnections]);
 
+  const videoIdsKey = useMemo(
+    () => extractSortedVideoIds(snapshot.tasks),
+    [snapshot.tasks],
+  );
+
   useEffect(() => {
     let current = true;
-    const ids = Array.from(
-      new Set(
-        snapshot.tasks.flatMap((entry) =>
-          entry.resources
-            .filter((resource) => resource.kind === 'youtube')
-            .map((resource) => resource.resourceId),
-        ),
-      ),
-    );
+    const ids = videoIdsKey ? videoIdsKey.split(',') : [];
+    if (ids.length === 0) {
+      setWatch({});
+      return;
+    }
     void (async () => {
       const values: Record<string, WatchState | null | 'error'> = {};
       for (let offset = 0; offset < ids.length; offset += 20) {
@@ -620,7 +617,7 @@ export default function TaskWorkspace({
     return () => {
       current = false;
     };
-  }, [snapshot.tasks, progressRevision]);
+  }, [videoIdsKey, progressRevision]);
 
   const openDraft = useCallback((input: TaskInput) => {
     setDraft(input);
@@ -727,10 +724,35 @@ export default function TaskWorkspace({
       ].some((value) => value?.toLocaleLowerCase().includes(term));
     });
   }, [baseFiltered, snapshot.plans, snapshot.sources, term]);
+  const isBlocked = useCallback(
+    (entry: LearningTask) =>
+      entry.prerequisiteIds.some((id) => byId.get(id)?.status !== 'done'),
+    [byId],
+  );
+  const cancelledCount = useMemo(
+    () => matchingTasks.filter((entry) => entry.status === 'cancelled').length,
+    [matchingTasks],
+  );
+  const quickMatchingTasks = useMemo(() => {
+    if (planFilter === 'archived' || quickFilter === 'all')
+      return matchingTasks;
+    if (quickFilter === 'high') {
+      return matchingTasks.filter((entry) => entry.priority >= 2);
+    }
+    if (quickFilter === 'unblocked') {
+      return matchingTasks.filter(
+        (entry) =>
+          entry.status !== 'done' &&
+          entry.status !== 'cancelled' &&
+          !isBlocked(entry),
+      );
+    }
+    return matchingTasks.filter((entry) => entry.status === 'cancelled');
+  }, [isBlocked, matchingTasks, planFilter, quickFilter]);
   const contextTaskIds = useMemo(() => {
     const ids = new Set<string>();
     if (!term) return ids;
-    matchingTasks.forEach((entry) => {
+    quickMatchingTasks.forEach((entry) => {
       let parentId = entry.parentId;
       const visited = new Set<string>([entry.id]);
       while (parentId && !visited.has(parentId)) {
@@ -747,17 +769,27 @@ export default function TaskWorkspace({
       }
     });
     return ids;
-  }, [byId, matchingTasks, planFilter, term]);
+  }, [byId, planFilter, quickMatchingTasks, term]);
   const filtered = useMemo(() => {
-    if (!term) return baseFiltered;
+    if (!term && (quickFilter === 'all' || planFilter === 'archived')) {
+      return baseFiltered;
+    }
     const displayed = new Map<string, LearningTask>();
-    matchingTasks.forEach((entry) => displayed.set(entry.id, entry));
+    quickMatchingTasks.forEach((entry) => displayed.set(entry.id, entry));
     contextTaskIds.forEach((id) => {
       const parent = byId.get(id);
       if (parent) displayed.set(id, parent);
     });
     return Array.from(displayed.values());
-  }, [baseFiltered, byId, contextTaskIds, matchingTasks, term]);
+  }, [
+    baseFiltered,
+    byId,
+    contextTaskIds,
+    planFilter,
+    quickFilter,
+    quickMatchingTasks,
+    term,
+  ]);
   const selected =
     snapshot.tasks.find((entry) => entry.id === selectedId) ?? null;
   const taskGroups = useMemo(() => {
@@ -841,9 +873,7 @@ export default function TaskWorkspace({
         }
       });
       const compareTasks = (a: LearningTask, b: LearningTask) =>
-        a.position - b.position ||
-        a.createdAt - b.createdAt ||
-        a.title.localeCompare(b.title);
+        compareTasksBy(a, b, sortBy);
       const visited = new Set<string>();
       const isSourceCollapsed =
         !term && collapsedSourceGroups.has(group.collapseKey);
@@ -882,10 +912,9 @@ export default function TaskWorkspace({
     filtered,
     snapshot.plans,
     snapshot.sources,
+    sortBy,
     term,
   ]);
-  const isBlocked = (entry: LearningTask) =>
-    entry.prerequisiteIds.some((id) => byId.get(id)?.status !== 'done');
   const allResources = snapshot.tasks.flatMap((entry) => entry.resources);
   const ebookResources = allResources.filter(
     (resource) => resource.kind === 'ebook',
@@ -1120,7 +1149,12 @@ export default function TaskWorkspace({
           const message = rootChanged
             ? '这本书已在另一个书库中找到。重新关联后会使用当前书库路径，是否继续？'
             : '书籍文件已更新。重新关联后会从当前文件版本读取进度，是否继续？';
-          if (!window.confirm(message)) return;
+          const confirmed = await askConfirm({
+            title: '重新关联书籍',
+            message,
+            confirmLabel: '继续打开',
+          });
+          if (!confirmed) return;
         }
         const identityChanged =
           resource.bookId !== epubBookIdentity(book.relativePath);
@@ -1154,7 +1188,8 @@ export default function TaskWorkspace({
   };
   const addPlan = async (event: FormEvent) => {
     event.preventDefault();
-    if (!newPlan.trim()) return;
+    if (!newPlan.trim() || savingPlan) return;
+    setSavingPlan(true);
     try {
       const next = await taskApi.savePlan({ title: newPlan.trim() });
       setSnapshot(next);
@@ -1162,6 +1197,55 @@ export default function TaskWorkspace({
       setNotice('计划已创建');
     } catch (reason) {
       setError(errorText(reason));
+    } finally {
+      setSavingPlan(false);
+    }
+  };
+
+  const savePlanRename = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!renamingPlanId || savingPlan) return;
+    const plan = snapshot.plans.find((item) => item.id === renamingPlanId);
+    const trimmed = renamePlanTitle.trim();
+    if (!plan || !trimmed) return;
+    setSavingPlan(true);
+    try {
+      const next = await taskApi.savePlan({
+        id: plan.id,
+        title: trimmed,
+        description: plan.description,
+        originKey: plan.originKey,
+      });
+      setSnapshot(next);
+      setRenamingPlanId(null);
+      setRenamePlanTitle('');
+      setNotice(`计划已重命名为「${trimmed}」`);
+    } catch (reason) {
+      setError(errorText(reason));
+    } finally {
+      setSavingPlan(false);
+    }
+  };
+
+  const deletePlan = async (plan: { id: string; title: string }) => {
+    const confirmed = await askConfirm({
+      title: '删除计划',
+      message: `删除计划「${plan.title}」？其中的任务不会删除，将转为“未归类”。`,
+      confirmLabel: '删除计划',
+      danger: true,
+    });
+    if (!confirmed) return;
+    setSavingPlan(true);
+    try {
+      const next = await taskApi.deletePlan(plan.id);
+      setSnapshot(next);
+      if (planFilter === plan.id) setPlanFilter('all');
+      if (renamingPlanId === plan.id) setRenamingPlanId(null);
+      setNotice(`已删除计划「${plan.title}」`);
+    } catch (reason) {
+      setError(errorText(reason));
+    } finally {
+      setSavingPlan(false);
     }
   };
 
@@ -1449,6 +1533,16 @@ export default function TaskWorkspace({
     }
   };
 
+  const archiveSingleTask = async (entry: LearningTask) => {
+    try {
+      await taskApi.archiveTask(entry.id);
+      setNotice(`已归档「${entry.title}」`);
+      await reload();
+    } catch (reason) {
+      setError(errorText(reason));
+    }
+  };
+
   const exportArchiveMindmap = () => {
     if (filtered.length === 0) return;
     const md = generateMindmapMarkdown(filtered, snapshot.plans);
@@ -1458,8 +1552,13 @@ export default function TaskWorkspace({
   };
 
   const deleteTask = async (entry: LearningTask) => {
-    if (!window.confirm(`删除任务「${entry.title}」？关联的书籍和视频会保留。`))
-      return;
+    const confirmed = await askConfirm({
+      title: '删除任务',
+      message: `删除任务「${entry.title}」？关联的书籍和视频会保留。`,
+      confirmLabel: '确认删除',
+      danger: true,
+    });
+    if (!confirmed) return;
     try {
       await taskApi.deleteTask(entry.id);
       setSelectedId(null);
@@ -1526,13 +1625,15 @@ export default function TaskWorkspace({
     depth,
     hasChildren,
     context,
-  }: TaskTreeEntry) => (
+    detachedParentTitle,
+  }: TaskTreeEntry & { detachedParentTitle?: string }) => (
     <article
       key={entry.id}
       className={
         'task-card' +
         (selectedId === entry.id ? ' is-selected' : '') +
-        (context ? ' is-search-context' : '')
+        (context ? ' is-search-context' : '') +
+        (entry.status === 'cancelled' ? ' is-cancelled' : '')
       }
       style={{ marginInlineStart: depth * 14 }}
       draggable
@@ -1587,8 +1688,35 @@ export default function TaskWorkspace({
               : '○'}
         </button>
         <div className="task-card-title">{entry.title}</div>
+        {entry.status === 'done' && !entry.archivedAt && (
+          <button
+            type="button"
+            className="task-card-archive-btn"
+            disabled={statusSavingIds.has(entry.id)}
+            title="归档此已完成任务"
+            onClick={(event) => {
+              event.stopPropagation();
+              void archiveSingleTask(entry);
+            }}
+          >
+            归档
+          </button>
+        )}
       </div>
       <div className="task-card-meta">
+        {entry.priority > 0 && (
+          <span className={`task-priority-badge is-p${entry.priority}`}>
+            {TASK_PRIORITY_LABELS[entry.priority] ?? `P${entry.priority}`}
+          </span>
+        )}
+        {detachedParentTitle && (
+          <span
+            className="task-detached-parent"
+            title={`所属父任务: ${detachedParentTitle}`}
+          >
+            ↳ {detachedParentTitle}
+          </span>
+        )}
         {entry.resources.map((resource) => (
           <span key={`${resource.kind}:${resource.resourceId}`}>
             {resource.kind === 'ebook' ? '电子书' : 'YouTube'}
@@ -1615,1294 +1743,1542 @@ export default function TaskWorkspace({
     </article>
   );
 
-  if (workspaceMode === 'habits') {
-    return <HabitWorkspace onShowTasks={() => setWorkspaceMode('tasks')} />;
-  }
-
   return (
-    <div className="task-workspace">
-      <aside
-        className={`task-sidebar${sidebarCollapsed ? ' is-collapsed' : ''}`}
-        id="task-sidebar"
-      >
-        <header className="task-sidebar-heading">
-          <div className="task-sidebar-title">学习计划</div>
+    <div className="task-workspace-root">
+      <div className="task-workspace" hidden={workspaceMode === 'habits'}>
+        <aside
+          className={`task-sidebar${sidebarCollapsed ? ' is-collapsed' : ''}`}
+          id="task-sidebar"
+        >
+          <header className="task-sidebar-heading">
+            <div className="task-sidebar-title">学习计划</div>
+            <button
+              type="button"
+              className="task-sidebar-toggle"
+              title={sidebarCollapsed ? '展开任务侧栏' : '收起任务侧栏'}
+              aria-label={sidebarCollapsed ? '展开任务侧栏' : '收起任务侧栏'}
+              aria-expanded={!sidebarCollapsed}
+              aria-controls="task-sidebar"
+              onClick={toggleSidebarCollapsed}
+            >
+              <TaskSidebarToggleIcon collapsed={sidebarCollapsed} />
+            </button>
+          </header>
           <button
             type="button"
-            className="task-sidebar-toggle"
-            title={sidebarCollapsed ? '展开任务侧栏' : '收起任务侧栏'}
-            aria-label={sidebarCollapsed ? '展开任务侧栏' : '收起任务侧栏'}
-            aria-expanded={!sidebarCollapsed}
-            aria-controls="task-sidebar"
-            onClick={toggleSidebarCollapsed}
+            className={`task-filter${planFilter === 'all' ? ' is-active' : ''}`}
+            onClick={() => setPlanFilter('all')}
           >
-            <TaskSidebarToggleIcon collapsed={sidebarCollapsed} />
+            全部任务{' '}
+            <span>
+              {snapshot.tasks.filter((item) => !item.archivedAt).length}
+            </span>
           </button>
-        </header>
-        <button
-          type="button"
-          className={`task-filter${planFilter === 'all' ? ' is-active' : ''}`}
-          onClick={() => setPlanFilter('all')}
-        >
-          全部任务{' '}
-          <span>
-            {snapshot.tasks.filter((item) => !item.archivedAt).length}
-          </span>
-        </button>
-        <button
-          type="button"
-          className={`task-filter${planFilter === 'today' ? ' is-active' : ''}`}
-          onClick={() => setPlanFilter('today')}
-        >
-          今日及逾期{' '}
-          <span>
-            {
-              snapshot.tasks.filter(
-                (item) =>
-                  !item.archivedAt &&
-                  item.dueDate &&
-                  item.dueDate <= todayKey &&
-                  item.status !== 'done' &&
-                  item.status !== 'cancelled',
-              ).length
-            }
-          </span>
-        </button>
-        <button
-          type="button"
-          className={`task-filter${planFilter === 'unplanned' ? ' is-active' : ''}`}
-          onClick={() => setPlanFilter('unplanned')}
-        >
-          未归类{' '}
-          <span>
-            {
-              snapshot.tasks.filter((item) => !item.archivedAt && !item.planId)
-                .length
-            }
-          </span>
-        </button>
-        <button
-          type="button"
-          className={`task-filter${planFilter === 'archived' ? ' is-active' : ''}`}
-          onClick={() => setPlanFilter('archived')}
-        >
-          历史归档{' '}
-          <span>
-            {snapshot.tasks.filter((item) => Boolean(item.archivedAt)).length}
-          </span>
-        </button>
-        <div className="task-section-label">计划</div>
-        <div className="task-plan-list">
-          {snapshot.plans.map((plan) => (
-            <button
-              key={plan.id}
-              type="button"
-              className={`task-filter${planFilter === plan.id ? ' is-active' : ''}`}
-              onClick={() => setPlanFilter(plan.id)}
-            >
-              <span>{plan.title}</span>
-              <span>
-                {
-                  snapshot.tasks.filter((item) => item.planId === plan.id)
-                    .length
-                }
-              </span>
+          <button
+            type="button"
+            className={`task-filter${planFilter === 'today' ? ' is-active' : ''}`}
+            onClick={() => setPlanFilter('today')}
+          >
+            今日及逾期{' '}
+            <span>
+              {
+                snapshot.tasks.filter(
+                  (item) =>
+                    !item.archivedAt &&
+                    item.dueDate &&
+                    item.dueDate <= todayKey &&
+                    item.status !== 'done' &&
+                    item.status !== 'cancelled',
+                ).length
+              }
+            </span>
+          </button>
+          <button
+            type="button"
+            className={`task-filter${planFilter === 'unplanned' ? ' is-active' : ''}`}
+            onClick={() => setPlanFilter('unplanned')}
+          >
+            未归类{' '}
+            <span>
+              {
+                snapshot.tasks.filter(
+                  (item) => !item.archivedAt && !item.planId,
+                ).length
+              }
+            </span>
+          </button>
+          <button
+            type="button"
+            className={`task-filter${planFilter === 'archived' ? ' is-active' : ''}`}
+            onClick={() => setPlanFilter('archived')}
+          >
+            历史归档{' '}
+            <span>
+              {snapshot.tasks.filter((item) => Boolean(item.archivedAt)).length}
+            </span>
+          </button>
+          <div className="task-section-label">计划</div>
+          <div className="task-plan-list">
+            {snapshot.plans.map((plan) =>
+              renamingPlanId === plan.id ? (
+                <form
+                  key={plan.id}
+                  className="task-plan-rename"
+                  onSubmit={(event) => void savePlanRename(event)}
+                >
+                  <input
+                    value={renamePlanTitle}
+                    autoFocus
+                    maxLength={120}
+                    onChange={(event) => setRenamePlanTitle(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') {
+                        setRenamingPlanId(null);
+                        setRenamePlanTitle('');
+                      }
+                    }}
+                  />
+                  <button
+                    type="submit"
+                    className="task-primary"
+                    disabled={savingPlan || !renamePlanTitle.trim()}
+                  >
+                    保存
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRenamingPlanId(null);
+                      setRenamePlanTitle('');
+                    }}
+                  >
+                    取消
+                  </button>
+                </form>
+              ) : (
+                <div
+                  key={plan.id}
+                  className={`task-plan-row${planFilter === plan.id ? ' is-active' : ''}`}
+                >
+                  <button
+                    type="button"
+                    className={`task-filter${planFilter === plan.id ? ' is-active' : ''}`}
+                    onClick={() => setPlanFilter(plan.id)}
+                  >
+                    <span>{plan.title}</span>
+                    <span>{countPlanActiveTasks(snapshot.tasks, plan.id)}</span>
+                  </button>
+                  <div className="task-plan-actions">
+                    <button
+                      type="button"
+                      aria-label={`重命名计划 ${plan.title}`}
+                      title="重命名计划"
+                      onClick={() => {
+                        setRenamingPlanId(plan.id);
+                        setRenamePlanTitle(plan.title);
+                      }}
+                    >
+                      ✎
+                    </button>
+                    <button
+                      type="button"
+                      className="task-plan-delete"
+                      aria-label={`删除计划 ${plan.title}`}
+                      title="删除计划"
+                      onClick={() => void deletePlan(plan)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                </div>
+              ),
+            )}
+            {snapshot.plans.length === 0 && (
+              <div className="task-muted">还没有计划</div>
+            )}
+          </div>
+          <form className="task-add-plan" onSubmit={addPlan}>
+            <input
+              aria-label="新计划名称"
+              placeholder="新计划名称"
+              value={newPlan}
+              onChange={(event) => setNewPlan(event.target.value)}
+            />
+            <button type="submit" disabled={!newPlan.trim()}>
+              添加
             </button>
-          ))}
-          {snapshot.plans.length === 0 && (
-            <div className="task-muted">还没有计划</div>
-          )}
-        </div>
-        <form className="task-add-plan" onSubmit={addPlan}>
-          <input
-            aria-label="新计划名称"
-            placeholder="新计划名称"
-            value={newPlan}
-            onChange={(event) => setNewPlan(event.target.value)}
-          />
-          <button type="submit" disabled={!newPlan.trim()}>
-            添加
+          </form>
+          <button
+            type="button"
+            className="task-plain-button"
+            onClick={() => void reviewExistingPlans()}
+            disabled={Boolean(importBusy)}
+          >
+            预览已有计划
           </button>
-        </form>
-        <button
-          type="button"
-          className="task-plain-button"
-          onClick={() => void reviewExistingPlans()}
-          disabled={Boolean(importBusy)}
-        >
-          预览已有计划
-        </button>
-      </aside>
+        </aside>
 
-      <main className="task-main">
-        <header className="task-toolbar">
-          <div className="task-toolbar-heading">
-            <div
-              className="task-workspace-switch"
-              role="group"
-              aria-label="工作台"
-            >
-              <button type="button" className="is-active" aria-pressed="true">
-                任务
+        <main className="task-main">
+          <header className="task-toolbar">
+            <div className="task-toolbar-heading">
+              <div
+                className="task-workspace-switch"
+                role="group"
+                aria-label="工作台"
+              >
+                <button type="button" className="is-active" aria-pressed="true">
+                  任务
+                </button>
+                <button
+                  type="button"
+                  aria-pressed="false"
+                  onClick={() => setWorkspaceMode('habits')}
+                >
+                  习惯
+                </button>
+              </div>
+              <span className="task-toolbar-count">
+                {
+                  snapshot.tasks.filter(
+                    (item) => !item.archivedAt && item.status === 'doing',
+                  ).length
+                }{' '}
+                进行中 ·{' '}
+                {
+                  snapshot.tasks.filter(
+                    (item) => !item.archivedAt && item.status === 'done',
+                  ).length
+                }{' '}
+                已完成
+                {snapshot.tasks.some((item) => item.archivedAt) && (
+                  <>
+                    {' '}
+                    · {
+                      snapshot.tasks.filter((item) => item.archivedAt).length
+                    }{' '}
+                    已归档
+                  </>
+                )}
+              </span>
+              {view === 'calendar' && (
+                <div
+                  id="task-calendar-toolbar-slot"
+                  className="task-calendar-toolbar-slot"
+                />
+              )}
+            </div>
+            <div className="task-toolbar-actions">
+              <input
+                aria-label="搜索任务"
+                placeholder="搜索任务或资源"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+              <button
+                type="button"
+                className={view === 'board' ? 'is-active' : ''}
+                onClick={() => changeView('board')}
+              >
+                看板
               </button>
               <button
                 type="button"
-                aria-pressed="false"
-                onClick={() => setWorkspaceMode('habits')}
+                className={view === 'list' ? 'is-active' : ''}
+                onClick={() => changeView('list')}
               >
-                习惯
+                列表
+              </button>
+              <button
+                type="button"
+                className={view === 'calendar' ? 'is-active' : ''}
+                onClick={() => changeView('calendar')}
+              >
+                日历
+              </button>
+              <button
+                type="button"
+                className="task-primary"
+                onClick={() =>
+                  openDraft(
+                    blankTask(
+                      planFilter !== 'all' &&
+                        planFilter !== 'unplanned' &&
+                        planFilter !== 'today' &&
+                        planFilter !== 'archived'
+                        ? planFilter
+                        : null,
+                    ),
+                  )
+                }
+              >
+                新建任务
               </button>
             </div>
-            <span className="task-toolbar-count">
-              {
-                snapshot.tasks.filter(
-                  (item) => !item.archivedAt && item.status === 'doing',
-                ).length
-              }{' '}
-              进行中 ·{' '}
-              {
-                snapshot.tasks.filter(
-                  (item) => !item.archivedAt && item.status === 'done',
-                ).length
-              }{' '}
-              已完成
-              {snapshot.tasks.some((item) => item.archivedAt) && (
-                <>
-                  {' '}
-                  · {
-                    snapshot.tasks.filter((item) => item.archivedAt).length
-                  }{' '}
-                  已归档
-                </>
-              )}
-            </span>
-            {view === 'calendar' && (
-              <div
-                id="task-calendar-toolbar-slot"
-                className="task-calendar-toolbar-slot"
-              />
-            )}
-          </div>
-          <div className="task-toolbar-actions">
-            <input
-              aria-label="搜索任务"
-              placeholder="搜索任务或资源"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-            <button
-              type="button"
-              className={view === 'board' ? 'is-active' : ''}
-              onClick={() => changeView('board')}
-            >
-              看板
-            </button>
-            <button
-              type="button"
-              className={view === 'list' ? 'is-active' : ''}
-              onClick={() => changeView('list')}
-            >
-              列表
-            </button>
-            <button
-              type="button"
-              className={view === 'calendar' ? 'is-active' : ''}
-              onClick={() => changeView('calendar')}
-            >
-              日历
-            </button>
-            <button
-              type="button"
-              className="task-primary"
-              onClick={() =>
-                openDraft(
-                  blankTask(
-                    planFilter !== 'all' &&
-                      planFilter !== 'unplanned' &&
-                      planFilter !== 'today' &&
-                      planFilter !== 'archived'
-                      ? planFilter
-                      : null,
-                  ),
-                )
-              }
-            >
-              新建任务
-            </button>
-          </div>
-        </header>
-        <section
-          className="task-connection-panel"
-          aria-label="任务数据连接状态"
-        >
-          <div className="task-connection-item">
-            <span
-              className={`task-connection-dot ${databaseConnected === true ? 'is-connected' : databaseConnected === false ? 'is-error' : 'is-pending'}`}
-            />
-            任务库：
-            {databaseConnected === true
-              ? '已连接'
-              : databaseConnected === false
-                ? '连接失败'
-                : '检测中'}
-          </div>
-          <div className="task-connection-item">
-            <span
-              className={`task-connection-dot ${library?.rootPath ? 'is-connected' : 'is-pending'}`}
-            />
-            书库：{library?.rootPath ? `${library.books.length} 本` : '未连接'}
-            {unlinkedEbookCount > 0 && ` · ${unlinkedEbookCount} 条未关联`}
-            {ebookRebindCount > 0 && ` · ${ebookRebindCount} 条需确认重绑`}
-          </div>
-          <div className="task-connection-item">
-            <span
-              className={`task-connection-dot ${playerConnected === true ? 'is-connected' : playerConnected === false ? 'is-error' : 'is-pending'}`}
-            />
-            播放器：
-            {playerConnected === true
-              ? '已连接'
-              : playerConnected === false
-                ? '不可用'
-                : '检测中'}
-            {videoErrorCount > 0 && ` · ${videoErrorCount} 条进度读取失败`}
-            {videoPendingCount > 0 && ` · ${videoPendingCount} 条检测中`}
-          </div>
-          <div className="task-connection-item">
-            计划来源：{snapshot.sources.length} 个
-            {removedSourceTaskCount > 0 &&
-              ` · ${removedSourceTaskCount} 个已移除节点已保留`}
-          </div>
-          <button
-            type="button"
-            className="task-connection-refresh"
-            onClick={() => void refreshConnections()}
+          </header>
+          <section
+            className="task-connection-panel"
+            aria-label="任务数据连接状态"
           >
-            重新检测
-          </button>
-        </section>
-        {error && (
-          <div className="task-message is-error" role="alert">
-            {error}
-            <button type="button" onClick={() => setError('')}>
-              关闭
-            </button>
-          </div>
-        )}
-        {notice && (
-          <div className="task-message">
-            {notice}
-            {statusUndo &&
-              (notice === `已完成「${statusUndo.title}」` ||
-                notice ===
-                  `「${statusUndo.title}」已更新为${statusName[statusUndo.nextStatus]}`) && (
-                <button
-                  type="button"
-                  disabled={statusSavingIds.has(statusUndo.taskId)}
-                  onClick={() => void undoStatusChange()}
-                >
-                  撤销
-                </button>
-              )}
-            <button type="button" onClick={() => setNotice('')}>
-              关闭
-            </button>
-          </div>
-        )}
-        {loading ? (
-          <div className="task-empty">正在加载任务…</div>
-        ) : planFilter === 'archived' ? (
-          <div className="task-archive-view">
-            <div className="task-archive-summary">
-              <div className="task-archive-summary-left">
-                <div className="task-archive-title">历史归档审阅</div>
-                <div className="task-archive-stats">
-                  <span className="task-archive-stat-item">
-                    总归档 <strong>{filtered.length}</strong> 项
-                  </span>
-                  <span className="task-archive-stat-item">
-                    关联电子书{' '}
-                    <strong>
-                      {
-                        filtered.filter((t) =>
-                          t.resources.some((r) => r.kind === 'ebook'),
-                        ).length
-                      }
-                    </strong>{' '}
-                    项
-                  </span>
-                  <span className="task-archive-stat-item">
-                    关联视频{' '}
-                    <strong>
-                      {
-                        filtered.filter((t) =>
-                          t.resources.some((r) => r.kind === 'youtube'),
-                        ).length
-                      }
-                    </strong>{' '}
-                    项
-                  </span>
-                </div>
-              </div>
-              <div className="task-archive-summary-right">
-                <button
-                  type="button"
-                  className="task-archive-export-btn"
-                  onClick={exportArchiveMindmap}
-                  disabled={filtered.length === 0}
-                >
-                  导出复盘导图
-                </button>
-              </div>
+            <div className="task-connection-item">
+              <span
+                className={`task-connection-dot ${databaseConnected === true ? 'is-connected' : databaseConnected === false ? 'is-error' : 'is-pending'}`}
+              />
+              任务库：
+              {databaseConnected === true
+                ? '已连接'
+                : databaseConnected === false
+                  ? '连接失败'
+                  : '检测中'}
             </div>
-
-            {filtered.length === 0 ? (
-              <div className="task-empty">
-                暂无归档任务。在「看板」或「任务详情」中可一键归档已完成的任务。
-              </div>
-            ) : (
-              <div className="task-archive-timeline">
-                {groupArchivedTasks(filtered).map((group) => (
-                  <section key={group.dateKey} className="task-archive-group">
-                    <div className="task-archive-group-header">
-                      <span className="task-archive-group-date">
-                        {group.dateLabel}
-                      </span>
-                      <span className="task-archive-group-count">
-                        {group.tasks.length} 项
-                      </span>
-                    </div>
-                    <div className="task-archive-group-list">
-                      {group.tasks.map((entry) => (
-                        <article
-                          key={entry.id}
-                          className={`task-archive-card${selectedId === entry.id ? ' is-selected' : ''}`}
-                          onClick={() => setSelectedId(entry.id)}
-                        >
-                          <div className="task-archive-card-top">
-                            <span className="task-archive-card-title">
-                              {entry.title}
-                            </span>
-                            <div
-                              className="task-archive-card-actions"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <button
-                                type="button"
-                                className="task-archive-unarchive-btn"
-                                onClick={() => void unarchiveTask(entry)}
-                              >
-                                取消归档
-                              </button>
-                            </div>
-                          </div>
-                          <div className="task-archive-card-meta">
-                            {entry.completedAt && (
-                              <span className="task-archive-meta-time">
-                                完成时间：{formatTimestamp(entry.completedAt)}
-                              </span>
-                            )}
-                            {entry.planId && (
-                              <span className="task-archive-meta-plan">
-                                计划：
-                                {snapshot.plans.find(
-                                  (p) => p.id === entry.planId,
-                                )?.title || '已删除计划'}
-                              </span>
-                            )}
-                          </div>
-                          {entry.note && (
-                            <div className="task-archive-card-note">
-                              {entry.note}
-                            </div>
-                          )}
-                          {entry.resources.length > 0 && (
-                            <div
-                              className="task-archive-card-resources"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              {entry.resources.map((resource) => (
-                                <div
-                                  key={`${resource.kind}:${resource.resourceId}`}
-                                  className="task-archive-resource-row"
-                                >
-                                  <span className="task-archive-resource-name">
-                                    {resource.kind === 'ebook'
-                                      ? '电子书'
-                                      : 'YouTube'}{' '}
-                                    · {resource.title}
-                                  </span>
-                                  <button
-                                    type="button"
-                                    className="task-archive-resource-btn"
-                                    onClick={() =>
-                                      void openResource(entry, resource)
-                                    }
-                                  >
-                                    打开资源
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </article>
-                      ))}
-                    </div>
-                  </section>
-                ))}
-              </div>
-            )}
-          </div>
-        ) : view === 'board' ? (
-          <div className="task-board">
-            {COLUMNS.map((column) => {
-              const entries = filtered.filter(
-                (entry) => entry.status === column.status,
-              );
-              return (
-                <section
-                  key={column.status}
-                  className="task-column"
-                  onDragOver={(event) => event.preventDefault()}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    const entry = snapshot.tasks.find(
-                      (item) => item.id === dragging,
-                    );
-                    if (entry && entry.status !== column.status)
-                      void changeStatus(entry, column.status);
-                    setDragging(null);
-                  }}
-                >
-                  <header className="task-column-head">
-                    <div className="task-column-head-title">
-                      <span>{column.label}</span>
-                      <span className="task-column-count">
-                        {entries.length}
-                      </span>
-                    </div>
-                    {column.status === 'done' && (
-                      <button
-                        type="button"
-                        className="task-column-archive-btn"
-                        title="归档当前已完成任务"
-                        disabled={entries.length === 0}
-                        onClick={() => void archiveDoneTasks()}
-                      >
-                        归档已完成
-                      </button>
-                    )}
-                  </header>
-                  <div className="task-column-items">
-                    {taskGroups
-                      .filter((group) =>
-                        group.tasks.some(
-                          (entry) => entry.status === column.status,
-                        ),
-                      )
-                      .map((group) => (
-                        <section
-                          className="task-source-group task-source-group-board"
-                          key={group.key}
-                        >
-                          {renderSourceHeader(group)}
-                          <div className="task-source-group-items">
-                            {group.entries
-                              .filter(
-                                (treeEntry) =>
-                                  treeEntry.task.status === column.status,
-                              )
-                              .map(renderCard)}
-                          </div>
-                        </section>
-                      ))}
-                    {entries.length === 0 && (
-                      <div className="task-column-empty">暂无任务</div>
-                    )}
-                  </div>
-                </section>
-              );
-            })}
-          </div>
-        ) : view === 'calendar' ? (
-          <TaskCalendar
-            tasks={matchingTasks}
-            onOpenTask={setSelectedId}
-            onCreateTask={createTaskForDate}
-            onMoveTask={moveTaskDate}
-            onToggleTaskCompletion={toggleTaskCompletion}
-            statusSavingIds={statusSavingIds}
-            today={todayKey}
-            detailOpen={Boolean(selected)}
-          />
-        ) : (
-          <div className="task-list">
-            {taskGroups.length ? (
-              taskGroups.map((group) => (
-                <section className="task-source-group" key={group.key}>
-                  {renderSourceHeader(group)}
-                  <div className="task-source-group-items">
-                    {group.entries.map(renderCard)}
-                  </div>
-                </section>
-              ))
-            ) : (
-              <div className="task-empty">
-                还没有任务。可以新建任务或预览已有计划。
-              </div>
-            )}
-          </div>
-        )}
-      </main>
-
-      {selected && (
-        <aside
-          className={`task-detail${view === 'calendar' ? ' is-calendar-slot' : ''}`}
-        >
-          <div className="task-detail-head">
-            <strong>任务详情</strong>
+            <div className="task-connection-item">
+              <span
+                className={`task-connection-dot ${library?.rootPath ? 'is-connected' : 'is-pending'}`}
+              />
+              书库：
+              {library?.rootPath ? `${library.books.length} 本` : '未连接'}
+              {unlinkedEbookCount > 0 && ` · ${unlinkedEbookCount} 条未关联`}
+              {ebookRebindCount > 0 && ` · ${ebookRebindCount} 条需确认重绑`}
+            </div>
+            <div className="task-connection-item">
+              <span
+                className={`task-connection-dot ${playerConnected === true ? 'is-connected' : playerConnected === false ? 'is-error' : 'is-pending'}`}
+              />
+              播放器：
+              {playerConnected === true
+                ? '已连接'
+                : playerConnected === false
+                  ? '不可用'
+                  : '检测中'}
+              {videoErrorCount > 0 && ` · ${videoErrorCount} 条进度读取失败`}
+              {videoPendingCount > 0 && ` · ${videoPendingCount} 条检测中`}
+            </div>
+            <div className="task-connection-item">
+              计划来源：{snapshot.sources.length} 个
+              {removedSourceTaskCount > 0 &&
+                ` · ${removedSourceTaskCount} 个已移除节点已保留`}
+            </div>
             <button
               type="button"
-              className={view === 'calendar' ? 'task-detail-back' : undefined}
-              onClick={() => setSelectedId(null)}
-              aria-label={view === 'calendar' ? '返回日程' : '关闭任务详情'}
+              className="task-connection-refresh"
+              onClick={() => void refreshConnections()}
             >
-              {view === 'calendar' ? '返回日程' : '×'}
+              重新检测
             </button>
-          </div>
-          <div className="task-detail-body">
-            <h2>{selected.title}</h2>
-            <div className="task-detail-status-row">
-              <span>状态</span>
-              <div className="task-detail-status-controls">
-                <span className={`task-status-current is-${selected.status}`}>
-                  {statusName[selected.status]}
-                </span>
-                <button
-                  type="button"
-                  className={
-                    selected.status === 'done'
-                      ? 'task-status-reopen'
-                      : 'task-primary task-completion-action'
-                  }
-                  disabled={statusSavingIds.has(selected.id)}
-                  onClick={() => toggleTaskCompletion(selected)}
-                >
-                  {selected.status === 'done' || selected.status === 'cancelled'
-                    ? '重新打开'
-                    : '✓ 标记完成'}
-                </button>
-                <details className="task-status-menu">
-                  <summary
-                    aria-label={`当前状态：${statusName[selected.status]}，更改状态`}
+          </section>
+          {planFilter !== 'archived' && (
+            <div className="task-view-controls">
+              <div
+                className="task-quick-filters"
+                role="group"
+                aria-label="快捷筛选"
+              >
+                {(
+                  [
+                    ['all', '全部'],
+                    ['high', '中高优先级'],
+                    ['unblocked', '当前可执行'],
+                    [
+                      'cancelled',
+                      `已取消${cancelledCount > 0 ? ` (${cancelledCount})` : ''}`,
+                    ],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={`task-quick-chip${quickFilter === value ? ' is-active' : ''}`}
+                    aria-pressed={quickFilter === value}
+                    onClick={() => setQuickFilter(value)}
                   >
-                    更多
-                  </summary>
-                  <div role="group" aria-label="更改任务状态">
-                    {Object.entries(statusName).map(([value, label]) => (
-                      <button
-                        key={value}
-                        type="button"
-                        aria-pressed={selected.status === value}
-                        disabled={
-                          selected.status === value ||
-                          statusSavingIds.has(selected.id)
-                        }
-                        onClick={(event) => {
-                          event.currentTarget
-                            .closest('details')
-                            ?.removeAttribute('open');
-                          void changeStatus(selected, value as TaskStatus);
-                        }}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </details>
-              </div>
-            </div>
-            <div className="task-detail-row">
-              <span>计划</span>
-              <span>
-                {snapshot.plans.find((plan) => plan.id === selected.planId)
-                  ?.title || '未归类'}
-              </span>
-            </div>
-            {selected.dueDate && (
-              <div className="task-detail-row">
-                <span>截止</span>
-                <span>{selected.dueDate}</span>
-              </div>
-            )}
-            {selected.note && <p className="task-note">{selected.note}</p>}
-            {selected.sourceKey && !selected.sourcePresent && (
-              <span className="task-source-removed">
-                原计划已移除此节点；任务和进度保留
-              </span>
-            )}
-            {selected.prerequisiteIds.length > 0 && (
-              <div className="task-detail-section">
-                <strong>前置任务</strong>
-                {selected.prerequisiteIds.map((id) => (
-                  <div key={id}>
-                    {byId.get(id)?.status === 'done' ? '✓' : '○'}{' '}
-                    {byId.get(id)?.title ?? '任务不存在'}
-                  </div>
+                    {label}
+                  </button>
                 ))}
               </div>
-            )}
-            {selected.resources.map((resource) => (
-              <div
-                className="task-resource"
-                key={`${resource.kind}:${resource.resourceId}`}
-              >
-                <strong>
-                  {resource.kind === 'ebook' ? '电子书' : 'YouTube'} ·{' '}
-                  {resource.title}
-                </strong>
-                <span>{resourceProgress(resource, library, watch)}</span>
-                <button
-                  type="button"
-                  className="task-primary"
-                  onClick={() => void openResource(selected, resource)}
+              <label className="task-sort-select">
+                <span>排序</span>
+                <select
+                  value={sortBy}
+                  onChange={(event) =>
+                    setSortBy(event.target.value as TaskSortBy)
+                  }
                 >
-                  打开资源
-                </button>
-                {ebookLinkNeedsRepair(resource) && (
+                  <option value="position">默认排序</option>
+                  <option value="priority">按优先级</option>
+                  <option value="dueDate">按截止日期</option>
+                  <option value="updatedAt">按最近更新</option>
+                </select>
+              </label>
+            </div>
+          )}
+          {error && (
+            <div className="task-message is-error" role="alert">
+              {error}
+              <button type="button" onClick={() => setError('')}>
+                关闭
+              </button>
+            </div>
+          )}
+          {notice && (
+            <div className="task-message">
+              {notice}
+              {statusUndo &&
+                (notice === `已完成「${statusUndo.title}」` ||
+                  notice ===
+                    `「${statusUndo.title}」已更新为${statusName[statusUndo.nextStatus]}`) && (
                   <button
                     type="button"
-                    onClick={() => openDraft(editTask(selected))}
+                    disabled={statusSavingIds.has(statusUndo.taskId)}
+                    onClick={() => void undoStatusChange()}
                   >
-                    重新关联书籍
+                    撤销
                   </button>
                 )}
-                {resource.kind === 'youtube' &&
-                  watch[resource.resourceId] === 'error' && (
+              <button type="button" onClick={() => setNotice('')}>
+                关闭
+              </button>
+            </div>
+          )}
+          {loading ? (
+            <div className="task-empty">正在加载任务…</div>
+          ) : planFilter === 'archived' ? (
+            <div className="task-archive-view">
+              <div className="task-archive-summary">
+                <div className="task-archive-summary-left">
+                  <div className="task-archive-title">历史归档审阅</div>
+                  <div className="task-archive-stats">
+                    <span className="task-archive-stat-item">
+                      总归档 <strong>{filtered.length}</strong> 项
+                    </span>
+                    <span className="task-archive-stat-item">
+                      关联电子书{' '}
+                      <strong>
+                        {
+                          filtered.filter((t) =>
+                            t.resources.some((r) => r.kind === 'ebook'),
+                          ).length
+                        }
+                      </strong>{' '}
+                      项
+                    </span>
+                    <span className="task-archive-stat-item">
+                      关联视频{' '}
+                      <strong>
+                        {
+                          filtered.filter((t) =>
+                            t.resources.some((r) => r.kind === 'youtube'),
+                          ).length
+                        }
+                      </strong>{' '}
+                      项
+                    </span>
+                  </div>
+                </div>
+                <div className="task-archive-summary-right">
+                  <button
+                    type="button"
+                    className="task-archive-export-btn"
+                    onClick={exportArchiveMindmap}
+                    disabled={filtered.length === 0}
+                  >
+                    导出复盘导图
+                  </button>
+                </div>
+              </div>
+
+              {filtered.length === 0 ? (
+                <div className="task-empty">
+                  暂无归档任务。在「看板」或「任务详情」中可一键归档已完成的任务。
+                </div>
+              ) : (
+                <div className="task-archive-timeline">
+                  {groupArchivedTasks(filtered).map((group) => (
+                    <section key={group.dateKey} className="task-archive-group">
+                      <div className="task-archive-group-header">
+                        <span className="task-archive-group-date">
+                          {group.dateLabel}
+                        </span>
+                        <span className="task-archive-group-count">
+                          {group.tasks.length} 项
+                        </span>
+                      </div>
+                      <div className="task-archive-group-list">
+                        {group.tasks.map((entry) => (
+                          <article
+                            key={entry.id}
+                            className={`task-archive-card${selectedId === entry.id ? ' is-selected' : ''}`}
+                            onClick={() => setSelectedId(entry.id)}
+                          >
+                            <div className="task-archive-card-top">
+                              <span className="task-archive-card-title">
+                                {entry.title}
+                              </span>
+                              <div
+                                className="task-archive-card-actions"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <button
+                                  type="button"
+                                  className="task-archive-unarchive-btn"
+                                  onClick={() => void unarchiveTask(entry)}
+                                >
+                                  取消归档
+                                </button>
+                              </div>
+                            </div>
+                            <div className="task-archive-card-meta">
+                              {entry.completedAt && (
+                                <span className="task-archive-meta-time">
+                                  完成时间：{formatTimestamp(entry.completedAt)}
+                                </span>
+                              )}
+                              {entry.planId && (
+                                <span className="task-archive-meta-plan">
+                                  计划：
+                                  {snapshot.plans.find(
+                                    (p) => p.id === entry.planId,
+                                  )?.title || '已删除计划'}
+                                </span>
+                              )}
+                            </div>
+                            {entry.note && (
+                              <div className="task-archive-card-note">
+                                {entry.note}
+                              </div>
+                            )}
+                            {entry.resources.length > 0 && (
+                              <div
+                                className="task-archive-card-resources"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {entry.resources.map((resource) => (
+                                  <div
+                                    key={`${resource.kind}:${resource.resourceId}`}
+                                    className="task-archive-resource-row"
+                                  >
+                                    <span className="task-archive-resource-name">
+                                      {resource.kind === 'ebook'
+                                        ? '电子书'
+                                        : 'YouTube'}{' '}
+                                      · {resource.title}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      className="task-archive-resource-btn"
+                                      onClick={() =>
+                                        void openResource(entry, resource)
+                                      }
+                                    >
+                                      打开资源
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </article>
+                        ))}
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : view === 'board' ? (
+            (() => {
+              const showCancelledColumn =
+                quickFilter === 'cancelled' || cancelledCount > 0;
+              const columnsToRender = showCancelledColumn
+                ? [
+                    ...COLUMNS,
+                    { status: 'cancelled' as const, label: '已取消' },
+                  ]
+                : COLUMNS;
+              return (
+                <div
+                  className={`task-board${showCancelledColumn ? ' has-cancelled' : ''}`}
+                >
+                  {columnsToRender.map((column) => {
+                    const entries = filtered.filter(
+                      (entry) => entry.status === column.status,
+                    );
+                    return (
+                      <section
+                        key={column.status}
+                        className="task-column"
+                        onDragOver={(event) => event.preventDefault()}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          const entry = snapshot.tasks.find(
+                            (item) => item.id === dragging,
+                          );
+                          if (entry && entry.status !== column.status)
+                            void changeStatus(entry, column.status);
+                          setDragging(null);
+                        }}
+                      >
+                        <header className="task-column-head">
+                          <div className="task-column-head-title">
+                            <span>{column.label}</span>
+                            <span className="task-column-count">
+                              {entries.length}
+                            </span>
+                          </div>
+                          {column.status === 'done' && (
+                            <button
+                              type="button"
+                              className="task-column-archive-btn"
+                              title="归档当前已完成任务"
+                              disabled={entries.length === 0}
+                              onClick={() => void archiveDoneTasks()}
+                            >
+                              归档已完成
+                            </button>
+                          )}
+                        </header>
+                        <div className="task-column-items">
+                          {taskGroups
+                            .filter((group) =>
+                              group.tasks.some(
+                                (entry) => entry.status === column.status,
+                              ),
+                            )
+                            .map((group) => {
+                              const columnEntries = group.entries.filter(
+                                (treeEntry) =>
+                                  treeEntry.task.status === column.status,
+                              );
+                              const columnIds = new Set(
+                                columnEntries.map(
+                                  (treeEntry) => treeEntry.task.id,
+                                ),
+                              );
+                              return (
+                                <section
+                                  className="task-source-group task-source-group-board"
+                                  key={group.key}
+                                >
+                                  {renderSourceHeader(group)}
+                                  <div className="task-source-group-items">
+                                    {columnEntries.map((treeEntry) => {
+                                      const parentInSameCol = Boolean(
+                                        treeEntry.task.parentId &&
+                                          columnIds.has(
+                                            treeEntry.task.parentId,
+                                          ),
+                                      );
+                                      const parentTitle = treeEntry.task
+                                        .parentId
+                                        ? byId.get(treeEntry.task.parentId)
+                                            ?.title
+                                        : undefined;
+                                      return renderCard({
+                                        ...treeEntry,
+                                        depth: parentInSameCol
+                                          ? treeEntry.depth
+                                          : 0,
+                                        detachedParentTitle:
+                                          !parentInSameCol && parentTitle
+                                            ? parentTitle
+                                            : undefined,
+                                      });
+                                    })}
+                                  </div>
+                                </section>
+                              );
+                            })}
+                          {entries.length === 0 && (
+                            <div className="task-column-empty">暂无任务</div>
+                          )}
+                        </div>
+                      </section>
+                    );
+                  })}
+                </div>
+              );
+            })()
+          ) : view === 'calendar' ? (
+            <TaskCalendar
+              tasks={quickMatchingTasks}
+              onOpenTask={setSelectedId}
+              onCreateTask={createTaskForDate}
+              onMoveTask={moveTaskDate}
+              onToggleTaskCompletion={toggleTaskCompletion}
+              statusSavingIds={statusSavingIds}
+              today={todayKey}
+              detailOpen={Boolean(selected)}
+              showCancelled={quickFilter === 'cancelled'}
+              filterHint={
+                planFilter === 'today'
+                  ? '当前仅显示「今日到期与逾期」任务，其余日期暂被隐藏'
+                  : undefined
+              }
+              onClearFilter={
+                planFilter === 'today' ? () => setPlanFilter('all') : undefined
+              }
+            />
+          ) : (
+            <div className="task-list">
+              {taskGroups.length ? (
+                taskGroups.map((group) => (
+                  <section className="task-source-group" key={group.key}>
+                    {renderSourceHeader(group)}
+                    <div className="task-source-group-items">
+                      {group.entries.map(renderCard)}
+                    </div>
+                  </section>
+                ))
+              ) : (
+                <div className="task-empty">
+                  还没有任务。可以新建任务或预览已有计划。
+                </div>
+              )}
+            </div>
+          )}
+        </main>
+
+        {selected && (
+          <aside
+            className={`task-detail${view === 'calendar' ? ' is-calendar-slot' : ''}`}
+          >
+            <div className="task-detail-head">
+              <strong>任务详情</strong>
+              <button
+                type="button"
+                className={view === 'calendar' ? 'task-detail-back' : undefined}
+                onClick={() => setSelectedId(null)}
+                aria-label={view === 'calendar' ? '返回日程' : '关闭任务详情'}
+              >
+                {view === 'calendar' ? '返回日程' : '×'}
+              </button>
+            </div>
+            <div className="task-detail-body">
+              <h2>{selected.title}</h2>
+              <div className="task-detail-status-row">
+                <span>状态</span>
+                <div className="task-detail-status-controls">
+                  <span className={`task-status-current is-${selected.status}`}>
+                    {statusName[selected.status]}
+                  </span>
+                  <button
+                    type="button"
+                    className={
+                      selected.status === 'done'
+                        ? 'task-status-reopen'
+                        : 'task-primary task-completion-action'
+                    }
+                    disabled={statusSavingIds.has(selected.id)}
+                    onClick={() => toggleTaskCompletion(selected)}
+                  >
+                    {selected.status === 'done' ||
+                    selected.status === 'cancelled'
+                      ? '重新打开'
+                      : '✓ 标记完成'}
+                  </button>
+                  <details className="task-status-menu">
+                    <summary
+                      aria-label={`当前状态：${statusName[selected.status]}，更改状态`}
+                    >
+                      更多
+                    </summary>
+                    <div role="group" aria-label="更改任务状态">
+                      {Object.entries(statusName).map(([value, label]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          aria-pressed={selected.status === value}
+                          disabled={
+                            selected.status === value ||
+                            statusSavingIds.has(selected.id)
+                          }
+                          onClick={(event) => {
+                            event.currentTarget
+                              .closest('details')
+                              ?.removeAttribute('open');
+                            void changeStatus(selected, value as TaskStatus);
+                          }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </details>
+                </div>
+              </div>
+              <div className="task-detail-row">
+                <span>计划</span>
+                <span>
+                  {snapshot.plans.find((plan) => plan.id === selected.planId)
+                    ?.title || '未归类'}
+                </span>
+              </div>
+              <div className="task-detail-row">
+                <span>优先级</span>
+                <span>
+                  {TASK_PRIORITY_LABELS[selected.priority] ??
+                    `P${selected.priority}`}
+                </span>
+              </div>
+              {selected.parentId && (
+                <div className="task-detail-row">
+                  <span>父任务</span>
+                  <button
+                    type="button"
+                    className="task-detail-link"
+                    onClick={() => setSelectedId(selected.parentId)}
+                  >
+                    {byId.get(selected.parentId)?.title ?? '父任务不存在'}
+                  </button>
+                </div>
+              )}
+              {selected.dueDate && (
+                <div className="task-detail-row">
+                  <span>截止</span>
+                  <span>{selected.dueDate}</span>
+                </div>
+              )}
+              {selected.note && <p className="task-note">{selected.note}</p>}
+              {selected.sourceKey && !selected.sourcePresent && (
+                <span className="task-source-removed">
+                  原计划已移除此节点；任务和进度保留
+                </span>
+              )}
+              {selected.prerequisiteIds.length > 0 && (
+                <div className="task-detail-section">
+                  <strong>前置任务</strong>
+                  {selected.prerequisiteIds.map((id) => (
+                    <div key={id}>
+                      {byId.get(id)?.status === 'done' ? '✓' : '○'}{' '}
+                      {byId.get(id)?.title ?? '任务不存在'}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {selected.resources.map((resource) => (
+                <div
+                  className="task-resource"
+                  key={`${resource.kind}:${resource.resourceId}`}
+                >
+                  <strong>
+                    {resource.kind === 'ebook' ? '电子书' : 'YouTube'} ·{' '}
+                    {resource.title}
+                  </strong>
+                  <span>{resourceProgress(resource, library, watch)}</span>
+                  <button
+                    type="button"
+                    className="task-primary"
+                    onClick={() => void openResource(selected, resource)}
+                  >
+                    打开资源
+                  </button>
+                  {ebookLinkNeedsRepair(resource) && (
                     <button
                       type="button"
-                      onClick={() =>
-                        void retryVideoProgress(resource.resourceId)
-                      }
+                      onClick={() => openDraft(editTask(selected))}
                     >
-                      重试读取进度
+                      重新关联书籍
                     </button>
                   )}
-              </div>
-            ))}
-            {taskTargetsReached(selected, library, watch) && (
-              <div className="task-target-ready" role="status">
-                <span>已达到所有关联资源的目标。</span>
-                {selected.status !== 'done' && (
+                  {resource.kind === 'youtube' &&
+                    watch[resource.resourceId] === 'error' && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void retryVideoProgress(resource.resourceId)
+                        }
+                      >
+                        重试读取进度
+                      </button>
+                    )}
+                </div>
+              ))}
+              {taskTargetsReached(selected, library, watch) && (
+                <div className="task-target-ready" role="status">
+                  <span>已达到所有关联资源的目标。</span>
+                  {selected.status !== 'done' && (
+                    <button
+                      type="button"
+                      disabled={statusSavingIds.has(selected.id)}
+                      onClick={() => void changeStatus(selected, 'done')}
+                    >
+                      确认标记完成
+                    </button>
+                  )}
+                </div>
+              )}
+              <div className="task-detail-actions">
+                <button
+                  type="button"
+                  onClick={() => openDraft(editTask(selected))}
+                >
+                  编辑
+                </button>
+                {!selected.archivedAt && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      openDraft({
+                        ...blankTask(selected.planId),
+                        parentId: selected.id,
+                      })
+                    }
+                  >
+                    + 添加子任务
+                  </button>
+                )}
+                {selected.status === 'done' && !selected.archivedAt && (
                   <button
                     type="button"
                     disabled={statusSavingIds.has(selected.id)}
-                    onClick={() => void changeStatus(selected, 'done')}
+                    onClick={() => void archiveSingleTask(selected)}
                   >
-                    确认标记完成
+                    归档
                   </button>
                 )}
+                <button type="button" onClick={() => void deleteTask(selected)}>
+                  删除任务
+                </button>
               </div>
-            )}
-            <div className="task-detail-actions">
-              <button
-                type="button"
-                onClick={() => openDraft(editTask(selected))}
-              >
-                编辑
-              </button>
-              <button type="button" onClick={() => void deleteTask(selected)}>
-                删除任务
-              </button>
             </div>
-          </div>
-        </aside>
-      )}
+          </aside>
+        )}
 
-      {draft && (
-        <div
-          className="task-modal-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget && !saving) setDraft(null);
-          }}
-        >
-          <form
-            className="task-modal"
-            onSubmit={(event) => void saveDraft(event)}
-            role="dialog"
-            aria-modal="true"
-            aria-label={draft.id ? '编辑任务' : '新建任务'}
+        {draft && (
+          <div
+            className="task-modal-backdrop"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget && !saving)
+                setDraft(null);
+            }}
           >
-            <header>
-              <strong>{draft.id ? '编辑任务' : '新建任务'}</strong>
-              <button
-                type="button"
-                onClick={() => setDraft(null)}
-                disabled={saving}
-              >
-                关闭
-              </button>
-            </header>
-            <div className="task-modal-body">
-              <label>
-                标题
-                <input
-                  value={draft.title}
-                  required
-                  maxLength={240}
-                  onChange={(event) =>
-                    setDraft({ ...draft, title: event.target.value })
-                  }
-                />
-              </label>
-              <div className="task-form-row">
+            <form
+              className="task-modal"
+              onSubmit={(event) => void saveDraft(event)}
+              role="dialog"
+              aria-modal="true"
+              aria-label={draft.id ? '编辑任务' : '新建任务'}
+            >
+              <header>
+                <strong>{draft.id ? '编辑任务' : '新建任务'}</strong>
+                <button
+                  type="button"
+                  onClick={() => setDraft(null)}
+                  disabled={saving}
+                >
+                  关闭
+                </button>
+              </header>
+              <div className="task-modal-body">
                 <label>
-                  计划
-                  <select
-                    value={draft.planId ?? ''}
-                    onChange={(event) =>
-                      setDraft({ ...draft, planId: event.target.value || null })
-                    }
-                  >
-                    <option value="">未归类</option>
-                    {snapshot.plans.map((plan) => (
-                      <option key={plan.id} value={plan.id}>
-                        {plan.title}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  截止日期
+                  标题
                   <input
-                    type="date"
-                    value={draft.dueDate ?? ''}
+                    value={draft.title}
+                    required
+                    maxLength={240}
                     onChange={(event) =>
-                      setDraft({
-                        ...draft,
-                        dueDate: event.target.value || null,
-                      })
+                      setDraft({ ...draft, title: event.target.value })
                     }
                   />
                 </label>
-              </div>
-              <div className="task-form-row">
-                <label>
-                  状态
-                  <select
-                    value={draft.status}
-                    onChange={(event) =>
-                      setDraft({
-                        ...draft,
-                        status: event.target.value as TaskStatus,
-                      })
-                    }
-                  >
-                    {Object.entries(statusName).map(([value, label]) => (
-                      <option key={value} value={value}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  优先级
-                  <select
-                    value={draft.priority}
-                    onChange={(event) =>
-                      setDraft({
-                        ...draft,
-                        priority: Number(event.target.value),
-                      })
-                    }
-                  >
-                    <option value={0}>普通</option>
-                    <option value={1}>低</option>
-                    <option value={2}>中</option>
-                    <option value={3}>高</option>
-                  </select>
-                </label>
-              </div>
-              <section className="task-resource-editor">
-                <div className="task-resource-editor-heading">
-                  <div>
-                    <strong>关联资源</strong>
-                    <span>
-                      各资源进度分别统计；所有目标达成后由你确认完成。
-                    </span>
-                  </div>
-                  <div className="task-resource-add-actions">
-                    <button
-                      type="button"
-                      onClick={() => addResourceDraft('ebook')}
+                <div className="task-form-row">
+                  <label>
+                    计划
+                    <select
+                      value={draft.planId ?? ''}
+                      onChange={(event) =>
+                        setDraft({
+                          ...draft,
+                          planId: event.target.value || null,
+                        })
+                      }
                     >
-                      + 电子书
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => addResourceDraft('youtube')}
+                      <option value="">未归类</option>
+                      {snapshot.plans.map((plan) => (
+                        <option key={plan.id} value={plan.id}>
+                          {plan.title}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    父任务
+                    <select
+                      value={draft.parentId ?? ''}
+                      onChange={(event) =>
+                        setDraft({
+                          ...draft,
+                          parentId: event.target.value || null,
+                        })
+                      }
                     >
-                      + YouTube
-                    </button>
-                  </div>
+                      <option value="">无（顶级任务）</option>
+                      {(() => {
+                        const excluded = draft.id
+                          ? collectTaskDescendantIds(snapshot.tasks, draft.id)
+                          : new Set<string>();
+                        return snapshot.tasks
+                          .filter(
+                            (item) =>
+                              !item.archivedAt &&
+                              item.id !== draft.id &&
+                              !excluded.has(item.id),
+                          )
+                          .map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.title}
+                            </option>
+                          ));
+                      })()}
+                    </select>
+                  </label>
+                  <label>
+                    截止日期
+                    <input
+                      type="date"
+                      value={draft.dueDate ?? ''}
+                      onChange={(event) =>
+                        setDraft({
+                          ...draft,
+                          dueDate: event.target.value || null,
+                        })
+                      }
+                    />
+                  </label>
                 </div>
-                {resourceDrafts.map((item) => (
-                  <fieldset className="task-resource-edit-card" key={item.key}>
-                    <div className="task-resource-edit-heading">
-                      <label>
-                        资源类型
-                        <select
-                          value={item.kind}
-                          onChange={(event) => {
-                            const kind = event.target
-                              .value as TaskResource['kind'];
-                            updateResourceDraft(item.key, {
-                              kind,
-                              original: null,
-                              bookPath: '',
-                              chapterHref: '',
-                              videoInput: '',
-                              startSeconds: '0',
-                              targetUnit: '',
-                              targetValue: '',
-                              manualValue: '',
-                            });
-                          }}
-                        >
-                          <option value="ebook">电子书</option>
-                          <option value="youtube">YouTube 视频</option>
-                        </select>
-                      </label>
+                <div className="task-form-row">
+                  <label>
+                    状态
+                    <select
+                      value={draft.status}
+                      onChange={(event) =>
+                        setDraft({
+                          ...draft,
+                          status: event.target.value as TaskStatus,
+                        })
+                      }
+                    >
+                      {Object.entries(statusName).map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    优先级
+                    <select
+                      value={draft.priority}
+                      onChange={(event) =>
+                        setDraft({
+                          ...draft,
+                          priority: Number(event.target.value),
+                        })
+                      }
+                    >
+                      <option value={0}>普通</option>
+                      <option value={1}>低</option>
+                      <option value={2}>中</option>
+                      <option value={3}>高</option>
+                    </select>
+                  </label>
+                </div>
+                <section className="task-resource-editor">
+                  <div className="task-resource-editor-heading">
+                    <div>
+                      <strong>关联资源</strong>
+                      <span>
+                        各资源进度分别统计；所有目标达成后由你确认完成。
+                      </span>
+                    </div>
+                    <div className="task-resource-add-actions">
                       <button
                         type="button"
-                        className="task-resource-remove"
-                        onClick={() => removeResourceDraft(item.key)}
+                        onClick={() => addResourceDraft('ebook')}
                       >
-                        移除资源
+                        + 电子书
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => addResourceDraft('youtube')}
+                      >
+                        + YouTube
                       </button>
                     </div>
-                    {item.kind === 'ebook' ? (
-                      <>
+                  </div>
+                  {resourceDrafts.map((item) => (
+                    <fieldset
+                      className="task-resource-edit-card"
+                      key={item.key}
+                    >
+                      <div className="task-resource-edit-heading">
                         <label>
-                          书籍
+                          资源类型
                           <select
-                            value={item.bookPath}
+                            value={item.kind}
+                            onChange={(event) => {
+                              const kind = event.target
+                                .value as TaskResource['kind'];
+                              updateResourceDraft(item.key, {
+                                kind,
+                                original: null,
+                                bookPath: '',
+                                chapterHref: '',
+                                videoInput: '',
+                                startSeconds: '0',
+                                targetUnit: '',
+                                targetValue: '',
+                                manualValue: '',
+                              });
+                            }}
+                          >
+                            <option value="ebook">电子书</option>
+                            <option value="youtube">YouTube 视频</option>
+                          </select>
+                        </label>
+                        <button
+                          type="button"
+                          className="task-resource-remove"
+                          onClick={() => removeResourceDraft(item.key)}
+                        >
+                          移除资源
+                        </button>
+                      </div>
+                      {item.kind === 'ebook' ? (
+                        <>
+                          <label>
+                            书籍
+                            <select
+                              value={item.bookPath}
+                              onChange={(event) =>
+                                updateResourceDraft(item.key, {
+                                  bookPath: event.target.value,
+                                })
+                              }
+                            >
+                              <option value="">选择书籍</option>
+                              {item.bookPath &&
+                                !library?.books.some(
+                                  (book) => book.relativePath === item.bookPath,
+                                ) && (
+                                  <option value={item.bookPath}>
+                                    未找到：{item.bookPath}
+                                  </option>
+                                )}
+                              {library?.books.map((book) => (
+                                <option
+                                  key={book.relativePath}
+                                  value={book.relativePath}
+                                >
+                                  {book.title}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            章节链接（可选）
+                            <input
+                              value={item.chapterHref}
+                              onChange={(event) =>
+                                updateResourceDraft(item.key, {
+                                  chapterHref: event.target.value,
+                                })
+                              }
+                              placeholder="从阅读器创建任务时自动带入"
+                            />
+                          </label>
+                        </>
+                      ) : (
+                        <div className="task-form-row">
+                          <label>
+                            视频链接或 ID
+                            <input
+                              value={item.videoInput}
+                              onChange={(event) =>
+                                updateResourceDraft(item.key, {
+                                  videoInput: event.target.value,
+                                })
+                              }
+                              placeholder="YouTube 视频链接或 11 位 ID"
+                            />
+                          </label>
+                          <label>
+                            起始秒数
+                            <input
+                              type="number"
+                              min="0"
+                              value={item.startSeconds}
+                              onChange={(event) =>
+                                updateResourceDraft(item.key, {
+                                  startSeconds: event.target.value,
+                                })
+                              }
+                            />
+                          </label>
+                        </div>
+                      )}
+                      <div className="task-form-row">
+                        <label>
+                          目标单位
+                          <select
+                            value={item.targetUnit}
                             onChange={(event) =>
                               updateResourceDraft(item.key, {
-                                bookPath: event.target.value,
+                                targetUnit: event.target
+                                  .value as ResourceTargetUnit,
                               })
                             }
                           >
-                            <option value="">选择书籍</option>
-                            {item.bookPath &&
-                              !library?.books.some(
-                                (book) => book.relativePath === item.bookPath,
-                              ) && (
-                                <option value={item.bookPath}>
-                                  未找到：{item.bookPath}
-                                </option>
-                              )}
-                            {library?.books.map((book) => (
-                              <option
-                                key={book.relativePath}
-                                value={book.relativePath}
-                              >
-                                {book.title}
-                              </option>
-                            ))}
+                            <option value="">无目标</option>
+                            {item.kind === 'ebook' ? (
+                              <>
+                                <option value="chapters">章节</option>
+                                <option value="words">字数（估算）</option>
+                              </>
+                            ) : (
+                              <option value="seconds">秒</option>
+                            )}
                           </select>
                         </label>
                         <label>
-                          章节链接（可选）
-                          <input
-                            value={item.chapterHref}
-                            onChange={(event) =>
-                              updateResourceDraft(item.key, {
-                                chapterHref: event.target.value,
-                              })
-                            }
-                            placeholder="从阅读器创建任务时自动带入"
-                          />
-                        </label>
-                      </>
-                    ) : (
-                      <div className="task-form-row">
-                        <label>
-                          视频链接或 ID
-                          <input
-                            value={item.videoInput}
-                            onChange={(event) =>
-                              updateResourceDraft(item.key, {
-                                videoInput: event.target.value,
-                              })
-                            }
-                            placeholder="YouTube 视频链接或 11 位 ID"
-                          />
-                        </label>
-                        <label>
-                          起始秒数
+                          目标
                           <input
                             type="number"
-                            min="0"
-                            value={item.startSeconds}
+                            min="1"
+                            value={item.targetValue}
                             onChange={(event) =>
                               updateResourceDraft(item.key, {
-                                startSeconds: event.target.value,
+                                targetValue: event.target.value,
+                              })
+                            }
+                            disabled={!item.targetUnit}
+                          />
+                        </label>
+                        {(item.targetUnit === 'words' ||
+                          item.targetUnit === 'seconds') && (
+                          <label>
+                            手动进度
+                            <input
+                              type="number"
+                              min="0"
+                              value={item.manualValue}
+                              onChange={(event) =>
+                                updateResourceDraft(item.key, {
+                                  manualValue: event.target.value,
+                                })
+                              }
+                            />
+                          </label>
+                        )}
+                      </div>
+                      {item.original && (
+                        <p className="task-resource-current-progress">
+                          当前：
+                          {resourceProgress(item.original, library, watch)}
+                        </p>
+                      )}
+                    </fieldset>
+                  ))}
+                </section>{' '}
+                <label>
+                  备注
+                  <textarea
+                    rows={3}
+                    value={draft.note ?? ''}
+                    onChange={(event) =>
+                      setDraft({ ...draft, note: event.target.value })
+                    }
+                  />
+                </label>
+                {snapshot.tasks.filter(
+                  (item) =>
+                    item.id !== draft.id &&
+                    (!draft.planId || item.planId === draft.planId),
+                ).length > 0 && (
+                  <fieldset className="task-prerequisites">
+                    <legend>前置任务</legend>
+                    {snapshot.tasks
+                      .filter(
+                        (item) =>
+                          item.id !== draft.id &&
+                          (!draft.planId || item.planId === draft.planId),
+                      )
+                      .map((item) => (
+                        <label key={item.id}>
+                          <input
+                            type="checkbox"
+                            checked={draft.prerequisiteIds.includes(item.id)}
+                            onChange={(event) =>
+                              setDraft({
+                                ...draft,
+                                prerequisiteIds: event.target.checked
+                                  ? [...draft.prerequisiteIds, item.id]
+                                  : draft.prerequisiteIds.filter(
+                                      (id) => id !== item.id,
+                                    ),
                               })
                             }
                           />
+                          {item.title}
                         </label>
-                      </div>
-                    )}
-                    <div className="task-form-row">
+                      ))}
+                  </fieldset>
+                )}
+                {draftError && (
+                  <div className="task-error" role="alert">
+                    {draftError}
+                  </div>
+                )}
+              </div>
+              <footer>
+                <button
+                  type="button"
+                  onClick={() => setDraft(null)}
+                  disabled={saving}
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  className="task-primary"
+                  disabled={saving || !draft.title.trim()}
+                >
+                  {saving ? '保存中…' : '保存任务'}
+                </button>
+              </footer>
+            </form>
+          </div>
+        )}
+
+        {candidates && (
+          <div
+            className="task-modal-backdrop"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget && !importBusy)
+                setCandidates(null);
+            }}
+          >
+            <div
+              className="task-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-label="预览已有计划"
+            >
+              <header>
+                <strong>预览已有计划</strong>
+                <button type="button" onClick={() => setCandidates(null)}>
+                  关闭
+                </button>
+              </header>
+              <div className="task-modal-body">
+                {error && (
+                  <div className="task-error" role="alert">
+                    {error}
+                  </div>
+                )}
+                <p className="task-muted">
+                  预览来源节点后确认同步。已有任务状态和资源进度会保留；来源更新只覆盖未被本地修改的字段，冲突会保留本地内容并计入结果。来源移除的节点会保留并标记，不会删除。
+                </p>
+                {candidates.length === 0 && (
+                  <p className="task-muted">
+                    当前书库和播放器没有可导入的计划。
+                  </p>
+                )}
+                {candidates.length > 0 && (
+                  <>
+                    <div className="task-import-selection-actions">
+                      <strong>选择来源</strong>
+                      <small>
+                        默认按电子书、视频分组；可用箭头调整导入顺序。
+                      </small>
+                      <button
+                        type="button"
+                        disabled={Boolean(importBusy)}
+                        onClick={() =>
+                          setSelectedCandidateKeys(
+                            candidates.map((candidate) => candidate.key),
+                          )
+                        }
+                      >
+                        全选
+                      </button>
+                      <button
+                        type="button"
+                        disabled={Boolean(importBusy)}
+                        onClick={() => setSelectedCandidateKeys([])}
+                      >
+                        清空
+                      </button>
+                    </div>
+                    <div className="task-import-target">
                       <label>
-                        目标单位
+                        同步到计划
                         <select
-                          value={item.targetUnit}
+                          value={mergeTargetPlanId}
+                          disabled={Boolean(importBusy)}
                           onChange={(event) =>
-                            updateResourceDraft(item.key, {
-                              targetUnit: event.target
-                                .value as ResourceTargetUnit,
-                            })
+                            setMergeTargetPlanId(event.target.value)
                           }
                         >
-                          <option value="">无目标</option>
-                          {item.kind === 'ebook' ? (
-                            <>
-                              <option value="chapters">章节</option>
-                              <option value="words">字数（估算）</option>
-                            </>
-                          ) : (
-                            <option value="seconds">秒</option>
-                          )}
+                          <option value="new">
+                            新建一个计划并合并所选来源
+                          </option>
+                          {snapshot.plans.map((plan) => (
+                            <option key={plan.id} value={plan.id}>
+                              {plan.title}
+                            </option>
+                          ))}
                         </select>
                       </label>
-                      <label>
-                        目标
-                        <input
-                          type="number"
-                          min="1"
-                          value={item.targetValue}
-                          onChange={(event) =>
-                            updateResourceDraft(item.key, {
-                              targetValue: event.target.value,
-                            })
-                          }
-                          disabled={!item.targetUnit}
-                        />
-                      </label>
-                      {(item.targetUnit === 'words' ||
-                        item.targetUnit === 'seconds') && (
+                      {mergeTargetPlanId === 'new' && (
                         <label>
-                          手动进度
+                          新计划名称
                           <input
-                            type="number"
-                            min="0"
-                            value={item.manualValue}
+                            value={newPlanTitle}
+                            maxLength={160}
+                            disabled={Boolean(importBusy)}
                             onChange={(event) =>
-                              updateResourceDraft(item.key, {
-                                manualValue: event.target.value,
-                              })
+                              setNewPlanTitle(event.target.value)
                             }
                           />
                         </label>
                       )}
                     </div>
-                    {item.original && (
-                      <p className="task-resource-current-progress">
-                        当前：{resourceProgress(item.original, library, watch)}
-                      </p>
-                    )}
-                  </fieldset>
-                ))}
-              </section>{' '}
-              <label>
-                备注
-                <textarea
-                  rows={3}
-                  value={draft.note ?? ''}
-                  onChange={(event) =>
-                    setDraft({ ...draft, note: event.target.value })
-                  }
-                />
-              </label>
-              {snapshot.tasks.filter(
-                (item) =>
-                  item.id !== draft.id &&
-                  (!draft.planId || item.planId === draft.planId),
-              ).length > 0 && (
-                <fieldset className="task-prerequisites">
-                  <legend>前置任务</legend>
-                  {snapshot.tasks
-                    .filter(
-                      (item) =>
-                        item.id !== draft.id &&
-                        (!draft.planId || item.planId === draft.planId),
-                    )
-                    .map((item) => (
-                      <label key={item.id}>
-                        <input
-                          type="checkbox"
-                          checked={draft.prerequisiteIds.includes(item.id)}
-                          onChange={(event) =>
-                            setDraft({
-                              ...draft,
-                              prerequisiteIds: event.target.checked
-                                ? [...draft.prerequisiteIds, item.id]
-                                : draft.prerequisiteIds.filter(
-                                    (id) => id !== item.id,
-                                  ),
-                            })
-                          }
-                        />
-                        {item.title}
-                      </label>
-                    ))}
-                </fieldset>
-              )}
-              {draftError && (
-                <div className="task-error" role="alert">
-                  {draftError}
-                </div>
-              )}
-            </div>
-            <footer>
-              <button
-                type="button"
-                onClick={() => setDraft(null)}
-                disabled={saving}
-              >
-                取消
-              </button>
-              <button
-                type="submit"
-                className="task-primary"
-                disabled={saving || !draft.title.trim()}
-              >
-                {saving ? '保存中…' : '保存任务'}
-              </button>
-            </footer>
-          </form>
-        </div>
-      )}
-
-      {candidates && (
-        <div
-          className="task-modal-backdrop"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget && !importBusy)
-              setCandidates(null);
-          }}
-        >
-          <div
-            className="task-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label="预览已有计划"
-          >
-            <header>
-              <strong>预览已有计划</strong>
-              <button type="button" onClick={() => setCandidates(null)}>
-                关闭
-              </button>
-            </header>
-            <div className="task-modal-body">
-              {error && (
-                <div className="task-error" role="alert">
-                  {error}
-                </div>
-              )}
-              <p className="task-muted">
-                预览来源节点后确认同步。已有任务状态和资源进度会保留；来源更新只覆盖未被本地修改的字段，冲突会保留本地内容并计入结果。来源移除的节点会保留并标记，不会删除。
-              </p>
-              {candidates.length === 0 && (
-                <p className="task-muted">当前书库和播放器没有可导入的计划。</p>
-              )}
-              {candidates.length > 0 && (
-                <>
-                  <div className="task-import-selection-actions">
-                    <strong>选择来源</strong>
-                    <small>
-                      默认按电子书、视频分组；可用箭头调整导入顺序。
-                    </small>
-                    <button
-                      type="button"
-                      disabled={Boolean(importBusy)}
-                      onClick={() =>
-                        setSelectedCandidateKeys(
-                          candidates.map((candidate) => candidate.key),
-                        )
-                      }
-                    >
-                      全选
-                    </button>
-                    <button
-                      type="button"
-                      disabled={Boolean(importBusy)}
-                      onClick={() => setSelectedCandidateKeys([])}
-                    >
-                      清空
-                    </button>
-                  </div>
-                  <div className="task-import-target">
-                    <label>
-                      同步到计划
-                      <select
-                        value={mergeTargetPlanId}
-                        disabled={Boolean(importBusy)}
-                        onChange={(event) =>
-                          setMergeTargetPlanId(event.target.value)
-                        }
-                      >
-                        <option value="new">新建一个计划并合并所选来源</option>
-                        {snapshot.plans.map((plan) => (
-                          <option key={plan.id} value={plan.id}>
-                            {plan.title}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    {mergeTargetPlanId === 'new' && (
-                      <label>
-                        新计划名称
-                        <input
-                          value={newPlanTitle}
-                          maxLength={160}
-                          disabled={Boolean(importBusy)}
-                          onChange={(event) =>
-                            setNewPlanTitle(event.target.value)
-                          }
-                        />
-                      </label>
-                    )}
-                  </div>
-                  {candidates.map((candidate, candidateIndex) => {
-                    const sourceLink = snapshot.sources.find(
-                      (source) => source.sourceKey === candidate.key,
-                    );
-                    const linkedPlan = snapshot.plans.find(
-                      (plan) =>
-                        plan.id ===
-                        (sourceLink?.planId ??
-                          snapshot.plans.find(
-                            (plan) => plan.originKey === candidate.key,
-                          )?.id),
-                    );
-                    const existingNodeCount = candidate.draft.tasks.filter(
-                      (item) =>
-                        snapshot.tasks.some(
-                          (task) => task.originKey === item.originKey,
-                        ),
-                    ).length;
-                    const selectedCandidate = selectedCandidateKeys.includes(
-                      candidate.key,
-                    );
-                    return (
-                      <article
-                        className={`task-import-card${selectedCandidate ? ' is-selected' : ''}`}
-                        key={candidate.key}
-                      >
-                        <label className="task-import-card-select">
-                          <input
-                            type="checkbox"
-                            checked={selectedCandidate}
-                            disabled={Boolean(importBusy)}
-                            onChange={(event) =>
-                              setSelectedCandidateKeys((current) =>
-                                event.target.checked
-                                  ? [...current, candidate.key]
-                                  : current.filter(
-                                      (key) => key !== candidate.key,
-                                    ),
-                              )
-                            }
-                          />
-                          <span>
-                            <strong>{candidate.label}</strong>
-                            <small>
-                              {candidate.source} ·{' '}
-                              {candidate.draft.tasks.length} 个节点
-                              {candidate.missingBooks
-                                ? ` · ${candidate.missingBooks} 本书需重新关联`
-                                : ''}
-                            </small>
-                          </span>
-                        </label>
-                        <div className="task-import-order-controls">
-                          <button
-                            type="button"
-                            aria-label="上移来源"
-                            title="上移来源"
-                            disabled={
-                              Boolean(importBusy) || candidateIndex === 0
-                            }
-                            onClick={() => moveCandidate(candidate.key, -1)}
-                          >
-                            ↑
-                          </button>
-                          <button
-                            type="button"
-                            aria-label="下移来源"
-                            title="下移来源"
-                            disabled={
-                              Boolean(importBusy) ||
-                              candidateIndex === candidates.length - 1
-                            }
-                            onClick={() => moveCandidate(candidate.key, 1)}
-                          >
-                            ↓
-                          </button>
-                        </div>
-                        <div className="task-import-connection">
-                          {linkedPlan
-                            ? `已连接到「${linkedPlan.title}」`
-                            : '尚未连接'}
-                          {` · 已有 ${existingNodeCount} / ${candidate.draft.tasks.length} 项`}
-                          {sourceLink?.removedCount
-                            ? ` · ${sourceLink.removedCount} 个来源移除节点已保留`
-                            : ''}
-                        </div>
-                        <details>
-                          <summary>查看节点与依赖</summary>
-                          <ul>
-                            {candidate.draft.tasks.map((item) => (
-                              <li key={item.id}>
-                                {item.title}
-                                {item.prerequisiteIds.length
-                                  ? ` · ${item.prerequisiteIds.length} 个前置`
+                    {candidates.map((candidate, candidateIndex) => {
+                      const sourceLink = snapshot.sources.find(
+                        (source) => source.sourceKey === candidate.key,
+                      );
+                      const linkedPlan = snapshot.plans.find(
+                        (plan) =>
+                          plan.id ===
+                          (sourceLink?.planId ??
+                            snapshot.plans.find(
+                              (plan) => plan.originKey === candidate.key,
+                            )?.id),
+                      );
+                      const existingNodeCount = candidate.draft.tasks.filter(
+                        (item) =>
+                          snapshot.tasks.some(
+                            (task) => task.originKey === item.originKey,
+                          ),
+                      ).length;
+                      const selectedCandidate = selectedCandidateKeys.includes(
+                        candidate.key,
+                      );
+                      return (
+                        <article
+                          className={`task-import-card${selectedCandidate ? ' is-selected' : ''}`}
+                          key={candidate.key}
+                        >
+                          <label className="task-import-card-select">
+                            <input
+                              type="checkbox"
+                              checked={selectedCandidate}
+                              disabled={Boolean(importBusy)}
+                              onChange={(event) =>
+                                setSelectedCandidateKeys((current) =>
+                                  event.target.checked
+                                    ? [...current, candidate.key]
+                                    : current.filter(
+                                        (key) => key !== candidate.key,
+                                      ),
+                                )
+                              }
+                            />
+                            <span>
+                              <strong>{candidate.label}</strong>
+                              <small>
+                                {candidate.source} ·{' '}
+                                {candidate.draft.tasks.length} 个节点
+                                {candidate.missingBooks
+                                  ? ` · ${candidate.missingBooks} 本书需重新关联`
                                   : ''}
-                                {item.optional ? ' · 可选' : ''}
-                              </li>
-                            ))}
-                          </ul>
-                        </details>
-                      </article>
-                    );
-                  })}
-                </>
-              )}
+                              </small>
+                            </span>
+                          </label>
+                          <div className="task-import-order-controls">
+                            <button
+                              type="button"
+                              aria-label="上移来源"
+                              title="上移来源"
+                              disabled={
+                                Boolean(importBusy) || candidateIndex === 0
+                              }
+                              onClick={() => moveCandidate(candidate.key, -1)}
+                            >
+                              ↑
+                            </button>
+                            <button
+                              type="button"
+                              aria-label="下移来源"
+                              title="下移来源"
+                              disabled={
+                                Boolean(importBusy) ||
+                                candidateIndex === candidates.length - 1
+                              }
+                              onClick={() => moveCandidate(candidate.key, 1)}
+                            >
+                              ↓
+                            </button>
+                          </div>
+                          <div className="task-import-connection">
+                            {linkedPlan
+                              ? `已连接到「${linkedPlan.title}」`
+                              : '尚未连接'}
+                            {` · 已有 ${existingNodeCount} / ${candidate.draft.tasks.length} 项`}
+                            {sourceLink?.removedCount
+                              ? ` · ${sourceLink.removedCount} 个来源移除节点已保留`
+                              : ''}
+                          </div>
+                          <details>
+                            <summary>查看节点与依赖</summary>
+                            <ul>
+                              {candidate.draft.tasks.map((item) => (
+                                <li key={item.id}>
+                                  {item.title}
+                                  {item.prerequisiteIds.length
+                                    ? ` · ${item.prerequisiteIds.length} 个前置`
+                                    : ''}
+                                  {item.optional ? ' · 可选' : ''}
+                                </li>
+                              ))}
+                            </ul>
+                          </details>
+                        </article>
+                      );
+                    })}
+                  </>
+                )}
+              </div>
+              <footer className="task-modal-footer">
+                <button
+                  type="button"
+                  onClick={() => setCandidates(null)}
+                  disabled={Boolean(importBusy)}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className="task-primary"
+                  onClick={() => void syncSelectedCandidates()}
+                  disabled={
+                    Boolean(importBusy) || selectedCandidateKeys.length === 0
+                  }
+                >
+                  {importBusy === 'sync'
+                    ? '同步中…'
+                    : `确认同步 ${selectedCandidateKeys.length} 个来源`}
+                </button>
+              </footer>
             </div>
-            <footer className="task-modal-footer">
-              <button
-                type="button"
-                onClick={() => setCandidates(null)}
-                disabled={Boolean(importBusy)}
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                className="task-primary"
-                onClick={() => void syncSelectedCandidates()}
-                disabled={
-                  Boolean(importBusy) || selectedCandidateKeys.length === 0
-                }
-              >
-                {importBusy === 'sync'
-                  ? '同步中…'
-                  : `确认同步 ${selectedCandidateKeys.length} 个来源`}
-              </button>
-            </footer>
           </div>
+        )}
+        {confirmDialog}
+      </div>
+      {habitsMounted && (
+        <div
+          className="task-workspace-host"
+          hidden={workspaceMode !== 'habits'}
+        >
+          <HabitWorkspace onShowTasks={() => setWorkspaceMode('tasks')} />
         </div>
       )}
     </div>

@@ -1656,6 +1656,55 @@ fn set_habit_active(conn: &Connection, id: &str, active: bool) -> Result<(), Str
     Ok(())
 }
 
+fn delete_habit(conn: &Connection, id: &str) -> Result<(), String> {
+    if !valid_id(id) {
+        return Err("习惯编号无效。".to_string());
+    }
+    let changed = conn
+        .execute("DELETE FROM habits WHERE id=?1", params![id])
+        .map_err(db_error)?;
+    if changed == 0 {
+        return Err("习惯不存在。".to_string());
+    }
+    Ok(())
+}
+
+fn delete_plan(conn: &Connection, id: &str) -> Result<TaskSnapshot, String> {
+    if !valid_id(id) {
+        return Err("计划编号无效。".to_string());
+    }
+    let tx = conn.unchecked_transaction().map_err(db_error)?;
+    tx.execute(
+        "UPDATE tasks SET plan_id=NULL, source_key=NULL, source_present=1 WHERE plan_id=?1",
+        params![id],
+    )
+    .map_err(db_error)?;
+    let changed = tx
+        .execute("DELETE FROM plans WHERE id=?1", params![id])
+        .map_err(db_error)?;
+    if changed == 0 {
+        return Err("计划不存在。".to_string());
+    }
+    tx.commit().map_err(db_error)?;
+    snapshot(conn)
+}
+
+fn archive_task_by_id(conn: &Connection, id: &str, timestamp: i64) -> Result<(), String> {
+    if !valid_id(id) {
+        return Err("任务编号无效。".to_string());
+    }
+    let changed = conn
+        .execute(
+            "UPDATE tasks SET archived_at=?1, updated_at=?1 WHERE id=?2 AND status='done'",
+            params![timestamp, id],
+        )
+        .map_err(db_error)?;
+    if changed == 0 {
+        return Err("仅已完成的任务可以归档。".to_string());
+    }
+    Ok(())
+}
+
 fn set_habit_occurrence(conn: &Connection, input: &HabitOccurrenceInput) -> Result<(), String> {
     if !valid_id(&input.habit_id) {
         return Err("习惯编号无效。".to_string());
@@ -1761,10 +1810,20 @@ pub fn learning_tasks_habits_delete_category(app: AppHandle, id: String) -> Resu
 }
 
 #[tauri::command(async)]
+pub fn learning_tasks_habits_delete(app: AppHandle, id: String) -> Result<(), String> {
+    delete_habit(&open(&app)?, &id)
+}
+
+#[tauri::command(async)]
 pub fn learning_tasks_save_plan(app: AppHandle, input: PlanInput) -> Result<TaskSnapshot, String> {
     let conn = open(&app)?;
     write_plan(&conn, &input, now())?;
     snapshot(&conn)
+}
+
+#[tauri::command(async)]
+pub fn learning_tasks_delete_plan(app: AppHandle, id: String) -> Result<TaskSnapshot, String> {
+    delete_plan(&open(&app)?, &id)
 }
 
 #[tauri::command(async)]
@@ -1841,6 +1900,11 @@ pub fn learning_tasks_unarchive_task(app: AppHandle, id: String) -> Result<(), S
     )
     .map_err(db_error)?;
     Ok(())
+}
+
+#[tauri::command(async)]
+pub fn learning_tasks_archive_task(app: AppHandle, id: String) -> Result<(), String> {
+    archive_task_by_id(&open(&app)?, &id, now())
 }
 
 #[cfg(test)]
@@ -2020,5 +2084,69 @@ mod tests {
             s3.tasks.iter().find(|t| t.id == "t1").unwrap().archived_at,
             None
         );
+
+        archive_task_by_id(&conn, "t1", 40).unwrap();
+        assert_eq!(
+            snapshot(&conn)
+                .unwrap()
+                .tasks
+                .into_iter()
+                .find(|t| t.id == "t1")
+                .unwrap()
+                .archived_at,
+            Some(40)
+        );
+        assert!(archive_task_by_id(&conn, "t2", 40).is_err());
+    }
+
+    #[test]
+    fn deletes_habit_and_plan_safely() {
+        let conn = db();
+        let plan_id = write_plan(
+            &conn,
+            &PlanInput {
+                id: None,
+                title: "Rust Plan".into(),
+                description: None,
+                origin_key: None,
+            },
+            1,
+        )
+        .unwrap();
+        let mut t = task("t-in-plan");
+        t.plan_id = Some(plan_id.clone());
+        save_task(&conn, &t, 2).unwrap();
+
+        let snap = delete_plan(&conn, &plan_id).unwrap();
+        assert!(snap.plans.is_empty());
+        assert_eq!(snap.tasks[0].plan_id, None);
+
+        let habit = write_habit(
+            &conn,
+            &HabitInput {
+                id: None,
+                title: "Read 30m".into(),
+                note: None,
+                category_id: None,
+                interval_days: 1,
+                start_date: "2026-11-10".into(),
+                active: Some(true),
+            },
+            10,
+        )
+        .unwrap();
+        set_habit_occurrence(
+            &conn,
+            &HabitOccurrenceInput {
+                habit_id: habit.id.clone(),
+                due_date: "2026-11-10".into(),
+                status: Some("done".into()),
+            },
+        )
+        .unwrap();
+        delete_habit(&conn, &habit.id).unwrap();
+        let after = habit_snapshot(&conn, "2026-11-01", "2026-11-30").unwrap();
+        assert!(after.habits.is_empty());
+        assert!(after.occurrences.is_empty());
     }
 }

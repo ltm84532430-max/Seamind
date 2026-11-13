@@ -2,8 +2,16 @@
   flex-basis: 210px;
 }
 
+.habit-sidebar.is-collapsed {
+  flex-basis: 38px;
+}
+
 .habit-sidebar .task-sidebar-heading {
-  padding-right: 8px;
+  padding-right: 6px;
+}
+
+.habit-sidebar.is-collapsed .task-sidebar-heading {
+  padding-right: 4px;
 }
 
 .habit-category-heading {
@@ -326,41 +334,119 @@
 }
 
 .habit-calendar .task-calendar-day-items {
-  overflow: hidden;
+  overflow-x: hidden;
 }
 
-.task-workspace.habit-workspace button.habit-calendar-marker {
+.task-workspace.habit-workspace .habit-calendar-marker {
   display: flex;
   align-items: center;
+  gap: 4px;
   width: 100%;
   min-width: 0;
   min-height: 20px;
-  padding: 2px 4px;
+  padding: 1px 4px;
   border: 0;
-  border-left: 2px solid var(--accent);
+  border-left: 2px solid var(--habit-category-color, var(--accent));
   border-radius: 0;
   color: var(--ink);
-  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+  background: color-mix(
+    in srgb,
+    var(--habit-category-color, var(--accent)) 8%,
+    var(--panel)
+  );
   font-size: 10px;
-  text-align: left;
 }
 
-.task-workspace.habit-workspace button.habit-calendar-marker.is-done {
+.task-workspace.habit-workspace .habit-calendar-marker.is-done {
   border-left-color: var(--good, #58a889);
   color: var(--muted);
   background: color-mix(in srgb, var(--good, #58a889) 7%, var(--panel));
 }
 
-.task-workspace.habit-workspace button.habit-calendar-marker.is-skipped {
+.task-workspace.habit-workspace .habit-calendar-marker.is-skipped {
   border-left-color: var(--line-strong, var(--muted));
   color: var(--muted);
   background: transparent;
 }
 
-.habit-calendar-marker span {
+.task-workspace.habit-workspace .habit-calendar-marker.is-paused {
+  opacity: 0.65;
+}
+
+.task-workspace.habit-workspace button.habit-calendar-quick-check {
+  display: grid;
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  color: var(--muted);
+  background: transparent;
+  font-size: 8px;
+  line-height: 1;
+}
+
+.task-workspace.habit-workspace button.habit-calendar-quick-check:hover {
+  border-color: var(--accent);
+}
+
+.task-workspace.habit-workspace button.habit-calendar-quick-check.is-done {
+  border-color: var(--good, #58a889);
+  color: var(--good, #58a889);
+}
+
+.task-workspace.habit-workspace button.habit-calendar-marker-open {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  align-items: center;
+  padding: 1px 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font-size: inherit;
+  text-align: left;
+}
+
+.habit-calendar-marker-open span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.habit-row-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  overflow: hidden;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.habit-definition-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.task-workspace.habit-workspace button.habit-definition-delete,
+.task-workspace.habit-workspace
+  .habit-row-menu-panel
+  button.habit-row-menu-danger {
+  color: var(--danger, #c45e56);
+}
+
+.habit-modal-delete {
+  margin-right: auto;
+}
+
+.habit-stats-habit-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .habit-agenda .task-calendar-agenda-list,
@@ -457,7 +543,7 @@
 .habit-stats-cards {
   display: grid;
   flex: 0 0 auto;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 8px;
 }
 

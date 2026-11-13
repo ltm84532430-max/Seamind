@@ -1,30 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { habitApi, TASKS_CHANGED_EVENT } from './task-api';
 import type { HabitSnapshot } from './types';
-import { dateKey, parseDateKey } from './calendar-model';
-import { summarizeHabitDays } from './habit-statistics-model';
+import { parseDateKey } from './calendar-model';
+import { habitDateFromOrdinal, habitDateOrdinal } from './habit-list-model';
+import {
+  computeHabitStreaksAndRate,
+  summarizeHabitDays,
+} from './habit-statistics-model';
 import type { DailyHabitStats } from './habit-statistics-model';
 
 const DAY_MS = 86_400_000;
-const PERIODS = [30, 90, 365] as const;
-
-function dateOrdinal(value: string): number | null {
-  const parsed = parseDateKey(value);
-  if (!parsed) return null;
-  const date = new Date(0);
-  date.setUTCFullYear(parsed.year, parsed.month - 1, parsed.day);
-  date.setUTCHours(0, 0, 0, 0);
-  return Math.floor(date.getTime() / DAY_MS);
-}
-
-function dateFromOrdinal(value: number): string {
-  const date = new Date(value * DAY_MS);
-  return dateKey(
-    date.getUTCFullYear(),
-    date.getUTCMonth() + 1,
-    date.getUTCDate(),
-  );
-}
+const PERIODS = [7, 30, 90, 365] as const;
 
 function shortDate(value: string): string {
   const parsed = parseDateKey(value);
@@ -185,7 +171,7 @@ function HabitHeatmap({
     }
   }, [days, focusedDate]);
   const firstDate = days[0]?.date;
-  const firstOrdinal = firstDate ? dateOrdinal(firstDate) : null;
+  const firstOrdinal = firstDate ? habitDateOrdinal(firstDate) : null;
   const mondayOffset =
     firstOrdinal == null
       ? 0
@@ -303,8 +289,8 @@ export default function HabitStatistics({
   const [snapshotRange, setSnapshotRange] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const todayOrdinal = dateOrdinal(today) ?? 0;
-  const fromDate = dateFromOrdinal(todayOrdinal - periodDays + 1);
+  const todayOrdinal = habitDateOrdinal(today) ?? 0;
+  const fromDate = habitDateFromOrdinal(todayOrdinal - periodDays + 1);
   const currentRange = `${fromDate}:${today}`;
   const activeSnapshot = snapshotRange === currentRange ? snapshot : null;
 
@@ -366,7 +352,7 @@ export default function HabitStatistics({
     [availableHabits, habitFilter],
   );
   const days = useMemo(() => {
-    const startOrdinal = dateOrdinal(fromDate) ?? 0;
+    const startOrdinal = habitDateOrdinal(fromDate) ?? 0;
     const selectedIds = new Set(selectedHabits.map((habit) => habit.id));
     const occurrencesByDate = new Map<
       string,
@@ -384,7 +370,7 @@ export default function HabitStatistics({
     }
 
     return Array.from({ length: periodDays }, (_, index) => {
-      const date = dateFromOrdinal(startOrdinal + index);
+      const date = habitDateFromOrdinal(startOrdinal + index);
       const counts = occurrencesByDate.get(date);
       return {
         date,
@@ -395,16 +381,38 @@ export default function HabitStatistics({
   }, [fromDate, periodDays, selectedHabits, activeSnapshot?.occurrences]);
 
   const totals = useMemo(() => summarizeHabitDays(days), [days]);
+  const selectedHabitIds = useMemo(
+    () => new Set(selectedHabits.map((habit) => habit.id)),
+    [selectedHabits],
+  );
+  const selectedOccurrences = useMemo(
+    () =>
+      (activeSnapshot?.occurrences ?? []).filter((occurrence) =>
+        selectedHabitIds.has(occurrence.habitId),
+      ),
+    [activeSnapshot?.occurrences, selectedHabitIds],
+  );
+  const streakAndRate = useMemo(
+    () =>
+      computeHabitStreaksAndRate({
+        habits: selectedHabits,
+        occurrences: selectedOccurrences,
+        fromDate,
+        today,
+      }),
+    [selectedHabits, selectedOccurrences, fromDate, today],
+  );
   const recordedDays = useMemo(
     () => days.filter((day) => day.done + day.skipped > 0),
     [days],
   );
-  const selectedHabitIds = new Set(selectedHabits.map((habit) => habit.id));
   const habitsWithRecords = new Set(
-    (activeSnapshot?.occurrences ?? [])
-      .filter((occurrence) => selectedHabitIds.has(occurrence.habitId))
-      .map((occurrence) => occurrence.habitId),
+    selectedOccurrences.map((occurrence) => occurrence.habitId),
   ).size;
+  const focusedHabit =
+    habitFilter !== 'all'
+      ? (availableHabits.find((habit) => habit.id === habitFilter) ?? null)
+      : null;
   const categoryName =
     categoryFilter === 'all'
       ? '全部分类'
@@ -472,6 +480,29 @@ export default function HabitStatistics({
           <small>次</small>
         </article>
         <article>
+          <span>当前连续</span>
+          <strong>{activeSnapshot ? streakAndRate.currentStreak : '—'}</strong>
+          <small>天</small>
+        </article>
+        <article>
+          <span>最长连续</span>
+          <strong>{activeSnapshot ? streakAndRate.bestStreak : '—'}</strong>
+          <small>天</small>
+        </article>
+        <article>
+          <span>计划完成率</span>
+          <strong>
+            {activeSnapshot && streakAndRate.completionRate != null
+              ? `${streakAndRate.completionRate}%`
+              : '—'}
+          </strong>
+          <small>
+            {activeSnapshot && streakAndRate.scheduledCount > 0
+              ? `${streakAndRate.completedScheduledCount}/${streakAndRate.scheduledCount}`
+              : '应打卡'}
+          </small>
+        </article>
+        <article>
           <span>跳过记录</span>
           <strong>{activeSnapshot ? totals.skipped : '—'}</strong>
           <small>次</small>
@@ -487,6 +518,9 @@ export default function HabitStatistics({
           <small>项</small>
         </article>
       </div>
+      {focusedHabit?.note && (
+        <p className="habit-stats-habit-note">备注：{focusedHabit.note}</p>
+      )}
 
       {!activeSnapshot ? (
         <div className="habit-stats-empty">

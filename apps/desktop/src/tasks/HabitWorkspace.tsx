@@ -11,9 +11,14 @@ import { habitApi, TASKS_CHANGED_EVENT } from './task-api';
 import HabitStatistics from './HabitStatistics';
 import {
   compareHabitsByCategory,
+  habitCategoryColor,
+  isHabitDueOn,
   nextCheckStatus,
+  nextHabitDueOnOrAfter,
   normalizeHabitScope,
 } from './habit-list-model';
+import { TaskSidebarToggleIcon } from './TaskSidebarToggleIcon';
+import { useConfirmDialog } from './ConfirmDialog';
 import type {
   Habit,
   HabitCategory,
@@ -22,7 +27,7 @@ import type {
   HabitSnapshot,
 } from './types';
 import {
-  dateKey,
+  computeCalendarCellVisibleCount,
   localToday,
   formatCalendarPeriod,
   monthGrid,
@@ -31,6 +36,7 @@ import {
   shiftedDateByMonth,
   weekGrid,
 } from './calendar-model';
+import { useCalendarRowHeight } from './useCalendarRowHeight';
 import './habit-workspace.css';
 
 type HabitView = 'list' | 'calendar' | 'stats';
@@ -60,7 +66,24 @@ const EMPTY_SNAPSHOT: HabitSnapshot = {
   occurrences: [],
 };
 const HABIT_UI_KEY = 'seamind:habit-ui:v1';
+const HABIT_SIDEBAR_COLLAPSED_KEY = 'seamind:habit-sidebar-collapsed:v1';
 type HabitCalendarMode = 'month' | 'week';
+
+function readHabitSidebarCollapsed(): boolean {
+  try {
+    return localStorage.getItem(HABIT_SIDEBAR_COLLAPSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeHabitSidebarCollapsed(collapsed: boolean): void {
+  try {
+    localStorage.setItem(HABIT_SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0');
+  } catch {
+    // Storage may be unavailable.
+  }
+}
 
 function readHabitUiState(): HabitUiState {
   const fallback: HabitUiState = {
@@ -86,44 +109,6 @@ function readHabitUiState(): HabitUiState {
   } catch {
     return fallback;
   }
-}
-
-function dateOrdinal(value: string): number | null {
-  const parsed = parseDateKey(value);
-  if (!parsed) return null;
-  const utc = new Date(0);
-  utc.setUTCFullYear(parsed.year, parsed.month - 1, parsed.day);
-  utc.setUTCHours(0, 0, 0, 0);
-  return Math.floor(utc.getTime() / 86_400_000);
-}
-
-function dateFromOrdinal(value: number): string {
-  const date = new Date(value * 86_400_000);
-  return dateKey(
-    date.getUTCFullYear(),
-    date.getUTCMonth() + 1,
-    date.getUTCDate(),
-  );
-}
-
-function isDueOn(habit: Habit, date: string): boolean {
-  const start = dateOrdinal(habit.startDate);
-  const current = dateOrdinal(date);
-  if (start == null || current == null || current < start) return false;
-  return (current - start) % habit.intervalDays === 0;
-}
-
-function nextDueOnOrAfter(habit: Habit, date: string): string {
-  const start = dateOrdinal(habit.startDate);
-  const current = dateOrdinal(date);
-  if (start == null || current == null || current <= start)
-    return habit.startDate;
-  const elapsed = current - start;
-  return dateFromOrdinal(
-    current +
-      ((habit.intervalDays - (elapsed % habit.intervalDays)) %
-        habit.intervalDays),
-  );
 }
 
 function occurrenceKey(habitId: string, date: string) {
@@ -164,7 +149,7 @@ function errorText(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-function habitDraft(habit?: Habit): HabitDraft {
+function habitDraft(habit?: Habit, defaultStartDate?: string): HabitDraft {
   return {
     id: habit?.id ?? null,
     title: habit?.title ?? '',
@@ -172,7 +157,7 @@ function habitDraft(habit?: Habit): HabitDraft {
     categoryId: habit?.categoryId ?? '',
     repeatMode: habit && habit.intervalDays > 1 ? 'interval' : 'daily',
     intervalDays: habit?.intervalDays ?? 3,
-    startDate: habit?.startDate ?? localToday(),
+    startDate: habit?.startDate ?? defaultStartDate ?? localToday(),
     active: habit?.active ?? true,
   };
 }
@@ -270,6 +255,7 @@ function HabitRowMenu({
 function HabitCheckRow({
   habit,
   categoryName,
+  categoryColor,
   occurrence,
   canMark,
   busy,
@@ -277,9 +263,11 @@ function HabitCheckRow({
   onMark,
   onEdit,
   onSetActive,
+  onDelete,
 }: {
   habit: Habit;
   categoryName: string;
+  categoryColor: string | null;
   occurrence?: HabitOccurrence;
   canMark: boolean;
   busy: boolean;
@@ -287,6 +275,7 @@ function HabitCheckRow({
   onMark(status: HabitOccurrenceStatus | null): void;
   onEdit(): void;
   onSetActive(active: boolean): void;
+  onDelete(): void;
 }) {
   const status = occurrence?.status;
   const meta =
@@ -296,7 +285,9 @@ function HabitCheckRow({
         ? `已完成${occurrence?.completedAt != null ? ` ${formatCompletionTime(occurrence.completedAt)}` : ''}`
         : !canMark && status === 'skipped'
           ? '已跳过'
-          : repeatLabel(habit.intervalDays);
+          : !habit.active
+            ? `已暂停 · ${repeatLabel(habit.intervalDays)}`
+            : repeatLabel(habit.intervalDays);
   const checkLabel =
     status === 'done'
       ? `撤销${habit.title}`
@@ -324,8 +315,22 @@ function HabitCheckRow({
       <div className="habit-row-main">
         <div className="habit-row-title-line">
           <strong>{habit.title}</strong>
-          <span className="habit-category-badge">{categoryName}</span>
+          <span
+            className="habit-category-badge"
+            style={
+              categoryColor
+                ? { borderColor: categoryColor, color: categoryColor }
+                : undefined
+            }
+          >
+            {categoryName}
+          </span>
         </div>
+        {habit.note && (
+          <p className="habit-row-note" title={habit.note}>
+            {habit.note}
+          </p>
+        )}
         <div className="habit-row-meta">
           <span>{meta}</span>
         </div>
@@ -378,6 +383,15 @@ function HabitCheckRow({
           >
             暂停
           </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="habit-row-menu-danger"
+            disabled={busy}
+            onClick={onDelete}
+          >
+            删除
+          </button>
         </HabitRowMenu>
       )}
     </article>
@@ -387,17 +401,21 @@ function HabitCheckRow({
 function HabitDefinitionRow({
   habit,
   categoryName,
+  categoryColor,
   nextDue,
   busy,
   onEdit,
   onSetActive,
+  onDelete,
 }: {
   habit: Habit;
   categoryName: string;
+  categoryColor: string | null;
   nextDue: string;
   busy: boolean;
   onEdit(): void;
   onSetActive(active: boolean): void;
+  onDelete(): void;
 }) {
   return (
     <article
@@ -406,20 +424,44 @@ function HabitDefinitionRow({
       <button type="button" className="habit-definition-open" onClick={onEdit}>
         <span className="habit-row-title-line">
           <strong>{habit.title}</strong>
-          <span className="habit-category-badge">{categoryName}</span>
+          <span
+            className="habit-category-badge"
+            style={
+              categoryColor
+                ? { borderColor: categoryColor, color: categoryColor }
+                : undefined
+            }
+          >
+            {categoryName}
+          </span>
         </span>
+        {habit.note && (
+          <span className="habit-row-note" title={habit.note}>
+            {habit.note}
+          </span>
+        )}
         <span className="habit-row-meta">
           <span>{repeatLabel(habit.intervalDays)}</span>
           <span>下次 {formatDate(nextDue)}</span>
         </span>
       </button>
-      <button
-        type="button"
-        disabled={busy}
-        onClick={() => onSetActive(!habit.active)}
-      >
-        {habit.active ? '暂停' : '启用'}
-      </button>
+      <div className="habit-definition-actions">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => onSetActive(!habit.active)}
+        >
+          {habit.active ? '暂停' : '启用'}
+        </button>
+        <button
+          type="button"
+          className="habit-definition-delete"
+          disabled={busy}
+          onClick={onDelete}
+        >
+          删除
+        </button>
+      </div>
     </article>
   );
 }
@@ -457,10 +499,26 @@ export default function HabitWorkspace({
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [draft, setDraft] = useState<HabitDraft | null>(null);
+  const [draftError, setDraftError] = useState('');
   const [saving, setSaving] = useState(false);
   const [savingKeys, setSavingKeys] = useState<Set<string>>(() => new Set());
   const [newCategory, setNewCategory] = useState('');
   const [savingCategory, setSavingCategory] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    readHabitSidebarCollapsed,
+  );
+  const { askConfirm, confirmDialog } = useConfirmDialog();
+  const openDraftModal = useCallback((nextDraft: HabitDraft) => {
+    setDraftError('');
+    setDraft(nextDraft);
+  }, []);
+  const toggleSidebarCollapsed = useCallback(() => {
+    setSidebarCollapsed((current) => {
+      const next = !current;
+      writeHabitSidebarCollapsed(next);
+      return next;
+    });
+  }, []);
 
   const cells = useMemo(
     () =>
@@ -468,6 +526,12 @@ export default function HabitWorkspace({
         ? weekGrid(selectedDate)
         : monthGrid(visibleMonth.year, visibleMonth.month),
     [calendarMode, selectedDate, visibleMonth],
+  );
+  const calendarGridRef = useRef<HTMLDivElement | null>(null);
+  const calendarRowHeight = useCalendarRowHeight(
+    calendarGridRef,
+    cells.length / 7,
+    !loading && view === 'calendar' && !focusedDate,
   );
   useEffect(() => {
     try {
@@ -635,7 +699,7 @@ export default function HabitWorkspace({
       `${habit.title} ${habit.note ?? ''}`.toLocaleLowerCase().includes(term),
   );
   const todayDue = searchedActiveHabits.filter((habit) =>
-    isDueOn(habit, today),
+    isHabitDueOn(habit, today),
   );
   const todayDone = todayDue.filter(
     (habit) =>
@@ -655,14 +719,20 @@ export default function HabitWorkspace({
   const libraryPaused = sortHabits(
     searchedHabits.filter((habit) => !habit.active),
   );
-  const calendarHabits = searchedActiveHabits;
+  const calendarHabits = searchedHabits;
+  const hasHabitEntryOn = useCallback(
+    (habit: Habit, date: string) =>
+      (habit.active && isHabitDueOn(habit, date)) ||
+      occurrencesByKey.has(occurrenceKey(habit.id, date)),
+    [occurrencesByKey],
+  );
   const statisticsHabitIds = searchedHabits.map((habit) => habit.id);
   const selectedDateHabits = sortHabits(
-    calendarHabits.filter((habit) => isDueOn(habit, selectedDate)),
+    calendarHabits.filter((habit) => hasHabitEntryOn(habit, selectedDate)),
   );
   const focusedHabits = sortHabits(
     focusedDate
-      ? calendarHabits.filter((habit) => isDueOn(habit, focusedDate))
+      ? calendarHabits.filter((habit) => hasHabitEntryOn(habit, focusedDate))
       : [],
   );
 
@@ -737,6 +807,7 @@ export default function HabitWorkspace({
     event.preventDefault();
     if (!draft || saving) return;
     setSaving(true);
+    setDraftError('');
     try {
       await habitApi.save({
         id: draft.id,
@@ -749,6 +820,26 @@ export default function HabitWorkspace({
       });
       setDraft(null);
       setNotice(draft.id ? '习惯已更新。' : '习惯已创建。');
+    } catch (reason) {
+      setDraftError(errorText(reason));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteHabit = async (habit: { id: string; title: string }) => {
+    const confirmed = await askConfirm({
+      title: '删除习惯',
+      message: `删除习惯「${habit.title}」？该习惯的所有历史打卡记录也将一并移除，且无法恢复。`,
+      confirmLabel: '确认删除',
+      danger: true,
+    });
+    if (!confirmed) return;
+    setSaving(true);
+    try {
+      await habitApi.delete(habit.id);
+      setDraft((current) => (current?.id === habit.id ? null : current));
+      setNotice(`已删除习惯「${habit.title}」。`);
     } catch (reason) {
       setError(errorText(reason));
     } finally {
@@ -802,8 +893,13 @@ export default function HabitWorkspace({
 
   const deleteCategory = async (category: HabitCategory) => {
     if (category.isBuiltin) return;
-    if (!window.confirm(`删除“${category.name}”分类？习惯会保留在未分类中。`))
-      return;
+    const confirmed = await askConfirm({
+      title: '删除分类',
+      message: `删除“${category.name}”分类？原有习惯会保留在未分类中。`,
+      confirmLabel: '删除',
+      danger: true,
+    });
+    if (!confirmed) return;
     try {
       await habitApi.deleteCategory(category.id);
       if (categoryFilter === category.id) setCategoryFilter('all');
@@ -823,13 +919,18 @@ export default function HabitWorkspace({
         key={key}
         habit={habit}
         categoryName={categoryNameOf(habit)}
+        categoryColor={habitCategoryColor(
+          habit.categoryId,
+          snapshot.categories,
+        )}
         occurrence={occurrencesByKey.get(key)}
-        canMark={date <= today}
+        canMark={date <= today && habit.active}
         busy={savingKeys.has(key)}
         targeted={agendaFocusId === habit.id && date === selectedDate}
         onMark={(status) => void markOccurrence(habit, date, status)}
-        onEdit={() => setDraft(habitDraft(habit))}
+        onEdit={() => openDraftModal(habitDraft(habit))}
         onSetActive={(active) => void setHabitActive(habit, active)}
+        onDelete={() => void deleteHabit(habit)}
       />
     );
   };
@@ -839,18 +940,35 @@ export default function HabitWorkspace({
       key={habit.id}
       habit={habit}
       categoryName={categoryNameOf(habit)}
-      nextDue={nextDueOnOrAfter(habit, today)}
+      categoryColor={habitCategoryColor(habit.categoryId, snapshot.categories)}
+      nextDue={nextHabitDueOnOrAfter(habit, today)}
       busy={saving}
-      onEdit={() => setDraft(habitDraft(habit))}
+      onEdit={() => openDraftModal(habitDraft(habit))}
       onSetActive={(active) => void setHabitActive(habit, active)}
+      onDelete={() => void deleteHabit(habit)}
     />
   );
 
   return (
     <div className="task-workspace habit-workspace">
-      <aside className="task-sidebar habit-sidebar" aria-label="习惯导航">
+      <aside
+        className={`task-sidebar habit-sidebar${sidebarCollapsed ? ' is-collapsed' : ''}`}
+        id="habit-sidebar"
+        aria-label="习惯导航"
+      >
         <header className="task-sidebar-heading">
           <div className="task-sidebar-title">习惯</div>
+          <button
+            type="button"
+            className="task-sidebar-toggle"
+            title={sidebarCollapsed ? '展开习惯侧栏' : '收起习惯侧栏'}
+            aria-label={sidebarCollapsed ? '展开习惯侧栏' : '收起习惯侧栏'}
+            aria-expanded={!sidebarCollapsed}
+            aria-controls="habit-sidebar"
+            onClick={toggleSidebarCollapsed}
+          >
+            <TaskSidebarToggleIcon collapsed={sidebarCollapsed} />
+          </button>
         </header>
         <button
           type="button"
@@ -879,11 +997,15 @@ export default function HabitWorkspace({
         </div>
         <div className="task-plan-list habit-category-list">
           {snapshot.categories.map((category) => {
+            const categoryColor = habitCategoryColor(
+              category.id,
+              snapshot.categories,
+            );
             const count = snapshot.habits.filter(
               (habit) =>
                 habit.categoryId === category.id &&
                 (scope === 'today'
-                  ? habit.active && isDueOn(habit, today)
+                  ? habit.active && isHabitDueOn(habit, today)
                   : true) &&
                 (!term ||
                   `${habit.title} ${habit.note ?? ''}`
@@ -898,7 +1020,14 @@ export default function HabitWorkspace({
                   onClick={() => setCategoryFilter(category.id)}
                 >
                   <span className="habit-category-name">
-                    <span className="habit-category-mark" />
+                    <span
+                      className="habit-category-mark"
+                      style={
+                        categoryColor
+                          ? { backgroundColor: categoryColor }
+                          : undefined
+                      }
+                    />
                     {category.name}
                   </span>
                   <span>{count}</span>
@@ -971,7 +1100,7 @@ export default function HabitWorkspace({
             <button
               type="button"
               className="task-primary"
-              onClick={() => setDraft(habitDraft())}
+              onClick={() => openDraftModal(habitDraft())}
             >
               新建习惯
             </button>
@@ -1147,6 +1276,7 @@ export default function HabitWorkspace({
                       ))}
                     </div>
                     <div
+                      ref={calendarGridRef}
                       className="task-calendar-grid"
                       role="region"
                       aria-label="习惯日历"
@@ -1157,8 +1287,13 @@ export default function HabitWorkspace({
                       {cells.map((cell) => {
                         const entries = sortHabits(
                           calendarHabits.filter((habit) =>
-                            isDueOn(habit, cell.date),
+                            hasHabitEntryOn(habit, cell.date),
                           ),
+                        );
+                        const visibleLimit = computeCalendarCellVisibleCount(
+                          calendarMode,
+                          calendarRowHeight,
+                          entries.length,
                         );
                         return (
                           <div
@@ -1226,33 +1361,93 @@ export default function HabitWorkspace({
                               >
                                 {cell.day}
                               </button>
+                              <button
+                                type="button"
+                                className="task-calendar-day-add"
+                                onClick={() => {
+                                  chooseDate(cell.date);
+                                  openDraftModal(
+                                    habitDraft(undefined, cell.date),
+                                  );
+                                }}
+                                aria-label={`${cell.date} 新建习惯`}
+                              >
+                                +
+                              </button>
                             </div>
                             <div className="task-calendar-day-items">
-                              {entries.slice(0, 3).map((habit) => {
-                                const occurrence = occurrencesByKey.get(
-                                  occurrenceKey(habit.id, cell.date),
+                              {entries.slice(0, visibleLimit).map((habit) => {
+                                const key = occurrenceKey(habit.id, cell.date);
+                                const occurrence = occurrencesByKey.get(key);
+                                const categoryColor = habitCategoryColor(
+                                  habit.categoryId,
+                                  snapshot.categories,
                                 );
+                                const canQuickCheck =
+                                  cell.date <= today && habit.active;
+                                const status = occurrence?.status;
+                                const markerTitle = `${habit.title} · ${status === 'done' ? '已完成' : status === 'skipped' ? '已跳过' : habit.active ? '待打卡' : '已暂停'}`;
                                 return (
-                                  <button
-                                    type="button"
-                                    className={`habit-calendar-marker${occurrence ? ` is-${occurrence.status}` : ''}`}
-                                    title={`${habit.title} · ${occurrence?.status === 'done' ? '已完成' : occurrence?.status === 'skipped' ? '已跳过' : '待打卡'}`}
+                                  <div
                                     key={habit.id}
-                                    onClick={() =>
-                                      showAgenda(cell.date, habit.id)
+                                    className={`habit-calendar-marker${status ? ` is-${status}` : ''}${!habit.active ? ' is-paused' : ''}`}
+                                    style={
+                                      !status && categoryColor
+                                        ? ({
+                                            '--habit-category-color':
+                                              categoryColor,
+                                          } as CSSProperties)
+                                        : undefined
                                     }
+                                    title={markerTitle}
                                   >
-                                    <span>{habit.title}</span>
-                                  </button>
+                                    {canQuickCheck && (
+                                      <button
+                                        type="button"
+                                        className={`habit-calendar-quick-check${status ? ` is-${status}` : ''}`}
+                                        disabled={savingKeys.has(key)}
+                                        aria-pressed={status === 'done'}
+                                        aria-label={`${status === 'done' ? '撤销' : '打卡'} ${habit.title}`}
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          void markOccurrence(
+                                            habit,
+                                            cell.date,
+                                            nextCheckStatus(status),
+                                          );
+                                        }}
+                                      >
+                                        {status === 'done'
+                                          ? '✓'
+                                          : status === 'skipped'
+                                            ? '—'
+                                            : ''}
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      className="habit-calendar-marker-open"
+                                      onClick={() =>
+                                        showAgenda(cell.date, habit.id)
+                                      }
+                                    >
+                                      <span>{habit.title}</span>
+                                    </button>
+                                  </div>
                                 );
                               })}
-                              {entries.length > 3 && (
-                                <span
+                              {entries.length > visibleLimit && (
+                                <button
+                                  type="button"
                                   className="task-calendar-more"
-                                  title="双击查看这一天"
+                                  title="展开查看这一天"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    openDay(cell.date);
+                                  }}
                                 >
-                                  另有 {entries.length - 3} 项
-                                </span>
+                                  另有 {entries.length - visibleLimit} 项
+                                </button>
                               )}
                             </div>
                           </div>
@@ -1480,8 +1675,28 @@ export default function HabitWorkspace({
                   }
                 />
               </label>
+              {draftError && (
+                <div className="task-error" role="alert">
+                  {draftError}
+                </div>
+              )}
             </div>
             <footer>
+              {draft.id && (
+                <button
+                  type="button"
+                  className="task-danger habit-modal-delete"
+                  disabled={saving}
+                  onClick={() =>
+                    void deleteHabit({
+                      id: draft.id!,
+                      title: draft.title.trim() || '未命名习惯',
+                    })
+                  }
+                >
+                  删除习惯
+                </button>
+              )}
               <button
                 type="button"
                 disabled={saving}
@@ -1500,6 +1715,7 @@ export default function HabitWorkspace({
           </form>
         </div>
       )}
+      {confirmDialog}
     </div>
   );
 }

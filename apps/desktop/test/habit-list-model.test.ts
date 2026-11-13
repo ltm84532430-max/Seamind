@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   compareHabitsByCategory,
+  habitCategoryColor,
+  isHabitDueOn,
   nextCheckStatus,
+  nextHabitDueOnOrAfter,
   normalizeHabitScope,
 } from '../src/tasks/habit-list-model';
 
@@ -39,5 +42,36 @@ describe('habit list model', () => {
       { categoryId: 'study', title: '阅读' },
       { categoryId: null, title: '早睡' },
     ]);
+  });
+
+  it('assigns distinct colors to builtin and custom categories', () => {
+    const categories = [
+      { id: 'habit-category-health', isBuiltin: true },
+      { id: 'habit-category-learning', isBuiltin: true },
+      { id: 'custom-1', isBuiltin: false },
+      { id: 'custom-2', isBuiltin: false },
+    ];
+    expect(habitCategoryColor('habit-category-health', categories)).toBe(
+      '#58a889',
+    );
+    expect(habitCategoryColor('habit-category-learning', categories)).toBe(
+      '#5b8def',
+    );
+    expect(habitCategoryColor('custom-1', categories)).not.toBeNull();
+    expect(habitCategoryColor('custom-1', categories)).not.toBe(
+      habitCategoryColor('custom-2', categories),
+    );
+    expect(habitCategoryColor(null, categories)).toBeNull();
+  });
+
+  it('calculates recurring habit due dates and next due dates', () => {
+    const habit = { startDate: '2026-11-01', intervalDays: 3 };
+    expect(isHabitDueOn(habit, '2026-10-31')).toBe(false);
+    expect(isHabitDueOn(habit, '2026-11-01')).toBe(true);
+    expect(isHabitDueOn(habit, '2026-11-02')).toBe(false);
+    expect(isHabitDueOn(habit, '2026-11-04')).toBe(true);
+    expect(nextHabitDueOnOrAfter(habit, '2026-10-30')).toBe('2026-11-01');
+    expect(nextHabitDueOnOrAfter(habit, '2026-11-02')).toBe('2026-11-04');
+    expect(nextHabitDueOnOrAfter(habit, '2026-11-04')).toBe('2026-11-04');
   });
 });

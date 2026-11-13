@@ -129,3 +129,28 @@ export function formatCalendarPeriod(
         : `${end.year}年${end.month}月${end.day}日`;
   return `${startLabel} – ${endLabel}`;
 }
+
+export const DEFAULT_CALENDAR_CELL_LIMIT = 3;
+
+const CALENDAR_DAY_OVERHEAD_PX = 36;
+const CALENDAR_ITEM_ROW_PX = 22;
+
+/** 计算日历单格可展示条目数：周视图全量展示，月视图按行高动态适配。 */
+export function computeCalendarCellVisibleCount(
+  mode: 'month' | 'week',
+  rowHeight: number | null | undefined,
+  totalEntries: number,
+): number {
+  if (totalEntries <= 0) return 0;
+  if (mode === 'week') return totalEntries;
+  if (rowHeight == null || !Number.isFinite(rowHeight) || rowHeight <= 0) {
+    return Math.min(totalEntries, DEFAULT_CALENDAR_CELL_LIMIT);
+  }
+  const availableHeight = Math.max(0, rowHeight - CALENDAR_DAY_OVERHEAD_PX);
+  const slotsAvailable = Math.max(
+    1,
+    Math.floor((availableHeight + 2) / CALENDAR_ITEM_ROW_PX),
+  );
+  if (totalEntries <= slotsAvailable) return totalEntries;
+  return Math.max(1, slotsAvailable - 1);
+}

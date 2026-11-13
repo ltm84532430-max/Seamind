@@ -34,6 +34,13 @@ export const taskApi = {
     tasksChanged();
     return result;
   },
+  deletePlan: async (id: string) => {
+    const result = await invoke<TaskSnapshot>('learning_tasks_delete_plan', {
+      id,
+    });
+    tasksChanged();
+    return result;
+  },
   saveTask: async (input: TaskInput) => {
     const result = await invoke<LearningTask>('learning_tasks_save_task', {
       input,
@@ -76,6 +83,10 @@ export const taskApi = {
     await invoke<void>('learning_tasks_unarchive_task', { id });
     tasksChanged();
   },
+  archiveTask: async (id: string) => {
+    await invoke<void>('learning_tasks_archive_task', { id });
+    tasksChanged();
+  },
 };
 
 export const habitApi = {
@@ -107,6 +118,10 @@ export const habitApi = {
   },
   deleteCategory: async (id: string) => {
     await invoke<void>('learning_tasks_habits_delete_category', { id });
+    tasksChanged();
+  },
+  delete: async (id: string) => {
+    await invoke<void>('learning_tasks_habits_delete', { id });
     tasksChanged();
   },
 };

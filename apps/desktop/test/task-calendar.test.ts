@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  computeCalendarCellVisibleCount,
   dateKey,
   formatCalendarPeriod,
   localToday,
@@ -94,5 +95,14 @@ describe('task deadline calendar', () => {
         '2027-01-03',
       ),
     ).toBe('2026年12月28日 – 2027年1月3日');
+  });
+
+  it('shows all entries in week view and adapts month cell limit to row height', () => {
+    expect(computeCalendarCellVisibleCount('week', 100, 12)).toBe(12);
+    expect(computeCalendarCellVisibleCount('week', null, 6)).toBe(6);
+    expect(computeCalendarCellVisibleCount('month', null, 6)).toBe(3);
+    expect(computeCalendarCellVisibleCount('month', 150, 5)).toBe(5);
+    expect(computeCalendarCellVisibleCount('month', 150, 7)).toBe(4);
+    expect(computeCalendarCellVisibleCount('month', 190, 7)).toBe(7);
   });
 });
