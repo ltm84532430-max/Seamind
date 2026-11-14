@@ -3,6 +3,10 @@ import {
   buildFeedGalaxyGraph,
   categoryOrbitRadius,
   FEED_GALAXY_ARTICLE_LIMIT,
+  FEED_GALAXY_HIGHLIGHT_LIMIT,
+  FEED_GALAXY_PREVIEW_LIMIT,
+  FEED_STAR_PALETTE,
+  rankUnreadChannels,
   selectFeedGalaxyArticles,
 } from '../src/feed/feed-galaxy-model';
 import type {
@@ -186,5 +190,71 @@ describe('feed galaxy model', () => {
         angleDelta(Math.atan2(dy, dx), parent.orbitAngle ?? 0),
       ).toBeLessThanOrEqual(0.7);
     }
+  });
+
+  it('previews a few articles on every loaded channel and keeps eight on the expanded one', () => {
+    const articles = [
+      ...Array.from({ length: 6 }, (_, index) =>
+        article(`a-${index}`, 'a', 'unread', false, index),
+      ),
+      ...Array.from({ length: 6 }, (_, index) =>
+        article(`b-${index}`, 'b', 'unread', false, index),
+      ),
+    ];
+    const graph = buildFeedGalaxyGraph(
+      [category('技术')],
+      [channel('a', '技术', 0), channel('b', '技术', 1)],
+      'a',
+      articles,
+    );
+    const satellitesOf = (parentId: string) =>
+      graph.nodes.filter(
+        (node) => node.kind === 'satellite' && node.parentId === parentId,
+      );
+    expect(satellitesOf('feed:a')).toHaveLength(6);
+    expect(satellitesOf('feed:b')).toHaveLength(FEED_GALAXY_PREVIEW_LIMIT);
+  });
+
+  it('marks a single focus channel and highlights only the top unread ones', () => {
+    const channels = Array.from({ length: 9 }, (_, index) =>
+      channel(`ch-${index}`, '技术', index),
+    );
+    channels.push({ ...channel('done', '技术', 20), unreadCount: 0 });
+    const graph = buildFeedGalaxyGraph([category('技术')], channels);
+    const planets = graph.nodes.filter((node) => node.kind === 'planet');
+
+    const focus = planets.filter((node) => node.isFocus);
+    expect(focus.map((node) => node.channelId)).toEqual(['ch-8']);
+    const highlighted = planets.filter((node) => node.isHighlighted);
+    expect(highlighted).toHaveLength(FEED_GALAXY_HIGHLIGHT_LIMIT);
+    expect(highlighted.some((node) => node.channelId === 'done')).toBe(false);
+    expect(rankUnreadChannels(channels)[0].id).toBe('ch-8');
+  });
+
+  it('uses the shared star palette unless category colors are requested', () => {
+    const categories = [category('技术', '#123456')];
+    const channels = [channel('a', '技术')];
+    const paletteGraph = buildFeedGalaxyGraph(categories, channels);
+    const customGraph = buildFeedGalaxyGraph(categories, channels, null, [], {
+      useCategoryColors: true,
+    });
+    const colorOf = (graph: typeof paletteGraph) =>
+      graph.nodes.find((node) => node.id === 'category:技术')?.color;
+    expect(colorOf(paletteGraph)).toBe(FEED_STAR_PALETTE[0]);
+    expect(colorOf(customGraph)).toBe('#123456');
+  });
+
+  it('links sibling channels with non-physical sequence arcs', () => {
+    const graph = buildFeedGalaxyGraph(
+      [category('技术')],
+      Array.from({ length: 3 }, (_, index) =>
+        channel(`ch-${index}`, '技术', index),
+      ),
+    );
+    const arcs = graph.links.filter((link) => link.kind === 'sequence');
+    expect(arcs.map((link) => `${link.source}>${link.target}`)).toEqual([
+      'feed:ch-0>feed:ch-1',
+      'feed:ch-1>feed:ch-2',
+    ]);
   });
 });

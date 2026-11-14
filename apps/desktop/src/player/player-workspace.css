@@ -222,7 +222,7 @@
 .player-sidebar.is-collapsed .player-sidebar-header {
   padding: 0;
   justify-content: center;
-  border-bottom: 0;
+  border-bottom: 1px solid var(--player-line);
 }
 
 .player-sidebar-body {
@@ -232,8 +232,102 @@
   flex-direction: column;
 }
 
-.player-sidebar.is-collapsed .player-sidebar-body {
-  display: none !important;
+.player-rail {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+}
+
+.player-rail-scroll {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+}
+
+.player-rail-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.player-rail-divider {
+  width: 22px;
+  height: 1px;
+  flex: none;
+  margin: 3px 0;
+  background: var(--player-line);
+}
+
+.player-rail-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 30px;
+  flex: none;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--player-muted);
+  cursor: pointer;
+  transition:
+    color 0.14s ease,
+    background-color 0.14s ease,
+    border-color 0.14s ease;
+}
+
+.player-rail-button:hover {
+  color: var(--player-ink);
+  background: var(--player-hover);
+}
+
+.player-rail-button:focus-visible {
+  outline: 2px solid var(--player-accent);
+  outline-offset: -1px;
+}
+
+.player-rail-button.is-current {
+  color: var(--player-accent);
+  background: var(--player-accent-soft);
+  border-color: color-mix(in srgb, var(--player-accent) 28%, transparent);
+}
+
+.player-rail-button.is-channel.is-current .player-avatar {
+  box-shadow: 0 0 0 1.5px var(--player-accent);
+}
+
+.player-rail-warning-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #eab308;
+  box-shadow: 0 0 0 1px var(--player-panel);
+}
+
+.player-rail-footer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 6px 0;
+  border-top: 1px solid var(--player-line);
+  flex: none;
 }
 
 .player-open {

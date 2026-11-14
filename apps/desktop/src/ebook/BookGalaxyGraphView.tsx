@@ -63,6 +63,7 @@ export function BookGalaxyGraphView({
   // Obsidian-style Graph Filter & Display states
   const [onlyWithNotes, setOnlyWithNotes] = useState(false);
   const [showSatellites, setShowSatellites] = useState(true);
+  const [showAllFootnotes, setShowAllFootnotes] = useState(false);
   const [showCrossLinks, setShowCrossLinks] = useState(true);
   const [showSequenceLinks, setShowSequenceLinks] = useState(false);
   const [showOrbitGuides, setShowOrbitGuides] = useState(false);
@@ -87,36 +88,126 @@ export function BookGalaxyGraphView({
     return initial;
   });
 
-  // Visible nodes based on topology filters
+  const nodeMap = useMemo(() => {
+    const map = new Map<string, GalaxyNode>();
+    for (const n of graph.nodes) {
+      map.set(n.id, n);
+    }
+    return map;
+  }, [graph.nodes]);
+
+  const filteredNodes = useMemo(() => {
+    const q = searchFilter.trim().toLowerCase();
+    if (!q) return graph.nodes;
+    return graph.nodes.filter(
+      (n) =>
+        n.label.toLowerCase().includes(q) ||
+        (n.chapterIndex && n.chapterIndex.toLowerCase().includes(q)) ||
+        (n.noteTitle && n.noteTitle.toLowerCase().includes(q)) ||
+        (n.footnoteData?.content &&
+          n.footnoteData.content.toLowerCase().includes(q)) ||
+        (n.footnoteData?.quote &&
+          n.footnoteData.quote.toLowerCase().includes(q)) ||
+        (n.footnoteData?.footnoteKey &&
+          n.footnoteData.footnoteKey.toLowerCase().includes(q)),
+    );
+  }, [graph.nodes, searchFilter]);
+
+  const activeFilteredIds = useMemo(() => {
+    return new Set(filteredNodes.map((n) => n.id));
+  }, [filteredNodes]);
+
+  const activeHoveredId = draggingNodeId ?? hoveredNode?.node.id ?? null;
+
+  // Visible nodes based on topology filters & Choice B focused footnote visibility
   const visibleNodeIds = useMemo(() => {
     const set = new Set<string>();
-    const activeClustersWithNotes = new Set<string>();
+    const activeAncestorIds = new Set<string>();
+    const hasSearchQuery = Boolean(searchFilter.trim());
+
     if (onlyWithNotes) {
       for (const n of graph.nodes) {
+        if (n.kind === 'footnote') continue;
         if (n.hasNote || n.isCurrent) {
           set.add(n.id);
-          if (n.parentId) activeClustersWithNotes.add(n.parentId);
+          let parentId = n.parentId;
+          while (parentId) {
+            activeAncestorIds.add(parentId);
+            parentId = nodeMap.get(parentId)?.parentId;
+          }
         }
       }
     }
+
     for (const n of graph.nodes) {
       if (n.kind === 'sun') {
         set.add(n.id);
+        continue;
+      }
+      if (n.kind === 'footnote') {
         continue;
       }
       if (!showSatellites && n.kind === 'satellite') {
         continue;
       }
       if (onlyWithNotes) {
-        if (n.hasNote || n.isCurrent || activeClustersWithNotes.has(n.id)) {
+        if (n.hasNote || n.isCurrent || activeAncestorIds.has(n.id)) {
           set.add(n.id);
         }
         continue;
       }
       set.add(n.id);
     }
+
+    // Choice B: by default, focus footnotes on current chapter + hovered cluster + search matches
+    const focusedClusters = new Set<string>();
+    let sunFocused = false;
+    for (const n of graph.nodes) {
+      if (n.isCurrent && n.rootClusterId) {
+        focusedClusters.add(n.rootClusterId);
+      }
+    }
+    if (activeHoveredId) {
+      const hovered = nodeMap.get(activeHoveredId);
+      if (hovered) {
+        if (hovered.kind === 'sun') {
+          sunFocused = true;
+        } else if (hovered.rootClusterId) {
+          focusedClusters.add(hovered.rootClusterId);
+        } else if (hovered.parentId === 'sun-root') {
+          sunFocused = true;
+        }
+      }
+    }
+
+    for (const n of graph.nodes) {
+      if (n.kind !== 'footnote') continue;
+      if (n.parentId && !set.has(n.parentId)) continue;
+
+      const isFocused =
+        showAllFootnotes ||
+        Boolean(n.isCurrent) ||
+        n.id === activeHoveredId ||
+        (hasSearchQuery && activeFilteredIds.has(n.id)) ||
+        Boolean(n.rootClusterId && focusedClusters.has(n.rootClusterId)) ||
+        (n.parentId === 'sun-root' && sunFocused);
+
+      if (isFocused) {
+        set.add(n.id);
+      }
+    }
+
     return set;
-  }, [graph.nodes, onlyWithNotes, showSatellites]);
+  }, [
+    graph.nodes,
+    nodeMap,
+    onlyWithNotes,
+    showSatellites,
+    showAllFootnotes,
+    activeHoveredId,
+    searchFilter,
+    activeFilteredIds,
+  ]);
 
   const visibleIdsRef = useRef<Set<string>>(visibleNodeIds);
   visibleIdsRef.current = visibleNodeIds;
@@ -192,6 +283,7 @@ export function BookGalaxyGraphView({
     physicsConfig.centerGravity,
     onlyWithNotes,
     showSatellites,
+    showAllFootnotes,
     reheatSimulation,
   ]);
 
@@ -418,18 +510,11 @@ export function BookGalaxyGraphView({
     setLabelFadeThreshold(0.68);
     setOnlyWithNotes(false);
     setShowSatellites(true);
+    setShowAllFootnotes(false);
     setShowCrossLinks(true);
     setShowSequenceLinks(false);
     setShowOrbitGuides(false);
   };
-
-  const nodeMap = useMemo(() => {
-    const map = new Map<string, GalaxyNode>();
-    for (const n of graph.nodes) {
-      map.set(n.id, n);
-    }
-    return map;
-  }, [graph.nodes]);
 
   // 1-Hop Obsidian Adjacency Map
   const adjacencyMap = useMemo(
@@ -441,26 +526,10 @@ export function BookGalaxyGraphView({
     [graph.nodes, graph.links, showSequenceLinks, showCrossLinks],
   );
 
-  const activeHoveredId = draggingNodeId ?? hoveredNode?.node.id ?? null;
   const spotlightNeighborSet = useMemo(() => {
     if (!activeHoveredId) return null;
     return adjacencyMap.get(activeHoveredId) ?? new Set([activeHoveredId]);
   }, [activeHoveredId, adjacencyMap]);
-
-  const filteredNodes = useMemo(() => {
-    const q = searchFilter.trim().toLowerCase();
-    if (!q) return graph.nodes;
-    return graph.nodes.filter(
-      (n) =>
-        n.label.toLowerCase().includes(q) ||
-        (n.chapterIndex && n.chapterIndex.toLowerCase().includes(q)) ||
-        (n.noteTitle && n.noteTitle.toLowerCase().includes(q)),
-    );
-  }, [graph.nodes, searchFilter]);
-
-  const activeFilteredIds = useMemo(() => {
-    return new Set(filteredNodes.map((n) => n.id));
-  }, [filteredNodes]);
 
   // Unique orbit radii for optional guide rings
   const orbitGuideRadii = useMemo(() => {
@@ -482,6 +551,21 @@ export function BookGalaxyGraphView({
     [graph.links],
   );
 
+  const visibleStats = useMemo(() => {
+    let chapters = 0;
+    let footnotes = 0;
+    for (const id of visibleNodeIds) {
+      const node = nodeMap.get(id);
+      if (!node || node.kind === 'sun') continue;
+      if (node.kind === 'footnote') {
+        footnotes++;
+      } else {
+        chapters++;
+      }
+    }
+    return { chapters, footnotes };
+  }, [visibleNodeIds, nodeMap]);
+
   // Inverse scale font compensation for Obsidian-like crisp labels at any zoom
   const clusterFontSize = Math.max(
     9.5,
@@ -501,12 +585,16 @@ export function BookGalaxyGraphView({
           <span className="book-galaxy-title">《{graph.bookTitle}》</span>
           <div className="book-galaxy-stats">
             <span className="book-galaxy-stat-pill">
-              节点: {visibleNodeIds.size - 1}/{graph.stats.totalChapters}
+              节点: {visibleStats.chapters}/{graph.stats.totalChapters}
             </span>
             <span>·</span>
             <span className="book-galaxy-stat-pill">
               已记笔记: {graph.stats.notesCount} (
               {graph.stats.completionPercentage}%)
+            </span>
+            <span>·</span>
+            <span className="book-galaxy-stat-pill">
+              脚注: {visibleStats.footnotes}/{graph.stats.footnotesCount}
             </span>
             {crossLinksCount > 0 && (
               <>
@@ -523,7 +611,7 @@ export function BookGalaxyGraphView({
           <input
             type="text"
             className="book-galaxy-search-input"
-            placeholder="检索章节或知识节点…"
+            placeholder="检索章节、笔记或脚注…"
             value={searchFilter}
             onChange={(e) => setSearchFilter(e.target.value)}
           />
@@ -534,6 +622,20 @@ export function BookGalaxyGraphView({
             onClick={() => setOnlyWithNotes((prev) => !prev)}
           >
             仅看笔记
+          </button>
+          <button
+            type="button"
+            className={`book-galaxy-btn ${showAllFootnotes ? 'is-active' : ''}`}
+            title={
+              showAllFootnotes
+                ? '已展开全书全部脚注；点击切回按当前阅读章与悬停章聚焦'
+                : '默认仅聚焦当前阅读章与悬停章脚注；点击展开全书全部脚注'
+            }
+            onClick={() => setShowAllFootnotes((prev) => !prev)}
+          >
+            {showAllFootnotes
+              ? `全部脚注 (${graph.stats.footnotesCount})`
+              : `聚焦脚注 (${graph.stats.footnotesCount})`}
           </button>
           <button
             type="button"
@@ -598,6 +700,14 @@ export function BookGalaxyGraphView({
                 type="checkbox"
                 checked={showSatellites}
                 onChange={(e) => setShowSatellites(e.target.checked)}
+              />
+            </label>
+            <label className="book-galaxy-toggle-row">
+              <span>显示全书全部脚注 (关闭则按章聚焦)</span>
+              <input
+                type="checkbox"
+                checked={showAllFootnotes}
+                onChange={(e) => setShowAllFootnotes(e.target.checked)}
               />
             </label>
             <label className="book-galaxy-toggle-row">
@@ -825,6 +935,9 @@ export function BookGalaxyGraphView({
                     spotlightNeighborSet.has(link.source)) ||
                   (hoveredNode?.node.kind === 'cluster' &&
                     spotlightNeighborSet.has(link.source) &&
+                    spotlightNeighborSet.has(link.target)) ||
+                  (link.kind === 'orbit' &&
+                    spotlightNeighborSet.has(link.source) &&
                     spotlightNeighborSet.has(link.target))
                 : false;
 
@@ -868,7 +981,10 @@ export function BookGalaxyGraphView({
               }
 
               const isIntraCluster =
-                tgtNode.kind === 'planet' || tgtNode.kind === 'satellite';
+                tgtNode.kind === 'planet' ||
+                tgtNode.kind === 'satellite' ||
+                tgtNode.kind === 'footnote';
+              const isFootnoteLink = tgtNode.kind === 'footnote';
               const strokeColor = link.color || tgtNode.color;
 
               return (
@@ -880,9 +996,9 @@ export function BookGalaxyGraphView({
                   y2={tgtPos.y}
                   className={`galaxy-link-orbit ${
                     isIntraCluster ? 'is-intra' : 'is-root-spoke'
-                  } ${isSpotlightLink ? 'is-spotlight' : ''} ${
-                    isDimmedBySpotlight || isSearchDimmed ? 'is-dimmed' : ''
-                  }`}
+                  } ${isFootnoteLink ? 'is-footnote-orbit' : ''} ${
+                    isSpotlightLink ? 'is-spotlight' : ''
+                  } ${isDimmedBySpotlight || isSearchDimmed ? 'is-dimmed' : ''}`}
                   style={
                     strokeColor
                       ? ({ '--link-color': strokeColor } as CSSProperties)
@@ -902,6 +1018,8 @@ export function BookGalaxyGraphView({
               const isCluster = node.kind === 'cluster';
               const isPlanet = node.kind === 'planet';
               const isSatellite = node.kind === 'satellite';
+              const isFootnote = node.kind === 'footnote';
+              const footnoteSource = node.footnoteData?.source;
 
               const isHoveredSelf = activeHoveredId === node.id;
               const isSpotlightNeighbor = spotlightNeighborSet
@@ -920,7 +1038,10 @@ export function BookGalaxyGraphView({
                   : isPlanet
                     ? ((node.hasNote ? 6.2 : 4.5) + degreeBoost * 0.35) *
                       nodeSizeScale
-                    : (node.hasNote ? 4.2 : 3.0) * nodeSizeScale;
+                    : isFootnote
+                      ? (footnoteSource === 'epub-note' ? 5.2 : 4.8) *
+                        nodeSizeScale
+                      : (node.hasNote ? 4.2 : 3.0) * nodeSizeScale;
 
               // Semantic Zoom (LOD) label visibility calculation
               const t1 = labelFadeThreshold * 0.55;
@@ -946,6 +1067,18 @@ export function BookGalaxyGraphView({
                 isSpotlightNeighbor ||
                 node.hasNote ||
                 scale >= labelFadeThreshold * 1.35;
+
+              const showFootnoteLabel =
+                isHoveredSelf ||
+                hoveredNode?.node.id === node.parentId ||
+                (isSpotlightNeighbor && hoveredNode?.node.kind !== 'cluster') ||
+                (Boolean(searchFilter.trim()) && isMatch) ||
+                scale >= labelFadeThreshold * 1.15;
+
+              const diamondR = displayRadius * 1.18;
+              const diamondPoints = `0,${-diamondR} ${diamondR},0 0,${diamondR} ${-diamondR},0`;
+              const haloR = diamondR + 3.2;
+              const diamondHaloPoints = `0,${-haloR} ${haloR},0 0,${haloR} ${-haloR},0`;
 
               const cleanPlanetText =
                 scale >= 0.95 || isHoveredSelf || isSpotlightNeighbor
@@ -996,19 +1129,34 @@ export function BookGalaxyGraphView({
                     <circle cx={0} cy={0} className="galaxy-current-pulse" />
                   )}
 
-                  {/* Has-note crisp outer ring */}
-                  {node.hasNote && !isSun && (
-                    <circle
-                      cx={0}
-                      cy={0}
-                      r={displayRadius + 3.5}
-                      className="galaxy-note-halo"
+                  {/* Has-note crisp outer ring / Footnote diamond halo */}
+                  {isFootnote ? (
+                    <polygon
+                      points={diamondHaloPoints}
+                      className={`galaxy-footnote-halo is-${
+                        footnoteSource ?? 'epub-note'
+                      } ${node.footnoteData?.syncedNotePath ? 'is-synced' : ''}`}
                       style={
                         {
                           '--node-color': node.color,
                         } as CSSProperties
                       }
                     />
+                  ) : (
+                    node.hasNote &&
+                    !isSun && (
+                      <circle
+                        cx={0}
+                        cy={0}
+                        r={displayRadius + 3.5}
+                        className="galaxy-note-halo"
+                        style={
+                          {
+                            '--node-color': node.color,
+                          } as CSSProperties
+                        }
+                      />
+                    )
                   )}
 
                   {/* Central Book Node */}
@@ -1044,6 +1192,39 @@ export function BookGalaxyGraphView({
                       >
                         《{graph.bookTitle}》
                       </text>
+                    </>
+                  ) : isFootnote ? (
+                    <>
+                      <polygon
+                        points={diamondPoints}
+                        fill={node.color}
+                        className={`galaxy-node-diamond is-${
+                          footnoteSource ?? 'epub-note'
+                        } ${node.footnoteData?.syncedNotePath ? 'is-synced' : ''}`}
+                        style={
+                          {
+                            '--node-color': node.color,
+                          } as CSSProperties
+                        }
+                      />
+                      <circle
+                        cx={0}
+                        cy={0}
+                        r={Math.max(1.3, displayRadius * 0.28)}
+                        className={`galaxy-footnote-pip is-${
+                          footnoteSource ?? 'epub-note'
+                        }`}
+                      />
+                      {showFootnoteLabel && (
+                        <text
+                          x={0}
+                          y={diamondR + 10}
+                          className="galaxy-footnote-label"
+                          style={{ fontSize: `${planetFontSize * 0.88}px` }}
+                        >
+                          {node.label}
+                        </text>
+                      )}
                     </>
                   ) : (
                     <>
@@ -1134,21 +1315,41 @@ export function BookGalaxyGraphView({
           <div
             className="book-galaxy-tooltip"
             style={{
-              left: Math.min(hoveredNode.clientX, dimensions.width - 300),
-              top: Math.min(hoveredNode.clientY, dimensions.height - 165),
+              left: Math.max(
+                12,
+                Math.min(hoveredNode.clientX, dimensions.width - 310),
+              ),
+              top: Math.max(
+                12,
+                Math.min(
+                  hoveredNode.clientY,
+                  dimensions.height -
+                    (hoveredNode.node.kind === 'footnote' ? 245 : 165),
+                ),
+              ),
             }}
           >
             <div className="book-galaxy-tooltip-head">
               <span>
                 {hoveredNode.node.kind === 'sun'
                   ? `《${hoveredNode.node.bookTitle}》`
-                  : hoveredNode.node.label}
+                  : hoveredNode.node.kind === 'footnote'
+                    ? hoveredNode.node.footnoteData?.footnoteKey
+                      ? `脚注 [^${hoveredNode.node.footnoteData.footnoteKey}]`
+                      : '书籍原位脚注'
+                    : hoveredNode.node.label}
               </span>
               <span className="book-galaxy-badge">
                 {hoveredNode.node.kind === 'sun'
                   ? '全书核心'
-                  : hoveredNode.node.chapterIndex ||
-                    (hoveredNode.node.kind === 'cluster' ? '章节点' : '小节')}
+                  : hoveredNode.node.kind === 'footnote'
+                    ? hoveredNode.node.footnoteData?.source === 'epub-note'
+                      ? '书内批注'
+                      : hoveredNode.node.footnoteData?.source === 'epub-ai'
+                        ? 'AI 脚注'
+                        : '笔记脚注'
+                    : hoveredNode.node.chapterIndex ||
+                      (hoveredNode.node.kind === 'cluster' ? '章节点' : '小节')}
               </span>
             </div>
 
@@ -1158,32 +1359,69 @@ export function BookGalaxyGraphView({
               </div>
             )}
 
-            <div className="book-galaxy-tooltip-meta">
-              拓扑连接度：{hoveredNode.node.degree ?? 1} 个相邻节点
-            </div>
+            {hoveredNode.node.kind === 'footnote' ? (
+              <>
+                {hoveredNode.node.footnoteData?.quote && (
+                  <blockquote className="book-galaxy-tooltip-quote">
+                    “
+                    {hoveredNode.node.footnoteData.quote.length > 96
+                      ? `${hoveredNode.node.footnoteData.quote.slice(0, 96)}…`
+                      : hoveredNode.node.footnoteData.quote}
+                    ”
+                  </blockquote>
+                )}
+                {hoveredNode.node.footnoteData?.content && (
+                  <div className="book-galaxy-tooltip-footnote-body">
+                    {hoveredNode.node.footnoteData.content.length > 180
+                      ? `${hoveredNode.node.footnoteData.content.slice(0, 180)}…`
+                      : hoveredNode.node.footnoteData.content}
+                  </div>
+                )}
+                <div className="book-galaxy-tooltip-status is-has-note">
+                  <span>
+                    {hoveredNode.node.footnoteData?.source ===
+                    'markdown-footnote'
+                      ? `● 关联笔记：《${hoveredNode.node.footnoteData.noteTitle || '章节笔记'}》`
+                      : hoveredNode.node.footnoteData?.syncedNotePath
+                        ? `● 已同步至笔记 [^${hoveredNode.node.footnoteData.syncedFootnoteKey || ''}]`
+                        : '◆ 书内原位脚注（可跳转原页或在阅读器中写入笔记）'}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="book-galaxy-tooltip-meta">
+                  拓扑连接度：{hoveredNode.node.degree ?? 1} 个相邻节点
+                </div>
 
-            <div
-              className={`book-galaxy-tooltip-status ${
-                hoveredNode.node.hasNote ? 'is-has-note' : 'is-no-note'
-              }`}
-            >
-              <span>
-                {hoveredNode.node.hasNote
-                  ? '● 已关联章节知识库笔记'
-                  : '○ 暂无独立笔记（点击可创建）'}
-              </span>
-            </div>
+                <div
+                  className={`book-galaxy-tooltip-status ${
+                    hoveredNode.node.hasNote ? 'is-has-note' : 'is-no-note'
+                  }`}
+                >
+                  <span>
+                    {hoveredNode.node.hasNote
+                      ? '● 已关联章节知识库笔记'
+                      : '○ 暂无独立笔记（点击可创建）'}
+                  </span>
+                </div>
+              </>
+            )}
 
             {hoveredNode.node.isCurrent && (
               <div className="book-galaxy-tooltip-current">
-                当前阅读所在章节
+                {hoveredNode.node.kind === 'footnote'
+                  ? '位于当前阅读章节'
+                  : '当前阅读所在章节'}
               </div>
             )}
 
             <div className="book-galaxy-tooltip-hint">
               {hoveredNode.node.kind === 'sun'
                 ? '单击查看全书总览笔记 · 按住可拖拽牵引星系'
-                : '单击跳转该章并展开笔记 · 按住可物理拖拽节点'}
+                : hoveredNode.node.kind === 'footnote'
+                  ? '单击精确定位电子书原句与右侧笔记脚注'
+                  : '单击跳转该章并展开笔记 · 按住可物理拖拽节点'}
             </div>
           </div>
         )}

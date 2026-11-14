@@ -13,6 +13,7 @@ import {
   CourseIcon,
   FeedIcon,
   HistoryIcon,
+  ListIcon,
   PathTreeIcon,
   PlusIcon,
   SettingsIcon,
@@ -198,6 +199,39 @@ export default function Sidebar({
   const courses = playlists.filter((playlist) => playlist.kind === 'course');
   const count = (id: string) =>
     playlists.find((playlist) => playlist.playlistId === id)?.itemCount;
+
+  const favCount = count(FAVORITES_ID);
+  const watchLaterCount = count(WATCH_LATER_ID);
+  const pathActive =
+    view.kind === 'learning-paths-home' || view.kind === 'learning-path';
+  const pathTitle = learningPaths.length
+    ? `学习路径 (${learningPaths.length})`
+    : '学习路径';
+
+  const primaryNavItems: {
+    target: PlayerView;
+    icon: ReactNode;
+    filledIcon?: ReactNode;
+    label: string;
+    badge?: string;
+  }[] = [
+    { target: { kind: 'feed' }, icon: <FeedIcon />, label: '动态' },
+    {
+      target: { kind: 'favorites' },
+      icon: <StarIcon />,
+      filledIcon: <StarIcon filled />,
+      label: '收藏',
+      badge: favCount ? String(favCount) : undefined,
+    },
+    {
+      target: { kind: 'watch-later' },
+      icon: <ClockIcon />,
+      filledIcon: <ClockIcon filled />,
+      label: '稍后看',
+      badge: watchLaterCount ? String(watchLaterCount) : undefined,
+    },
+    { target: { kind: 'history' }, icon: <HistoryIcon />, label: '历史' },
+  ];
 
   // Filter channels if filter query is present
   const filterQuery = filter.trim().toLowerCase();
@@ -454,282 +488,406 @@ export default function Sidebar({
           )}
         </div>
 
-        <div className="player-sidebar-body">
-          {opening && slowOpen && (
-            <p className="player-open-hint" role="status">
-              {SLOW_LOOKUP_TEXT}
-            </p>
-          )}
-          {openError && (
-            <p className="player-open-error" role="alert">
-              <WarningIcon />
-              {openError}
-            </p>
-          )}
-
-          <nav className="player-nav" aria-label="播放器">
-            <NavItem
-              view={view}
-              target={{ kind: 'feed' }}
-              icon={<FeedIcon />}
-              label="动态"
-              onGo={onGo}
-            />
-            <NavItem
-              view={view}
-              target={{ kind: 'favorites' }}
-              icon={<StarIcon />}
-              label="收藏"
-              badge={
-                count(FAVORITES_ID) ? String(count(FAVORITES_ID)) : undefined
-              }
-              onGo={onGo}
-            />
-            <NavItem
-              view={view}
-              target={{ kind: 'watch-later' }}
-              icon={<ClockIcon />}
-              label="稍后看"
-              badge={
-                count(WATCH_LATER_ID)
-                  ? String(count(WATCH_LATER_ID))
-                  : undefined
-              }
-              onGo={onGo}
-            />
-            <NavItem
-              view={view}
-              target={{ kind: 'history' }}
-              icon={<HistoryIcon />}
-              label="历史"
-              onGo={onGo}
-            />
-
-            <h3 className="player-nav-heading">学习路径</h3>
-            <NavItem
-              view={view}
-              target={{ kind: 'learning-paths-home' }}
-              icon={<PathTreeIcon />}
-              label="全部路径"
-              badge={
-                learningPaths.length ? String(learningPaths.length) : undefined
-              }
-              onGo={onGo}
-            />
-            {learningPaths.map((path) => (
-              <NavItem
-                key={path.pathId}
-                view={view}
-                target={{ kind: 'learning-path', pathId: path.pathId }}
-                icon={<PathTreeIcon />}
-                label={path.title}
-                badge={`${path.finishedCount}/${path.videoCount}`}
-                onGo={onGo}
-              />
-            ))}
-
-            {courses.length > 0 && (
-              <>
-                <h3 className="player-nav-heading">课程</h3>
-                {courses.map((course) => (
-                  <NavItem
-                    key={course.playlistId}
-                    view={view}
-                    target={{ kind: 'course', playlistId: course.playlistId }}
-                    icon={<CourseIcon />}
-                    label={course.name}
-                    badge={`${course.finishedCount}/${course.itemCount}`}
-                    onGo={onGo}
-                  />
-                ))}
-              </>
+        {!collapsed ? (
+          <div className="player-sidebar-body">
+            {opening && slowOpen && (
+              <p className="player-open-hint" role="status">
+                {SLOW_LOOKUP_TEXT}
+              </p>
             )}
-
-            {/* ---- Subscriptions Section with Grouping ---- */}
-            <div className="player-nav-heading-row">
-              <h3 className="player-nav-heading">
-                订阅
-                {channels.length > 0 && (
-                  <span className="player-nav-count">{channels.length}</span>
-                )}
-              </h3>
-              <div className="player-sub-header-actions">
-                {channels.some((c) => Boolean(c.lastError)) && (
-                  <button
-                    type="button"
-                    className="player-sub-header-btn is-clear-errors"
-                    title="部分频道上次动态同步受限，点击一键清除所有警告标记"
-                    aria-label="清除所有警告"
-                    onClick={handleClearAllErrors}
-                  >
-                    <CheckIcon size={11} />
-                    <span>重置提示</span>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="player-sub-header-btn"
-                  title="新建分组"
-                  aria-label="新建分组"
-                  onClick={() => {
-                    setInitialModalGroupId(null);
-                    setGroupsModalOpen(true);
-                  }}
-                >
-                  <PlusIcon size={11} />
-                  <span>分组</span>
-                </button>
-                <button
-                  type="button"
-                  className="player-sub-header-btn is-icon-only"
-                  title="管理订阅分组"
-                  aria-label="管理订阅分组"
-                  onClick={() => {
-                    setInitialModalGroupId(null);
-                    setGroupsModalOpen(true);
-                  }}
-                >
-                  <SettingsIcon />
-                </button>
-              </div>
-            </div>
-
-            {channels.length >= FILTER_FROM && (
-              <input
-                type="search"
-                className="player-filter"
-                value={filter}
-                placeholder="筛选订阅"
-                aria-label="筛选订阅"
-                onChange={(event) => setFilter(event.target.value)}
-              />
-            )}
-
-            {channels.length === 0 && (
-              <p className="player-nav-empty">
-                还没有订阅。粘贴频道链接，或导入订阅文件。
+            {openError && (
+              <p className="player-open-error" role="alert">
+                <WarningIcon />
+                {openError}
               </p>
             )}
 
-            {/* If groups exist, render grouped sections */}
-            {groups.length > 0 ? (
-              <>
-                {groupedData.grouped.map(({ group, channels: groupItems }) => {
-                  const isCollapsed = collapsedGroups.has(group.id);
-                  const isDropActive = dragOverGroupId === group.id;
+            <nav className="player-nav" aria-label="播放器">
+              {primaryNavItems.map((item) => (
+                <NavItem
+                  key={item.target.kind}
+                  view={view}
+                  target={item.target}
+                  icon={item.icon}
+                  label={item.label}
+                  badge={item.badge}
+                  onGo={onGo}
+                />
+              ))}
 
-                  // If filtering and no items match in this group, hide it
-                  if (filterQuery && groupItems.length === 0) return null;
+              <h3 className="player-nav-heading">学习路径</h3>
+              <NavItem
+                view={view}
+                target={{ kind: 'learning-paths-home' }}
+                icon={<PathTreeIcon />}
+                label="全部路径"
+                badge={
+                  learningPaths.length
+                    ? String(learningPaths.length)
+                    : undefined
+                }
+                onGo={onGo}
+              />
+              {learningPaths.map((path) => (
+                <NavItem
+                  key={path.pathId}
+                  view={view}
+                  target={{ kind: 'learning-path', pathId: path.pathId }}
+                  icon={<PathTreeIcon />}
+                  label={path.title}
+                  badge={`${path.finishedCount}/${path.videoCount}`}
+                  onGo={onGo}
+                />
+              ))}
 
-                  return (
-                    <div key={group.id} className="player-sub-group-section">
+              {courses.length > 0 && (
+                <>
+                  <h3 className="player-nav-heading">课程</h3>
+                  {courses.map((course) => (
+                    <NavItem
+                      key={course.playlistId}
+                      view={view}
+                      target={{ kind: 'course', playlistId: course.playlistId }}
+                      icon={<CourseIcon />}
+                      label={course.name}
+                      badge={`${course.finishedCount}/${course.itemCount}`}
+                      onGo={onGo}
+                    />
+                  ))}
+                </>
+              )}
+
+              {/* ---- Subscriptions Section with Grouping ---- */}
+              <div className="player-nav-heading-row">
+                <h3 className="player-nav-heading">
+                  订阅
+                  {channels.length > 0 && (
+                    <span className="player-nav-count">{channels.length}</span>
+                  )}
+                </h3>
+                <div className="player-sub-header-actions">
+                  {channels.some((c) => Boolean(c.lastError)) && (
+                    <button
+                      type="button"
+                      className="player-sub-header-btn is-clear-errors"
+                      title="部分频道上次动态同步受限，点击一键清除所有警告标记"
+                      aria-label="清除所有警告"
+                      onClick={handleClearAllErrors}
+                    >
+                      <CheckIcon size={11} />
+                      <span>重置提示</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="player-sub-header-btn"
+                    title="新建分组"
+                    aria-label="新建分组"
+                    onClick={() => {
+                      setInitialModalGroupId(null);
+                      setGroupsModalOpen(true);
+                    }}
+                  >
+                    <PlusIcon size={11} />
+                    <span>分组</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="player-sub-header-btn is-icon-only"
+                    title="管理订阅分组"
+                    aria-label="管理订阅分组"
+                    onClick={() => {
+                      setInitialModalGroupId(null);
+                      setGroupsModalOpen(true);
+                    }}
+                  >
+                    <SettingsIcon />
+                  </button>
+                </div>
+              </div>
+
+              {channels.length >= FILTER_FROM && (
+                <input
+                  type="search"
+                  className="player-filter"
+                  value={filter}
+                  placeholder="筛选订阅"
+                  aria-label="筛选订阅"
+                  onChange={(event) => setFilter(event.target.value)}
+                />
+              )}
+
+              {channels.length === 0 && (
+                <p className="player-nav-empty">
+                  还没有订阅。粘贴频道链接，或导入订阅文件。
+                </p>
+              )}
+
+              {/* If groups exist, render grouped sections */}
+              {groups.length > 0 ? (
+                <>
+                  {groupedData.grouped.map(
+                    ({ group, channels: groupItems }) => {
+                      const isCollapsed = collapsedGroups.has(group.id);
+                      const isDropActive = dragOverGroupId === group.id;
+
+                      // If filtering and no items match in this group, hide it
+                      if (filterQuery && groupItems.length === 0) return null;
+
+                      return (
+                        <div
+                          key={group.id}
+                          className="player-sub-group-section"
+                        >
+                          <div
+                            className={`player-sub-group-head${
+                              isCollapsed ? ' is-collapsed' : ''
+                            }${isDropActive ? ' is-drop-active' : ''}`}
+                            onClick={() => toggleGroupCollapse(group.id)}
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                              setDragOverGroupId(group.id);
+                            }}
+                            onDragLeave={() => {
+                              if (dragOverGroupId === group.id)
+                                setDragOverGroupId(null);
+                            }}
+                            onDrop={(e) => handleDropOnGroup(e, group.id)}
+                          >
+                            <span className="player-sub-group-chevron">▼</span>
+                            <span
+                              className="player-sub-group-dot"
+                              style={{ background: group.color ?? '#df735b' }}
+                            />
+                            <span
+                              className="player-sub-group-name"
+                              title={group.name}
+                            >
+                              {group.name}
+                            </span>
+                            <span className="player-sub-group-count">
+                              {groupItems.length}
+                            </span>
+                            <button
+                              type="button"
+                              className="player-sub-group-menu-btn"
+                              title="分组选项"
+                              aria-label="分组选项"
+                              onClick={(e) => handleGroupMenuOpen(e, group)}
+                            >
+                              ···
+                            </button>
+                          </div>
+
+                          {!isCollapsed && groupItems.map(renderChannelButton)}
+                        </div>
+                      );
+                    },
+                  )}
+
+                  {/* Ungrouped Section */}
+                  {groupedData.ungrouped.length > 0 && (
+                    <div className="player-sub-group-section">
                       <div
                         className={`player-sub-group-head${
-                          isCollapsed ? ' is-collapsed' : ''
-                        }${isDropActive ? ' is-drop-active' : ''}`}
-                        onClick={() => toggleGroupCollapse(group.id)}
+                          collapsedGroups.has('__ungrouped__')
+                            ? ' is-collapsed'
+                            : ''
+                        }${dragOverGroupId === '__ungrouped__' ? ' is-drop-active' : ''}`}
+                        onClick={() => toggleGroupCollapse('__ungrouped__')}
                         onDragOver={(e) => {
                           e.preventDefault();
-                          setDragOverGroupId(group.id);
+                          setDragOverGroupId('__ungrouped__');
                         }}
                         onDragLeave={() => {
-                          if (dragOverGroupId === group.id)
+                          if (dragOverGroupId === '__ungrouped__')
                             setDragOverGroupId(null);
                         }}
-                        onDrop={(e) => handleDropOnGroup(e, group.id)}
+                        onDrop={(e) => handleDropOnGroup(e, null)}
                       >
                         <span className="player-sub-group-chevron">▼</span>
-                        <span
-                          className="player-sub-group-dot"
-                          style={{ background: group.color ?? '#df735b' }}
-                        />
-                        <span
-                          className="player-sub-group-name"
-                          title={group.name}
-                        >
-                          {group.name}
-                        </span>
+                        <span className="player-sub-group-name">未分组</span>
                         <span className="player-sub-group-count">
-                          {groupItems.length}
+                          {groupedData.ungrouped.length}
                         </span>
-                        <button
-                          type="button"
-                          className="player-sub-group-menu-btn"
-                          title="分组选项"
-                          aria-label="分组选项"
-                          onClick={(e) => handleGroupMenuOpen(e, group)}
-                        >
-                          ···
-                        </button>
                       </div>
 
-                      {!isCollapsed && groupItems.map(renderChannelButton)}
+                      {!collapsedGroups.has('__ungrouped__') &&
+                        groupedData.ungrouped.map(renderChannelButton)}
                     </div>
-                  );
-                })}
+                  )}
+                </>
+              ) : (
+                /* Flat channels list when no groups configured */
+                filteredChannels.map(renderChannelButton)
+              )}
 
-                {/* Ungrouped Section */}
-                {groupedData.ungrouped.length > 0 && (
-                  <div className="player-sub-group-section">
-                    <div
-                      className={`player-sub-group-head${
-                        collapsedGroups.has('__ungrouped__')
-                          ? ' is-collapsed'
-                          : ''
-                      }${dragOverGroupId === '__ungrouped__' ? ' is-drop-active' : ''}`}
-                      onClick={() => toggleGroupCollapse('__ungrouped__')}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        setDragOverGroupId('__ungrouped__');
-                      }}
-                      onDragLeave={() => {
-                        if (dragOverGroupId === '__ungrouped__')
-                          setDragOverGroupId(null);
-                      }}
-                      onDrop={(e) => handleDropOnGroup(e, null)}
-                    >
-                      <span className="player-sub-group-chevron">▼</span>
-                      <span className="player-sub-group-name">未分组</span>
-                      <span className="player-sub-group-count">
-                        {groupedData.ungrouped.length}
-                      </span>
-                    </div>
+              {channels.length > 0 && filteredChannels.length === 0 && (
+                <p className="player-nav-empty">没有匹配的订阅。</p>
+              )}
+            </nav>
 
-                    {!collapsedGroups.has('__ungrouped__') &&
-                      groupedData.ungrouped.map(renderChannelButton)}
-                  </div>
-                )}
-              </>
-            ) : (
-              /* Flat channels list when no groups configured */
-              filteredChannels.map(renderChannelButton)
-            )}
-
-            {channels.length > 0 && filteredChannels.length === 0 && (
-              <p className="player-nav-empty">没有匹配的订阅。</p>
-            )}
-          </nav>
-
-          <div className="player-sidebar-footer">
-            <button
-              type="button"
-              className="player-footer-button"
-              onClick={onImport}
-              title="从 NewPipe、Google Takeout 或 OPML 文件导入订阅"
-            >
-              <PlusIcon />
-              导入订阅
-            </button>
-            <button
-              type="button"
-              className="player-footer-button"
-              onClick={onSettings}
-            >
-              <SettingsIcon />
-              设置
-            </button>
+            <div className="player-sidebar-footer">
+              <button
+                type="button"
+                className="player-footer-button"
+                onClick={onImport}
+                title="从 NewPipe、Google Takeout 或 OPML 文件导入订阅"
+              >
+                <PlusIcon />
+                导入订阅
+              </button>
+              <button
+                type="button"
+                className="player-footer-button"
+                onClick={onSettings}
+              >
+                <SettingsIcon />
+                设置
+              </button>
+            </div>
           </div>
-        </div>
+        ) : (
+          <nav className="player-rail" aria-label="收起的播放器导航">
+            <div className="player-rail-scroll">
+              {primaryNavItems.map((item) => {
+                const current = isCurrent(view, item.target);
+                const labelText = item.badge
+                  ? `${item.label} (${item.badge})`
+                  : item.label;
+                return (
+                  <button
+                    key={item.target.kind}
+                    type="button"
+                    className={`player-rail-button${current ? ' is-current' : ''}`}
+                    title={labelText}
+                    aria-label={labelText}
+                    aria-current={current ? 'page' : undefined}
+                    onClick={() => onGo(item.target)}
+                  >
+                    {current && item.filledIcon ? item.filledIcon : item.icon}
+                  </button>
+                );
+              })}
+
+              <div className="player-rail-divider" role="separator" />
+
+              <button
+                type="button"
+                className={`player-rail-button${pathActive ? ' is-current' : ''}`}
+                title={pathTitle}
+                aria-label={pathTitle}
+                aria-current={
+                  view.kind === 'learning-paths-home' ? 'page' : undefined
+                }
+                onClick={() => onGo({ kind: 'learning-paths-home' })}
+              >
+                <PathTreeIcon />
+              </button>
+
+              {courses.map((course) => {
+                const current = isCurrent(view, {
+                  kind: 'course',
+                  playlistId: course.playlistId,
+                });
+                const courseTitle = `${course.name} (${course.finishedCount}/${course.itemCount})`;
+                return (
+                  <button
+                    key={course.playlistId}
+                    type="button"
+                    className={`player-rail-button${current ? ' is-current' : ''}`}
+                    title={courseTitle}
+                    aria-label={courseTitle}
+                    aria-current={current ? 'page' : undefined}
+                    onClick={() =>
+                      onGo({ kind: 'course', playlistId: course.playlistId })
+                    }
+                  >
+                    <CourseIcon />
+                  </button>
+                );
+              })}
+
+              {sorted.length > 0 && (
+                <>
+                  <div className="player-rail-divider" role="separator" />
+                  {sorted.map((channel) => {
+                    const current = isCurrent(view, {
+                      kind: 'channel',
+                      channelId: channel.channelId,
+                    });
+                    return (
+                      <button
+                        key={channel.channelId}
+                        type="button"
+                        className={`player-rail-button is-channel${current ? ' is-current' : ''}`}
+                        title={
+                          channel.lastError
+                            ? `${channel.name}\n同步提示：${channel.lastError}`
+                            : channel.name
+                        }
+                        aria-label={channel.name}
+                        aria-current={current ? 'page' : undefined}
+                        onClick={() =>
+                          onGo({
+                            kind: 'channel',
+                            channelId: channel.channelId,
+                          })
+                        }
+                        onContextMenu={(e) => handleChannelMenuOpen(e, channel)}
+                      >
+                        <Avatar
+                          name={channel.name}
+                          url={channel.avatarUrl}
+                          size={22}
+                        />
+                        {channel.lastError && (
+                          <span
+                            className="player-rail-warning-dot"
+                            aria-hidden="true"
+                          />
+                        )}
+                      </button>
+                    );
+                  })}
+                </>
+              )}
+            </div>
+
+            <div className="player-rail-footer">
+              <button
+                type="button"
+                className="player-rail-button"
+                title="管理订阅分组"
+                aria-label="管理订阅分组"
+                onClick={() => {
+                  setInitialModalGroupId(null);
+                  setGroupsModalOpen(true);
+                }}
+              >
+                <ListIcon />
+              </button>
+              <button
+                type="button"
+                className="player-rail-button"
+                title="从 NewPipe、Google Takeout 或 OPML 文件导入订阅"
+                aria-label="导入订阅"
+                onClick={onImport}
+              >
+                <PlusIcon />
+              </button>
+              <button
+                type="button"
+                className="player-rail-button"
+                title="播放器设置"
+                aria-label="设置"
+                onClick={onSettings}
+              >
+                <SettingsIcon />
+              </button>
+            </div>
+          </nav>
+        )}
       </aside>
 
       {/* Channel Group Assignment Popup Menu */}

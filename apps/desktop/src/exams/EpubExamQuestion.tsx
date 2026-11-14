@@ -1,11 +1,15 @@
-import { useRef } from 'react';
+import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import type {
   EpubExamAnswer,
   EpubExamGrade,
   EpubExamQuestion,
   EpubExamSelfReview,
 } from './epub-exams';
-import type { ExamChoiceLayout } from './exam-paper';
+import {
+  choiceKeysFor,
+  choiceTexts,
+  type ExamChoiceLayout,
+} from './exam-paper';
 import { ExamRichText } from './ExamRichText';
 import { ExamScrollMinimap } from './ExamScrollMinimap';
 
@@ -50,6 +54,7 @@ interface Props {
   answerLines?: number;
   focused?: boolean;
   onFocus?: (id: string) => void;
+  reviewExpandSignal?: { open: boolean; version: number };
 }
 
 function typeLabel(type: EpubExamQuestion['type']) {
@@ -64,26 +69,230 @@ function typeLabel(type: EpubExamQuestion['type']) {
   }[type];
 }
 
+export function isOptionExpected(
+  option: string,
+  choiceKey: string | null,
+  expected: EpubExamAnswer | undefined,
+): boolean {
+  if (expected === undefined) return false;
+  const targets = (Array.isArray(expected) ? expected : [expected])
+    .map((item) => String(item).trim())
+    .filter(Boolean);
+  const optNorm = option.trim();
+  const keyUpper = choiceKey?.toUpperCase() ?? '';
+  return targets.some((target) => {
+    if (target === optNorm) return true;
+    if (keyUpper && target.toUpperCase() === keyUpper) return true;
+    return false;
+  });
+}
+
+function applyCodeEditorKeyDown(
+  event: KeyboardEvent<HTMLTextAreaElement>,
+  currentValue: string,
+  onChange: (nextValue: string) => void,
+) {
+  const el = event.currentTarget;
+  const start = el.selectionStart ?? 0;
+  const end = el.selectionEnd ?? start;
+
+  if (event.key === 'Tab') {
+    event.preventDefault();
+    const indent = '    ';
+    if (start === end && !event.shiftKey) {
+      const next =
+        currentValue.slice(0, start) + indent + currentValue.slice(end);
+      onChange(next);
+      requestAnimationFrame(() => {
+        el.selectionStart = el.selectionEnd = start + indent.length;
+      });
+      return;
+    }
+
+    const lineStart = currentValue.lastIndexOf('\n', start - 1) + 1;
+    const rawLineEnd = currentValue.indexOf('\n', end);
+    const lineEnd = rawLineEnd === -1 ? currentValue.length : rawLineEnd;
+    const block = currentValue.slice(lineStart, lineEnd);
+    const lines = block.split('\n');
+    let firstDelta = 0;
+    let totalDelta = 0;
+
+    const updated = lines.map((line, idx) => {
+      if (event.shiftKey) {
+        const match = line.match(/^( {1,4}|\t)/);
+        if (!match) return line;
+        const removed = match[1].length;
+        if (idx === 0) firstDelta = -removed;
+        totalDelta -= removed;
+        return line.slice(removed);
+      }
+      if (idx === 0) firstDelta = indent.length;
+      totalDelta += indent.length;
+      return indent + line;
+    });
+
+    const next =
+      currentValue.slice(0, lineStart) +
+      updated.join('\n') +
+      currentValue.slice(lineEnd);
+    onChange(next);
+    requestAnimationFrame(() => {
+      el.selectionStart = Math.max(lineStart, start + firstDelta);
+      el.selectionEnd = Math.max(lineStart, end + totalDelta);
+    });
+    return;
+  }
+
+  if (event.key === 'Enter') {
+    const lineStart = currentValue.lastIndexOf('\n', start - 1) + 1;
+    const beforeCursor = currentValue.slice(lineStart, start);
+    const indentMatch = beforeCursor.match(/^[ \t]+/);
+    if (!indentMatch) return;
+    event.preventDefault();
+    const indent = indentMatch[0];
+    const next =
+      currentValue.slice(0, start) + '\n' + indent + currentValue.slice(end);
+    onChange(next);
+    requestAnimationFrame(() => {
+      const caret = start + 1 + indent.length;
+      el.selectionStart = el.selectionEnd = caret;
+    });
+  }
+}
+
 export default function EpubExamQuestion(props: Props) {
   const leafRef = useRef<HTMLElement>(null);
   const { question, answer, submitted, busy, grade } = props;
   const isPaper = props.variant === 'paper';
-  const choices =
-    question.type === 'trueFalse'
-      ? (question.options ?? ['正确', '错误'])
-      : (question.options ?? []);
+  const [paperReviewOpen, setPaperReviewOpen] = useState(false);
+  const lastExpandVersionRef = useRef(-1);
+
+  useEffect(() => {
+    if (
+      props.reviewExpandSignal &&
+      props.reviewExpandSignal.version !== lastExpandVersionRef.current
+    ) {
+      lastExpandVersionRef.current = props.reviewExpandSignal.version;
+      setPaperReviewOpen(props.reviewExpandSignal.open);
+    }
+  }, [props.reviewExpandSignal]);
+  const choices = choiceTexts(question);
+  const choiceKeys =
+    props.choiceKeys ?? choiceKeysFor(question.type, choices.length);
   const isSubjective = [
     'shortAnswer',
     'comprehensive',
     'engineering',
     'cProgramming',
   ].includes(question.type);
+  const isUntouchedStarter =
+    question.type === 'cProgramming' &&
+    typeof answer !== 'string' &&
+    Boolean(question.codeSpec?.starterCode);
+  const codeValue =
+    typeof answer === 'string'
+      ? answer
+      : question.type === 'cProgramming'
+        ? (question.codeSpec?.starterCode ?? '')
+        : '';
+
+  const renderReviewContent = () => (
+    <>
+      <div className="epub-exam-ai-solution">
+        <strong>参考答案与解析</strong>
+        {question.type === 'cProgramming' ? (
+          <pre>
+            {Array.isArray(question.answer)
+              ? question.answer.join('、')
+              : question.answer}
+          </pre>
+        ) : (
+          <p>
+            <ExamRichText
+              text={
+                Array.isArray(question.answer)
+                  ? question.answer.join('、')
+                  : question.answer
+              }
+            />
+          </p>
+        )}
+        <p>
+          <ExamRichText text={question.explanation} />
+        </p>
+      </div>
+      {!!question.rubric?.length && (
+        <div className="epub-exam-rubric">
+          <strong>评分细则</strong>
+          {question.rubric.map((item, idx) => (
+            <div key={idx}>
+              {item.criterion}
+              <span>{item.points} 分</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {grade && (
+        <div className="epub-exam-grade">
+          <strong>
+            {grade.provisional ? '建议得分' : '得分'}：{grade.earned} /{' '}
+            {grade.maximum}
+          </strong>
+          <p>{grade.feedback}</p>
+          {['shortAnswer', 'comprehensive', 'engineering'].includes(
+            question.type,
+          ) && (
+            <label>
+              人工调整{' '}
+              <input
+                type="number"
+                min="0"
+                max={grade.maximum}
+                step="0.5"
+                value={grade.earned}
+                onChange={(event) =>
+                  props.onOverride(Number(event.target.value))
+                }
+              />
+            </label>
+          )}
+        </div>
+      )}
+      <div className="epub-exam-review-segmented">
+        <span className="epub-exam-review-label">掌握度：</span>
+        {(
+          [
+            ['mastered', '✓ 掌握'],
+            ['partial', '◐ 部分'],
+            ['review', '✗ 需复习'],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            className={`epub-exam-seg-btn is-${value}${props.review === value ? ' is-active' : ''}`}
+            onClick={() => props.onReview(value)}
+            disabled={busy}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+
   const paper = (
     <article
       ref={leafRef}
       className={`${isPaper ? 'exam-paper-item' : 'epub-exam-leaf'}${isPaper && props.focused ? ' is-focused' : ''}`}
       id={`exam-question-${question.id}`}
+      data-question-id={question.id}
       onClick={
+        isPaper && props.onFocus
+          ? () => props.onFocus?.(question.id)
+          : undefined
+      }
+      onFocusCapture={
         isPaper && props.onFocus
           ? () => props.onFocus?.(question.id)
           : undefined
@@ -125,9 +334,9 @@ export default function EpubExamQuestion(props: Props) {
               <strong>公开样例</strong>
               {(question.codeSpec.cases ?? [])
                 .filter((item) => !item.hidden)
-                .map((item, index) => (
-                  <div key={index}>
-                    <span>样例 {index + 1}</span>
+                .map((item, idx) => (
+                  <div key={idx}>
+                    <span>样例 {idx + 1}</span>
                     <pre>
                       输入：{item.stdin || '（空）'}
                       {'\n'}输出：{item.expectedStdout || '（空）'}
@@ -152,7 +361,14 @@ export default function EpubExamQuestion(props: Props) {
                 className="epub-exam-answer-label"
                 htmlFor={`exam-answer-${question.id}`}
               >
-                {question.type === 'cProgramming' ? 'C11 源代码' : '你的作答'}
+                <span>
+                  {question.type === 'cProgramming' ? 'C11 源代码' : '你的作答'}
+                </span>
+                {isUntouchedStarter && (
+                  <span className="epub-exam-code-untouched-hint">
+                    当前为起始模板（修改后计为已作答）
+                  </span>
+                )}
               </label>
               <textarea
                 id={`exam-answer-${question.id}`}
@@ -169,17 +385,29 @@ export default function EpubExamQuestion(props: Props) {
                     : undefined
                 }
                 spellCheck={question.type !== 'cProgramming'}
-                value={
-                  typeof answer === 'string'
-                    ? answer
-                    : question.type === 'cProgramming'
-                      ? (question.codeSpec?.starterCode ?? '')
-                      : ''
-                }
+                value={codeValue}
                 onChange={(event) => props.onAnswer(event.target.value)}
+                onKeyDown={
+                  question.type === 'cProgramming'
+                    ? (event) =>
+                        applyCodeEditorKeyDown(event, codeValue, (next) =>
+                          props.onAnswer(next),
+                        )
+                    : undefined
+                }
                 disabled={submitted || busy}
                 rows={question.type === 'cProgramming' ? 15 : 8}
               />
+              {question.type !== 'cProgramming' &&
+                typeof answer === 'string' &&
+                answer.includes('$') && (
+                  <div className="epub-exam-math-preview">
+                    <span className="epub-exam-math-preview-label">
+                      公式渲染预览
+                    </span>
+                    <ExamRichText text={answer} />
+                  </div>
+                )}
               {question.type === 'cProgramming' && (
                 <>
                   <button
@@ -207,12 +435,12 @@ export default function EpubExamQuestion(props: Props) {
                           `通过 ${props.codeResult.evaluation?.passed ?? 0} / ${props.codeResult.evaluation?.total ?? 0} 个测试`}
                       </strong>
                       {(props.codeResult.evaluation?.cases ?? []).map(
-                        (item, index) => (
+                        (item, idx) => (
                           <div
-                            key={index}
+                            key={idx}
                             className={item.passed ? 'is-passed' : 'is-failed'}
                           >
-                            {item.visible ? '公开' : '隐藏'}用例 {index + 1}：
+                            {item.visible ? '公开' : '隐藏'}用例 {idx + 1}：
                             {item.passed ? '通过' : '未通过'}
                             {item.visible && !item.passed && (
                               <pre>
@@ -240,15 +468,25 @@ export default function EpubExamQuestion(props: Props) {
               }
             >
               {choices.map((option, optionIndex) => {
-                const choiceKey = props.choiceKeys?.[optionIndex];
+                const choiceKey = choiceKeys[optionIndex] ?? null;
                 const selected =
                   question.type === 'multipleChoice'
                     ? Array.isArray(answer) && answer.includes(option)
                     : answer === option;
+                const expectedOpt =
+                  submitted &&
+                  isOptionExpected(option, choiceKey, question.answer);
+                const statusClass = submitted
+                  ? expectedOpt
+                    ? ' is-correct'
+                    : selected
+                      ? ' is-wrong'
+                      : ''
+                  : '';
                 return (
                   <label
-                    key={option}
-                    className={`${isPaper ? 'exam-paper-option' : 'epub-exam-option-item'}${selected ? ' is-selected' : ''}`}
+                    key={`${question.id}-${optionIndex}`}
+                    className={`${isPaper ? 'exam-paper-option' : 'epub-exam-option-item'}${selected ? ' is-selected' : ''}${statusClass}`}
                   >
                     <input
                       type={
@@ -289,89 +527,23 @@ export default function EpubExamQuestion(props: Props) {
               })}
             </div>
           )}
-          {submitted && !isPaper && (
-            <>
-              <div className="epub-exam-ai-solution">
-                <strong>参考答案与解析</strong>
-                {question.type === 'cProgramming' ? (
-                  <pre>
-                    {Array.isArray(question.answer)
-                      ? question.answer.join('、')
-                      : question.answer}
-                  </pre>
-                ) : (
-                  <p>
-                    <ExamRichText
-                      text={
-                        Array.isArray(question.answer)
-                          ? question.answer.join('、')
-                          : question.answer
-                      }
-                    />
-                  </p>
-                )}
-                <p>
-                  <ExamRichText text={question.explanation} />
-                </p>
-              </div>
-              {!!question.rubric?.length && (
-                <div className="epub-exam-rubric">
-                  <strong>评分细则</strong>
-                  {question.rubric.map((item, index) => (
-                    <div key={index}>
-                      {item.criterion}
-                      <span>{item.points} 分</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {grade && (
-                <div className="epub-exam-grade">
-                  <strong>
-                    {grade.provisional ? '建议得分' : '得分'}：{grade.earned} /{' '}
-                    {grade.maximum}
-                  </strong>
-                  <p>{grade.feedback}</p>
-                  {['shortAnswer', 'comprehensive', 'engineering'].includes(
-                    question.type,
-                  ) && (
-                    <label>
-                      人工调整{' '}
-                      <input
-                        type="number"
-                        min="0"
-                        max={grade.maximum}
-                        step="0.5"
-                        value={grade.earned}
-                        onChange={(event) =>
-                          props.onOverride(Number(event.target.value))
-                        }
-                      />
-                    </label>
-                  )}
-                </div>
-              )}
-              <div className="epub-exam-review-segmented">
-                <span>掌握度：</span>
-                {(
-                  [
-                    ['mastered', '✓ 掌握'],
-                    ['partial', '◐ 部分'],
-                    ['review', '✗ 需复习'],
-                  ] as const
-                ).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    className={`epub-exam-seg-btn${props.review === value ? ' is-active' : ''}`}
-                    onClick={() => props.onReview(value)}
-                    disabled={busy}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </>
+          {submitted && !isPaper && renderReviewContent()}
+          {submitted && isPaper && (
+            <details
+              className="exam-paper-inline-review"
+              open={paperReviewOpen}
+            >
+              <summary
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setPaperReviewOpen((prev) => !prev);
+                }}
+              >
+                {paperReviewOpen ? '收起参考答案与解析' : '查看参考答案与解析'}
+              </summary>
+              {renderReviewContent()}
+            </details>
           )}
         </div>
       )}

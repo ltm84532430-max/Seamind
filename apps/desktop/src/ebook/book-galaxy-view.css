@@ -917,3 +917,126 @@
 .app-shell[data-theme='light'] .book-galaxy-tooltip-hint {
   color: #475569;
 }
+
+/* Footnote Diamond Child Nodes */
+.galaxy-link-orbit.is-footnote-orbit {
+  stroke-dasharray: 2.5 2.5;
+  opacity: 0.55;
+}
+
+.galaxy-link-orbit.is-footnote-orbit.is-spotlight {
+  stroke-dasharray: none;
+  opacity: 0.92;
+}
+
+.galaxy-node-diamond {
+  stroke: rgba(15, 23, 42, 0.8);
+  stroke-width: 1.2px;
+  transition:
+    filter 0.15s ease,
+    stroke 0.15s ease,
+    stroke-width 0.15s ease;
+}
+
+.app-shell[data-theme='light'] .galaxy-node-diamond {
+  stroke: rgba(255, 255, 255, 0.95);
+}
+
+.galaxy-node-diamond.is-epub-ai {
+  stroke: rgba(196, 181, 253, 0.95);
+}
+
+.galaxy-node-diamond.is-markdown-footnote {
+  stroke: rgba(110, 231, 183, 0.92);
+}
+
+.galaxy-node-diamond.is-synced {
+  stroke: #fbbf24;
+  stroke-width: 1.5px;
+}
+
+.galaxy-node-group.is-hovered .galaxy-node-diamond,
+.galaxy-node-group:hover .galaxy-node-diamond {
+  stroke: #ffffff;
+  stroke-width: 1.8px;
+  filter: drop-shadow(0 0 7px var(--node-color, #d9573b));
+}
+
+.galaxy-footnote-halo {
+  fill: none;
+  stroke: var(--node-color, #f59e0b);
+  stroke-width: 1.15px;
+  opacity: 0.72;
+  pointer-events: none;
+}
+
+.galaxy-footnote-halo.is-epub-ai {
+  stroke: #a78bfa;
+  stroke-dasharray: 2 1.8;
+}
+
+.galaxy-footnote-halo.is-markdown-footnote {
+  stroke: #34d399;
+}
+
+.galaxy-footnote-halo.is-synced {
+  stroke: #fbbf24;
+  stroke-width: 1.45px;
+  opacity: 0.88;
+}
+
+.galaxy-footnote-pip {
+  fill: rgba(255, 255, 255, 0.92);
+  pointer-events: none;
+}
+
+.galaxy-footnote-pip.is-epub-ai {
+  fill: #ddd6fe;
+}
+
+.galaxy-footnote-pip.is-markdown-footnote {
+  fill: #a7f3d0;
+}
+
+.galaxy-footnote-label {
+  font-family: inherit;
+  font-size: 8.8px;
+  font-weight: 500;
+  fill: #cbd5e1;
+  text-anchor: middle;
+  pointer-events: none;
+  paint-order: stroke;
+  stroke: rgba(13, 16, 22, 0.88);
+  stroke-width: 2.4px;
+}
+
+.app-shell[data-theme='light'] .galaxy-footnote-label {
+  fill: #334155;
+  stroke: rgba(246, 248, 250, 0.94);
+}
+
+.book-galaxy-tooltip-quote {
+  margin: 2px 0;
+  padding: 4px 8px;
+  border-left: 2px solid #d9573b;
+  background: rgba(255, 255, 255, 0.05);
+  color: #cbd5e1;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.app-shell[data-theme='light'] .book-galaxy-tooltip-quote {
+  background: rgba(15, 23, 42, 0.05);
+  color: #475569;
+}
+
+.book-galaxy-tooltip-footnote-body {
+  color: #f8fafc;
+  font-size: 11.5px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.app-shell[data-theme='light'] .book-galaxy-tooltip-footnote-body {
+  color: #0f172a;
+}

@@ -1,7 +1,12 @@
 /**
  * 为电子书和 RSS 星图共享的图形结构与布局物理计算。
  */
-export type GalaxyNodeKind = 'sun' | 'cluster' | 'planet' | 'satellite';
+export type GalaxyNodeKind =
+  | 'sun'
+  | 'cluster'
+  | 'planet'
+  | 'satellite'
+  | 'footnote';
 export type GalaxyLinkKind = 'orbit' | 'sequence' | 'cross_link';
 
 export interface GalaxyLink {
@@ -81,11 +86,24 @@ export function buildGalaxyAdjacencyMap<
     map.get(link.target)?.add(link.source);
   }
 
-  // 聚类节点高亮时，同时包含其子节点及文章、笔记卫星节点。
+  // 聚类或小节高亮时，递归纳入旗下三级子节与脚注子节点。
   for (const node of nodes) {
-    if (node.kind !== 'satellite' || !node.parentId) continue;
-    const parent = nodeById.get(node.parentId);
-    if (parent?.parentId) map.get(parent.parentId)?.add(node.id);
+    if (
+      (node.kind !== 'satellite' && node.kind !== 'footnote') ||
+      !node.parentId
+    ) {
+      continue;
+    }
+    let ancestor = nodeById.get(node.parentId);
+    while (ancestor && ancestor.kind !== 'sun') {
+      map.get(ancestor.id)?.add(node.id);
+      if (node.kind === 'footnote') {
+        map.get(node.id)?.add(ancestor.id);
+      }
+      ancestor = ancestor.parentId
+        ? nodeById.get(ancestor.parentId)
+        : undefined;
+    }
   }
   return map;
 }
@@ -159,13 +177,17 @@ export function stepGalaxyPhysics(
       if (distanceSquared > maxRepelDistanceSquared) continue;
 
       const distance = Math.max(8, Math.sqrt(distanceSquared));
-      const minGap = (a.radius + b.radius + 22) * Math.sqrt(repel);
+      const isFootnotePair = a.kind === 'footnote' || b.kind === 'footnote';
+      const minGap =
+        (a.radius + b.radius + (isFootnotePair ? 11 : 22)) * Math.sqrt(repel);
       const charge =
         a.kind === 'sun' || b.kind === 'sun'
           ? 2400 * repel
           : a.kind === 'cluster' && b.kind === 'cluster'
             ? 1450 * repel
-            : 460 * repel;
+            : isFootnotePair
+              ? 210 * repel
+              : 460 * repel;
       let force = (charge / (distanceSquared + 120)) * activeAlpha;
       if (distance < minGap) force += (minGap - distance) * 0.22 * activeAlpha;
       const fx = (dx / distance) * force;
@@ -202,7 +224,9 @@ export function stepGalaxyPhysics(
           ? 0.065
           : target.kind === 'planet'
             ? 0.14
-            : 0.18) *
+            : target.kind === 'footnote'
+              ? 0.22
+              : 0.18) *
         tension *
         activeAlpha;
       const delta = (distance - restLength) * spring;
@@ -256,7 +280,9 @@ export function stepGalaxyPhysics(
       body.vx += (targetX - body.x) * 0.042 * gravity * activeAlpha;
       body.vy += (targetY - body.y) * 0.042 * gravity * activeAlpha;
     } else if (
-      (body.kind === 'planet' || body.kind === 'satellite') &&
+      (body.kind === 'planet' ||
+        body.kind === 'satellite' ||
+        body.kind === 'footnote') &&
       body.parentId
     ) {
       const parent = bodies.get(body.parentId);
@@ -271,8 +297,16 @@ export function stepGalaxyPhysics(
           parent.fx !== null
             ? body.kind === 'planet'
               ? 0.16
-              : 0.2
-            : (body.kind === 'planet' ? 0.055 : 0.075) * gravity * activeAlpha;
+              : body.kind === 'footnote'
+                ? 0.24
+                : 0.2
+            : (body.kind === 'planet'
+                ? 0.055
+                : body.kind === 'footnote'
+                  ? 0.095
+                  : 0.075) *
+              gravity *
+              activeAlpha;
         body.vx += (targetX - body.x) * pull;
         body.vy += (targetY - body.y) * pull;
       }
@@ -287,6 +321,27 @@ export function stepGalaxyPhysics(
     }
     body.x += body.vx;
     body.y += body.vy;
+  }
+
+  // Keep collapsed/hidden footnote satellites anchored to their parent cluster's latest position.
+  if (visibleIds) {
+    for (const body of bodyList) {
+      if (
+        body.kind !== 'footnote' ||
+        visibleIds.has(body.id) ||
+        !body.parentId
+      ) {
+        continue;
+      }
+      const parent = bodies.get(body.parentId);
+      if (!parent) continue;
+      body.x =
+        parent.x + Math.cos(body.orbitAngle) * body.orbitRadius * distScale;
+      body.y =
+        parent.y + Math.sin(body.orbitAngle) * body.orbitRadius * distScale;
+      body.vx = 0;
+      body.vy = 0;
+    }
   }
 
   if (!hasPinned) state.alpha *= 0.965;

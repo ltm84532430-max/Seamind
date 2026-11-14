@@ -26,9 +26,25 @@ export interface ZlibEnvironment {
 
 export interface ZlibProfile {
   email?: string | null;
+  name?: string | null;
   downloadsToday?: number | null;
   downloadsLimit?: number | null;
+  dailyRemaining?: number | null;
+  dailyAllowed?: number | null;
+  activeDomain?: string | null;
   isLoggedIn: boolean;
+}
+
+export interface ZlibDoctorResult {
+  healthyDomains: string[];
+  activeDomain?: string | null;
+}
+
+export interface ZlibSwitchDomainResult {
+  activeDomain: string;
+  healthyDomains: string[];
+  profile?: ZlibProfile | null;
+  warning?: string | null;
 }
 
 export interface ZlibSearchResult {
@@ -51,8 +67,36 @@ export const zlibApi = {
     });
   },
 
-  login(email: string, password: string): Promise<void> {
-    return invoke<void>('zlib_login', { email, password });
+  doctor(customPath?: string): Promise<ZlibDoctorResult> {
+    return invoke<ZlibDoctorResult>('zlib_doctor', {
+      customPath: customPath || null,
+    });
+  },
+
+  switchDomain(
+    domain?: string,
+    customPath?: string,
+  ): Promise<ZlibSwitchDomainResult> {
+    return invoke<ZlibSwitchDomainResult>('zlib_switch_domain', {
+      domain: domain || null,
+      customPath: customPath || null,
+    });
+  },
+
+  login(
+    email: string,
+    password: string,
+    customPath?: string,
+  ): Promise<ZlibProfile> {
+    return invoke<ZlibProfile>('zlib_login', {
+      email,
+      password,
+      customPath: customPath || null,
+    });
+  },
+
+  logout(): Promise<void> {
+    return invoke<void>('zlib_logout');
   },
 
   search(
@@ -61,9 +105,10 @@ export const zlibApi = {
     count = 20,
     customPath?: string,
   ): Promise<ZlibSearchResult> {
+    const normalizedExt = ext.trim();
     return invoke<ZlibSearchResult>('zlib_search', {
       query,
-      ext: ext || 'epub',
+      ext: normalizedExt ? normalizedExt : null,
       count,
       customPath: customPath || null,
     });

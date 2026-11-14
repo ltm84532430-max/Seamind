@@ -7,21 +7,27 @@ import {
   useState,
 } from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import type {
   EpubExam,
   EpubExamAttempt,
   EpubExamAnswer,
-  EpubExamGrade,
   EpubExamSelfReview,
-  EpubExamSummary,
 } from './epub-exams';
-import { formatEpubExamDate, listEpubExams } from './epub-exams';
-import { ExamPaperReview } from './ExamPaperReview';
+import { formatEpubExamDate } from './epub-exams';
+import { choiceTexts, composeExamPaper } from './exam-paper';
 import { ExamPaperSheet } from './ExamPaperSheet';
 import EpubExamQuestion from './EpubExamQuestion';
-import type { ExamCodeResult } from './EpubExamQuestion';
+import { ExamBookNavSidebar } from './ExamBookNavSidebar';
+import { ExamAnalyticsSidebar } from './ExamAnalyticsSidebar';
+import {
+  getDifficultyLabel,
+  isAnswerFilled,
+  normalizeExam,
+  useExamSession,
+} from './useExamSession';
 import './epub-exam-v2.css';
+
+export { normalizeExam };
 
 export interface EpubExamWorkspaceProps {
   provider?: { baseUrl: string; model: string };
@@ -79,7 +85,7 @@ export class ExamErrorBoundary extends Component<
                 style={{
                   fontSize: '1.1rem',
                   fontWeight: 600,
-                  color: 'var(--text-main, #0f172a)',
+                  color: 'var(--exam-ink, #0f172a)',
                   margin: '16px 0 8px',
                 }}
               >
@@ -88,7 +94,7 @@ export class ExamErrorBoundary extends Component<
               <p
                 role="alert"
                 style={{
-                  color: 'var(--text-muted, #64748b)',
+                  color: 'var(--exam-muted, #64748b)',
                   fontSize: '0.9rem',
                   marginBottom: '16px',
                 }}
@@ -113,28 +119,6 @@ export class ExamErrorBoundary extends Component<
   }
 }
 
-export function normalizeExam(raw?: EpubExam | null): EpubExam | null {
-  if (!raw) return null;
-  return {
-    ...raw,
-    attempts: Array.isArray(raw.attempts) ? raw.attempts : [],
-    questions: Array.isArray(raw.questions) ? raw.questions : [],
-    answers: raw.answers && typeof raw.answers === 'object' ? raw.answers : {},
-    selfReviews:
-      raw.selfReviews && typeof raw.selfReviews === 'object'
-        ? raw.selfReviews
-        : {},
-    grades: raw.grades && typeof raw.grades === 'object' ? raw.grades : {},
-    sourceSectionLabel: raw.sourceSectionLabel || '',
-    bookTitle: raw.bookTitle || '',
-    questionCount:
-      typeof raw.questionCount === 'number'
-        ? raw.questionCount
-        : (raw.questions?.length ?? 0),
-    status: raw.status || 'inProgress',
-  };
-}
-
 function formatExamAnswer(answer: EpubExamAnswer | undefined): string {
   if (answer === undefined || answer === '') return '未作答';
   return Array.isArray(answer) ? answer.join('、') || '未作答' : answer;
@@ -147,38 +131,20 @@ function formatSelfReview(review: EpubExamSelfReview | undefined): string {
   return '未自评';
 }
 
-function getDifficultyLabel(difficulty?: string): string {
-  if (difficulty === 'easy') return '简单';
-  if (difficulty === 'hard') return '困难';
-  return '中等';
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
 }
 
 function EpubExamWorkspaceInner({
   provider,
-  examId: initialExamId,
+  examId,
   bookKey,
   onBack,
   initialExam,
 }: EpubExamWorkspaceProps) {
-  const [activeExamId, setActiveExamId] = useState(initialExamId);
-  const [exam, setExam] = useState<EpubExam | null>(() =>
-    normalizeExam(initialExam),
-  );
-  const [bookExams, setBookExams] = useState<EpubExamSummary[]>([]);
-  const [answers, setAnswers] = useState<Record<string, EpubExamAnswer>>(
-    initialExam?.answers ?? {},
-  );
-  const [selfReviews, setSelfReviews] = useState<
-    Record<string, EpubExamSelfReview>
-  >(initialExam?.selfReviews ?? {});
-  const [grades, setGrades] = useState<Record<string, EpubExamGrade>>(
-    initialExam?.grades ?? {},
-  );
-  const [codeResults, setCodeResults] = useState<
-    Record<string, ExamCodeResult>
-  >({});
-  const [codeBusyId, setCodeBusyId] = useState('');
-  const [gradingBusy, setGradingBusy] = useState(false);
   const [displayMode, setDisplayMode] = useState<
     'spread' | 'workspace' | 'paper'
   >('spread');
@@ -187,370 +153,112 @@ function EpubExamWorkspaceInner({
   );
   const [pageIndex, setPageIndex] = useState(0);
   const [compactPages, setCompactPages] = useState(false);
-  useEffect(() => {
-    const query = window.matchMedia('(max-width: 2184px)');
-    const update = () => setCompactPages(query.matches);
-    update();
-    query.addEventListener('change', update);
-    return () => query.removeEventListener('change', update);
-  }, []);
-  const pageStep = displayMode === 'spread' && !compactPages ? 2 : 1;
-  const [loading, setLoading] = useState(!initialExam);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>(
-    'idle',
-  );
-
-  // Layout states
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [analyticsCollapsed, setAnalyticsCollapsed] = useState(false);
-  const [sidebarFilter, setSidebarFilter] = useState('');
+  const [paperWideWidth, setPaperWideWidth] = useState(false);
+  const [paperWhiteSurface, setPaperWhiteSurface] = useState(false);
+  const [scrollLockNonce, setScrollLockNonce] = useState(0);
 
-  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const saveTimerRef = useRef<number | null>(null);
-  const dirtyRef = useRef(false);
-  const revisionRef = useRef(0);
+  const stageRef = useRef<HTMLElement>(null);
+  const preZenStateRef = useRef<{
+    sidebar: boolean;
+    analytics: boolean;
+  } | null>(null);
+  const isZenMode = sidebarCollapsed && analyticsCollapsed;
 
-  // Fetch all exams for this book to populate sequential sidebar and analytics
-  const refreshBookExams = useCallback(async () => {
-    try {
-      const items = await listEpubExams(bookKey);
-      setBookExams(items);
-    } catch {
-      // ignore non-critical list error
-    }
-  }, [bookKey]);
-
-  useEffect(() => {
-    void refreshBookExams();
-  }, [refreshBookExams]);
-
-  // Load active exam
-  useEffect(() => {
-    let active = true;
-    setLoading(true);
-    setError('');
-    void invoke<EpubExam>('get_epub_exam', { bookKey, examId: activeExamId })
-      .then((loaded) => {
-        if (!active) return;
-        const normalized = normalizeExam(loaded);
-        setExam(normalized);
-        setAnswers(normalized?.answers ?? {});
-        setSelfReviews(normalized?.selfReviews ?? {});
-        setGrades(normalized?.grades ?? {});
-        setCodeResults({});
-        setPageIndex(0);
-        setPaperFocusId(normalized?.questions[0]?.id ?? '');
-        dirtyRef.current = false;
-        revisionRef.current = 0;
-      })
-      .catch((cause) => {
-        if (active) {
-          setError(cause instanceof Error ? cause.message : String(cause));
-        }
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-      if (saveTimerRef.current !== null) {
-        window.clearTimeout(saveTimerRef.current);
+  const toggleZenMode = useCallback(() => {
+    if (sidebarCollapsed && analyticsCollapsed) {
+      const prev = preZenStateRef.current;
+      if (prev && (!prev.sidebar || !prev.analytics)) {
+        setSidebarCollapsed(prev.sidebar);
+        setAnalyticsCollapsed(prev.analytics);
+      } else {
+        setSidebarCollapsed(false);
+        setAnalyticsCollapsed(false);
       }
-    };
-  }, [bookKey, activeExamId]);
-
-  // Enqueue auto save
-  const enqueueSave = useCallback(
-    (
-      nextAnswers: Record<string, EpubExamAnswer>,
-      nextReviews: Record<string, EpubExamSelfReview>,
-      submitted: boolean,
-    ) => {
-      const operation = saveQueueRef.current
-        .catch(() => undefined)
-        .then(() =>
-          invoke<EpubExam>('save_epub_exam_progress', {
-            bookKey,
-            examId: activeExamId,
-            answers: nextAnswers,
-            selfReviews: nextReviews,
-            submitted,
-          }),
-        );
-      saveQueueRef.current = operation.then(() => undefined);
-      return operation;
-    },
-    [bookKey, activeExamId],
-  );
-
-  // Debounced auto-save effect
-  useEffect(() => {
-    if (!exam || loading || !dirtyRef.current) return;
-    const revision = revisionRef.current;
-    if (saveTimerRef.current !== null) {
-      window.clearTimeout(saveTimerRef.current);
-    }
-    saveTimerRef.current = window.setTimeout(() => {
-      setSaveState('saving');
-      void enqueueSave(answers, selfReviews, exam.status === 'submitted')
-        .then(() => {
-          if (revisionRef.current === revision) dirtyRef.current = false;
-          setSaveState('saved');
-          setError('');
-          void refreshBookExams();
-        })
-        .catch((cause) => {
-          setError(cause instanceof Error ? cause.message : String(cause));
-          setSaveState('idle');
-        });
-    }, 500);
-    return () => {
-      if (saveTimerRef.current !== null) {
-        window.clearTimeout(saveTimerRef.current);
-      }
-    };
-  }, [answers, enqueueSave, exam, loading, refreshBookExams, selfReviews]);
-
-  // Edit answer
-  const editAnswer = (questionId: string, value: EpubExamAnswer) => {
-    if (exam?.status === 'submitted' || busy) return;
-    dirtyRef.current = true;
-    revisionRef.current += 1;
-    setSaveState('idle');
-    setAnswers((current) => ({ ...current, [questionId]: value }));
-  };
-
-  // Edit review with immediate auto-save
-  const editReview = (questionId: string, value: EpubExamSelfReview) => {
-    if (busy) return;
-    dirtyRef.current = true;
-    revisionRef.current += 1;
-    setSaveState('idle');
-    setSelfReviews((current) => ({ ...current, [questionId]: value }));
-  };
-
-  const runCode = async (questionId: string, submittedOverride?: boolean) => {
-    if (!exam || codeBusyId) return;
-    const question = exam.questions.find((item) => item.id === questionId);
-    if (!question || question.type !== 'cProgramming') return;
-    const source =
-      typeof answers[questionId] === 'string'
-        ? (answers[questionId] as string)
-        : submittedOverride
-          ? ''
-          : (question.codeSpec?.starterCode ?? '');
-    setCodeBusyId(questionId);
-    try {
-      const result = await invoke<ExamCodeResult>('run_epub_exam_code', {
-        bookKey,
-        examId: activeExamId,
-        questionId,
-        source,
-      });
-      setCodeResults((current) => ({ ...current, [questionId]: result }));
-      if (submittedOverride || exam.status === 'submitted') {
-        setGrades((current) => ({ ...current, [questionId]: result.grade }));
-      }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setCodeBusyId('');
-    }
-  };
-
-  const gradeSubjective = async () => {
-    if (!exam || !provider?.model || !provider.baseUrl) {
-      setError('请先在模型设置中配置 AI 服务，再评阅主观题。');
+      preZenStateRef.current = null;
       return;
     }
-    setGradingBusy(true);
-    try {
-      const result = await invoke<Record<string, EpubExamGrade>>(
-        'grade_epub_exam_subjective',
-        {
-          bookKey,
-          examId: activeExamId,
-          baseUrl: provider.baseUrl,
-          model: provider.model,
-        },
-      );
-      setGrades((current) => ({ ...current, ...result }));
-      setError('');
-    } catch (cause) {
-      setError(
-        `AI 评阅暂未完成：${cause instanceof Error ? cause.message : String(cause)}。已交卷答案保存在本机，可重试。`,
-      );
-    } finally {
-      setGradingBusy(false);
-    }
-  };
+    preZenStateRef.current = {
+      sidebar: sidebarCollapsed,
+      analytics: analyticsCollapsed,
+    };
+    setSidebarCollapsed(true);
+    setAnalyticsCollapsed(true);
+  }, [analyticsCollapsed, sidebarCollapsed]);
 
-  const overrideGrade = async (questionId: string, earned: number) => {
-    if (!Number.isFinite(earned)) return;
-    try {
-      const grade = await invoke<EpubExamGrade>('override_epub_exam_grade', {
-        bookKey,
-        examId: activeExamId,
-        questionId,
-        earned,
-      });
-      setGrades((current) => ({ ...current, [questionId]: grade }));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
-  };
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const update = () => {
+      const width = el.clientWidth;
+      if (width > 0) setCompactPages(width < 980);
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
-  // Submit exam
-  const submitExam = async () => {
-    if (!exam || exam.status === 'submitted' || busy) return;
-    if (saveTimerRef.current !== null) {
-      window.clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
-    setBusy(true);
-    setError('');
-    revisionRef.current += 1;
-    dirtyRef.current = true;
-    try {
-      const submittedExam = await enqueueSave(answers, selfReviews, true);
-      dirtyRef.current = false;
-      setSaveState('saved');
-      setExam(normalizeExam(submittedExam));
-      setGrades(submittedExam.grades ?? {});
-      void refreshBookExams();
-      for (const question of exam.questions) {
-        if (
-          question.type === 'cProgramming' &&
-          typeof answers[question.id] === 'string'
-        ) {
-          await runCode(question.id, true);
-        }
+  const handleExamReset = useCallback((nextExam: EpubExam | null) => {
+    setPageIndex(0);
+    setPaperFocusId(nextExam?.questions?.[0]?.id ?? '');
+  }, []);
+
+  const session = useExamSession({
+    provider,
+    examId,
+    bookKey,
+    initialExam,
+    onBack,
+    onExamReset: handleExamReset,
+  });
+
+  const {
+    activeExamId,
+    exam,
+    sortedBookExams,
+    bookStats,
+    answers,
+    selfReviews,
+    grades,
+    codeResults,
+    codeBusyId,
+    gradingBusy,
+    loading,
+    busy,
+    error,
+    saveState,
+    editAnswer,
+    editReview,
+    runCode,
+    gradeSubjective,
+    overrideGrade,
+    submitExam,
+    restartExam,
+    deleteExam,
+    switchExam,
+    goBack,
+  } = session;
+
+  const pageStep = displayMode === 'spread' && !compactPages ? 2 : 1;
+
+  const handleSetDisplayMode = useCallback(
+    (nextMode: 'spread' | 'workspace' | 'paper') => {
+      setDisplayMode(nextMode);
+      if (
+        nextMode === 'paper' &&
+        typeof window !== 'undefined' &&
+        window.innerWidth < 1380
+      ) {
+        setSidebarCollapsed(true);
       }
-      await gradeSubjective();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Restart exam
-  const restartExam = async () => {
-    if (!exam || exam.status !== 'submitted' || busy) return;
-    const nextAttempt = (exam.attempts?.length ?? 0) + 1;
-    const accepted = window.confirm(
-      `开始第 ${nextAttempt} 次作答？本轮答案会清空，上次答案和自评会保存在历史记录中。`,
-    );
-    if (!accepted) return;
-    if (saveTimerRef.current !== null) {
-      window.clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
-    setBusy(true);
-    setError('');
-    try {
-      await saveQueueRef.current.catch(() => undefined);
-      if (dirtyRef.current) {
-        await enqueueSave(answers, selfReviews, true);
-        dirtyRef.current = false;
+      if (nextMode === 'spread' && !compactPages) {
+        setPageIndex((prev) => Math.floor(prev / 2) * 2);
       }
-      const restarted = await invoke<EpubExam>('restart_epub_exam', {
-        bookKey,
-        examId: activeExamId,
-      });
-      const normalized = normalizeExam(restarted);
-      revisionRef.current += 1;
-      dirtyRef.current = false;
-      setExam(normalized);
-      setAnswers(normalized?.answers ?? {});
-      setSelfReviews(normalized?.selfReviews ?? {});
-      setGrades(normalized?.grades ?? {});
-      setCodeResults({});
-      setPageIndex(0);
-      setSaveState('saved');
-      void refreshBookExams();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-      setSaveState('idle');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Delete exam
-  const deleteExam = async () => {
-    if (!exam || busy) return;
-    const accepted = window.confirm(
-      '删除这份试卷及其作答和自评？此操作无法撤销。',
-    );
-    if (!accepted) return;
-    if (saveTimerRef.current !== null) {
-      window.clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
-    setBusy(true);
-    setError('');
-    try {
-      await saveQueueRef.current.catch(() => undefined);
-      await invoke('delete_epub_exam', { bookKey, examId: activeExamId });
-      // If there are other exams in the same book, switch to the first available, otherwise go back
-      const remaining = bookExams.filter((item) => item.id !== activeExamId);
-      if (remaining.length > 0) {
-        setBookExams(remaining);
-        setActiveExamId(remaining[0].id);
-      } else {
-        onBack();
-      }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-      setBusy(false);
-    }
-  };
-
-  // Safe exam switching with draft flush
-  const handleSwitchExam = async (targetExamId: string) => {
-    if (targetExamId === activeExamId || busy) return;
-    if (saveTimerRef.current !== null) {
-      window.clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
-    if (exam && dirtyRef.current) {
-      setSaveState('saving');
-      try {
-        await enqueueSave(answers, selfReviews, exam.status === 'submitted');
-        dirtyRef.current = false;
-        setSaveState('saved');
-      } catch {
-        // preserve flow
-      }
-    }
-    setActiveExamId(targetExamId);
-  };
-
-  // Return to exam library with draft flush
-  const goBack = async () => {
-    if (busy) return;
-    if (saveTimerRef.current !== null) {
-      window.clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
-    setBusy(true);
-    setError('');
-    try {
-      await saveQueueRef.current.catch(() => undefined);
-      if (exam && dirtyRef.current) {
-        await enqueueSave(answers, selfReviews, exam.status === 'submitted');
-        dirtyRef.current = false;
-      }
-      onBack();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+    },
+    [compactPages],
+  );
 
   const displayModeRef = useRef(displayMode);
   displayModeRef.current = displayMode;
@@ -581,265 +289,248 @@ function EpubExamWorkspaceInner({
     }
   };
 
-  const focusPaperQuestion = (questionId: string) => {
-    const index =
-      exam?.questions.findIndex((item) => item.id === questionId) ?? -1;
-    if (index < 0) return;
-    setPaperFocusId(questionId);
-    setPageIndex(pageStep === 2 ? Math.floor(index / 2) * 2 : index);
-  };
+  const paper = useMemo(
+    () =>
+      exam
+        ? composeExamPaper(exam.questions, {
+            bookTitle: exam.bookTitle,
+            scopeLabel: exam.scope?.label || exam.sourceSectionLabel,
+          })
+        : null,
+    [exam],
+  );
 
-  // Scroll to question helper
-  const scrollToQuestion = (questionId: string) => {
-    const index =
-      exam?.questions.findIndex((item) => item.id === questionId) ?? -1;
-    if (index < 0) return;
-    focusPaperQuestion(questionId);
-    if (displayMode === 'paper') {
-      document.getElementById(`exam-question-${questionId}`)?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'center',
-      });
-      return;
-    }
-    document
-      .querySelector('.epub-exam-stage')
-      ?.scrollTo({ top: 0, behavior: 'smooth' });
-  };
+  const resetLeafScrolls = useCallback(() => {
+    const reset = () => {
+      stageRef.current
+        ?.querySelectorAll<HTMLElement>('.epub-exam-leaf')
+        .forEach((leaf) => {
+          leaf.scrollTop = 0;
+        });
+    };
+    reset();
+    requestAnimationFrame(reset);
+  }, []);
 
-  // Sort exams by chapter sequential order
-  const sortedBookExams = useMemo(() => {
-    return [...bookExams].sort((a, b) => {
-      const idxA = a.sourceSectionIndex ?? 999999;
-      const idxB = b.sourceSectionIndex ?? 999999;
-      if (idxA !== idxB) return idxA - idxB;
-      return a.createdAt - b.createdAt;
-    });
-  }, [bookExams]);
+  const focusPaperQuestion = useCallback(
+    (questionId: string) => {
+      const index =
+        exam?.questions.findIndex((item) => item.id === questionId) ?? -1;
+      if (index < 0) return;
+      setPaperFocusId(questionId);
+      setPageIndex(pageStep === 2 ? Math.floor(index / 2) * 2 : index);
+    },
+    [exam?.questions, pageStep],
+  );
 
-  // Filtered sidebar exams
-  const filteredBookExams = useMemo(() => {
-    const q = sidebarFilter.trim().toLowerCase();
-    if (!q) return sortedBookExams;
-    return sortedBookExams.filter(
-      (item) =>
-        (item.sourceSectionLabel || '').toLowerCase().includes(q) ||
-        (item.difficulty && getDifficultyLabel(item.difficulty).includes(q)) ||
-        (item.status === 'submitted' ? '已交卷' : '未交卷').includes(q),
+  const orderedPaperIds = useMemo(
+    () =>
+      paper
+        ? paper.sections.flatMap((sec) =>
+            sec.items.map((item) => item.question.id),
+          )
+        : (exam?.questions.map((item) => item.id) ?? []),
+    [exam?.questions, paper],
+  );
+
+  const scrollToQuestion = useCallback(
+    (questionId: string) => {
+      const index =
+        exam?.questions.findIndex((item) => item.id === questionId) ?? -1;
+      if (index < 0) return;
+      focusPaperQuestion(questionId);
+      if (displayMode === 'paper') {
+        setScrollLockNonce((n) => n + 1);
+        document.getElementById(`exam-question-${questionId}`)?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center',
+        });
+        return;
+      }
+      resetLeafScrolls();
+    },
+    [displayMode, exam?.questions, focusPaperQuestion, resetLeafScrolls],
+  );
+
+  const jumpNextUnanswered = useCallback(() => {
+    if (!exam) return;
+    const orderedQuestions =
+      displayMode === 'paper' && paper
+        ? paper.sections.flatMap((sec) =>
+            sec.items.map((item) => item.question),
+          )
+        : exam.questions;
+    if (orderedQuestions.length === 0) return;
+    const currentId =
+      displayMode === 'paper'
+        ? paperFocusId
+        : (exam.questions[pageIndex]?.id ?? '');
+    const startIdx = Math.max(
+      0,
+      orderedQuestions.findIndex((q) => q.id === currentId),
     );
-  }, [sidebarFilter, sortedBookExams]);
-
-  // Overall book stats
-  const bookStats = useMemo(() => {
-    let totalQuestions = 0;
-    let answeredQuestions = 0;
-    let totalMastered = 0;
-    let totalPartial = 0;
-    let totalReview = 0;
-    let submittedExams = 0;
-
-    for (const item of sortedBookExams) {
-      const itemQCount = item.questionCount ?? 0;
-      totalQuestions += itemQCount;
-      if (item.status === 'submitted') {
-        submittedExams += 1;
-        // If it's the currently active loaded exam, use current state for real-time reactivity
-        if (item.id === activeExamId && exam) {
-          const revs = Object.values(selfReviews);
-          const mastered = revs.filter((r) => r === 'mastered').length;
-          const partial = revs.filter((r) => r === 'partial').length;
-          const review = revs.filter((r) => r === 'review').length;
-          totalMastered += mastered;
-          totalPartial += partial;
-          totalReview += review;
-          answeredQuestions += itemQCount;
-        } else {
-          totalMastered += item.masteredCount ?? 0;
-          totalPartial += item.partialCount ?? 0;
-          totalReview += item.reviewCount ?? 0;
-          answeredQuestions += itemQCount;
-        }
-      } else if (item.id === activeExamId && exam) {
-        // Count in-progress answers for current exam
-        const ansCount = Object.values(answers).filter(
-          (a) =>
-            a !== undefined && a !== '' && (!Array.isArray(a) || a.length > 0),
-        ).length;
-        answeredQuestions += ansCount;
+    for (let offset = 1; offset <= orderedQuestions.length; offset += 1) {
+      const candidate =
+        orderedQuestions[(startIdx + offset) % orderedQuestions.length];
+      if (!isAnswerFilled(answers[candidate.id])) {
+        scrollToQuestion(candidate.id);
+        return;
       }
     }
+  }, [
+    answers,
+    displayMode,
+    exam,
+    pageIndex,
+    paper,
+    paperFocusId,
+    scrollToQuestion,
+  ]);
 
-    const reviewedQuestions = totalMastered + totalPartial + totalReview;
-    const masteryRate =
-      reviewedQuestions > 0
-        ? Math.round((totalMastered / reviewedQuestions) * 100)
-        : 0;
+  // Keyboard shortcuts outside inputs: ArrowLeft / ArrowRight & 1-4 / A-D
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!exam || loading || busy) return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (isEditableTarget(event.target)) return;
 
-    return {
-      totalExams: sortedBookExams.length,
-      submittedExams,
-      totalQuestions,
-      answeredQuestions,
-      totalMastered,
-      totalPartial,
-      totalReview,
-      reviewedQuestions,
-      masteryRate,
+      const questions = exam.questions;
+      if (questions.length === 0) return;
+
+      if (event.key === 'f' || event.key === 'F') {
+        event.preventDefault();
+        toggleZenMode();
+        return;
+      }
+
+      if (
+        displayMode === 'paper' &&
+        (event.key === 'j' ||
+          event.key === 'J' ||
+          event.key === 'k' ||
+          event.key === 'K')
+      ) {
+        if (orderedPaperIds.length === 0) return;
+        event.preventDefault();
+        const delta = event.key === 'j' || event.key === 'J' ? 1 : -1;
+        const currentIdx = orderedPaperIds.indexOf(paperFocusId);
+        const baseIdx = currentIdx === -1 ? 0 : currentIdx;
+        const nextIdx = Math.max(
+          0,
+          Math.min(orderedPaperIds.length - 1, baseIdx + delta),
+        );
+        const nextId = orderedPaperIds[nextIdx];
+        if (nextId) {
+          focusPaperQuestion(nextId);
+          setScrollLockNonce((n) => n + 1);
+          document.getElementById(`exam-question-${nextId}`)?.scrollIntoView({
+            behavior: 'smooth',
+            block: 'nearest',
+          });
+        }
+        return;
+      }
+
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        if (displayMode === 'paper') return;
+        event.preventDefault();
+        const delta = event.key === 'ArrowRight' ? pageStep : -pageStep;
+        setPageIndex((prev) =>
+          Math.max(0, Math.min(questions.length - 1, prev + delta)),
+        );
+        resetLeafScrolls();
+        return;
+      }
+
+      if (exam.status === 'submitted') return;
+
+      let optionIdx = -1;
+      if (['1', '2', '3', '4'].includes(event.key)) {
+        optionIdx = Number(event.key) - 1;
+      } else {
+        const upper = event.key.toUpperCase();
+        if (['A', 'B', 'C', 'D'].includes(upper)) {
+          optionIdx = upper.charCodeAt(0) - 65;
+        }
+      }
+      if (optionIdx < 0) return;
+
+      const targetQuestion =
+        displayMode === 'paper'
+          ? questions.find((q) => q.id === paperFocusId)
+          : questions[pageIndex];
+      if (!targetQuestion) return;
+      if (
+        !['singleChoice', 'multipleChoice', 'trueFalse'].includes(
+          targetQuestion.type,
+        )
+      ) {
+        return;
+      }
+      const choices = choiceTexts(targetQuestion);
+      const option = choices[optionIdx];
+      if (!option) return;
+
+      event.preventDefault();
+      if (targetQuestion.type === 'multipleChoice') {
+        const current = Array.isArray(answers[targetQuestion.id])
+          ? (answers[targetQuestion.id] as string[])
+          : [];
+        editAnswer(
+          targetQuestion.id,
+          current.includes(option)
+            ? current.filter((v) => v !== option)
+            : [...current, option],
+        );
+      } else {
+        editAnswer(targetQuestion.id, option);
+      }
     };
-  }, [activeExamId, answers, exam, selfReviews, sortedBookExams]);
 
-  // Current exam weak points (marked for review)
-  const weakQuestions = useMemo(() => {
-    if (!exam || exam.status !== 'submitted') return [];
-    const questions = exam.questions ?? [];
-    return questions.filter((q) => selfReviews[q.id] === 'review');
-  }, [exam, selfReviews]);
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [
+    answers,
+    busy,
+    displayMode,
+    editAnswer,
+    exam,
+    focusPaperQuestion,
+    loading,
+    orderedPaperIds,
+    pageIndex,
+    pageStep,
+    paperFocusId,
+    resetLeafScrolls,
+    toggleZenMode,
+  ]);
 
   const attemptsList = exam?.attempts ?? [];
   const attemptsCount = attemptsList.length;
   const questionsList = exam?.questions ?? [];
-  const answeredCount = questionsList.filter((question) => {
-    const value = answers[question.id];
-    return (
-      value !== undefined &&
-      value !== '' &&
-      (!Array.isArray(value) || value.length > 0)
-    );
-  }).length;
+  const answeredCount = questionsList.filter((q) =>
+    isAnswerFilled(answers[q.id]),
+  ).length;
   const examSubmitted = exam?.status === 'submitted';
 
   return (
     <div
-      className={`epub-exam-workspace-shell${sidebarCollapsed ? ' is-sidebar-collapsed' : ''}${analyticsCollapsed ? ' is-analytics-collapsed' : ''}`}
+      className={`epub-exam-workspace-shell${displayMode === 'paper' ? ' is-paper-mode' : ''}${sidebarCollapsed ? ' is-sidebar-collapsed' : ''}${analyticsCollapsed ? ' is-analytics-collapsed' : ''}`}
     >
-      {/* LEFT SIDEBAR: Sequential Book Exams */}
-      <aside
-        className={`epub-exam-sidebar${sidebarCollapsed ? ' is-collapsed' : ''}`}
-        aria-label="同书顺序试卷导航"
-      >
-        <div className="epub-exam-sidebar-header">
-          <div className="epub-exam-sidebar-book-meta">
-            <h2 title={exam?.bookTitle || '当前书籍'}>本书试卷</h2>
-            <div className="epub-exam-sidebar-stats">
-              <span>{exam?.bookTitle || '当前书籍'}</span>
-            </div>
-            <div className="epub-exam-sidebar-stats">
-              <span>共 {sortedBookExams.length} 套</span>
-              <span>·</span>
-              <span>已交 {bookStats.submittedExams} 套</span>
-            </div>
-          </div>
-          <button
-            type="button"
-            className="epub-exam-sidebar-collapse-btn"
-            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            title={sidebarCollapsed ? '展开本书试卷' : '收起本书试卷'}
-            aria-label={sidebarCollapsed ? '展开本书试卷' : '收起本书试卷'}
-          >
-            {sidebarCollapsed ? '▶' : '◀'}
-          </button>
-        </div>
+      <ExamBookNavSidebar
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed((v) => !v)}
+        bookTitle={exam?.bookTitle || '当前书籍'}
+        sortedBookExams={sortedBookExams}
+        submittedCount={bookStats.submittedExams}
+        activeExamId={activeExamId}
+        activeExam={exam}
+        selfReviews={selfReviews}
+        busy={busy}
+        onSwitchExam={(id) => void switchExam(id)}
+      />
 
-        {!sidebarCollapsed && (
-          <>
-            <div className="epub-exam-sidebar-search">
-              <input
-                type="text"
-                placeholder="搜索章节或考点…"
-                value={sidebarFilter}
-                onChange={(e) => setSidebarFilter(e.target.value)}
-              />
-              {sidebarFilter && (
-                <button
-                  type="button"
-                  className="epub-exam-filter-clear"
-                  onClick={() => setSidebarFilter('')}
-                >
-                  ×
-                </button>
-              )}
-            </div>
-
-            <nav className="epub-exam-sidebar-list">
-              {filteredBookExams.length === 0 ? (
-                <div className="epub-exam-sidebar-empty">未找到匹配的试卷</div>
-              ) : (
-                filteredBookExams.map((item, index) => {
-                  const isActive = item.id === activeExamId;
-                  const isSubmitted = item.status === 'submitted';
-                  // Calculate badge
-                  let statusBadge = (
-                    <span className="epub-exam-pill is-pending">未交卷</span>
-                  );
-                  if (isSubmitted) {
-                    const mastered =
-                      item.id === activeExamId && exam
-                        ? Object.values(selfReviews).filter(
-                            (r) => r === 'mastered',
-                          ).length
-                        : (item.masteredCount ?? 0);
-                    const review =
-                      item.id === activeExamId && exam
-                        ? Object.values(selfReviews).filter(
-                            (r) => r === 'review',
-                          ).length
-                        : (item.reviewCount ?? 0);
-                    if (review > 0) {
-                      statusBadge = (
-                        <span className="epub-exam-pill is-review">需复习</span>
-                      );
-                    } else if (mastered >= (item.questionCount ?? 0) * 0.7) {
-                      statusBadge = (
-                        <span className="epub-exam-pill is-mastered">
-                          已掌握
-                        </span>
-                      );
-                    } else {
-                      statusBadge = (
-                        <span className="epub-exam-pill is-partial">
-                          部分掌握
-                        </span>
-                      );
-                    }
-                  }
-
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      className={`epub-exam-sidebar-item${isActive ? ' is-active' : ''}`}
-                      onClick={() => void handleSwitchExam(item.id)}
-                      disabled={busy}
-                    >
-                      <div className="epub-exam-sidebar-item-top">
-                        <span className="epub-exam-seq-badge">
-                          {String(index + 1).padStart(2, '0')}
-                        </span>
-                        <span
-                          className="epub-exam-sidebar-item-title"
-                          title={item.sourceSectionLabel || ''}
-                        >
-                          {item.sourceSectionLabel || '未命名章节'}
-                        </span>
-                      </div>
-                      <div className="epub-exam-sidebar-item-meta">
-                        <span>
-                          {item.questionCount ?? 0} 题 ·{' '}
-                          {getDifficultyLabel(item.difficulty)}
-                        </span>
-                        {statusBadge}
-                      </div>
-                    </button>
-                  );
-                })
-              )}
-            </nav>
-          </>
-        )}
-      </aside>
-
-      {/* CENTER STAGE: Exam Questions & Answering */}
-      <main className="epub-exam-stage">
+      <main className="epub-exam-stage" ref={stageRef}>
         {loading ? (
           <div className="epub-exam-page-loading">
             <div className="epub-exam-spinner" />
@@ -916,37 +607,68 @@ function EpubExamWorkspaceInner({
                 <button
                   type="button"
                   className={displayMode === 'paper' ? 'is-active' : ''}
-                  onClick={() => setDisplayMode('paper')}
+                  onClick={() => handleSetDisplayMode('paper')}
                 >
                   整卷
                 </button>
                 <button
                   type="button"
                   className={displayMode === 'spread' ? 'is-active' : ''}
-                  onClick={() => setDisplayMode('spread')}
+                  onClick={() => handleSetDisplayMode('spread')}
                 >
                   左右翻页
                 </button>
                 <button
                   type="button"
                   className={displayMode === 'workspace' ? 'is-active' : ''}
-                  onClick={() => setDisplayMode('workspace')}
+                  onClick={() => handleSetDisplayMode('workspace')}
                 >
                   分栏
                 </button>
               </div>
               {displayMode === 'paper' && (
-                <button type="button" onClick={printPaper}>
-                  打印
-                </button>
+                <div className="epub-exam-paper-tools">
+                  <button
+                    type="button"
+                    className={paperWideWidth ? 'is-active' : ''}
+                    onClick={() => setPaperWideWidth((v) => !v)}
+                    title="切换标准 (800px) / 宽幅 (1020px) 试卷宽度"
+                  >
+                    {paperWideWidth ? '宽幅纸面' : '标准纸宽'}
+                  </button>
+                  <button
+                    type="button"
+                    className={paperWhiteSurface ? 'is-active' : ''}
+                    onClick={() => setPaperWhiteSurface((v) => !v)}
+                    title="在深色主题下切换真实白纸底色"
+                  >
+                    仿真白纸
+                  </button>
+                  <button
+                    type="button"
+                    className={isZenMode ? 'is-active' : ''}
+                    onClick={toggleZenMode}
+                    title="专注做卷（快捷键 F，一键收起/恢复两侧栏）"
+                  >
+                    {isZenMode ? '退出专注' : '专注做卷'}
+                  </button>
+                  <button
+                    type="button"
+                    className="epub-exam-action-btn"
+                    onClick={printPaper}
+                  >
+                    打印 / 导出 PDF
+                  </button>
+                </div>
               )}
               {displayMode !== 'paper' && (
                 <nav className="epub-exam-page-nav" aria-label="试卷翻页">
                   <button
                     type="button"
-                    onClick={() =>
-                      setPageIndex((index) => Math.max(0, index - pageStep))
-                    }
+                    onClick={() => {
+                      setPageIndex((index) => Math.max(0, index - pageStep));
+                      resetLeafScrolls();
+                    }}
                     disabled={pageIndex === 0}
                   >
                     上一页
@@ -960,11 +682,12 @@ function EpubExamWorkspaceInner({
                   </span>
                   <button
                     type="button"
-                    onClick={() =>
+                    onClick={() => {
                       setPageIndex((index) =>
                         Math.min(questionsList.length - 1, index + pageStep),
-                      )
-                    }
+                      );
+                      resetLeafScrolls();
+                    }}
                     disabled={pageIndex + pageStep >= questionsList.length}
                   >
                     下一页
@@ -972,6 +695,7 @@ function EpubExamWorkspaceInner({
                 </nav>
               )}
             </div>
+
             {examSubmitted && attemptsCount > 0 && (
               <details className="epub-exam-attempt-accordion">
                 <summary>
@@ -1014,11 +738,13 @@ function EpubExamWorkspaceInner({
                 </div>
               </details>
             )}
+
             {displayMode === 'paper' ? (
               <ExamPaperSheet
                 exam={exam}
+                paper={paper ?? undefined}
                 answers={answers}
-                submitted={exam.status === 'submitted'}
+                submitted={examSubmitted}
                 busy={busy}
                 reviews={selfReviews}
                 grades={grades}
@@ -1030,15 +756,18 @@ function EpubExamWorkspaceInner({
                 onOverride={(id, earned) => void overrideGrade(id, earned)}
                 focusId={paperFocusId}
                 onFocus={focusPaperQuestion}
+                wideWidth={paperWideWidth}
+                whiteSurface={paperWhiteSurface}
+                scrollLockNonce={scrollLockNonce}
               />
             ) : (
               <div className={`epub-exam-book-spread is-${displayMode}`}>
-                {(displayMode === 'spread' && !compactPages
+                {(pageStep === 2
                   ? [pageIndex, pageIndex + 1]
                   : [pageIndex]
                 ).map((index) => {
                   const question = questionsList[index];
-                  if (!question)
+                  if (!question) {
                     return (
                       <div
                         className="epub-exam-leaf is-blank"
@@ -1046,13 +775,14 @@ function EpubExamWorkspaceInner({
                         aria-hidden="true"
                       />
                     );
+                  }
                   return (
                     <EpubExamQuestion
                       key={question.id}
                       question={question}
                       index={index}
                       answer={answers[question.id]}
-                      submitted={exam.status === 'submitted'}
+                      submitted={examSubmitted}
                       busy={busy}
                       review={selfReviews[question.id]}
                       grade={grades[question.id]}
@@ -1075,7 +805,7 @@ function EpubExamWorkspaceInner({
                     question={questionsList[pageIndex]}
                     index={pageIndex}
                     answer={answers[questionsList[pageIndex].id]}
-                    submitted={exam.status === 'submitted'}
+                    submitted={examSubmitted}
                     busy={busy}
                     review={selfReviews[questionsList[pageIndex].id]}
                     grade={grades[questionsList[pageIndex].id]}
@@ -1097,7 +827,8 @@ function EpubExamWorkspaceInner({
                 )}
               </div>
             )}
-            {exam.status === 'submitted' &&
+
+            {examSubmitted &&
               questionsList.some(
                 (question) =>
                   ['comprehensive', 'engineering', 'shortAnswer'].includes(
@@ -1113,6 +844,7 @@ function EpubExamWorkspaceInner({
                   {gradingBusy ? '正在 AI 评阅…' : '评阅待完成的主观题'}
                 </button>
               )}
+
             <footer className="epub-exam-page-footer">
               <div className="epub-exam-save-status">
                 <span className={`epub-exam-save-indicator is-${saveState}`} />
@@ -1144,305 +876,28 @@ function EpubExamWorkspaceInner({
         )}
       </main>
 
-      {/* RIGHT SIDEBAR: Analytics & Heatmap Dashboard */}
-      <aside
-        className={`epub-exam-analytics${analyticsCollapsed ? ' is-collapsed' : ''}`}
-        aria-label="答题卡"
-      >
-        <div className="epub-exam-analytics-header">
-          <div className="epub-exam-analytics-title">
-            <h2>答题卡</h2>
-          </div>
-          <button
-            type="button"
-            className="epub-exam-sidebar-collapse-btn"
-            onClick={() => setAnalyticsCollapsed(!analyticsCollapsed)}
-            title={analyticsCollapsed ? '展开答题卡' : '收起答题卡'}
-            aria-label={analyticsCollapsed ? '展开答题卡' : '收起答题卡'}
-          >
-            {analyticsCollapsed ? '◀' : '▶'}
-          </button>
-        </div>
-
-        {!analyticsCollapsed && (
-          <div className="epub-exam-analytics-body">
-            {examSubmitted && displayMode === 'paper' && exam && (
-              <ExamPaperReview
-                exam={exam}
-                focusId={paperFocusId}
-                submitted={exam.status === 'submitted'}
-                busy={busy}
-                answer={answers[paperFocusId]}
-                review={selfReviews[paperFocusId]}
-                grade={grades[paperFocusId]}
-                onReview={(value) => editReview(paperFocusId, value)}
-                onOverride={(earned) =>
-                  void overrideGrade(paperFocusId, earned)
-                }
-              />
-            )}
-            {/* MODULE 1: Current Exam Question Matrix Heatmap */}
-            <section className="epub-exam-analytics-card">
-              <div className="epub-exam-card-title-row">
-                <h3>题号</h3>
-                <span className="epub-exam-card-badge">
-                  {questionsList.length} 题
-                </span>
-              </div>
-              <p className="epub-exam-card-hint">
-                已答 {answeredCount} / {questionsList.length}
-              </p>
-
-              <div className="epub-exam-heatmap-grid">
-                {questionsList.map((q, idx) => {
-                  const submitted = exam?.status === 'submitted';
-                  const hasAns =
-                    answers[q.id] !== undefined &&
-                    answers[q.id] !== '' &&
-                    (!Array.isArray(answers[q.id]) ||
-                      (answers[q.id] as string[]).length > 0);
-                  const rev = selfReviews[q.id];
-
-                  let stateClass = 'is-unanswered';
-                  let icon = `${idx + 1}`;
-                  let statusTitle = `第 ${idx + 1} 题: 待作答`;
-
-                  if (submitted) {
-                    if (rev === 'mastered') {
-                      stateClass = 'is-mastered';
-                      icon = '✓';
-                      statusTitle = `第 ${idx + 1} 题: 已掌握`;
-                    } else if (rev === 'partial') {
-                      stateClass = 'is-partial';
-                      icon = '◐';
-                      statusTitle = `第 ${idx + 1} 题: 部分掌握`;
-                    } else if (rev === 'review') {
-                      stateClass = 'is-review';
-                      icon = '✗';
-                      statusTitle = `第 ${idx + 1} 题: 需复习`;
-                    } else {
-                      stateClass = 'is-pending-review';
-                      icon = '?';
-                      statusTitle = `第 ${idx + 1} 题: 已交卷待自评`;
-                    }
-                  } else if (hasAns) {
-                    stateClass = 'is-answered';
-                    statusTitle = `第 ${idx + 1} 题: 已作答`;
-                  }
-
-                  return (
-                    <button
-                      key={q.id}
-                      type="button"
-                      className={`epub-exam-heatmap-cell ${stateClass}${displayMode === 'paper' && paperFocusId === q.id ? ' is-current' : ''}`}
-                      onClick={() => scrollToQuestion(q.id)}
-                      title={statusTitle}
-                    >
-                      <span className="epub-exam-cell-index">{idx + 1}</span>
-                      {submitted && (
-                        <span className="epub-exam-cell-icon">{icon}</span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="epub-exam-legend-row">
-                <span className="epub-exam-legend-item">
-                  <i className="is-mastered" /> 掌握
-                </span>
-                <span className="epub-exam-legend-item">
-                  <i className="is-partial" /> 部分
-                </span>
-                <span className="epub-exam-legend-item">
-                  <i className="is-review" /> 需复习
-                </span>
-                <span className="epub-exam-legend-item">
-                  <i className="is-unanswered" /> 待答
-                </span>
-              </div>
-            </section>
-
-            <section className="epub-exam-analytics-card">
-              <div className="epub-exam-card-title-row">
-                <h3>本卷小结</h3>
-              </div>
-              <p className="epub-exam-card-hint">
-                {examSubmitted ? '已交卷' : '未交卷'} · 已答 {answeredCount} /{' '}
-                {questionsList.length}
-                {examSubmitted
-                  ? ` · 掌握 ${Object.values(selfReviews).filter((item) => item === 'mastered').length}`
-                  : ''}
-              </p>
-            </section>
-
-            {examSubmitted && (
-              <>
-                {/* MODULE 2: Sequential Chapter Mastery Heatmap */}
-                <section className="epub-exam-analytics-card">
-                  <div className="epub-exam-card-title-row">
-                    <h3>本书套次</h3>
-                    <span className="epub-exam-card-badge">
-                      {sortedBookExams.length} 套
-                    </span>
-                  </div>
-                  <p className="epub-exam-card-hint">点击套次切换试卷</p>
-
-                  <div className="epub-exam-chapter-matrix">
-                    {sortedBookExams.map((item, idx) => {
-                      const isActive = item.id === activeExamId;
-                      const isSubmitted = item.status === 'submitted';
-                      const itemQCount = item.questionCount ?? 0;
-                      const mastered =
-                        item.id === activeExamId && exam
-                          ? Object.values(selfReviews).filter(
-                              (r) => r === 'mastered',
-                            ).length
-                          : (item.masteredCount ?? 0);
-                      const review =
-                        item.id === activeExamId && exam
-                          ? Object.values(selfReviews).filter(
-                              (r) => r === 'review',
-                            ).length
-                          : (item.reviewCount ?? 0);
-
-                      let cellClass = 'is-not-submitted';
-                      if (isSubmitted) {
-                        const rate = itemQCount > 0 ? mastered / itemQCount : 0;
-                        if (review > 0) {
-                          cellClass = 'is-level-review';
-                        } else if (rate >= 0.8) {
-                          cellClass = 'is-level-high';
-                        } else if (rate >= 0.4) {
-                          cellClass = 'is-level-med';
-                        } else {
-                          cellClass = 'is-level-low';
-                        }
-                      }
-
-                      return (
-                        <button
-                          key={item.id}
-                          type="button"
-                          className={`epub-exam-chapter-cell ${cellClass}${isActive ? ' is-active' : ''}`}
-                          onClick={() => void handleSwitchExam(item.id)}
-                          title={`[第${idx + 1}套] ${item.sourceSectionLabel || ''}\n${isSubmitted ? `已掌握: ${mastered}/${itemQCount}` : '未交卷'}`}
-                        >
-                          <span>{idx + 1}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </section>
-
-                {/* MODULE 3: KPI Metrics & Breakdown Bar */}
-                <section className="epub-exam-analytics-card">
-                  <div className="epub-exam-card-title-row">
-                    <h3>掌握</h3>
-                  </div>
-
-                  <div className="epub-exam-kpi-grid">
-                    <div className="epub-exam-kpi-box">
-                      <span className="epub-exam-kpi-val">
-                        {bookStats.masteryRate}%
-                      </span>
-                      <span className="epub-exam-kpi-label">掌握率</span>
-                    </div>
-                    <div className="epub-exam-kpi-box">
-                      <span className="epub-exam-kpi-val">
-                        {bookStats.answeredQuestions}
-                        <small>/{bookStats.totalQuestions}</small>
-                      </span>
-                      <span className="epub-exam-kpi-label">已练</span>
-                    </div>
-                    <div className="epub-exam-kpi-box">
-                      <span className="epub-exam-kpi-val is-danger">
-                        {bookStats.totalReview}
-                      </span>
-                      <span className="epub-exam-kpi-label">需复习</span>
-                    </div>
-                  </div>
-
-                  {/* Segmented bar */}
-                  <div className="epub-exam-progress-bar-wrap">
-                    <div className="epub-exam-progress-bar">
-                      <div
-                        className="epub-exam-bar-seg is-mastered"
-                        style={{
-                          width: `${bookStats.totalQuestions > 0 ? (bookStats.totalMastered / bookStats.totalQuestions) * 100 : 0}%`,
-                        }}
-                        title={`已掌握: ${bookStats.totalMastered}`}
-                      />
-                      <div
-                        className="epub-exam-bar-seg is-partial"
-                        style={{
-                          width: `${bookStats.totalQuestions > 0 ? (bookStats.totalPartial / bookStats.totalQuestions) * 100 : 0}%`,
-                        }}
-                        title={`部分掌握: ${bookStats.totalPartial}`}
-                      />
-                      <div
-                        className="epub-exam-bar-seg is-review"
-                        style={{
-                          width: `${bookStats.totalQuestions > 0 ? (bookStats.totalReview / bookStats.totalQuestions) * 100 : 0}%`,
-                        }}
-                        title={`需复习: ${bookStats.totalReview}`}
-                      />
-                    </div>
-                    <div className="epub-exam-bar-legend">
-                      <span>掌握 {bookStats.totalMastered}</span>
-                      <span>部分 {bookStats.totalPartial}</span>
-                      <span>复习 {bookStats.totalReview}</span>
-                    </div>
-                  </div>
-                </section>
-
-                {/* MODULE 4: Focus Weak Points */}
-                <section className="epub-exam-analytics-card">
-                  <div className="epub-exam-card-title-row">
-                    <h3>薄弱题</h3>
-                    {weakQuestions.length > 0 && (
-                      <span className="epub-exam-card-badge is-alert">
-                        {weakQuestions.length} 项
-                      </span>
-                    )}
-                  </div>
-
-                  {weakQuestions.length === 0 ? (
-                    <div className="epub-exam-empty-focus">
-                      <span className="epub-exam-check-icon">✓</span>
-                      <p>还没有标成需复习的题。</p>
-                    </div>
-                  ) : (
-                    <div className="epub-exam-focus-list">
-                      {weakQuestions.map((q) => {
-                        const qIndex = questionsList.findIndex(
-                          (item) => item.id === q.id,
-                        );
-                        const displayNum = qIndex >= 0 ? qIndex + 1 : 1;
-                        return (
-                          <button
-                            key={q.id}
-                            type="button"
-                            className="epub-exam-focus-item"
-                            onClick={() => scrollToQuestion(q.id)}
-                            title="点击定位到该题查看 AI 解析"
-                          >
-                            <span className="epub-exam-focus-dot">!</span>
-                            <div className="epub-exam-focus-text">
-                              <strong>第 {displayNum} 题</strong>
-                              <p>{q.prompt}</p>
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </section>
-              </>
-            )}
-          </div>
-        )}
-      </aside>
+      <ExamAnalyticsSidebar
+        collapsed={analyticsCollapsed}
+        onToggleCollapse={() => setAnalyticsCollapsed((v) => !v)}
+        displayMode={displayMode}
+        pageIndex={pageIndex}
+        pageStep={pageStep}
+        paperFocusId={paperFocusId}
+        exam={exam}
+        paper={paper}
+        activeExamId={activeExamId}
+        sortedBookExams={sortedBookExams}
+        bookStats={bookStats}
+        answers={answers}
+        selfReviews={selfReviews}
+        grades={grades}
+        busy={busy}
+        onScrollToQuestion={scrollToQuestion}
+        onJumpNextUnanswered={jumpNextUnanswered}
+        onSwitchExam={(id) => void switchExam(id)}
+        onEditReview={editReview}
+        onOverrideGrade={(id, earned) => void overrideGrade(id, earned)}
+      />
     </div>
   );
 }

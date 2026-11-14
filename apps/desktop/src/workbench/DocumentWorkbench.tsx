@@ -1,5 +1,6 @@
 import type { ActiveDocument } from './active-document';
 import MarkdownDocWorkbench from './MarkdownDocWorkbench';
+import type { PreviewFootnoteJumpRequest } from './MarkdownPreview';
 import MermaidWorkbench from './MermaidWorkbench';
 import type { MapDocument } from '../library/library';
 import type { CodeBlockHandlers } from './code-blocks';
@@ -12,6 +13,7 @@ export interface DocumentWorkbenchProps {
   theme: Theme;
   documents?: readonly MapDocument[];
   categories?: readonly string[];
+  scrollToFootnoteRequest?: PreviewFootnoteJumpRequest | null;
   renderMarkdownPreview(markdown: string): { html: string; source: string };
   onSourceChange(source: string): void;
   onSave(): void;
@@ -36,6 +38,7 @@ export interface DocumentWorkbenchProps {
 export default function DocumentWorkbench({
   document,
   renderMarkdownPreview,
+  scrollToFootnoteRequest,
   onOpenAsMindmap,
   onConvertToMindmap,
   onChangeCategory,
@@ -64,6 +67,7 @@ export default function DocumentWorkbench({
       documents={documents}
       categories={categories}
       theme={theme}
+      scrollToFootnoteRequest={scrollToFootnoteRequest}
       renderPreview={renderMarkdownPreview}
       onChangeCategory={onChangeCategory}
       onChangeTags={onChangeTags}

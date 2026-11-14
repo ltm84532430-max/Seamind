@@ -1,16 +1,32 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
 } from 'react';
 import '../ebook/book-galaxy-view.css';
+import {
+  buildGalaxyAdjacencyMap,
+  createGalaxyPhysicsState,
+  DEFAULT_GALAXY_PHYSICS_CONFIG,
+  stepGalaxyPhysics,
+  type GalaxyPhysicsConfig,
+  type GalaxyPhysicsState,
+} from '../graph/galaxy-physics';
 import type { EpubExamSummary } from './epub-exams';
-import { layoutExamGraph } from './exam-graph-model';
-import type { ExamReviewSchedule, ReviewUrgency } from './review-schedule';
+import {
+  buildExamGalaxyGraph,
+  EXAM_ROOT_ID,
+  truncateLabel,
+  type ExamGalaxyMode,
+  type ExamGalaxyStarNode,
+} from './exam-graph-model';
+import type { ExamReviewSchedule } from './review-schedule';
 
 export interface ExamGraphItem {
   exam: EpubExamSummary;
@@ -18,6 +34,7 @@ export interface ExamGraphItem {
 }
 
 interface Props {
+  mode: ExamGalaxyMode;
   bookKey: string;
   bookTitle: string;
   coverDataUrl: string | null;
@@ -26,20 +43,12 @@ interface Props {
   onSelectExam: (id: string) => void;
   onOpenExam: (exam: EpubExamSummary) => void;
   onOpenBook?: () => void;
+  onSelectBookFilter?: (bookKey: string) => void;
 }
 
-const URGENCY_COLOR: Record<ReviewUrgency, string> = {
-  overdue: '#e04332',
-  today: '#e05638',
-  upcoming: '#d97706',
-  inProgress: '#38bdf8',
-  notStarted: '#94a3b8',
-  later: '#34d399',
-};
-
-function clampScale(value: number): number {
-  return Math.max(0.25, Math.min(2.6, value));
-}
+const MIN_ZOOM = 0.22;
+const MAX_ZOOM = 2.8;
+const INITIAL_ZOOM = 0.68;
 
 function urgencyText(schedule: ExamReviewSchedule): string {
   if (schedule.urgency === 'overdue') {
@@ -52,461 +61,1020 @@ function urgencyText(schedule: ExamReviewSchedule): string {
   return `${schedule.daysUntil ?? ''} 天后`;
 }
 
-function shortLabel(label: string, limit: number): string {
-  const chars = Array.from(label);
-  if (chars.length <= limit) return label;
-  return `${chars.slice(0, limit).join('')}…`;
-}
-
 export function ExamGraphView({
+  mode,
   bookKey,
   bookTitle,
-  coverDataUrl,
   items,
   selectedId,
   onSelectExam,
   onOpenExam,
   onOpenBook,
+  onSelectBookFilter,
 }: Props) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<{
-    x: number;
-    y: number;
-    panX: number;
-    panY: number;
-  } | null>(null);
-  const [viewport, setViewport] = useState({ width: 800, height: 600 });
-  const [scale, setScale] = useState(0.72);
-  const [pan, setPan] = useState({ x: 400, y: 300 });
-  const [dragging, setDragging] = useState(false);
+
+  const [dimensions, setDimensions] = useState({ width: 960, height: 640 });
+  const [scale, setScale] = useState(INITIAL_ZOOM);
+  const [pan, setPan] = useState({ x: 480, y: 320 });
+  const hasCenteredRef = useRef(false);
+
   const [query, setQuery] = useState('');
-  const [hoveredId, setHoveredId] = useState<string | null>(null);
-  const [hoverPoint, setHoverPoint] = useState({ x: 0, y: 0 });
-  const layout = useMemo(
-    () => layoutExamGraph(items.map(({ exam }) => exam.id)),
-    [items],
+  const [controlsOpen, setControlsOpen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Toggles & Physics
+  const [onlyDue, setOnlyDue] = useState(false);
+  const [showOrbitGuides, setShowOrbitGuides] = useState(true);
+  const [showSequenceArcs, setShowSequenceArcs] = useState(true);
+  const [nodeSizeScale, setNodeSizeScale] = useState(1);
+  const [labelFadeThreshold, setLabelFadeThreshold] = useState(0.55);
+  const [physicsConfig, setPhysicsConfig] = useState<GalaxyPhysicsConfig>(
+    DEFAULT_GALAXY_PHYSICS_CONFIG,
   );
-  const itemById = useMemo(
-    () => new Map(items.map((item) => [item.exam.id, item])),
-    [items],
+  const physicsConfigRef = useRef(physicsConfig);
+  physicsConfigRef.current = physicsConfig;
+
+  const [collapsedClusters, setCollapsedClusters] = useState<Set<string>>(
+    () => new Set(),
   );
-  const rings = [...new Set(layout.nodes.map((node) => node.ring))];
-  const dueCount = items.filter(({ schedule }) =>
-    ['overdue', 'today'].includes(schedule.urgency),
-  ).length;
-  const needle = query.trim().toLowerCase();
-  const matchedIds = useMemo(() => {
+  const [hoveredNode, setHoveredNode] = useState<{
+    node: ExamGalaxyStarNode;
+    clientX: number;
+    clientY: number;
+  } | null>(null);
+  const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
+  const [isPanning, setIsPanning] = useState(false);
+
+  const graph = useMemo(
+    () =>
+      buildExamGalaxyGraph(items, {
+        mode,
+        bookKey,
+        bookTitle,
+        selectedId,
+      }),
+    [bookKey, bookTitle, items, mode, selectedId],
+  );
+
+  const nodeById = useMemo(
+    () => new Map(graph.nodes.map((node) => [node.id, node])),
+    [graph.nodes],
+  );
+
+  const adjacency = useMemo(
+    () =>
+      buildGalaxyAdjacencyMap(graph.nodes, graph.links, {
+        includeSequence: showSequenceArcs,
+      }),
+    [graph.links, graph.nodes, showSequenceArcs],
+  );
+
+  const visibleNodeIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const node of graph.nodes) {
+      if (
+        node.kind === 'planet' &&
+        node.parentId &&
+        collapsedClusters.has(node.parentId)
+      ) {
+        continue;
+      }
+      if (onlyDue && node.kind === 'planet') {
+        const u = node.schedule?.urgency;
+        if (u !== 'overdue' && u !== 'today') continue;
+      }
+      ids.add(node.id);
+    }
+    return ids;
+  }, [collapsedClusters, graph.nodes, onlyDue]);
+
+  const filteredNodeIds = useMemo(() => {
+    const needle = query.trim().toLowerCase();
     if (!needle) return null;
-    return new Set(
-      items
-        .filter(({ exam }) =>
-          `${exam.sourceSectionLabel} ${exam.bookTitle}`
-            .toLowerCase()
-            .includes(needle),
-        )
-        .map(({ exam }) => exam.id),
-    );
-  }, [items, needle]);
+    const matched = new Set<string>([EXAM_ROOT_ID]);
+    for (const node of graph.nodes) {
+      const hay =
+        `${node.label} ${node.bookTitle ?? ''} ${node.shortCode}`.toLowerCase();
+      if (hay.includes(needle)) {
+        matched.add(node.id);
+        if (node.parentId) matched.add(node.parentId);
+      }
+    }
+    return matched;
+  }, [graph.nodes, query]);
+
+  // Physics simulation state
+  const physicsRef = useRef<GalaxyPhysicsState | null>(null);
+  const [livePositions, setLivePositions] = useState<
+    Record<string, { x: number; y: number }>
+  >({});
+  const animFrameRef = useRef<number | null>(null);
+
+  const syncPositionsToReact = useCallback((state: GalaxyPhysicsState) => {
+    const next: Record<string, { x: number; y: number }> = {};
+    for (const [id, body] of state.bodies.entries()) {
+      next[id] = { x: body.x, y: body.y };
+    }
+    setLivePositions(next);
+  }, []);
+
+  const ensureAnimLoop = useCallback(() => {
+    if (animFrameRef.current !== null) return;
+    let tickCount = 0;
+    const tick = () => {
+      const state = physicsRef.current;
+      if (!state) {
+        animFrameRef.current = null;
+        return;
+      }
+      const moved = stepGalaxyPhysics(
+        state,
+        physicsConfigRef.current,
+        visibleNodeIds,
+      );
+      const hasPinned = state.bodyList.some((body) => body.fx !== null);
+      tickCount += 1;
+      if (moved || tickCount <= 2) {
+        syncPositionsToReact(state);
+      }
+      if (moved || hasPinned) {
+        animFrameRef.current = window.requestAnimationFrame(tick);
+      } else {
+        animFrameRef.current = null;
+      }
+    };
+    animFrameRef.current = window.requestAnimationFrame(tick);
+  }, [syncPositionsToReact, visibleNodeIds]);
+
+  const reheatSimulation = useCallback(
+    (alpha = 0.55) => {
+      if (!physicsRef.current) return;
+      physicsRef.current.alpha = Math.max(physicsRef.current.alpha, alpha);
+      ensureAnimLoop();
+    },
+    [ensureAnimLoop],
+  );
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const observer = new ResizeObserver(([entry]) => {
-      if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
-        setViewport({
-          width: entry.contentRect.width,
-          height: entry.contentRect.height,
-        });
+    const nextState = createGalaxyPhysicsState(graph);
+    if (physicsRef.current) {
+      for (const [id, oldBody] of physicsRef.current.bodies.entries()) {
+        const nextBody = nextState.bodies.get(id);
+        if (nextBody) {
+          nextBody.x = oldBody.x;
+          nextBody.y = oldBody.y;
+        }
       }
-    });
-    observer.observe(canvas);
+    }
+    nextState.alpha = 0.6;
+    physicsRef.current = nextState;
+    syncPositionsToReact(nextState);
+    ensureAnimLoop();
+
+    return () => {
+      if (animFrameRef.current !== null) {
+        window.cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
+      }
+    };
+  }, [ensureAnimLoop, graph, syncPositionsToReact]);
+
+  // Measure canvas size cleanly
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const update = () => {
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        setDimensions({ width: rect.width, height: rect.height });
+        if (!hasCenteredRef.current) {
+          hasCenteredRef.current = true;
+          setPan({ x: rect.width / 2, y: rect.height / 2 });
+        }
+      }
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
     return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
-    if (viewport.width < 10 || viewport.height < 10) return;
-    const size = Math.max(layout.extent * 2, 320);
-    const next = clampScale(
-      Math.min((viewport.width - 96) / size, (viewport.height - 96) / size),
-    );
-    setScale(Math.max(0.4, next));
-    setPan({ x: viewport.width / 2, y: viewport.height / 2 });
-  }, [bookKey, viewport.width, viewport.height, layout.extent]);
-
-  const resetView = () => {
-    const size = Math.max(layout.extent * 2, 320);
-    const next = clampScale(
-      Math.min((viewport.width - 96) / size, (viewport.height - 96) / size),
-    );
-    setScale(Math.max(0.4, next));
-    setPan({ x: viewport.width / 2, y: viewport.height / 2 });
-  };
-
-  const zoomAt = (nextScale: number, clientX: number, clientY: number) => {
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
-    const actualScale = clampScale(nextScale);
-    const worldX = (x - pan.x) / scale;
-    const worldY = (y - pan.y) / scale;
-    setPan({
-      x: x - worldX * actualScale,
-      y: y - worldY * actualScale,
-    });
-    setScale(actualScale);
-  };
-
-  const handleWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    zoomAt(
-      scale * (event.deltaY < 0 ? 1.12 : 0.89),
-      event.clientX,
-      event.clientY,
-    );
-  };
-
-  const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (
-      event.button !== 0 ||
-      (event.target as Element).closest?.('.galaxy-node-group')
-    ) {
-      return;
-    }
-    dragRef.current = {
-      x: event.clientX,
-      y: event.clientY,
-      panX: pan.x,
-      panY: pan.y,
+    const onFsChange = () => {
+      setIsFullscreen(document.fullscreenElement === containerRef.current);
     };
-    setDragging(true);
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, []);
+
+  const resetView = useCallback(() => {
+    setScale(INITIAL_ZOOM);
+    setPan({ x: dimensions.width / 2, y: dimensions.height / 2 });
+  }, [dimensions.height, dimensions.width]);
+
+  const focusNode = useCallback(
+    (nodeId: string, nextScale?: number) => {
+      const target = livePositions[nodeId] ?? nodeById.get(nodeId);
+      if (!target) return;
+      const targetScale = nextScale ?? Math.max(scale, 0.92);
+      setScale(targetScale);
+      setPan({
+        x: dimensions.width / 2 - target.x * targetScale,
+        y: dimensions.height / 2 - target.y * targetScale,
+      });
+    },
+    [dimensions.height, dimensions.width, livePositions, nodeById, scale],
+  );
+
+  const focusUrgentExam = useCallback(() => {
+    const target =
+      graph.nodes.find((n) => n.kind === 'planet' && n.isFocus) ??
+      graph.nodes.find(
+        (n) =>
+          n.kind === 'planet' &&
+          (n.urgency === 'overdue' || n.urgency === 'today'),
+      );
+    if (target) {
+      if (target.exam) onSelectExam(target.exam.id);
+      focusNode(target.id, 1);
+    }
+  }, [focusNode, graph.nodes, onSelectExam]);
+
+  const zoomAtCenter = (factor: number) => {
+    const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, scale * factor));
+    const cx = dimensions.width / 2;
+    const cy = dimensions.height / 2;
+    const ratio = next / scale;
+    setPan({
+      x: cx - (cx - pan.x) * ratio,
+      y: cy - (cy - pan.y) * ratio,
+    });
+    setScale(next);
+  };
+
+  // Drag state
+  const pointerActionRef = useRef<
+    | {
+        kind: 'pan';
+        startX: number;
+        startY: number;
+        originX: number;
+        originY: number;
+        moved: boolean;
+      }
+    | {
+        kind: 'node';
+        nodeId: string;
+        startX: number;
+        startY: number;
+        moved: boolean;
+      }
+    | null
+  >(null);
+
+  const handleCanvasPointerDown = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    if (event.button !== 0) return;
+    pointerActionRef.current = {
+      kind: 'pan',
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: pan.x,
+      originY: pan.y,
+      moved: false,
+    };
+    setIsPanning(true);
     event.currentTarget.setPointerCapture(event.pointerId);
   };
-  const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const start = dragRef.current;
-    if (!start) return;
-    setPan({
-      x: start.panX + event.clientX - start.x,
-      y: start.panY + event.clientY - start.y,
-    });
+
+  const handleNodePointerDown = (
+    event: ReactPointerEvent<SVGGElement>,
+    node: ExamGalaxyStarNode,
+  ) => {
+    if (event.button !== 0) return;
+    event.stopPropagation();
+    pointerActionRef.current = {
+      kind: 'node',
+      nodeId: node.id,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+    };
+    setDraggingNodeId(node.id);
+    const body = physicsRef.current?.bodies.get(node.id);
+    if (body) {
+      body.fx = body.x;
+      body.fy = body.y;
+      body.vx = 0;
+      body.vy = 0;
+    }
+    canvasRef.current?.setPointerCapture(event.pointerId);
   };
-  const handlePointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
-    dragRef.current = null;
-    setDragging(false);
+
+  const handleCanvasPointerMove = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    const action = pointerActionRef.current;
+    if (!action) return;
+    const dx = event.clientX - action.startX;
+    const dy = event.clientY - action.startY;
+    if (Math.hypot(dx, dy) > 4) action.moved = true;
+
+    if (action.kind === 'pan') {
+      setPan({ x: action.originX + dx, y: action.originY + dy });
+      return;
+    }
+
+    if (action.kind === 'node' && physicsRef.current && canvasRef.current) {
+      const rect = canvasRef.current.getBoundingClientRect();
+      const worldX = (event.clientX - rect.left - pan.x) / scale;
+      const worldY = (event.clientY - rect.top - pan.y) / scale;
+      const body = physicsRef.current.bodies.get(action.nodeId);
+      if (body) {
+        body.fx = worldX;
+        body.fy = worldY;
+        body.x = worldX;
+        body.y = worldY;
+        body.vx = 0;
+        body.vy = 0;
+      }
+      syncPositionsToReact(physicsRef.current);
+      reheatSimulation(0.3);
+    }
+  };
+
+  const handleCanvasPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const action = pointerActionRef.current;
+    pointerActionRef.current = null;
+    if (!action) return;
+
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+    setIsPanning(false);
+    setDraggingNodeId(null);
+
+    if (action.kind === 'node' && physicsRef.current) {
+      const body = physicsRef.current.bodies.get(action.nodeId);
+      if (body) {
+        body.fx = null;
+        body.fy = null;
+      }
+      if (action.moved) {
+        reheatSimulation(0.28);
+      }
+    }
+
+    if (action.kind === 'node' && !action.moved) {
+      const node = nodeById.get(action.nodeId);
+      if (!node) return;
+      if (node.kind === 'planet' && node.exam) {
+        onSelectExam(node.exam.id);
+      } else if (node.kind === 'cluster') {
+        setCollapsedClusters((prev) => {
+          const next = new Set(prev);
+          if (next.has(node.id)) next.delete(node.id);
+          else next.add(node.id);
+          return next;
+        });
+        reheatSimulation(0.32);
+      } else if (node.kind === 'sun' && mode === 'book' && onSelectBookFilter) {
+        onSelectBookFilter('');
+      }
+    }
   };
 
-  const hovered = hoveredId ? itemById.get(hoveredId) : undefined;
-  const sunRadius = 32;
+  const handleWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const px = event.clientX - rect.left;
+    const py = event.clientY - rect.top;
+    const factor = event.deltaY < 0 ? 1.12 : 0.89;
+    const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, scale * factor));
+    const ratio = next / scale;
+    setPan({
+      x: px - (px - pan.x) * ratio,
+      y: py - (py - pan.y) * ratio,
+    });
+    setScale(next);
+  };
+
+  const toggleFullscreen = async () => {
+    const host = containerRef.current;
+    if (!host) return;
+    try {
+      if (document.fullscreenElement === host) {
+        await document.exitFullscreen();
+      } else {
+        await host.requestFullscreen();
+      }
+    } catch {
+      // ignore fullscreen errors in non-supported environments
+    }
+  };
+
+  const nodePosition = (node: ExamGalaxyStarNode) =>
+    livePositions[node.id] ?? node;
+  const activeHoveredId = draggingNodeId ?? hoveredNode?.node.id ?? null;
+  const spotlightIds = activeHoveredId
+    ? (adjacency.get(activeHoveredId) ?? new Set([activeHoveredId]))
+    : null;
+
+  const orbitGuideRadii = useMemo(() => {
+    const radii = new Set<number>();
+    for (const node of graph.nodes) {
+      if (node.kind === 'cluster' && node.orbitRadius) {
+        radii.add(
+          Math.round(node.orbitRadius * physicsConfig.linkDistanceScale),
+        );
+      }
+    }
+    return [...radii].sort((a, b) => a - b);
+  }, [graph.nodes, physicsConfig.linkDistanceScale]);
+
+  const sunRadius = Math.round(32 * nodeSizeScale);
+  const clusterFontSize = Math.max(
+    9.5,
+    Math.min(13.5, 11.2 / Math.pow(scale, 0.28)),
+  );
+  const planetFontSize = Math.max(
+    8.5,
+    Math.min(11.5, 9.8 / Math.pow(scale, 0.28)),
+  );
+  const dueCount = items.filter(({ schedule }) =>
+    ['overdue', 'today'].includes(schedule.urgency),
+  ).length;
 
   return (
-    <div
-      className="book-galaxy-container exam-galaxy"
-      aria-label={`《${bookTitle}》试卷星系`}
+    <section
+      ref={containerRef}
+      className="book-galaxy-container"
+      aria-label="试卷星系视图"
     >
-      <div className="book-galaxy-header">
+      <header className="book-galaxy-header">
         <div className="book-galaxy-title-wrap">
-          <span className="book-galaxy-badge">试卷星系</span>
-          <span className="book-galaxy-title">《{bookTitle}》</span>
-          <div className="book-galaxy-stats">
-            <span className="book-galaxy-stat-pill">{items.length} 份试卷</span>
-            <span>·</span>
-            <span className="book-galaxy-stat-pill">{dueCount} 份需复习</span>
-          </div>
+          <span className="book-galaxy-badge">
+            {mode === 'book' ? '单书星系' : '全库星系'}
+          </span>
+          <strong className="book-galaxy-title">
+            {mode === 'book' ? bookTitle : `全部书籍 · ${items.length} 份试卷`}
+          </strong>
+          <span className="book-galaxy-subtitle">
+            {dueCount > 0 ? `${dueCount} 份待交` : '已稳固'}
+          </span>
         </div>
+
         <div className="book-galaxy-actions">
           <input
-            type="text"
+            type="search"
             className="book-galaxy-search-input"
-            placeholder="检索章节试卷…"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
+            placeholder="定位试卷或书名…"
           />
-          <button type="button" className="book-galaxy-btn" onClick={resetView}>
-            重置视角
+          {mode === 'book' && onSelectBookFilter && (
+            <button
+              type="button"
+              className="book-galaxy-btn"
+              onClick={() => onSelectBookFilter('')}
+            >
+              全库视角
+            </button>
+          )}
+          {mode === 'book' && onOpenBook && (
+            <button
+              type="button"
+              className="book-galaxy-btn"
+              onClick={onOpenBook}
+            >
+              打开本书
+            </button>
+          )}
+          <button
+            type="button"
+            className={`book-galaxy-btn${controlsOpen ? ' is-primary' : ''}`}
+            onClick={() => setControlsOpen((v) => !v)}
+          >
+            图谱设置
           </button>
         </div>
-      </div>
+      </header>
+
+      {controlsOpen && (
+        <aside
+          className="book-galaxy-controls-drawer"
+          aria-label="图谱参数控制"
+        >
+          <div className="book-galaxy-controls-header">
+            <span>星系控制台</span>
+            <button
+              type="button"
+              className="book-galaxy-controls-close"
+              onClick={() => setControlsOpen(false)}
+            >
+              关闭
+            </button>
+          </div>
+          <div className="book-galaxy-controls-section">
+            <div className="book-galaxy-controls-kicker">
+              拓扑过滤 · FILTERS
+            </div>
+            <label className="book-galaxy-toggle-row">
+              <span>仅显示待交 / 逾期试卷</span>
+              <input
+                type="checkbox"
+                checked={onlyDue}
+                onChange={(e) => setOnlyDue(e.target.checked)}
+              />
+            </label>
+            <label className="book-galaxy-toggle-row">
+              <span>显示同心轨道参考环</span>
+              <input
+                type="checkbox"
+                checked={showOrbitGuides}
+                onChange={(e) => setShowOrbitGuides(e.target.checked)}
+              />
+            </label>
+            <label className="book-galaxy-toggle-row">
+              <span>显示章节顺序弧线</span>
+              <input
+                type="checkbox"
+                checked={showSequenceArcs}
+                onChange={(e) => setShowSequenceArcs(e.target.checked)}
+              />
+            </label>
+          </div>
+
+          <div className="book-galaxy-controls-section">
+            <div className="book-galaxy-controls-kicker">
+              视觉表现 · DISPLAY
+            </div>
+            <div className="book-galaxy-slider-row">
+              <div className="book-galaxy-slider-label">
+                <span>节点尺寸比例</span>
+                <strong>{nodeSizeScale.toFixed(2)}x</strong>
+              </div>
+              <input
+                type="range"
+                min="0.6"
+                max="1.6"
+                step="0.05"
+                value={nodeSizeScale}
+                onChange={(e) => setNodeSizeScale(Number(e.target.value))}
+              />
+            </div>
+            <div className="book-galaxy-slider-row">
+              <div className="book-galaxy-slider-label">
+                <span>标签显现阈值 (LOD)</span>
+                <strong>{labelFadeThreshold.toFixed(2)}</strong>
+              </div>
+              <input
+                type="range"
+                min="0.35"
+                max="1.25"
+                step="0.05"
+                value={labelFadeThreshold}
+                onChange={(e) => setLabelFadeThreshold(Number(e.target.value))}
+              />
+            </div>
+          </div>
+
+          <div className="book-galaxy-controls-section">
+            <div className="book-galaxy-controls-kicker">
+              力导向物理 · PHYSICS
+            </div>
+            <div className="book-galaxy-slider-row">
+              <div className="book-galaxy-slider-label">
+                <span>节点排斥力</span>
+                <strong>{physicsConfig.repelStrength.toFixed(2)}x</strong>
+              </div>
+              <input
+                type="range"
+                min="0.3"
+                max="2.2"
+                step="0.05"
+                value={physicsConfig.repelStrength}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  setPhysicsConfig((prev) => ({ ...prev, repelStrength: val }));
+                  reheatSimulation(0.35);
+                }}
+              />
+            </div>
+            <div className="book-galaxy-slider-row">
+              <div className="book-galaxy-slider-label">
+                <span>连线引力距离</span>
+                <strong>{physicsConfig.linkDistanceScale.toFixed(2)}x</strong>
+              </div>
+              <input
+                type="range"
+                min="0.6"
+                max="1.8"
+                step="0.05"
+                value={physicsConfig.linkDistanceScale}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  setPhysicsConfig((prev) => ({
+                    ...prev,
+                    linkDistanceScale: val,
+                  }));
+                  reheatSimulation(0.35);
+                }}
+              />
+            </div>
+            <div className="book-galaxy-slider-row">
+              <div className="book-galaxy-slider-label">
+                <span>向心聚合力</span>
+                <strong>{physicsConfig.centerGravity.toFixed(2)}x</strong>
+              </div>
+              <input
+                type="range"
+                min="0.3"
+                max="2.0"
+                step="0.05"
+                value={physicsConfig.centerGravity}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  setPhysicsConfig((prev) => ({ ...prev, centerGravity: val }));
+                  reheatSimulation(0.35);
+                }}
+              />
+            </div>
+            <button
+              type="button"
+              className="book-galaxy-btn"
+              onClick={() => {
+                setPhysicsConfig(DEFAULT_GALAXY_PHYSICS_CONFIG);
+                setNodeSizeScale(1);
+                setLabelFadeThreshold(0.55);
+                reheatSimulation(0.6);
+                resetView();
+              }}
+            >
+              重置默认星系参数
+            </button>
+          </div>
+        </aside>
+      )}
+
       <div
         ref={canvasRef}
-        className={`book-galaxy-canvas${dragging ? ' is-panning' : ''}`}
+        className={`book-galaxy-canvas${isPanning ? ' is-panning' : ''}${
+          draggingNodeId ? ' is-dragging-node' : ''
+        }`}
+        onPointerDown={handleCanvasPointerDown}
+        onPointerMove={handleCanvasPointerMove}
+        onPointerUp={handleCanvasPointerUp}
+        onPointerCancel={handleCanvasPointerUp}
         onWheel={handleWheel}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
       >
         <svg
           className="book-galaxy-svg"
-          width={viewport.width}
-          height={viewport.height}
+          width={dimensions.width}
+          height={dimensions.height}
+          role="group"
+          aria-label="试卷星系知识拓扑"
         >
           <defs>
-            <clipPath id="exam-galaxy-sun-clip">
-              <circle cx={0} cy={0} r={sunRadius} />
-            </clipPath>
-            {coverDataUrl && (
-              <pattern
-                id="exam-galaxy-sun-cover"
-                patternUnits="userSpaceOnUse"
-                x={-sunRadius}
-                y={-sunRadius}
-                width={sunRadius * 2}
-                height={sunRadius * 2}
-              >
-                <image
-                  href={coverDataUrl}
-                  x={0}
-                  y={0}
-                  width={sunRadius * 2}
-                  height={sunRadius * 2}
-                  preserveAspectRatio="xMidYMid slice"
-                />
-              </pattern>
-            )}
-            <radialGradient id="exam-galaxy-sun-grad" cx="50%" cy="50%" r="50%">
+            <radialGradient id="examStarSunGrad" cx="50%" cy="50%" r="50%">
               <stop offset="0%" stopColor="#ff7b54" />
               <stop offset="70%" stopColor="#e05638" />
               <stop offset="100%" stopColor="#992e18" />
             </radialGradient>
           </defs>
+
           <g transform={`translate(${pan.x}, ${pan.y}) scale(${scale})`}>
-            {rings.map((ring) => {
-              const nodeOnRing = layout.nodes.find(
-                (node) => node.ring === ring,
-              );
-              const ringRadius = nodeOnRing
-                ? Math.round(Math.hypot(nodeOnRing.x, nodeOnRing.y))
-                : 0;
-              if (!ringRadius) return null;
-              return (
+            {showOrbitGuides &&
+              orbitGuideRadii.map((radius) => (
                 <circle
-                  key={ring}
-                  className="galaxy-orbit-ring"
+                  key={`orbit-ring-${radius}`}
                   cx={0}
                   cy={0}
-                  r={ringRadius}
+                  r={radius}
+                  className="galaxy-orbit-ring"
                 />
-              );
-            })}
-            {layout.nodes.map((node, index) => {
-              const next = layout.nodes[index + 1];
-              if (!next) return null;
-              const dimmed =
-                matchedIds != null &&
-                !matchedIds.has(node.id) &&
-                !matchedIds.has(next.id);
-              const spotlight = hoveredId === node.id || hoveredId === next.id;
-              const mx = ((node.x + next.x) / 2) * 0.86;
-              const my = ((node.y + next.y) / 2) * 0.86;
-              return (
-                <path
-                  key={`seq-${node.id}`}
-                  d={`M ${node.x} ${node.y} Q ${mx} ${my} ${next.x} ${next.y}`}
-                  className={`galaxy-link-sequence${spotlight ? ' is-spotlight' : ''}${dimmed ? ' is-dimmed' : ''}`}
-                />
-              );
-            })}
-            {layout.nodes.map((node) => {
-              const urgency =
-                itemById.get(node.id)?.schedule.urgency ?? 'notStarted';
-              const dimmed = matchedIds != null && !matchedIds.has(node.id);
-              const spotlight = hoveredId === node.id || selectedId === node.id;
+              ))}
+
+            {graph.links.map((link) => {
+              if (
+                !visibleNodeIds.has(link.source) ||
+                !visibleNodeIds.has(link.target)
+              ) {
+                return null;
+              }
+              const sourceNode = nodeById.get(link.source);
+              const targetNode = nodeById.get(link.target);
+              if (!sourceNode || !targetNode) return null;
+              const source = nodePosition(sourceNode);
+              const target = nodePosition(targetNode);
+              const isSpotlightLink = spotlightIds
+                ? (link.source === activeHoveredId &&
+                    spotlightIds.has(link.target)) ||
+                  (link.target === activeHoveredId &&
+                    spotlightIds.has(link.source))
+                : false;
+              const isDimmedBySpotlight =
+                Boolean(spotlightIds) && !isSpotlightLink;
+              const isSearchDimmed =
+                Boolean(filteredNodeIds) &&
+                !filteredNodeIds?.has(link.source) &&
+                !filteredNodeIds?.has(link.target);
+
+              if (link.kind === 'sequence') {
+                if (!showSequenceArcs) return null;
+                const mx = (source.x + target.x) / 2;
+                const my = (source.y + target.y) / 2 - 26;
+                return (
+                  <path
+                    key={`seq:${link.source}:${link.target}`}
+                    d={`M ${source.x} ${source.y} Q ${mx} ${my} ${target.x} ${target.y}`}
+                    className={`galaxy-link-cross${
+                      isSpotlightLink ? ' is-spotlight' : ''
+                    }${isDimmedBySpotlight || isSearchDimmed ? ' is-dimmed' : ''}`}
+                    style={
+                      link.color
+                        ? ({ '--link-color': link.color } as CSSProperties)
+                        : undefined
+                    }
+                  />
+                );
+              }
+
               return (
                 <line
-                  key={node.id}
-                  className={`galaxy-link-orbit is-root-spoke${spotlight ? ' is-spotlight' : ''}${dimmed ? ' is-dimmed' : ''}`}
-                  x1={0}
-                  y1={0}
-                  x2={node.x}
-                  y2={node.y}
+                  key={`${link.source}:${link.target}`}
+                  x1={source.x}
+                  y1={source.y}
+                  x2={target.x}
+                  y2={target.y}
+                  className={`galaxy-link-orbit ${
+                    link.source === EXAM_ROOT_ID ? 'is-root-spoke' : 'is-intra'
+                  }${isSpotlightLink ? ' is-spotlight' : ''}${
+                    isDimmedBySpotlight || isSearchDimmed ? ' is-dimmed' : ''
+                  }`}
                   style={
-                    {
-                      '--link-color': URGENCY_COLOR[urgency],
-                    } as CSSProperties
+                    link.color
+                      ? ({ '--link-color': link.color } as CSSProperties)
+                      : undefined
                   }
                 />
               );
             })}
-            <g
-              className="galaxy-node-group is-sun has-note"
-              onClick={() => onOpenBook?.()}
-              onPointerDown={(event) => event.stopPropagation()}
-            >
-              <circle cx={0} cy={0} r={sunRadius + 8} fill="transparent" />
-              {coverDataUrl ? (
-                <circle
-                  cx={0}
-                  cy={0}
-                  r={sunRadius}
-                  fill="url(#exam-galaxy-sun-cover)"
-                  clipPath="url(#exam-galaxy-sun-clip)"
-                  className="galaxy-sun-circle"
-                />
-              ) : (
-                <>
-                  <circle
-                    cx={0}
-                    cy={0}
-                    r={sunRadius}
-                    fill="url(#exam-galaxy-sun-grad)"
-                    className="galaxy-node-circle"
-                  />
-                  <text x={0} y={5} className="galaxy-sun-monogram">
-                    {Array.from(bookTitle).slice(0, 1).join('')}
-                  </text>
-                </>
-              )}
-              <text x={0} y={sunRadius + 18} className="galaxy-sun-title">
-                《{shortLabel(bookTitle, 16)}》
-              </text>
-            </g>
-            {layout.nodes.map((node) => {
-              const item = itemById.get(node.id);
-              if (!item) return null;
-              const label = item.exam.sourceSectionLabel || '未命名试卷';
-              const due = ['overdue', 'today'].includes(item.schedule.urgency);
-              const active =
-                hoveredId === node.id || selectedId === node.id || due;
-              const dimmed =
-                (matchedIds != null && !matchedIds.has(node.id)) ||
-                (hoveredId != null && hoveredId !== node.id);
-              const practiced = item.exam.status === 'submitted';
-              const radius = due || selectedId === node.id ? 7.2 : 5.4;
-              const showLabel =
-                active || scale >= 0.72 || matchedIds?.has(node.id);
+
+            {graph.nodes.map((node) => {
+              if (!visibleNodeIds.has(node.id)) return null;
+              const position = nodePosition(node);
+              const isSun = node.kind === 'sun';
+              const isCluster = node.kind === 'cluster';
+              const isPlanet = node.kind === 'planet';
+              const isMatch = filteredNodeIds
+                ? filteredNodeIds.has(node.id)
+                : true;
+              const isHoveredSelf = activeHoveredId === node.id;
+              const isSpotlightNeighbor = spotlightIds
+                ? spotlightIds.has(node.id)
+                : false;
+              const isDimmed =
+                (Boolean(spotlightIds) && !isSpotlightNeighbor) ||
+                (Boolean(filteredNodeIds) && !isMatch);
+              const isFocus = isPlanet && node.isFocus;
+              const isEmphasized = isFocus || (isPlanet && node.isHighlighted);
+              const displayRadius = isSun
+                ? sunRadius
+                : isCluster
+                  ? Math.min(18, 9.5 + node.examCount * 0.65) * nodeSizeScale
+                  : (node.isFocus ? 7.6 : node.isHighlighted ? 6.2 : 4.8) *
+                    nodeSizeScale;
+
+              const t1 = labelFadeThreshold * 0.55;
+              const t2 = labelFadeThreshold;
+              const forceShowLabel =
+                isHoveredSelf ||
+                isSpotlightNeighbor ||
+                isFocus ||
+                node.isHighlighted ||
+                (Boolean(filteredNodeIds) && isMatch);
+              let planetLabelOpacity = 0;
+              if (forceShowLabel) planetLabelOpacity = 1;
+              else if (scale >= t2) planetLabelOpacity = 0.88;
+              else if (scale > t1) {
+                planetLabelOpacity = ((scale - t1) / (t2 - t1)) * 0.85;
+              }
+
               return (
                 <g
                   key={node.id}
-                  className={`galaxy-node-group is-planet ${practiced ? 'has-note' : 'no-note'} ${active ? 'is-hovered' : ''} ${dimmed ? 'is-dimmed' : ''}`}
-                  transform={`translate(${node.x}, ${node.y})`}
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onClick={() => onSelectExam(node.id)}
-                  onDoubleClick={() => onOpenExam(item.exam)}
+                  className={`galaxy-node-group is-${node.kind}${
+                    isEmphasized ? ' has-note' : ' no-note'
+                  }${isHoveredSelf ? ' is-hovered' : ''}${
+                    isSpotlightNeighbor ? ' is-neighbor' : ''
+                  }${isDimmed ? ' is-dimmed' : ''}`}
+                  transform={`translate(${position.x}, ${position.y})`}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${node.label} ${node.subtitle}`}
+                  onPointerDown={(event) => handleNodePointerDown(event, node)}
+                  onDoubleClick={(event: ReactMouseEvent<SVGGElement>) => {
+                    event.stopPropagation();
+                    if (isPlanet && node.exam) {
+                      onOpenExam(node.exam);
+                    } else if (
+                      isCluster &&
+                      node.bookKey &&
+                      onSelectBookFilter
+                    ) {
+                      onSelectBookFilter(node.bookKey);
+                    }
+                  }}
                   onMouseEnter={(event) => {
                     const rect = canvasRef.current?.getBoundingClientRect();
-                    setHoveredId(node.id);
-                    setHoverPoint({
-                      x: event.clientX - (rect?.left ?? 0),
-                      y: event.clientY - (rect?.top ?? 0),
+                    if (!rect) return;
+                    setHoveredNode({
+                      node,
+                      clientX: event.clientX - rect.left,
+                      clientY: event.clientY - rect.top,
                     });
                   }}
-                  onMouseLeave={() => setHoveredId(null)}
+                  onMouseLeave={() => setHoveredNode(null)}
                 >
-                  <circle cx={0} cy={0} r={16} fill="transparent" />
-                  {due && selectedId === node.id && (
-                    <circle cx={0} cy={0} className="galaxy-current-pulse" />
-                  )}
-                  {(practiced || active) && (
+                  {isFocus && (
                     <circle
-                      cx={0}
-                      cy={0}
-                      r={radius + 3.5}
-                      className="galaxy-note-halo"
-                      style={
-                        {
-                          '--node-color': URGENCY_COLOR[item.schedule.urgency],
-                        } as CSSProperties
-                      }
+                      r={displayRadius + 8}
+                      className="galaxy-current-pulse"
+                      style={{ '--cluster-color': node.color } as CSSProperties}
                     />
                   )}
-                  <circle
-                    cx={0}
-                    cy={0}
-                    r={radius}
-                    fill={URGENCY_COLOR[item.schedule.urgency]}
-                    className="galaxy-node-circle"
-                    style={
-                      {
-                        '--node-color': URGENCY_COLOR[item.schedule.urgency],
-                      } as CSSProperties
-                    }
-                  />
-                  {showLabel && (
+
+                  {isSun ? (
+                    <circle
+                      r={displayRadius}
+                      fill="url(#examStarSunGrad)"
+                      className="galaxy-sun-disc"
+                    />
+                  ) : (
+                    <circle
+                      r={displayRadius}
+                      fill={node.color}
+                      className={
+                        isCluster ? 'galaxy-cluster-disc' : 'galaxy-planet-disc'
+                      }
+                      style={{ '--cluster-color': node.color } as CSSProperties}
+                    />
+                  )}
+
+                  {isSun ? (
                     <text
-                      x={0}
-                      y={radius + 12}
-                      className={`galaxy-planet-badge${active ? ' is-prominent' : ''}`}
+                      y={displayRadius + 16}
+                      textAnchor="middle"
+                      className="galaxy-sun-title"
                     >
-                      {shortLabel(label, active || scale >= 0.9 ? 18 : 8)}
+                      {truncateLabel(node.label, 18)}
                     </text>
+                  ) : isCluster ? (
+                    <text
+                      y={displayRadius + clusterFontSize + 4}
+                      textAnchor="middle"
+                      className="galaxy-node-label is-cluster-label"
+                      style={{ fontSize: `${clusterFontSize}px` }}
+                    >
+                      {truncateLabel(node.label, 14)} ({node.examCount})
+                    </text>
+                  ) : (
+                    planetLabelOpacity > 0 && (
+                      <text
+                        y={displayRadius + planetFontSize + 3}
+                        textAnchor="middle"
+                        className="galaxy-node-label is-planet-label"
+                        style={{
+                          fontSize: `${planetFontSize}px`,
+                          opacity: planetLabelOpacity,
+                        }}
+                      >
+                        {truncateLabel(node.label, scale >= 0.88 ? 20 : 12)}
+                      </text>
+                    )
                   )}
                 </g>
               );
             })}
           </g>
         </svg>
-        <div className="book-galaxy-hud-hint">
-          <i className="exam-galaxy-swatch is-due" />
-          <span>逾期</span>
-          <i className="exam-galaxy-swatch is-soon" />
-          <span>今日</span>
-          <i className="exam-galaxy-swatch is-open" />
-          <span>未交</span>
-          <i className="exam-galaxy-swatch is-done" />
-          <span>已交</span>
-          <span>·</span>
-          <span>单击查看</span>
-          <span>·</span>
-          <span>双击打开</span>
-          <span>·</span>
-          <span>滚轮缩放 ({Math.round(scale * 100)}%)</span>
-        </div>
-        <div className="exam-galaxy-dock">
-          <button
-            type="button"
-            aria-label="缩小星系"
-            onClick={() => setScale((value) => clampScale(value / 1.12))}
-          >
-            −
-          </button>
-          <span>{Math.round(scale * 100)}%</span>
-          <button
-            type="button"
-            aria-label="放大星系"
-            onClick={() => setScale((value) => clampScale(value * 1.12))}
-          >
-            +
-          </button>
-          <button type="button" onClick={resetView}>
-            适配全景
-          </button>
-        </div>
-        {hovered && (
+
+        {hoveredNode && !draggingNodeId && (
           <div
             className="book-galaxy-tooltip"
             style={{
               left: Math.min(
-                hoverPoint.x + 12,
-                Math.max(12, viewport.width - 280),
+                dimensions.width - 260,
+                Math.max(12, hoveredNode.clientX),
               ),
               top: Math.min(
-                hoverPoint.y + 12,
-                Math.max(12, viewport.height - 132),
+                dimensions.height - 130,
+                Math.max(12, hoveredNode.clientY),
               ),
             }}
           >
             <div className="book-galaxy-tooltip-head">
-              <span>{hovered.exam.sourceSectionLabel || '未命名试卷'}</span>
-              <span className="book-galaxy-badge">
-                {urgencyText(hovered.schedule)}
-              </span>
+              <span>{truncateLabel(hoveredNode.node.label, 26)}</span>
+              {hoveredNode.node.schedule && (
+                <span>{urgencyText(hoveredNode.node.schedule)}</span>
+              )}
             </div>
-            <div className="book-galaxy-tooltip-meta">
-              {hovered.exam.questionCount} 题 · 已交卷{' '}
-              {hovered.schedule.completedRounds} 轮
-            </div>
-            <div className="book-galaxy-tooltip-hint">
-              单击查看 · 双击打开试卷
-            </div>
+            {hoveredNode.node.exam ? (
+              <>
+                <div className="book-galaxy-tooltip-meta">
+                  《{hoveredNode.node.exam.bookTitle}》 ·{' '}
+                  {hoveredNode.node.exam.questionCount} 题 ·{' '}
+                  {hoveredNode.node.schedule?.completedRounds ?? 0} 轮
+                </div>
+                <div className="book-galaxy-tooltip-hint">
+                  单击查看右侧解析详情 · 双击直接开始作答
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="book-galaxy-tooltip-meta">
+                  {hoveredNode.node.subtitle}
+                </div>
+                <div className="book-galaxy-tooltip-hint">
+                  {hoveredNode.node.kind === 'cluster'
+                    ? mode === 'library'
+                      ? '单击折叠子星系 · 双击聚焦本书'
+                      : '单击折叠 / 展开该分组'
+                    : '拖拽调整视图，滚轮缩放'}
+                </div>
+              </>
+            )}
           </div>
         )}
-        {!items.length && (
-          <p className="exam-galaxy-empty">这本书在当前筛选条件下没有试卷。</p>
-        )}
+
+        {/* Bottom-right Zoom & Focus Dock */}
+        <div className="lp-starmap-dock" aria-label="缩放与视图控制">
+          <button
+            type="button"
+            className="lp-starmap-dock-btn"
+            onClick={() => zoomAtCenter(1.22)}
+            title="放大"
+          >
+            +
+          </button>
+          <span className="lp-starmap-dock-scale">
+            {Math.round(scale * 100)}%
+          </span>
+          <button
+            type="button"
+            className="lp-starmap-dock-btn"
+            onClick={() => zoomAtCenter(0.82)}
+            title="缩小"
+          >
+            −
+          </button>
+          <button
+            type="button"
+            className="lp-starmap-dock-btn"
+            onClick={resetView}
+            title="重置居中"
+          >
+            ⟲
+          </button>
+          <button
+            type="button"
+            className="lp-starmap-dock-btn"
+            onClick={focusUrgentExam}
+            title="定位当前/待复习试卷"
+          >
+            ⌖
+          </button>
+          <button
+            type="button"
+            className="lp-starmap-dock-btn"
+            onClick={() => void toggleFullscreen()}
+            title={isFullscreen ? '退出全屏' : '全屏'}
+          >
+            {isFullscreen ? '✕' : '⛶'}
+          </button>
+        </div>
       </div>
-    </div>
+
+      <footer className="exam-galaxy-legend-inline">
+        <span>
+          <i className="is-overdue" /> 逾期 / 今日待交
+        </span>
+        <span>
+          <i className="is-upcoming" /> 三日内待复习
+        </span>
+        <span>
+          <i className="is-mastered" /> 稳固 / 已掌握
+        </span>
+        <span>
+          <i /> 未交 / 远期
+        </span>
+        <span>单击选中 · 双击作答 · 节点可拖拽</span>
+      </footer>
+    </section>
   );
 }

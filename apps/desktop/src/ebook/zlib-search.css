@@ -358,6 +358,89 @@
   color: #3e8267;
 }
 
+.zlib-side-status.is-warning {
+  color: #b94d34;
+}
+
+.zlib-side-status.is-checking {
+  color: #7e8a92;
+}
+
+.zlib-side-account-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.zlib-node-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #7e8a92;
+  font-size: 10px;
+}
+
+.zlib-node-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid #d8dfe3;
+  border-radius: 0;
+  outline: none;
+  color: #344149;
+  background: #fff;
+  font: inherit;
+  font-size: 10px;
+}
+
+.zlib-side-account-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
+.zlib-side-mini-btn {
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid #d8dfe3;
+  border-radius: 0;
+  color: #4b5861;
+  background: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.zlib-side-mini-btn:hover:not(:disabled) {
+  border-color: #c45d42;
+  color: #c45d42;
+}
+
+.zlib-side-mini-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.zlib-side-offline-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid #e6cdb8;
+  color: #9e5334;
+  background: #fdf5ef;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 .zlib-side-controls {
   display: grid;
   gap: 8px;
@@ -421,6 +504,12 @@
   background: transparent;
 }
 
+.zlib-side-login.is-urgent {
+  border-color: #c45d42;
+  color: #fff;
+  background: #c45d42;
+}
+
 .zlib-side-hint,
 .zlib-side-error {
   margin: 0;
@@ -432,6 +521,10 @@
 
 .zlib-side-error {
   color: #b94d34;
+}
+
+.zlib-side-results-error {
+  padding: 16px 12px;
 }
 
 .zlib-side-results {
@@ -522,10 +615,47 @@
   input,
 .app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
   .zlib-side-search
-  select {
+  select,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .zlib-node-select,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .zlib-side-mini-btn {
   border-color: var(--line-strong, #3b454c);
   color: var(--ink, #dce3e8);
   background: var(--input-bg, #20282d);
+}
+
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .zlib-side-mini-btn:hover:not(:disabled) {
+  border-color: var(--player-accent, #df735b);
+  color: var(--player-accent, #df735b);
+}
+
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .zlib-side-status.is-warning,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .zlib-side-error {
+  color: #e8846c;
+}
+
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .zlib-side-offline-hint {
+  border-color: #5b3b30;
+  color: #f0b39d;
+  background: #2b201d;
+}
+
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .zlib-side-login {
+  border-color: var(--line-strong, #3b454c);
+  color: #e8846c;
+}
+
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .zlib-side-login.is-urgent {
+  border-color: var(--player-accent, #df735b);
+  color: #fff;
+  background: var(--player-accent, #df735b);
 }
 
 .app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])

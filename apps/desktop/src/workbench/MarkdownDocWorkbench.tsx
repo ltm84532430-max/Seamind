@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   preparePastedSvg,
   updateMarkdownCodeFence,
@@ -8,7 +8,17 @@ import type { CodeBlockHandlers } from './code-blocks';
 import MarkdownEditor from './MarkdownEditor';
 import type { MarkdownEditorHandle } from './MarkdownEditor';
 import MarkdownPreview from './MarkdownPreview';
+import type { PreviewFootnoteJumpRequest } from './MarkdownPreview';
 import type { ActiveDocument } from './active-document';
+import {
+  extractFootnoteAnchorContext,
+  formatTextForFootnotePaste,
+  nextAvailableFootnoteId,
+  parseMarkdownFootnotes,
+  removeFootnoteFromMarkdown,
+  upsertFootnoteInMarkdown,
+  type MarkdownFootnote,
+} from './markdown-footnotes';
 import { extractMarkdownHeadings } from './markdown-outline';
 import type { MarkdownHeading } from './markdown-outline';
 import { useDebouncedValue } from './use-debounced-value';
@@ -58,6 +68,7 @@ export interface MarkdownDocWorkbenchProps {
   theme: Theme;
   documents?: readonly MapDocument[];
   categories?: readonly string[];
+  scrollToFootnoteRequest?: PreviewFootnoteJumpRequest | null;
   /** Turns Markdown into the sanitized HTML the preview shows. */
   renderPreview(markdown: string): { html: string; source: string };
   onSourceChange(source: string): void;
@@ -88,6 +99,17 @@ interface PendingKnowledgePaste extends KnowledgePasteDraft {
   to: number;
 }
 
+interface FootnoteComposerState {
+  session: number;
+  mode: 'create' | 'edit';
+  footnoteId: string;
+  indexLabel: string;
+  selectionFrom: number;
+  selectionTo: number;
+  anchorContext: string;
+  draft: string;
+}
+
 /**
  * Clean, distraction-free Markdown document workbench supporting single-pane Edit (default),
  * side-by-side Split, and focused Read modes, with ref-stabilized CodeMirror completions.
@@ -99,6 +121,7 @@ export default function MarkdownDocWorkbench({
   theme,
   documents,
   categories,
+  scrollToFootnoteRequest,
   renderPreview,
   onSourceChange,
   onSave,
@@ -128,12 +151,23 @@ export default function MarkdownDocWorkbench({
     readStoredViewMode(),
   );
   const [outlineOpen, setOutlineOpen] = useState(false);
+  const [railTab, setRailTab] = useState<'outline' | 'footnotes'>('outline');
+  const [localFootnoteJump, setLocalFootnoteJump] =
+    useState<PreviewFootnoteJumpRequest | null>(null);
   const [addingTag, setAddingTag] = useState(false);
   const [tagDraft, setTagDraft] = useState('');
   const [pendingPaste, setPendingPaste] =
     useState<PendingKnowledgePaste | null>(null);
   const [pasteBusy, setPasteBusy] = useState(false);
   const [pasteError, setPasteError] = useState('');
+  const [footnoteComposer, setFootnoteComposer] =
+    useState<FootnoteComposerState | null>(null);
+  const [footnoteComposerError, setFootnoteComposerError] = useState('');
+
+  useEffect(() => {
+    setFootnoteComposer(null);
+    setFootnoteComposerError('');
+  }, [document.session]);
 
   const handleKnowledgePaste = useCallback(
     (event: ClipboardEvent, editor: import('codemirror').EditorView) => {
@@ -173,7 +207,13 @@ export default function MarkdownDocWorkbench({
         return false;
       }
       try {
-        editorRef.current.replaceRange(paste.from, paste.to, text);
+        const formatted = formatTextForFootnotePaste(
+          sourceRef.current,
+          paste.from,
+          paste.to,
+          text,
+        );
+        editorRef.current.replaceRange(paste.from, paste.to, formatted.text);
       } catch {
         setPasteError('粘贴位置已失效。请取消后重新粘贴。');
         return false;
@@ -240,10 +280,10 @@ export default function MarkdownDocWorkbench({
     applyPendingPaste,
   ]);
 
-  const switchViewMode = (mode: DocViewMode) => {
+  const switchViewMode = useCallback((mode: DocViewMode) => {
     setViewMode(mode);
     writeStoredViewMode(mode);
-  };
+  }, []);
 
   const showEditor = viewMode === 'edit' || viewMode === 'split';
   const showPreview = viewMode === 'split' || viewMode === 'read';
@@ -261,6 +301,135 @@ export default function MarkdownDocWorkbench({
   const headings = useMemo(
     () => extractMarkdownHeadings(document.source),
     [document.source],
+  );
+
+  const footnotes = useMemo(
+    () => parseMarkdownFootnotes(document.source).footnotes,
+    [document.source],
+  );
+
+  const activeFootnoteJump = useMemo(() => {
+    if (!localFootnoteJump) return scrollToFootnoteRequest ?? null;
+    if (!scrollToFootnoteRequest) return localFootnoteJump;
+    return localFootnoteJump.nonce >= scrollToFootnoteRequest.nonce
+      ? localFootnoteJump
+      : scrollToFootnoteRequest;
+  }, [localFootnoteJump, scrollToFootnoteRequest]);
+
+  useEffect(() => {
+    if (!scrollToFootnoteRequest?.id) return;
+    const target = footnotes.find((fn) => fn.id === scrollToFootnoteRequest.id);
+    if (!target) return;
+    if (showEditor) {
+      editorRef.current?.selectLine(target.lineIndex, viewMode === 'edit');
+    }
+  }, [scrollToFootnoteRequest, footnotes, showEditor, viewMode]);
+
+  const handleInsertFootnote = useCallback(() => {
+    const current = sourceRef.current;
+    const selection = showEditor ? editorRef.current?.getSelection() : null;
+    const range = selection
+      ? { from: selection.from, to: selection.to }
+      : { from: current.length, to: current.length };
+    const nextId = nextAvailableFootnoteId(current);
+    setFootnoteComposerError('');
+    setFootnoteComposer({
+      session: document.session,
+      mode: 'create',
+      footnoteId: nextId,
+      indexLabel: nextId,
+      selectionFrom: range.from,
+      selectionTo: range.to,
+      anchorContext: extractFootnoteAnchorContext(current, range.to),
+      draft: '',
+    });
+  }, [document.session, showEditor]);
+
+  const openEditFootnoteComposer = useCallback(
+    (footnoteId: string) => {
+      const target = parseMarkdownFootnotes(sourceRef.current).footnotes.find(
+        (fn) => fn.id === footnoteId,
+      );
+      if (!target) return;
+      const sourceLines = sourceRef.current.split(/\r?\n/);
+      const refLine = target.refLineIndices[0];
+      const anchorContext =
+        refLine !== undefined && sourceLines[refLine] !== undefined
+          ? sourceLines[refLine].trim().slice(0, 48)
+          : `第 ${target.lineIndex + 1} 行`;
+      setFootnoteComposerError('');
+      setFootnoteComposer({
+        session: document.session,
+        mode: 'edit',
+        footnoteId: target.id,
+        indexLabel: String(target.index),
+        selectionFrom: 0,
+        selectionTo: 0,
+        anchorContext,
+        draft: target.content,
+      });
+    },
+    [document.session],
+  );
+
+  const submitFootnoteComposer = useCallback(() => {
+    const composer = footnoteComposer;
+    if (!composer) return;
+    if (composer.session !== document.session) {
+      setFootnoteComposer(null);
+      return;
+    }
+    if (!composer.draft.trim()) {
+      setFootnoteComposerError('请输入或粘贴脚注内容');
+      return;
+    }
+    const result = upsertFootnoteInMarkdown(sourceRef.current, {
+      mode: composer.mode,
+      id: composer.footnoteId,
+      selection: {
+        from: composer.selectionFrom,
+        to: composer.selectionTo,
+      },
+      content: composer.draft,
+    });
+    if (showEditor && editorRef.current) {
+      editorRef.current.applyDocument(
+        result.nextSource,
+        composer.mode === 'create' && result.cursorOffsetAfterRef !== undefined
+          ? { cursorOffset: result.cursorOffsetAfterRef, focus: true }
+          : undefined,
+      );
+    } else {
+      onSourceChange(result.nextSource);
+    }
+    if (composer.mode === 'create') {
+      setRailTab('footnotes');
+    }
+    setFootnoteComposerError('');
+    setFootnoteComposer(null);
+  }, [document.session, footnoteComposer, onSourceChange, showEditor]);
+
+  const goToFootnote = (footnote: MarkdownFootnote) => {
+    if (showEditor) {
+      editorRef.current?.selectLine(footnote.lineIndex, viewMode === 'edit');
+    }
+    if (showPreview) {
+      setLocalFootnoteJump({ id: footnote.id, nonce: Date.now() });
+    }
+  };
+
+  const handleDeleteFootnote = useCallback(
+    (footnote: MarkdownFootnote) => {
+      const result = removeFootnoteFromMarkdown(sourceRef.current, footnote.id);
+      if (!result.removed) return;
+      if (showEditor && editorRef.current) {
+        editorRef.current.applyDocument(result.nextSource);
+      } else {
+        onSourceChange(result.nextSource);
+      }
+      setLocalFootnoteJump((prev) => (prev?.id === footnote.id ? null : prev));
+    },
+    [showEditor, onSourceChange],
   );
 
   const availableCategories = useMemo(() => {
@@ -470,12 +639,44 @@ export default function MarkdownDocWorkbench({
           </div>
           <button
             type="button"
-            className={outlineOpen ? 'is-active' : ''}
-            aria-pressed={outlineOpen}
-            onClick={() => setOutlineOpen((open) => !open)}
+            onClick={handleInsertFootnote}
+            title="在光标处插入 Markdown 脚注 [^n] (Ctrl+Alt+F)"
+          >
+            + 脚注
+          </button>
+          <button
+            type="button"
+            className={outlineOpen && railTab === 'outline' ? 'is-active' : ''}
+            aria-pressed={outlineOpen && railTab === 'outline'}
+            onClick={() => {
+              if (outlineOpen && railTab === 'outline') {
+                setOutlineOpen(false);
+              } else {
+                setRailTab('outline');
+                setOutlineOpen(true);
+              }
+            }}
             title="显示或隐藏章节大纲"
           >
             大纲{headings.length > 0 ? ` ${headings.length}` : ''}
+          </button>
+          <button
+            type="button"
+            className={
+              outlineOpen && railTab === 'footnotes' ? 'is-active' : ''
+            }
+            aria-pressed={outlineOpen && railTab === 'footnotes'}
+            onClick={() => {
+              if (outlineOpen && railTab === 'footnotes') {
+                setOutlineOpen(false);
+              } else {
+                setRailTab('footnotes');
+                setOutlineOpen(true);
+              }
+            }}
+            title="查看当前笔记的脚注索引"
+          >
+            脚注{footnotes.length > 0 ? ` ${footnotes.length}` : ''}
           </button>
           <button
             type="button"
@@ -498,6 +699,16 @@ export default function MarkdownDocWorkbench({
         ref={panesRef}
         data-doc-mode={viewMode}
         className={`workbench-split${outlineOpen ? ' has-outline' : ' is-outline-hidden'}`}
+        onKeyDown={(event) => {
+          if (
+            (event.ctrlKey || event.metaKey) &&
+            event.altKey &&
+            event.key.toLowerCase() === 'f'
+          ) {
+            event.preventDefault();
+            handleInsertFootnote();
+          }
+        }}
       >
         {showEditor && (
           <section
@@ -543,6 +754,7 @@ export default function MarkdownDocWorkbench({
               theme={theme}
               mediaDocumentPath={document.relativePath}
               hideMinimap={viewMode !== 'read'}
+              scrollToFootnoteRequest={activeFootnoteJump}
               onCodeChange={handleCodeChange}
               onOpenWikilink={onOpenWikilink}
               onOpenYouTubeLink={
@@ -552,6 +764,7 @@ export default function MarkdownDocWorkbench({
                   : undefined
               }
               onRunInTerminal={onRunInTerminal}
+              onEditFootnote={openEditFootnoteComposer}
             />
           </section>
         )}
@@ -559,15 +772,74 @@ export default function MarkdownDocWorkbench({
         {outlineOpen && (
           <nav
             className="workbench-pane workbench-outline-pane"
-            aria-label="文档目录"
+            aria-label={railTab === 'footnotes' ? '脚注列表' : '文档目录'}
           >
-            <div className="workbench-pane-heading">
-              <span className="pane-kicker">OUTLINE</span>
-              <strong>大纲</strong>
-              <span className="workbench-format">{headings.length}</span>
+            <div className="workbench-pane-heading workbench-rail-tabs">
+              <button
+                type="button"
+                className={`workbench-rail-tab${railTab === 'outline' ? ' is-active' : ''}`}
+                onClick={() => setRailTab('outline')}
+              >
+                目录 <span>{headings.length}</span>
+              </button>
+              <button
+                type="button"
+                className={`workbench-rail-tab${railTab === 'footnotes' ? ' is-active' : ''}`}
+                onClick={() => setRailTab('footnotes')}
+              >
+                脚注 <span>{footnotes.length}</span>
+              </button>
             </div>
             <div className="workbench-outline-list">
-              {headings.length === 0 ? (
+              {railTab === 'footnotes' ? (
+                footnotes.length === 0 ? (
+                  <p className="workbench-outline-empty">
+                    点击工具栏「+ 脚注」或使用 [^1]
+                    语法添加脚注后，会汇集在此处方便定位。
+                  </p>
+                ) : (
+                  footnotes.map((footnote) => (
+                    <div
+                      key={footnote.id}
+                      className="workbench-outline-footnote-row"
+                    >
+                      <button
+                        type="button"
+                        className="workbench-outline-footnote-item"
+                        title={`第 ${footnote.lineIndex + 1} 行 · [^${footnote.id}]`}
+                        onClick={() => goToFootnote(footnote)}
+                      >
+                        <span className="workbench-outline-fn-badge">
+                          [{footnote.index}] {footnote.id}
+                        </span>
+                        <span className="workbench-outline-fn-text">
+                          {footnote.plainText || '（空白脚注，点击补全内容）'}
+                        </span>
+                      </button>
+                      <div className="workbench-outline-footnote-actions">
+                        <button
+                          type="button"
+                          className="workbench-outline-footnote-edit"
+                          aria-label={`编辑脚注 [^${footnote.id}]`}
+                          title={`在独立编辑框中修改脚注 [^${footnote.id}]`}
+                          onClick={() => openEditFootnoteComposer(footnote.id)}
+                        >
+                          编辑
+                        </button>
+                        <button
+                          type="button"
+                          className="workbench-outline-footnote-delete"
+                          aria-label={`删除脚注 [^${footnote.id}]`}
+                          title={`删除脚注 [^${footnote.id}] 及其正文引用`}
+                          onClick={() => handleDeleteFootnote(footnote)}
+                        >
+                          删除
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )
+              ) : headings.length === 0 ? (
                 <p className="workbench-outline-empty">
                   使用 # 编写各级标题后，章节结构会自动生成在此处。
                 </p>
@@ -736,6 +1008,117 @@ export default function MarkdownDocWorkbench({
                 {pasteBusy ? '正在导入…' : '确认粘贴'}
               </button>
             </div>
+          </section>
+        </div>
+      )}
+      {footnoteComposer && (
+        <div
+          className="workbench-paste-overlay"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setFootnoteComposer(null);
+              setFootnoteComposerError('');
+            }
+          }}
+        >
+          <section
+            className="workbench-paste-dialog workbench-fn-composer-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="workbench-fn-composer-title"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                setFootnoteComposer(null);
+                setFootnoteComposerError('');
+              }
+            }}
+          >
+            <div className="workbench-paste-heading">
+              <div>
+                <small>
+                  {footnoteComposer.mode === 'create'
+                    ? `FOOTNOTE / 插入 [^${footnoteComposer.footnoteId}]`
+                    : `FOOTNOTE / 编辑 [${footnoteComposer.indexLabel}] [^${footnoteComposer.footnoteId}]`}
+                </small>
+                <h2 id="workbench-fn-composer-title">
+                  {footnoteComposer.mode === 'create'
+                    ? '新建独立脚注'
+                    : '编辑脚注内容'}
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setFootnoteComposer(null);
+                  setFootnoteComposerError('');
+                }}
+                aria-label="关闭脚注编辑"
+              >
+                ×
+              </button>
+            </div>
+            {footnoteComposer.anchorContext && (
+              <p className="workbench-fn-composer-context">
+                <span>定位上下文：</span>
+                <code>{footnoteComposer.anchorContext}</code>
+              </p>
+            )}
+            <form
+              className="workbench-fn-composer-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                submitFootnoteComposer();
+              }}
+            >
+              <textarea
+                autoFocus
+                className="workbench-fn-composer-textarea seamind-fn-hover-scroll"
+                aria-label="脚注内容"
+                value={footnoteComposer.draft}
+                placeholder="输入或直接粘贴多段解释、原文摘录、列表或代码块；空行后续段落会自动保持在脚注区块内…"
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setFootnoteComposer((prev) =>
+                    prev ? { ...prev, draft: value } : null,
+                  );
+                  if (footnoteComposerError && value.trim()) {
+                    setFootnoteComposerError('');
+                  }
+                }}
+                onKeyDown={(event) => {
+                  if (
+                    (event.ctrlKey || event.metaKey) &&
+                    event.key === 'Enter'
+                  ) {
+                    event.preventDefault();
+                    submitFootnoteComposer();
+                  }
+                }}
+              />
+              {footnoteComposerError && (
+                <p className="workbench-paste-error" role="alert">
+                  {footnoteComposerError}
+                </p>
+              )}
+              <p className="workbench-fn-composer-hint">
+                与正文完全隔离编辑 · 自动生成规范缩进区块（兼容星系图与导览） ·
+                Ctrl+Enter 保存
+              </p>
+              <div className="workbench-paste-actions workbench-fn-composer-actions">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFootnoteComposer(null);
+                    setFootnoteComposerError('');
+                  }}
+                >
+                  取消
+                </button>
+                <button type="submit" className="is-primary">
+                  保存脚注
+                </button>
+              </div>
+            </form>
           </section>
         </div>
       )}

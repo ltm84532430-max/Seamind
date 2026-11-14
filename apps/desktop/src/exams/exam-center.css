@@ -738,22 +738,9 @@
 }
 
 /* --------------------------------------------------------------------------
-   6. Center Stage (Cognitive Graph View)
+   6. Center Stage (Galaxy StarMap View)
    -------------------------------------------------------------------------- */
-.exam-graph {
-  --graph-due: var(--exam-danger);
-  --graph-soon: var(--exam-warning);
-  --graph-open: #64748b;
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  position: relative;
-  background: var(--exam-bg);
-}
-
-.exam-graph-meta {
+.exam-galaxy-meta {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -765,7 +752,7 @@
   background: var(--exam-surface);
 }
 
-.exam-graph-kicker {
+.exam-galaxy-kicker {
   flex: none;
   padding: 2px 6px;
   border: 1px solid var(--exam-border);
@@ -776,7 +763,7 @@
   background: var(--exam-subtle);
 }
 
-.exam-graph-meta strong {
+.exam-galaxy-meta strong {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -785,270 +772,18 @@
   font-weight: 650;
 }
 
-.exam-graph-meta > span:last-child {
+.exam-galaxy-meta > span:last-child {
   flex: none;
   margin-left: auto;
   color: var(--exam-muted);
   font-size: 11px;
 }
 
-.exam-graph-canvas {
-  flex: 1;
-  min-height: 0;
-  position: relative;
-  overflow: hidden;
-  cursor: grab;
-  touch-action: none;
-  background-image: radial-gradient(var(--exam-border) 1px, transparent 1px);
-  background-size: 24px 24px;
-}
-
-.exam-graph-canvas.is-dragging {
-  cursor: grabbing;
-}
-
-.exam-graph-world {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 0;
-  height: 0;
-  transform-origin: 0 0;
-}
-
-.exam-graph-lines {
-  position: absolute;
-  left: 0;
-  top: 0;
-  transform: translate(-50%, -50%);
-  overflow: visible;
-  pointer-events: none;
-}
-
-.exam-graph-ring {
-  fill: none;
-  stroke: var(--exam-border);
-  stroke-width: 1;
-  stroke-dasharray: 4 6;
-}
-
-.exam-graph-link {
-  stroke: var(--exam-border);
-  stroke-width: 1.25;
-}
-
-.exam-graph-link.is-overdue,
-.exam-graph-link.is-today,
-.exam-graph-link.is-selected {
-  stroke: var(--graph-due);
-  stroke-width: 1.75;
-}
-
-.exam-graph-link.is-upcoming {
-  stroke: var(--graph-soon);
-}
-
-/* Center Book Node */
-.exam-graph-book {
-  position: absolute;
-  left: 0;
-  top: 0;
-  transform: translate(-50%, -50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  width: 180px;
-  height: 120px;
-  gap: 6px;
-  padding: 12px;
-  border: 1.5px solid var(--exam-ink);
-  border-radius: 8px;
-  background: var(--exam-surface);
-  text-align: center;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
-  cursor: pointer;
-  z-index: 1;
-  transition:
-    transform 0.15s ease,
-    box-shadow 0.15s ease;
-}
-
-.exam-graph-book:hover:not(:disabled) {
-  transform: translate(-50%, -50%) scale(1.02);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.12);
-}
-
-.exam-graph-book:disabled {
-  cursor: default;
-}
-
-.exam-graph-cover {
-  display: grid;
-  place-items: center;
-  width: 38px;
-  height: 44px;
-  flex: none;
-  overflow: hidden;
-  border: 1px solid var(--exam-border);
-  border-radius: 4px;
-  background: var(--exam-subtle);
-  color: var(--exam-ink);
-  font-size: 16px;
-  font-weight: 700;
-}
-
-.exam-graph-cover img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.exam-graph-book-title {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.exam-graph-book small {
-  color: var(--exam-muted);
-  font: 10px var(--mono);
-}
-
-/* Exam Node on Orbit */
-.exam-graph-node {
-  position: absolute;
-  transform: translate(-50%, -50%);
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  width: 164px;
-  height: 72px;
-  gap: 5px;
-  padding: 8px 12px;
-  border: 1px solid var(--exam-border);
-  border-left: 3px solid var(--graph-open);
-  border-radius: 6px;
-  background: var(--exam-surface);
-  color: var(--exam-ink);
-  text-align: left;
-  cursor: pointer;
-  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.05);
-  transition: all 0.15s ease;
-}
-
-.exam-graph-node:hover {
-  transform: translate(-50%, -50%) scale(1.03);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.1);
-  z-index: 3;
-}
-
-.exam-graph-node.is-overdue,
-.exam-graph-node.is-today {
-  border-left-color: var(--graph-due);
-}
-
-.exam-graph-node.is-upcoming {
-  border-left-color: var(--graph-soon);
-}
-
-.exam-graph-node.is-selected {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
-  z-index: 2;
-}
-
-.exam-graph-node-index {
-  color: var(--exam-muted);
-  font: 600 9.5px var(--mono);
-}
-
-.exam-graph-node strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11.5px;
-  font-weight: 650;
-}
-
-.exam-graph-node-foot {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 4px;
-  color: var(--exam-muted);
-  font: 10px var(--mono);
-}
-
-.exam-graph-node.is-overdue .exam-graph-node-foot span:last-child,
-.exam-graph-node.is-today .exam-graph-node-foot span:last-child {
-  color: var(--graph-due);
-  font-weight: 700;
-}
-
-.exam-graph-empty {
-  position: absolute;
-  left: 50%;
-  top: calc(50% + 84px);
-  transform: translateX(-50%);
-  color: var(--exam-muted);
-  font-size: 12px;
-}
-
-.exam-graph-controls {
+.exam-galaxy-legend-inline {
   display: flex;
   align-items: center;
-  position: absolute;
-  right: 14px;
-  top: 60px;
-  height: 30px;
-  border: 1px solid var(--exam-border);
-  border-radius: 5px;
-  background: var(--exam-surface);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-  z-index: 2;
-  overflow: hidden;
-}
-
-.exam-graph-controls button {
-  height: 30px;
-  min-width: 30px;
-  padding: 0 10px;
-  border: 0;
-  border-right: 1px solid var(--exam-border);
-  border-radius: 0;
-  color: var(--exam-ink);
-  background: var(--exam-surface);
-  font-size: 11px;
-  cursor: pointer;
-  transition: background 0.12s ease;
-}
-
-.exam-graph-controls button:last-child {
-  border-right: 0;
-}
-
-.exam-graph-controls button:hover {
-  background: var(--exam-subtle);
-  color: var(--accent);
-}
-
-.exam-graph-controls > span {
-  min-width: 44px;
-  text-align: center;
-  color: var(--exam-muted);
-  font: 10px var(--mono);
-}
-
-.exam-graph-legend {
-  display: flex;
-  align-items: center;
-  gap: 16px;
+  flex-wrap: wrap;
+  gap: 12px;
   height: 36px;
   flex: none;
   padding: 0 16px;
@@ -1058,32 +793,36 @@
   font-size: 10.5px;
 }
 
-.exam-graph-legend span {
+.exam-galaxy-legend-inline span {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   white-space: nowrap;
 }
 
-.exam-graph-legend span:last-child {
+.exam-galaxy-legend-inline span:last-child {
   margin-left: auto;
   font: 10px var(--mono);
 }
 
-.exam-graph-legend i {
+.exam-galaxy-legend-inline i {
   display: inline-block;
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--graph-open);
+  background: #64748b;
 }
 
-.exam-graph-legend i.is-overdue {
-  background: var(--graph-due);
+.exam-galaxy-legend-inline i.is-overdue {
+  background: var(--exam-danger);
 }
 
-.exam-graph-legend i.is-upcoming {
-  background: var(--graph-soon);
+.exam-galaxy-legend-inline i.is-upcoming {
+  background: var(--exam-warning);
+}
+
+.exam-galaxy-legend-inline i.is-mastered {
+  background: var(--exam-success);
 }
 
 /* --------------------------------------------------------------------------
@@ -1478,10 +1217,6 @@
   --accent: #e58a75;
 }
 
-.app-shell[data-theme='dark'] .exam-graph-canvas {
-  background-image: radial-gradient(#2e3a43 1px, transparent 1px);
-}
-
 /* Navy Theme (Deep Oceanic) */
 .app-shell[data-theme='navy'] .exam-center {
   --exam-bg: #070f1e;
@@ -1498,10 +1233,6 @@
   --accent: #38bdf8;
 }
 
-.app-shell[data-theme='navy'] .exam-graph-canvas {
-  background-image: radial-gradient(#162a47 1px, transparent 1px);
-}
-
 .app-shell[data-theme='navy'] .exam-center-sprint-btn,
 .app-shell[data-theme='navy'] .exam-btn-primary {
   background: #0284c7;
@@ -1513,11 +1244,6 @@
 .app-shell[data-theme='navy'] .exam-center-sprint-btn:hover,
 .app-shell[data-theme='navy'] .exam-btn-primary:hover {
   background: #0369a1;
-}
-
-.app-shell[data-theme='navy'] .exam-graph-book {
-  border-color: #38bdf8;
-  background: #0e2038;
 }
 
 /* Purple Theme (Cyber Violet) */
@@ -1536,10 +1262,6 @@
   --accent: #c084fc;
 }
 
-.app-shell[data-theme='purple'] .exam-graph-canvas {
-  background-image: radial-gradient(#2b1b42 1px, transparent 1px);
-}
-
 .app-shell[data-theme='purple'] .exam-center-sprint-btn,
 .app-shell[data-theme='purple'] .exam-btn-primary {
   background: #9333ea;
@@ -1551,11 +1273,6 @@
 .app-shell[data-theme='purple'] .exam-center-sprint-btn:hover,
 .app-shell[data-theme='purple'] .exam-btn-primary:hover {
   background: #7e22ce;
-}
-
-.app-shell[data-theme='purple'] .exam-graph-book {
-  border-color: #c084fc;
-  background: #1d1233;
 }
 
 /* Responsive adjustments */

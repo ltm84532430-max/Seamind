@@ -1,5 +1,13 @@
 import { invoke } from '@tauri-apps/api/core';
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { createPortal } from 'react-dom';
 import YouTubeDiagnostics from './YouTubeDiagnostics';
 import { buildYouTubeEmbedUrl } from './youtube';
@@ -134,6 +142,7 @@ export default function YouTubePlayerPanel({
   const [mpvLaunched, setMpvLaunched] = useState(false);
   const [volumePercent, setVolumePercent] = useState(100);
   const [muted, setMuted] = useState(false);
+  const [volumeHudVisible, setVolumeHudVisible] = useState(false);
 
   const embedHostRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -141,6 +150,7 @@ export default function YouTubePlayerPanel({
   const embedPlayerRef = useRef<YouTubeIframePlayer | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const wheelDeltaRef = useRef(0);
+  const volumeHudTimerRef = useRef<number | null>(null);
   const nativeAbortRef = useRef<AbortController | null>(null);
   const resumeRef = useRef(selection.startSeconds);
   const requestIdRef = useRef(newRequestId());
@@ -675,6 +685,25 @@ export default function YouTubePlayerPanel({
     };
   }, []);
 
+  const showVolumeHud = useCallback(() => {
+    setVolumeHudVisible(true);
+    if (volumeHudTimerRef.current !== null) {
+      window.clearTimeout(volumeHudTimerRef.current);
+    }
+    volumeHudTimerRef.current = window.setTimeout(() => {
+      volumeHudTimerRef.current = null;
+      setVolumeHudVisible(false);
+    }, 950);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (volumeHudTimerRef.current !== null) {
+        window.clearTimeout(volumeHudTimerRef.current);
+      }
+    };
+  }, []);
+
   useEffect(() => {
     setVolumePercent(handle.getVolume());
     setMuted(handle.isMuted());
@@ -706,6 +735,7 @@ export default function YouTubePlayerPanel({
       handle.setVolume(next);
       setVolumePercent(next);
       setMuted(next === 0);
+      showVolumeHud();
     };
 
     button.addEventListener('wheel', adjustVolume, { passive: false });
@@ -713,7 +743,7 @@ export default function YouTubePlayerPanel({
       button.removeEventListener('wheel', adjustVolume);
       wheelDeltaRef.current = 0;
     };
-  }, [handle, mode]);
+  }, [handle, mode, showVolumeHud]);
 
   useEffect(() => {
     onHandleRef.current?.(handle);
@@ -884,6 +914,17 @@ export default function YouTubePlayerPanel({
           </div>
         )}
         <div ref={stageRef} className="youtube-player-stage">
+          {mode === 'embed' && volumeHudVisible && (
+            <span
+              className="youtube-player-volume-hud"
+              role="status"
+              aria-live="polite"
+            >
+              {muted || volumePercent === 0
+                ? '已静音'
+                : `音量 ${volumePercent}%`}
+            </span>
+          )}
           {mode === 'embed' && (
             <button
               ref={volumeButtonRef}
@@ -896,29 +937,9 @@ export default function YouTubePlayerPanel({
               onClick={() => {
                 setMuted(handle.toggleMute());
                 setVolumePercent(handle.getVolume());
+                showVolumeHud();
               }}
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M3 9v6h4l5 4V5L7 9H3z" fill="currentColor" />
-                {muted ? (
-                  <path
-                    d="m16 9 5 6m0-6-5 6"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeLinecap="round"
-                    strokeWidth="2"
-                  />
-                ) : (
-                  <path
-                    d="M15 9a4 4 0 0 1 0 6m2.5-8.5a8 8 0 0 1 0 11"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeLinecap="round"
-                    strokeWidth="2"
-                  />
-                )}
-              </svg>
-            </button>
+            />
           )}
           {mode === 'embed' && (
             <div

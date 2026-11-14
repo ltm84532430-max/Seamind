@@ -11,6 +11,8 @@ import { basicSetup, EditorView } from 'codemirror';
 import { createMarkdownMinimap } from './markdown-minimap';
 import type { MarkdownMinimapController } from './markdown-minimap';
 import { createPasteTransaction } from './markdown-editor-paste';
+import { createMarkdownFootnoteEditorExtension } from './markdown-footnote-cm';
+import { formatTextForFootnotePaste } from './markdown-footnotes';
 
 export interface MarkdownSelection {
   from: number;
@@ -21,7 +23,12 @@ export interface MarkdownSelection {
 export interface MarkdownEditorHandle {
   applyDocument(
     markdown: string,
-    options?: { lineIndex?: number; endLineIndex?: number; focus?: boolean },
+    options?: {
+      lineIndex?: number;
+      endLineIndex?: number;
+      cursorOffset?: number;
+      focus?: boolean;
+    },
   ): void;
   selectLine(lineIndex: number, focus?: boolean): void;
   selectLines(lineIndex: number, endLineIndex: number, focus?: boolean): void;
@@ -126,12 +133,42 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
           basicSetup,
           EditorState.readOnly.of(readOnly),
           EditorView.editable.of(!readOnly),
-          ...(language === 'markdown' ? [markdown()] : []),
+          ...(language === 'markdown'
+            ? [markdown(), createMarkdownFootnoteEditorExtension()]
+            : []),
           ...(extraExtensionsRef.current ?? []),
           EditorView.lineWrapping,
           EditorView.domEventHandlers({
-            paste: (event, editor) =>
-              onPasteRef.current?.(event, editor) ?? false,
+            paste: (event, editor) => {
+              if (onPasteRef.current?.(event, editor)) {
+                return true;
+              }
+              if (language !== 'markdown' || editor.state.readOnly) {
+                return false;
+              }
+              const clipboardText = event.clipboardData?.getData('text/plain');
+              if (!clipboardText) return false;
+              const selection = editor.state.selection.main;
+              const formatted = formatTextForFootnotePaste(
+                editor.state.doc.toString(),
+                selection.from,
+                selection.to,
+                clipboardText,
+              );
+              if (!formatted.insideFootnote) {
+                return false;
+              }
+              event.preventDefault();
+              editor.dispatch(
+                createPasteTransaction(
+                  editor.state,
+                  selection.from,
+                  selection.to,
+                  formatted.text,
+                ),
+              );
+              return true;
+            },
           }),
           EditorView.editorAttributes.of({
             id,
@@ -200,30 +237,38 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
           const previous = view.state.doc.toString();
           const change = findChange(previous, markdownText);
           const selection =
-            options.lineIndex === undefined
-              ? undefined
-              : (() => {
-                  const lineCount = markdownText.split('\n').length;
-                  const firstLineIndex = Math.max(
+            options.cursorOffset !== undefined
+              ? (() => {
+                  const pos = Math.max(
                     0,
-                    Math.min(options.lineIndex!, lineCount - 1),
+                    Math.min(options.cursorOffset, markdownText.length),
                   );
-                  const lastLineIndex = Math.max(
-                    firstLineIndex,
-                    Math.min(
-                      (options.endLineIndex ?? firstLineIndex + 1) - 1,
-                      lineCount - 1,
-                    ),
-                  );
-                  const from = linePosition(markdownText, firstLineIndex);
-                  const lastLineStart = linePosition(
-                    markdownText,
-                    lastLineIndex,
-                  );
-                  const endOfLine = markdownText.indexOf('\n', lastLineStart);
-                  const to = endOfLine < 0 ? markdownText.length : endOfLine;
-                  return { anchor: from, head: to };
-                })();
+                  return { anchor: pos, head: pos };
+                })()
+              : options.lineIndex === undefined
+                ? undefined
+                : (() => {
+                    const lineCount = markdownText.split('\n').length;
+                    const firstLineIndex = Math.max(
+                      0,
+                      Math.min(options.lineIndex!, lineCount - 1),
+                    );
+                    const lastLineIndex = Math.max(
+                      firstLineIndex,
+                      Math.min(
+                        (options.endLineIndex ?? firstLineIndex + 1) - 1,
+                        lineCount - 1,
+                      ),
+                    );
+                    const from = linePosition(markdownText, firstLineIndex);
+                    const lastLineStart = linePosition(
+                      markdownText,
+                      lastLineIndex,
+                    );
+                    const endOfLine = markdownText.indexOf('\n', lastLineStart);
+                    const to = endOfLine < 0 ? markdownText.length : endOfLine;
+                    return { anchor: from, head: to };
+                  })();
           view.dispatch({
             changes: change,
             ...(selection ? { selection, scrollIntoView: true } : {}),

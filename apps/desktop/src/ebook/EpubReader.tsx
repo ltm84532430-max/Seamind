@@ -70,6 +70,8 @@ export interface EpubChapterNavigationRequest {
   id: number;
   progressKey: string;
   href?: string;
+  cfi?: string;
+  annotationId?: string;
   label: string;
 }
 
@@ -81,6 +83,7 @@ export interface EpubChapterChangeInfo {
   cfi: string;
   fraction: number;
   toc: FoliateTocItem[];
+  tocSectionByHref?: Record<string, number>;
 }
 
 export interface EpubReaderAgentBridge {
@@ -753,6 +756,8 @@ export default function EpubReader({
   onWakeAi,
   onAgentBridgeChange,
   onChapterChange,
+  onAnnotationsChange,
+  onWriteFootnoteToNote,
   onClose,
 }: {
   selection: EpubReaderSelection;
@@ -773,6 +778,13 @@ export default function EpubReader({
   onWakeAi: () => void;
   onAgentBridgeChange: (bridge: EpubReaderAgentBridge | null) => void;
   onChapterChange?: (info: EpubChapterChangeInfo) => void;
+  onAnnotationsChange?: (annotations: EpubAnnotation[]) => void;
+  onWriteFootnoteToNote?: (payload: {
+    annotation: EpubAnnotation;
+    chapterLabel: string;
+    chapterHref: string;
+    chapterHierarchy: string[];
+  }) => void;
   onClose: () => void;
 }) {
   const stageRef = useRef<HTMLDivElement>(null);
@@ -871,6 +883,11 @@ export default function EpubReader({
   const [noteDraft, setNoteDraft] = useState('');
   const [editingAnnotationId, setEditingAnnotationId] = useState('');
   const [editingNoteDraft, setEditingNoteDraft] = useState('');
+  const [popoverEditingNote, setPopoverEditingNote] = useState(false);
+  const [popoverNoteDraft, setPopoverNoteDraft] = useState('');
+  const [sidebarAnnotationFilter, setSidebarAnnotationFilter] = useState<
+    'all' | 'footnotes'
+  >('all');
   const [activeAnnotationId, setActiveAnnotationId] = useState('');
   const [readerSettings, setReaderSettings] = useState(() =>
     loadReaderSettings(selection.progressKey, theme),
@@ -907,6 +924,11 @@ export default function EpubReader({
   const [isFixedLayout, setIsFixedLayout] = useState(false);
   const bridgeChangeRef = useRef(onAgentBridgeChange);
   bridgeChangeRef.current = onAgentBridgeChange;
+  const onAnnotationsChangeRef = useRef(onAnnotationsChange);
+  onAnnotationsChangeRef.current = onAnnotationsChange;
+  const onWriteFootnoteToNoteRef = useRef(onWriteFootnoteToNote);
+  onWriteFootnoteToNoteRef.current = onWriteFootnoteToNote;
+  const tocSectionByHrefRef = useRef<Record<string, number>>({});
 
   const [bilingualActive, setBilingualActive] = useState<boolean>(() => {
     try {
@@ -1132,6 +1154,7 @@ export default function EpubReader({
 
   useEffect(() => {
     saveEpubAnnotations(selection.progressKey, annotations);
+    onAnnotationsChangeRef.current?.(annotations);
   }, [annotations, selection.progressKey]);
 
   useEffect(() => {
@@ -1173,8 +1196,15 @@ export default function EpubReader({
     handledChapterNavigationIdRef.current = request.id;
     setNavigationNotice(null);
 
-    let destination = request.href ? safeEpubDestination(request.href) : '';
-    if (request.href && !destination) {
+    const requestedCfi = request.cfi?.trim() ?? '';
+    const validCfi =
+      requestedCfi.startsWith('epubcfi(') && requestedCfi.endsWith(')')
+        ? requestedCfi
+        : '';
+
+    let destination =
+      validCfi || (request.href ? safeEpubDestination(request.href) : '');
+    if (request.href && !validCfi && !destination) {
       setNavigationNotice({
         message: '章节链接无效，已保留当前阅读位置。',
         kind: 'warning',
@@ -1227,13 +1257,42 @@ export default function EpubReader({
         }
         const previousCfi = currentLocationRef.current.cfi;
         try {
-          const resolved = await view.goTo(destination);
+          let resolved = await view.goTo(destination);
+          if (!resolved && validCfi && request.href) {
+            const fallbackHref = safeEpubDestination(request.href);
+            if (fallbackHref) {
+              resolved = await view.goTo(fallbackHref);
+            }
+          }
           if (!resolved)
             throw new Error('Chapter destination was not resolved.');
           if (
             handledChapterNavigationIdRef.current === request.id &&
             viewRef.current === view
           ) {
+            if (request.annotationId) {
+              const targetAnnotation = annotationsRef.current.find(
+                (item) => item.id === request.annotationId,
+              );
+              if (targetAnnotation) {
+                setActiveAnnotationId(targetAnnotation.id);
+                setSidebarSection('annotations');
+                setPopoverEditingNote(false);
+                if (targetAnnotation.note || targetAnnotation.aiAnalysis) {
+                  setActiveAiFootnote({
+                    annotationId: targetAnnotation.id,
+                    cfi: targetAnnotation.cfi,
+                    sectionIndex: targetAnnotation.sectionIndex,
+                    ...notePositionForPoint(180, 120),
+                  });
+                  window.requestAnimationFrame(() => {
+                    void view
+                      .showAnnotation?.({ value: targetAnnotation.cfi })
+                      .catch(() => undefined);
+                  });
+                }
+              }
+            }
             setNavigationNotice({
               message: `已定位：${request.label || '对应章节'}`,
               kind: 'success',
@@ -1838,16 +1897,21 @@ export default function EpubReader({
     setEditingNoteDraft(annotation.note);
   };
 
-  const saveEditedAnnotation = (annotation: EpubAnnotation) => {
+  const saveEditedAnnotation = (
+    annotation: EpubAnnotation,
+    explicitNote?: string,
+  ) => {
+    const rawDraft = explicitNote ?? editingNoteDraft;
     const updated = {
       ...annotation,
-      note: editingNoteDraft.trim().slice(0, 2000),
+      note: rawDraft.trim().slice(0, 2000),
       updatedAt: Date.now(),
     };
     updateAnnotations((previous) =>
       previous.map((item) => (item.id === annotation.id ? updated : item)),
     );
     setEditingAnnotationId('');
+    setPopoverEditingNote(false);
     void viewRef.current
       ?.addAnnotation?.({
         value: updated.cfi,
@@ -1858,10 +1922,30 @@ export default function EpubReader({
       .catch(() => undefined);
   };
 
+  const emitWriteFootnoteToNote = (annotation: EpubAnnotation) => {
+    const callback = onWriteFootnoteToNoteRef.current;
+    if (!callback) return;
+    const hierarchy = resolveTocHierarchy(
+      tocRef.current,
+      activeTocId,
+      activeTocHref || sectionHref,
+    );
+    const label = annotation.label || chapterTitle || '章节笔记';
+    callback({
+      annotation,
+      chapterLabel: label,
+      chapterHref: activeTocHref || sectionHref,
+      chapterHierarchy: hierarchy.length > 0 ? hierarchy : label ? [label] : [],
+    });
+  };
+
   const removeAnnotation = (annotation: EpubAnnotation) => {
     updateAnnotations((previous) =>
       previous.filter((item) => item.id !== annotation.id),
     );
+    if (activeAiFootnote?.annotationId === annotation.id) {
+      setActiveAiFootnote(null);
+    }
     void viewRef.current
       ?.deleteAnnotation?.({ value: annotation.cfi })
       .catch(() => undefined);
@@ -2368,8 +2452,9 @@ export default function EpubReader({
       setSidebarOpen(true);
       setSidebarSection('annotations');
       setActiveAnnotationId(annotation.id);
+      setPopoverEditingNote(false);
       const point = detail?.range ? readerPositionForRange(detail.range) : null;
-      if (annotation.aiAnalysis && point) {
+      if ((annotation.aiAnalysis || annotation.note) && point) {
         setActiveAiFootnote({
           annotationId: annotation.id,
           cfi: annotation.cfi,
@@ -2515,6 +2600,21 @@ export default function EpubReader({
         currentTocId,
         chapterHref,
       );
+      if (
+        Object.keys(tocSectionByHrefRef.current).length === 0 &&
+        flatToc.length > 0 &&
+        viewRef.current?.book?.resolveHref
+      ) {
+        const nextMap: Record<string, number> = {};
+        for (const item of flatToc) {
+          if (!item.href) continue;
+          const resolvedHref = viewRef.current.book.resolveHref(item.href);
+          if (typeof resolvedHref?.index === 'number') {
+            nextMap[item.href] = resolvedHref.index;
+          }
+        }
+        tocSectionByHrefRef.current = nextMap;
+      }
       onChapterChange?.({
         chapterIndex,
         chapterHref,
@@ -2524,6 +2624,7 @@ export default function EpubReader({
         cfi: detail.cfi || '',
         fraction: typeof detail.fraction === 'number' ? detail.fraction : 0,
         toc: currentToc,
+        tocSectionByHref: tocSectionByHrefRef.current,
       });
     };
     const blockExternalLink = (event: Event) => event.preventDefault();
@@ -3258,108 +3359,176 @@ export default function EpubReader({
                 aria-labelledby="epub-reader-annotations-tab"
               >
                 <div className="epub-reader-annotation-heading">
-                  <strong>标注与笔记</strong>
-                  <span>选中文字后可选择样式与颜色</span>
-                </div>
-                {annotations.length ? (
-                  <div className="epub-reader-annotation-list">
-                    {annotations.map((annotation) => (
-                      <article
-                        className={`epub-reader-annotation-row${activeAnnotationId === annotation.id ? ' is-active' : ''}`}
-                        key={annotation.id}
+                  <div className="epub-reader-annotation-title-row">
+                    <strong>
+                      {sidebarAnnotationFilter === 'footnotes'
+                        ? '书内脚注'
+                        : '标注与脚注'}
+                    </strong>
+                    <div
+                      className="epub-reader-annotation-filter"
+                      role="group"
+                      aria-label="筛选标注类型"
+                    >
+                      <button
+                        type="button"
+                        className={
+                          sidebarAnnotationFilter === 'all' ? 'is-active' : ''
+                        }
+                        onClick={() => setSidebarAnnotationFilter('all')}
                       >
-                        <button
-                          type="button"
-                          className="epub-reader-annotation-jump"
-                          onClick={() => {
-                            setActiveAnnotationId(annotation.id);
-                            void viewRef.current
-                              ?.showAnnotation?.({ value: annotation.cfi })
-                              .catch(
-                                () =>
-                                  void viewRef.current?.goTo(annotation.cfi),
-                              );
-                          }}
+                        全部 {annotations.length}
+                      </button>
+                      <button
+                        type="button"
+                        className={
+                          sidebarAnnotationFilter === 'footnotes'
+                            ? 'is-active'
+                            : ''
+                        }
+                        onClick={() => setSidebarAnnotationFilter('footnotes')}
+                      >
+                        仅脚注{' '}
+                        {
+                          annotations.filter((a) =>
+                            Boolean(a.note.trim() || a.aiAnalysis?.trim()),
+                          ).length
+                        }
+                      </button>
+                    </div>
+                  </div>
+                  <span>选中文字后可添加手写或 AI 脚注</span>
+                </div>
+                {(() => {
+                  const displayedAnnotations =
+                    sidebarAnnotationFilter === 'footnotes'
+                      ? annotations.filter((a) =>
+                          Boolean(a.note.trim() || a.aiAnalysis?.trim()),
+                        )
+                      : annotations;
+                  return displayedAnnotations.length ? (
+                    <div className="epub-reader-annotation-list">
+                      {displayedAnnotations.map((annotation) => (
+                        <article
+                          className={`epub-reader-annotation-row${activeAnnotationId === annotation.id ? ' is-active' : ''}`}
+                          key={annotation.id}
                         >
-                          <div className="epub-reader-annotation-meta">
-                            <i
-                              className="epub-reader-annotation-color"
-                              style={{
-                                backgroundColor: annotationDisplayColor(
-                                  annotation.color,
-                                ),
-                              }}
-                              title={annotation.color}
-                            />
-                            <small>
-                              {annotation.label || '标注'} ·{' '}
-                              {ANNOTATION_STYLES.find(
-                                (option) => option.value === annotation.style,
-                              )?.label ?? '高亮'}{' '}
-                              · {Math.round(annotation.fraction * 100)}%
-                            </small>
-                          </div>
-                          <span>{annotation.text}</span>
-                          {annotation.note && <em>{annotation.note}</em>}
-                          {annotation.aiAnalysis && (
-                            <div className="epub-reader-annotation-ai">
-                              <strong>AI 脚注</strong>
-                              <span>{annotation.aiAnalysis}</span>
-                            </div>
-                          )}
-                        </button>
-                        <div className="epub-reader-annotation-actions">
                           <button
                             type="button"
-                            onClick={() => beginEditAnnotation(annotation)}
-                          >
-                            {editingAnnotationId === annotation.id
-                              ? '编辑中'
-                              : '编辑笔记'}
-                          </button>
-                          <button
-                            type="button"
-                            aria-label={`删除标注 ${annotation.text.slice(0, 24)}`}
-                            onClick={() => removeAnnotation(annotation)}
-                          >
-                            删除
-                          </button>
-                        </div>
-                        {editingAnnotationId === annotation.id && (
-                          <form
-                            className="epub-reader-annotation-editor"
-                            onSubmit={(event) => {
-                              event.preventDefault();
-                              saveEditedAnnotation(annotation);
+                            className="epub-reader-annotation-jump"
+                            onClick={() => {
+                              setActiveAnnotationId(annotation.id);
+                              void viewRef.current
+                                ?.showAnnotation?.({ value: annotation.cfi })
+                                .catch(
+                                  () =>
+                                    void viewRef.current?.goTo(annotation.cfi),
+                                );
                             }}
                           >
-                            <textarea
-                              aria-label="编辑标注笔记"
-                              value={editingNoteDraft}
-                              maxLength={2000}
-                              rows={3}
-                              placeholder="为这段文字写一条笔记…"
-                              onChange={(event) =>
-                                setEditingNoteDraft(event.target.value)
-                              }
-                            />
-                            <div>
-                              <button type="submit">保存</button>
-                              <button
-                                type="button"
-                                onClick={() => setEditingAnnotationId('')}
-                              >
-                                取消
-                              </button>
+                            <div className="epub-reader-annotation-meta">
+                              <i
+                                className="epub-reader-annotation-color"
+                                style={{
+                                  backgroundColor: annotationDisplayColor(
+                                    annotation.color,
+                                  ),
+                                }}
+                                title={annotation.color}
+                              />
+                              <small>
+                                {annotation.label || '标注'} ·{' '}
+                                {ANNOTATION_STYLES.find(
+                                  (option) => option.value === annotation.style,
+                                )?.label ?? '高亮'}{' '}
+                                · {Math.round(annotation.fraction * 100)}%
+                              </small>
+                              {(annotation.note.trim() ||
+                                annotation.aiAnalysis?.trim()) && (
+                                <span className="epub-reader-footnote-pill">
+                                  脚注
+                                </span>
+                              )}
                             </div>
-                          </form>
-                        )}
-                      </article>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="epub-reader-search-status">还没有标注</p>
-                )}
+                            <span>{annotation.text}</span>
+                            {annotation.note && <em>{annotation.note}</em>}
+                            {annotation.aiAnalysis && (
+                              <div className="epub-reader-annotation-ai">
+                                <strong>AI 脚注</strong>
+                                <span>{annotation.aiAnalysis}</span>
+                              </div>
+                            )}
+                          </button>
+                          <div className="epub-reader-annotation-actions">
+                            <button
+                              type="button"
+                              onClick={() => beginEditAnnotation(annotation)}
+                            >
+                              {editingAnnotationId === annotation.id
+                                ? '编辑中'
+                                : '编辑脚注'}
+                            </button>
+                            {onWriteFootnoteToNote &&
+                              (annotation.note.trim() ||
+                                annotation.aiAnalysis?.trim()) && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    emitWriteFootnoteToNote(annotation)
+                                  }
+                                  title="追加到右侧本章 Markdown 笔记的脚注区块"
+                                >
+                                  写入笔记
+                                </button>
+                              )}
+                            <button
+                              type="button"
+                              aria-label={`删除标注 ${annotation.text.slice(0, 24)}`}
+                              onClick={() => removeAnnotation(annotation)}
+                            >
+                              删除
+                            </button>
+                          </div>
+                          {editingAnnotationId === annotation.id && (
+                            <form
+                              className="epub-reader-annotation-editor"
+                              onSubmit={(event) => {
+                                event.preventDefault();
+                                saveEditedAnnotation(annotation);
+                              }}
+                            >
+                              <textarea
+                                aria-label="编辑标注笔记"
+                                value={editingNoteDraft}
+                                maxLength={2000}
+                                rows={3}
+                                placeholder="为这段文字写一条笔记…"
+                                onChange={(event) =>
+                                  setEditingNoteDraft(event.target.value)
+                                }
+                              />
+                              <div>
+                                <button type="submit">保存</button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingAnnotationId('')}
+                                >
+                                  取消
+                                </button>
+                              </div>
+                            </form>
+                          )}
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="epub-reader-search-status">
+                      {sidebarAnnotationFilter === 'footnotes'
+                        ? '还没有带内容的书内脚注'
+                        : '还没有标注'}
+                    </p>
+                  );
+                })()}
               </div>
             ) : (
               <div
@@ -3547,8 +3716,9 @@ export default function EpubReader({
                   type="button"
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => setNoteComposerOpen(true)}
+                  title="为选中内容添加书内脚注或手写笔记"
                 >
-                  添加笔记
+                  添加脚注
                 </button>
                 <button
                   type="button"
@@ -3636,20 +3806,35 @@ export default function EpubReader({
                   className="epub-reader-selection-note"
                   onSubmit={(event) => {
                     event.preventDefault();
-                    saveSelectedAnnotation(selectedAnnotationStyle, noteDraft);
+                    const anchorLeft = selectionDraft.anchorLeft;
+                    const anchorTop = selectionDraft.anchorTop;
+                    const saved = saveSelectedAnnotation(
+                      selectedAnnotationStyle,
+                      noteDraft,
+                    );
+                    if (saved && saved.note.trim()) {
+                      setActiveAnnotationId(saved.id);
+                      setPopoverEditingNote(false);
+                      setActiveAiFootnote({
+                        annotationId: saved.id,
+                        cfi: saved.cfi,
+                        sectionIndex: saved.sectionIndex,
+                        ...notePositionForPoint(anchorLeft, anchorTop),
+                      });
+                    }
                   }}
                 >
                   <textarea
                     autoFocus
-                    aria-label="标注笔记内容"
+                    aria-label="书内脚注内容"
                     value={noteDraft}
                     maxLength={2000}
                     rows={3}
-                    placeholder="写下与这段文字相关的想法…"
+                    placeholder="写下这段文字的书内脚注、释义或思考笔记…"
                     onChange={(event) => setNoteDraft(event.target.value)}
                   />
                   <div>
-                    <button type="submit">保存笔记</button>
+                    <button type="submit">保存脚注</button>
                     <button
                       type="button"
                       onClick={() => {
@@ -3795,87 +3980,202 @@ export default function EpubReader({
                 </div>
               </aside>
             )}
-          {visibleAiAnnotation?.aiAnalysis && activeAiFootnote && (
-            <aside
-              className="epub-reader-ai-footnote is-saved"
-              style={{
-                left: `${activeAiFootnote.left}px`,
-                top: `${activeAiFootnote.top}px`,
-                width: `${activeAiFootnote.width}px`,
-              }}
-              aria-label="AI 脚注"
-            >
-              <div className="epub-reader-ai-footnote-heading">
-                <strong>AI 脚注</strong>
-                <button
-                  type="button"
-                  aria-label="收起 AI 脚注"
-                  onClick={() => setActiveAiFootnote(null)}
-                >
-                  ×
-                </button>
-              </div>
-              <div
-                className="epub-reader-ai-format-bar is-in-footnote"
-                role="group"
-                aria-label="切换已保存脚注返回形式"
+          {visibleAiAnnotation &&
+            (visibleAiAnnotation.note.trim() ||
+              visibleAiAnnotation.aiAnalysis?.trim()) &&
+            activeAiFootnote && (
+              <aside
+                className="epub-reader-ai-footnote is-saved"
+                style={{
+                  left: `${activeAiFootnote.left}px`,
+                  top: `${activeAiFootnote.top}px`,
+                  width: `${activeAiFootnote.width}px`,
+                }}
+                aria-label="书内脚注"
               >
-                {AI_RESPONSE_FORMATS.map((option) => (
+                <div className="epub-reader-ai-footnote-heading">
+                  <strong>
+                    {visibleAiAnnotation.note.trim() &&
+                    visibleAiAnnotation.aiAnalysis?.trim()
+                      ? '书内脚注 + AI'
+                      : visibleAiAnnotation.aiAnalysis?.trim()
+                        ? 'AI 脚注'
+                        : '书内脚注'}
+                  </strong>
                   <button
                     type="button"
-                    key={option.value}
-                    disabled={savedFootnoteBusy}
-                    className={
-                      aiResponseFormat === option.value ? 'is-active' : ''
-                    }
-                    title={`按「${option.label}」重新生成并更新脚注：${option.hint}`}
-                    onClick={() =>
-                      void reanalyzeSavedFootnote(
-                        visibleAiAnnotation,
-                        option.value,
-                        savedFootnoteQuestion,
-                      )
-                    }
+                    aria-label="收起脚注"
+                    onClick={() => {
+                      setPopoverEditingNote(false);
+                      setActiveAiFootnote(null);
+                    }}
                   >
-                    {option.label}
+                    ×
                   </button>
-                ))}
-              </div>
-              <div className="epub-reader-ai-footnote-body">
-                {renderAiFootnoteContent(visibleAiAnnotation.aiAnalysis)}
-              </div>
-              <form
-                className="epub-reader-ai-prompt-bar is-in-footnote"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void reanalyzeSavedFootnote(
-                    visibleAiAnnotation,
-                    aiResponseFormat,
-                    savedFootnoteQuestion,
-                  );
-                }}
-              >
-                <input
-                  type="text"
-                  value={savedFootnoteQuestion}
-                  maxLength={500}
-                  placeholder="更改提问内容并重新生成脚注…"
-                  aria-label="在已保存脚注内更改提问内容"
-                  onChange={(event) =>
-                    setSavedFootnoteQuestion(event.target.value)
-                  }
-                />
-                <button type="submit" disabled={savedFootnoteBusy}>
-                  {savedFootnoteBusy ? '更新中…' : '提问更新'}
-                </button>
-              </form>
-              {savedFootnoteError && (
-                <p className="epub-reader-ai-error" role="alert">
-                  {savedFootnoteError}
-                </p>
-              )}
-            </aside>
-          )}
+                </div>
+
+                <blockquote className="epub-reader-footnote-quote">
+                  {visibleAiAnnotation.text}
+                </blockquote>
+
+                <div className="epub-reader-footnote-note-section">
+                  <div className="epub-reader-footnote-subhead">
+                    <span>我的脚注</span>
+                    {!popoverEditingNote && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPopoverNoteDraft(visibleAiAnnotation.note);
+                          setPopoverEditingNote(true);
+                        }}
+                      >
+                        {visibleAiAnnotation.note.trim() ? '编辑' : '+ 添加'}
+                      </button>
+                    )}
+                  </div>
+                  {popoverEditingNote ? (
+                    <form
+                      className="epub-reader-footnote-inline-editor"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        saveEditedAnnotation(
+                          visibleAiAnnotation,
+                          popoverNoteDraft,
+                        );
+                      }}
+                    >
+                      <textarea
+                        autoFocus
+                        rows={3}
+                        maxLength={2000}
+                        value={popoverNoteDraft}
+                        placeholder="写下针对这段文字的书内脚注…"
+                        onChange={(event) =>
+                          setPopoverNoteDraft(event.target.value)
+                        }
+                      />
+                      <div className="epub-reader-footnote-inline-actions">
+                        <button type="submit" className="is-primary">
+                          保存
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPopoverEditingNote(false)}
+                        >
+                          取消
+                        </button>
+                      </div>
+                    </form>
+                  ) : visibleAiAnnotation.note.trim() ? (
+                    <p className="epub-reader-footnote-user-text">
+                      {visibleAiAnnotation.note}
+                    </p>
+                  ) : null}
+                </div>
+
+                {visibleAiAnnotation.aiAnalysis ? (
+                  <>
+                    <div
+                      className="epub-reader-ai-format-bar is-in-footnote"
+                      role="group"
+                      aria-label="切换已保存脚注返回形式"
+                    >
+                      {AI_RESPONSE_FORMATS.map((option) => (
+                        <button
+                          type="button"
+                          key={option.value}
+                          disabled={savedFootnoteBusy}
+                          className={
+                            aiResponseFormat === option.value ? 'is-active' : ''
+                          }
+                          title={`按「${option.label}」重新生成并更新脚注：${option.hint}`}
+                          onClick={() =>
+                            void reanalyzeSavedFootnote(
+                              visibleAiAnnotation,
+                              option.value,
+                              savedFootnoteQuestion,
+                            )
+                          }
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="epub-reader-ai-footnote-body">
+                      {renderAiFootnoteContent(visibleAiAnnotation.aiAnalysis)}
+                    </div>
+                    <form
+                      className="epub-reader-ai-prompt-bar is-in-footnote"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void reanalyzeSavedFootnote(
+                          visibleAiAnnotation,
+                          aiResponseFormat,
+                          savedFootnoteQuestion,
+                        );
+                      }}
+                    >
+                      <input
+                        type="text"
+                        value={savedFootnoteQuestion}
+                        maxLength={500}
+                        placeholder="更改提问内容并重新生成脚注…"
+                        aria-label="在已保存脚注内更改提问内容"
+                        onChange={(event) =>
+                          setSavedFootnoteQuestion(event.target.value)
+                        }
+                      />
+                      <button type="submit" disabled={savedFootnoteBusy}>
+                        {savedFootnoteBusy ? '更新中…' : '提问更新'}
+                      </button>
+                    </form>
+                  </>
+                ) : (
+                  <div className="epub-reader-footnote-ai-trigger">
+                    <button
+                      type="button"
+                      disabled={savedFootnoteBusy}
+                      onClick={() =>
+                        void reanalyzeSavedFootnote(
+                          visibleAiAnnotation,
+                          aiResponseFormat,
+                          '',
+                        )
+                      }
+                    >
+                      {savedFootnoteBusy ? 'AI 解析中…' : '+ AI 补充解析'}
+                    </button>
+                  </div>
+                )}
+
+                {savedFootnoteError && (
+                  <p className="epub-reader-ai-error" role="alert">
+                    {savedFootnoteError}
+                  </p>
+                )}
+
+                <div className="epub-reader-ai-footnote-actions">
+                  {onWriteFootnoteToNote && (
+                    <button
+                      type="button"
+                      className="is-primary"
+                      onClick={() =>
+                        emitWriteFootnoteToNote(visibleAiAnnotation)
+                      }
+                      title="把这条书内脚注写入右侧对应章节的 Markdown 笔记"
+                    >
+                      写入右侧笔记
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => removeAnnotation(visibleAiAnnotation)}
+                  >
+                    删除
+                  </button>
+                </div>
+              </aside>
+            )}
           {loading && (
             <div className="epub-reader-loading" role="status">
               {error ? '书籍未能载入' : '正在载入 EPUB…'}

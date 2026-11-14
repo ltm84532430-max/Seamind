@@ -21,6 +21,19 @@ export interface FeedGalaxyNode extends GalaxyPhysicsNode {
   publishedAt?: number;
   summary?: string;
   imageUrl?: string | null;
+  /** 唯一焦点源（未读最多），对应课程星图的「下一节」，只有它带脉冲。 */
+  isFocus?: boolean;
+  /** 未读排名靠前的源，常驻标签并放大，对应课程星图的已完成/检查点。 */
+  isHighlighted?: boolean;
+}
+
+export interface FeedGalaxyBuildOptions {
+  /** 非展开订阅源默认挂载的文章卫星数。 */
+  previewLimit?: number;
+  /** 使用分类自定义颜色；默认与课程星图共用高饱和色板。 */
+  useCategoryColors?: boolean;
+  /** 常驻标签的未读源数量。 */
+  highlightLimit?: number;
 }
 
 export interface FeedGalaxyGraph {
@@ -38,6 +51,8 @@ export interface FeedGalaxyGraph {
 
 const ROOT_ID = 'sun-root';
 export const FEED_GALAXY_ARTICLE_LIMIT = 8;
+export const FEED_GALAXY_PREVIEW_LIMIT = 3;
+export const FEED_GALAXY_HIGHLIGHT_LIMIT = 6;
 
 /** 与课程路径星图同一套高饱和色，只在分类没有自有颜色时使用。 */
 export const FEED_STAR_PALETTE = [
@@ -70,8 +85,28 @@ export function categoryOrbitRadius(index: number, count: number): number {
   return tier === 0 ? 330 : tier === 1 ? 480 : 630;
 }
 
-function categoryColor(category: CategoryStats | undefined, index: number) {
-  return category?.color || FEED_STAR_PALETTE[index % FEED_STAR_PALETTE.length];
+function categoryColor(
+  category: CategoryStats | undefined,
+  index: number,
+  useCategoryColors: boolean,
+) {
+  const paletteColor = FEED_STAR_PALETTE[index % FEED_STAR_PALETTE.length];
+  return useCategoryColors ? category?.color || paletteColor : paletteColor;
+}
+
+/** 未读最多的源排在前面；并列时按文章总数和标题稳定排序。 */
+export function rankUnreadChannels(
+  channels: readonly FeedChannelWithStats[],
+): FeedChannelWithStats[] {
+  return channels
+    .filter((channel) => channel.unreadCount > 0)
+    .sort(
+      (a, b) =>
+        b.unreadCount - a.unreadCount ||
+        b.totalCount - a.totalCount ||
+        a.title.localeCompare(b.title) ||
+        a.id.localeCompare(b.id),
+    );
 }
 
 function trimText(value: string | null | undefined, limit: number) {
@@ -82,6 +117,7 @@ function trimText(value: string | null | undefined, limit: number) {
 /** 未读优先，其次标星，再按发布时间。星系上每个订阅源最多挂 8 篇文章。 */
 export function selectFeedGalaxyArticles(
   articles: readonly FeedArticle[],
+  limit = FEED_GALAXY_ARTICLE_LIMIT,
 ): FeedArticle[] {
   return [...articles]
     .sort((a, b) => {
@@ -94,7 +130,7 @@ export function selectFeedGalaxyArticles(
       if (publishedDelta !== 0) return publishedDelta;
       return a.id.localeCompare(b.id);
     })
-    .slice(0, FEED_GALAXY_ARTICLE_LIMIT);
+    .slice(0, limit);
 }
 
 function placeInFan(
@@ -126,13 +162,25 @@ function placeInFan(
   };
 }
 
-/** 构造与课程路径星图同构的 RSS 层级。文章卫星只挂在当前展开的订阅源上。 */
+/**
+ * 构造与课程路径星图同构的 RSS 层级。
+ * 已加载文章的订阅源都会挂文章卫星：展开的源最多 8 篇，其余源预览 3 篇。
+ */
 export function buildFeedGalaxyGraph(
   categories: CategoryStats[],
   channels: FeedChannelWithStats[],
   expandedChannelId?: string | null,
   articles: FeedArticle[] = [],
+  options: FeedGalaxyBuildOptions = {},
 ): FeedGalaxyGraph {
+  const previewLimit = options.previewLimit ?? FEED_GALAXY_PREVIEW_LIMIT;
+  const useCategoryColors = options.useCategoryColors ?? false;
+  const highlightLimit = options.highlightLimit ?? FEED_GALAXY_HIGHLIGHT_LIMIT;
+  const rankedUnread = rankUnreadChannels(channels);
+  const focusChannelId = rankedUnread[0]?.id;
+  const highlightedChannelIds = new Set(
+    rankedUnread.slice(0, highlightLimit).map((channel) => channel.id),
+  );
   const categoryStats = new Map(
     categories.map((category) => [category.name, category]),
   );
@@ -183,7 +231,7 @@ export function buildFeedGalaxyGraph(
     const x = Math.round(Math.cos(angle) * orbitRadius);
     const y = Math.round(Math.sin(angle) * orbitRadius);
     const id = `category:${name}`;
-    const color = categoryColor(stat, index);
+    const color = categoryColor(stat, index, useCategoryColors);
     const categoryUnread = memberChannels.reduce(
       (sum, channel) => sum + channel.unreadCount,
       0,
@@ -263,6 +311,8 @@ export function buildFeedGalaxyGraph(
         categoryName: name,
         channelId: channel.id,
         url: channel.url,
+        isFocus: channel.id === focusChannelId,
+        isHighlighted: highlightedChannelIds.has(channel.id),
       };
       nodes.push(node);
       links.push({
@@ -271,69 +321,88 @@ export function buildFeedGalaxyGraph(
         kind: 'orbit',
         color: parent.color,
       });
+      // 同分类相邻订阅源之间的弧线，对应课程星图的前置依赖弧线；不参与物理受力。
+      if (index > 0) {
+        links.push({
+          source: `feed:${memberChannels[index - 1].id}`,
+          target: id,
+          kind: 'sequence',
+          color: parent.color,
+        });
+      }
     });
   }
 
-  if (expandedChannelId) {
-    const parentId = `feed:${expandedChannelId}`;
+  const articlesByChannel = new Map<string, FeedArticle[]>();
+  for (const article of articles) {
+    const bucket = articlesByChannel.get(article.channelId);
+    if (bucket) bucket.push(article);
+    else articlesByChannel.set(article.channelId, [article]);
+  }
+
+  for (const channel of channels) {
+    const channelArticles = articlesByChannel.get(channel.id);
+    if (!channelArticles?.length) continue;
+    const parentId = `feed:${channel.id}`;
     const parent = nodes.find((node) => node.id === parentId);
-    const channel = channels.find((item) => item.id === expandedChannelId);
-    if (parent && channel) {
-      const selectedArticles = selectFeedGalaxyArticles(
-        articles.filter((article) => article.channelId === expandedChannelId),
+    if (!parent) continue;
+    const isExpanded = channel.id === expandedChannelId;
+    const selectedArticles = selectFeedGalaxyArticles(
+      channelArticles,
+      isExpanded ? FEED_GALAXY_ARTICLE_LIMIT : previewLimit,
+    );
+    const centerAngle = parent.orbitAngle ?? Math.atan2(parent.y, parent.x);
+    selectedArticles.forEach((article, index) => {
+      const placement = placeInFan(
+        parent.x,
+        parent.y,
+        centerAngle,
+        index,
+        selectedArticles.length,
+        62,
+        4,
+        28,
+        0.42,
       );
-      const centerAngle = parent.orbitAngle ?? Math.atan2(parent.y, parent.x);
-      selectedArticles.forEach((article, index) => {
-        const placement = placeInFan(
-          parent.x,
-          parent.y,
-          centerAngle,
-          index,
-          selectedArticles.length,
-          62,
-          4,
-          28,
-          0.42,
-        );
-        const id = `article:${article.id}`;
-        nodes.push({
-          id,
-          kind: 'satellite',
-          parentId,
-          label: article.title,
-          sublabel: article.channelTitle,
-          shortCode: `${parent.shortCode ?? '1'}.${index + 1}`,
-          x: placement.x,
-          y: placement.y,
-          radius: 6,
-          orbitRadius: placement.orbitRadius,
-          orbitAngle: placement.orbitAngle,
-          color: article.starred ? '#38bdf8' : parent.color,
-          unreadCount: article.readStatus === 'unread' ? 1 : 0,
-          totalCount: 1,
-          audioCount: article.audioUrl ? 1 : 0,
-          categoryName: channel.category,
-          channelId: channel.id,
-          articleId: article.id,
-          readStatus: article.readStatus,
-          starred: article.starred,
-          audioUrl: article.audioUrl,
-          publishedAt: article.publishedAt,
-          summary: trimText(article.summary || article.content, 240),
-          imageUrl: article.imageUrl,
-        });
-        links.push({
-          source: parentId,
-          target: id,
-          kind: 'orbit',
-          color: article.starred ? '#38bdf8' : parent.color,
-        });
+      const id = `article:${article.id}`;
+      nodes.push({
+        id,
+        kind: 'satellite',
+        parentId,
+        label: article.title,
+        sublabel: article.channelTitle,
+        shortCode: `${parent.shortCode ?? '1'}.${index + 1}`,
+        x: placement.x,
+        y: placement.y,
+        radius: 6,
+        orbitRadius: placement.orbitRadius,
+        orbitAngle: placement.orbitAngle,
+        color: article.starred ? '#38bdf8' : parent.color,
+        unreadCount: article.readStatus === 'unread' ? 1 : 0,
+        totalCount: 1,
+        audioCount: article.audioUrl ? 1 : 0,
+        categoryName: channel.category,
+        channelId: channel.id,
+        articleId: article.id,
+        readStatus: article.readStatus,
+        starred: article.starred,
+        audioUrl: article.audioUrl,
+        publishedAt: article.publishedAt,
+        summary: trimText(article.summary || article.content, 240),
+        imageUrl: article.imageUrl,
       });
-    }
+      links.push({
+        source: parentId,
+        target: id,
+        kind: 'orbit',
+        color: article.starred ? '#38bdf8' : parent.color,
+      });
+    });
   }
 
   const degree = new Map<string, number>();
   for (const link of links) {
+    if (link.kind === 'sequence') continue;
     degree.set(link.source, (degree.get(link.source) ?? 0) + 1);
     degree.set(link.target, (degree.get(link.target) ?? 0) + 1);
   }

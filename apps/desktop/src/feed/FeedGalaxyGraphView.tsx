@@ -17,7 +17,12 @@ import {
   type GalaxyPhysicsState,
 } from '../graph/galaxy-physics';
 import type { CategoryStats, FeedArticle, FeedChannelWithStats } from './types';
-import { buildFeedGalaxyGraph, type FeedGalaxyNode } from './feed-galaxy-model';
+import {
+  buildFeedGalaxyGraph,
+  FEED_GALAXY_HIGHLIGHT_LIMIT,
+  rankUnreadChannels,
+  type FeedGalaxyNode,
+} from './feed-galaxy-model';
 import '../ebook/book-galaxy-view.css';
 import './feed-galaxy-view.css';
 
@@ -48,6 +53,8 @@ interface NodePointerState {
 const ROOT_ID = 'sun-root';
 const MAX_ZOOM = 3.5;
 const MIN_ZOOM = 0.18;
+/** 与 LearningPathStarMapView 的初始缩放一致。 */
+const INITIAL_ZOOM = 0.68;
 
 function truncate(text: string, limit: number) {
   const characters = Array.from(text);
@@ -89,7 +96,7 @@ export function FeedGalaxyGraphView({
   const canvasRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 920, height: 640 });
   const [pan, setPan] = useState<Point>({ x: 460, y: 320 });
-  const [scale, setScale] = useState(0.62);
+  const [scale, setScale] = useState(INITIAL_ZOOM);
   const [isPanning, setIsPanning] = useState(false);
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
   const [hoveredNode, setHoveredNode] = useState<{
@@ -103,6 +110,8 @@ export function FeedGalaxyGraphView({
   const [onlyAudio, setOnlyAudio] = useState(false);
   const [showSatellites, setShowSatellites] = useState(true);
   const [showOrbitGuides, setShowOrbitGuides] = useState(false);
+  const [showSiblingArcs, setShowSiblingArcs] = useState(true);
+  const [useCategoryColors, setUseCategoryColors] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(false);
   const [nodeSizeScale, setNodeSizeScale] = useState(1);
   const [labelFadeThreshold, setLabelFadeThreshold] = useState(0.68);
@@ -138,16 +147,58 @@ export function FeedGalaxyGraphView({
   const positionsRef = useRef(livePositions);
   positionsRef.current = livePositions;
 
+  const loadedArticles = useMemo(
+    () => Object.values(articlesByChannel).flat(),
+    [articlesByChannel],
+  );
   const graph = useMemo(
     () =>
       buildFeedGalaxyGraph(
         categories,
         channels,
         expandedChannelId,
-        expandedChannelId ? (articlesByChannel[expandedChannelId] ?? []) : [],
+        loadedArticles,
+        { useCategoryColors },
       ),
-    [categories, channels, expandedChannelId, articlesByChannel],
+    [
+      categories,
+      channels,
+      expandedChannelId,
+      loadedArticles,
+      useCategoryColors,
+    ],
   );
+
+  // 预载未读靠前的订阅源文章，让默认视图也有第 4 层文章卫星，与课程星图的知识点卫星密度一致。
+  const requestedPreviewIds = useRef(new Set<string>());
+  useEffect(() => {
+    const targets = rankUnreadChannels(channels)
+      .slice(0, FEED_GALAXY_HIGHLIGHT_LIMIT)
+      .map((channel) => channel.id)
+      .filter((id) => !requestedPreviewIds.current.has(id));
+    if (targets.length === 0) return;
+    for (const id of targets) requestedPreviewIds.current.add(id);
+    // 不随 channels 刷新而丢弃结果；同一订阅源只预载一次，失败的允许下次重试。
+    void Promise.allSettled(
+      targets.map((id) =>
+        loadChannelArticles(id).then((items) => [id, items] as const),
+      ),
+    ).then((results) => {
+      const loaded = results.flatMap((result, index) => {
+        if (result.status === 'fulfilled') return [result.value];
+        requestedPreviewIds.current.delete(targets[index]);
+        return [];
+      });
+      if (loaded.length === 0) return;
+      setArticlesByChannel((current) => {
+        const next = { ...current };
+        for (const [id, items] of loaded) {
+          if (!Object.prototype.hasOwnProperty.call(next, id)) next[id] = items;
+        }
+        return next;
+      });
+    });
+  }, [channels, loadChannelArticles]);
   const nodeById = useMemo(
     () => new Map(graph.nodes.map((node) => [node.id, node])),
     [graph.nodes],
@@ -283,28 +334,13 @@ export function FeedGalaxyGraphView({
     reheatSimulation,
   ]);
 
+  // 与课程星图一致：固定初始缩放居中，保证分类/订阅源显示完整名称而不是编号。
   const fitView = useCallback(
     (width = dimensions.width, height = dimensions.height) => {
-      const graphWidth = Math.max(320, graph.bounds.maxX - graph.bounds.minX);
-      const graphHeight = Math.max(320, graph.bounds.maxY - graph.bounds.minY);
-      const nextScale = Math.min(
-        1.15,
-        Math.max(
-          0.28,
-          Math.min((width - 96) / graphWidth, (height - 96) / graphHeight),
-        ),
-      );
-      setScale(nextScale);
+      setScale(INITIAL_ZOOM);
       setPan({ x: width / 2, y: height / 2 });
     },
-    [
-      dimensions.height,
-      dimensions.width,
-      graph.bounds.maxX,
-      graph.bounds.maxY,
-      graph.bounds.minX,
-      graph.bounds.minY,
-    ],
+    [dimensions.height, dimensions.width],
   );
 
   useEffect(() => {
@@ -432,6 +468,8 @@ export function FeedGalaxyGraphView({
     setOnlyAudio(false);
     setShowSatellites(true);
     setShowOrbitGuides(false);
+    setShowSiblingArcs(true);
+    setUseCategoryColors(false);
   };
 
   const handleCanvasPointerDown = (
@@ -873,6 +911,22 @@ export function FeedGalaxyGraphView({
                 onChange={(event) => setShowOrbitGuides(event.target.checked)}
               />
             </label>
+            <label className="book-galaxy-toggle-row">
+              <span>显示同类订阅弧线</span>
+              <input
+                type="checkbox"
+                checked={showSiblingArcs}
+                onChange={(event) => setShowSiblingArcs(event.target.checked)}
+              />
+            </label>
+            <label className="book-galaxy-toggle-row">
+              <span>使用分类自定义颜色</span>
+              <input
+                type="checkbox"
+                checked={useCategoryColors}
+                onChange={(event) => setUseCategoryColors(event.target.checked)}
+              />
+            </label>
           </div>
           <div className="book-galaxy-controls-section">
             <div className="book-galaxy-controls-kicker">
@@ -1054,6 +1108,26 @@ export function FeedGalaxyGraphView({
                 Boolean(filteredNodeIds) &&
                 !filteredNodeIds?.has(link.source) &&
                 !filteredNodeIds?.has(link.target);
+              if (link.kind === 'sequence') {
+                if (!showSiblingArcs) return null;
+                // 与课程星图的前置依赖弧线同款：二次贝塞尔上拱 28px。
+                const mx = (source.x + target.x) / 2;
+                const my = (source.y + target.y) / 2 - 28;
+                return (
+                  <path
+                    key={`seq:${link.source}:${link.target}`}
+                    d={`M ${source.x} ${source.y} Q ${mx} ${my} ${target.x} ${target.y}`}
+                    className={`galaxy-link-cross ${
+                      isSpotlightLink ? 'is-spotlight' : ''
+                    } ${isDimmedBySpotlight || isSearchDimmed ? 'is-dimmed' : ''}`}
+                    style={
+                      link.color
+                        ? ({ '--link-color': link.color } as CSSProperties)
+                        : undefined
+                    }
+                  />
+                );
+              }
               return (
                 <line
                   key={`${link.source}:${link.target}`}
@@ -1094,17 +1168,20 @@ export function FeedGalaxyGraphView({
               const isDimmed =
                 (Boolean(spotlightIds) && !isSpotlightNeighbor) ||
                 (Boolean(filteredNodeIds) && !isMatch);
-              const hasUnread = node.unreadCount > 0;
               const isCaughtUp =
                 isPlanet && node.totalCount > 0 && node.unreadCount === 0;
+              // 状态映射对齐课程星图：
+              // 焦点源 ≈ 下一节（唯一脉冲）；未读前列 ≈ 检查点（放大 + 常驻标签）；已读完 ≈ 已完成（光晕）。
+              const isFocus = isPlanet && Boolean(node.isFocus);
+              const isHighlighted = isPlanet && Boolean(node.isHighlighted);
+              const isEmphasized = isFocus || isHighlighted || isCaughtUp;
               const degreeBoost = Math.min(3.5, (node.degree ?? 0) * 0.22);
               const displayRadius = isSun
                 ? sunRadius
                 : isCluster
                   ? (9.5 + degreeBoost) * nodeSizeScale
                   : isPlanet
-                    ? ((hasUnread || isCaughtUp ? 6.2 : 4.8) +
-                        degreeBoost * 0.3) *
+                    ? ((isEmphasized ? 6.2 : 4.8) + degreeBoost * 0.3) *
                       nodeSizeScale
                     : isStarredArticle
                       ? 6.4 * nodeSizeScale
@@ -1115,8 +1192,8 @@ export function FeedGalaxyGraphView({
                 isHoveredSelf ||
                 isPinnedSelf ||
                 isSpotlightNeighbor ||
-                hasUnread ||
-                isCaughtUp ||
+                isFocus ||
+                isHighlighted ||
                 (Boolean(filteredNodeIds) && isMatch);
               let planetLabelOpacity = 0;
               if (forceShowLabel) planetLabelOpacity = 1;
@@ -1137,7 +1214,7 @@ export function FeedGalaxyGraphView({
                 isSpotlightNeighbor
                   ? truncate(node.label, 20)
                   : node.shortCode || truncate(node.label, 10);
-              const prominent = hasUnread || isCaughtUp || isPinnedSelf;
+              const prominent = isEmphasized || isPinnedSelf;
 
               return (
                 <g
@@ -1195,10 +1272,10 @@ export function FeedGalaxyGraphView({
                     r={Math.max(14, displayRadius + 6)}
                     fill="transparent"
                   />
-                  {isPlanet && hasUnread && (
+                  {isFocus && (
                     <circle cx={0} cy={0} className="galaxy-current-pulse" />
                   )}
-                  {(isCaughtUp || isPinnedSelf) && !isSun && (
+                  {(isEmphasized || isPinnedSelf) && !isSun && (
                     <circle
                       cx={0}
                       cy={0}

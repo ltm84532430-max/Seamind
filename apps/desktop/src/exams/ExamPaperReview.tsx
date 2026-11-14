@@ -6,7 +6,7 @@ import type {
   EpubExamQuestionType,
   EpubExamSelfReview,
 } from './epub-exams';
-import { composeExamPaper } from './exam-paper';
+import { composeExamPaper, type ExamPaper } from './exam-paper';
 import { ExamRichText } from './ExamRichText';
 
 const TYPE_LABEL: Record<EpubExamQuestionType, string> = {
@@ -21,6 +21,7 @@ const TYPE_LABEL: Record<EpubExamQuestionType, string> = {
 
 interface Props {
   exam: EpubExam;
+  paper?: ExamPaper;
   focusId: string;
   submitted: boolean;
   busy: boolean;
@@ -29,6 +30,7 @@ interface Props {
   grade: EpubExamGrade | undefined;
   onReview: (value: EpubExamSelfReview) => void;
   onOverride: (earned: number) => void;
+  onJumpNextUnanswered?: () => void;
 }
 
 function answerText(answer: EpubExamAnswer | undefined): string {
@@ -36,8 +38,22 @@ function answerText(answer: EpubExamAnswer | undefined): string {
   return Array.isArray(answer) ? answer.join('、') || '未作答' : answer;
 }
 
+function preSubmitHint(type: EpubExamQuestionType): string {
+  if (type === 'cProgramming') {
+    return '支持 Tab 4 空格缩进、自动对齐，并可点击「运行公开样例」验证输出。';
+  }
+  if (type === 'singleChoice' || type === 'multipleChoice') {
+    return '提交后将显示标准答案与解析；可用 A–D 或 1–4 快捷选择，J / K 切换上下题，F 专注做卷。';
+  }
+  if (type === 'trueFalse') {
+    return '判断正确或错误，交卷后自动判定并显示解析。';
+  }
+  return '支持 $...$ 与 $$...$$ 公式实时渲染预览，交卷后给出评分细则。';
+}
+
 export function ExamPaperReview({
   exam,
+  paper: providedPaper,
   focusId,
   submitted,
   busy,
@@ -46,14 +62,16 @@ export function ExamPaperReview({
   grade,
   onReview,
   onOverride,
+  onJumpNextUnanswered,
 }: Props) {
   const paper = useMemo(
     () =>
+      providedPaper ??
       composeExamPaper(exam.questions, {
         bookTitle: exam.bookTitle,
         scopeLabel: exam.scope?.label || exam.sourceSectionLabel,
       }),
-    [exam],
+    [exam, providedPaper],
   );
   const located = useMemo(() => {
     for (const section of paper.sections) {
@@ -67,10 +85,19 @@ export function ExamPaperReview({
     <section className="epub-exam-analytics-card exam-paper-review">
       <div className="epub-exam-card-title-row">
         <h3>当前题目</h3>
+        {!submitted && onJumpNextUnanswered && (
+          <button
+            type="button"
+            className="epub-exam-next-unanswered-btn"
+            onClick={onJumpNextUnanswered}
+          >
+            下一未答
+          </button>
+        )}
       </div>
       {!located ? (
         <p className="epub-exam-card-hint">
-          在卷面上点选一题，解析和评分显示在这里。
+          在卷面上点选一题，作答提示与解析会显示在这里。
         </p>
       ) : (
         <>
@@ -83,7 +110,9 @@ export function ExamPaperReview({
             <ExamRichText text={located.item.question.prompt} />
           </p>
           {!submitted ? (
-            <p className="epub-exam-card-hint">解析在交卷后出现在这里。</p>
+            <p className="epub-exam-card-hint">
+              {preSubmitHint(located.item.question.type)}
+            </p>
           ) : (
             <>
               {!!located.item.question.sourceRefs?.length && (
@@ -172,7 +201,7 @@ export function ExamPaperReview({
                   <button
                     key={value}
                     type="button"
-                    className={`epub-exam-seg-btn${review === value ? ' is-active' : ''}`}
+                    className={`epub-exam-seg-btn is-${value}${review === value ? ' is-active' : ''}`}
                     onClick={() => onReview(value)}
                     disabled={busy}
                   >

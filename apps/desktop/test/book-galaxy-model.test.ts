@@ -3,6 +3,7 @@ import {
   buildBookGalaxyGraph,
   buildGalaxyAdjacencyMap,
   createGalaxyPhysicsState,
+  DEFAULT_GALAXY_PHYSICS_CONFIG,
   extractChapterIndex,
   stepGalaxyPhysics,
   type TocLikeItem,
@@ -295,5 +296,187 @@ describe('Book Galaxy Model', () => {
     }
 
     expect(planetBody.x).toBeGreaterThan(initialPlanetX + 25);
+  });
+
+  it('builds deduplicated EPUB + Markdown footnote diamond children with cluster adjacency and collapsed tracking', () => {
+    const toc: TocLikeItem[] = [
+      {
+        href: 'text/ch01.xhtml',
+        label: '第1章 概览',
+        subitems: [
+          {
+            href: 'text/ch01.xhtml#s1',
+            label: '1.1 指针导论',
+          },
+        ],
+      },
+      {
+        href: 'text/ch02.xhtml',
+        label: '第2章 内存',
+        subitems: [{ href: 'text/ch02.xhtml#s2', label: '2.1 动态分配' }],
+      },
+    ];
+
+    const doc1: MapDocument = {
+      id: 'doc-1',
+      relativePath: '读书笔记/C Book/第1章 概览/1.1 指针导论.md',
+      title: '1.1 指针导论',
+      category: '读书笔记/C Book/第1章 概览',
+      mapType: '文档',
+      tags: ['读书笔记'],
+      createdAt: 1000,
+      updatedAt: 2000,
+      kind: 'doc',
+    };
+
+    const snapshot: LibrarySnapshot = {
+      rootPath: 'C:/books',
+      documents: [doc1],
+      books: [],
+      plantumlFiles: [],
+      textDocuments: [],
+      categories: [],
+    };
+
+    const graph = buildBookGalaxyGraph(
+      'C Book',
+      'c-book',
+      toc,
+      snapshot,
+      'text/ch01.xhtml#s1',
+      undefined,
+      {
+        tocSectionByHref: {
+          'text/ch01.xhtml': 0,
+          'text/ch01.xhtml#s1': 0,
+          'text/ch02.xhtml': 1,
+          'text/ch02.xhtml#s2': 2,
+        },
+        annotations: [
+          {
+            id: 'ann-synced',
+            cfi: 'epubcfi(/6/2!/4/2)',
+            sectionIndex: 0,
+            text: 'int *ptr',
+            note: '声明指针变量',
+            color: '#f59e0b',
+            style: 'highlight',
+            label: '1.1 指针导论',
+            fraction: 0.1,
+            createdAt: 100,
+            updatedAt: 200,
+          },
+          {
+            id: 'ann-ai-only',
+            cfi: 'epubcfi(/6/6!/4/4)',
+            sectionIndex: 2,
+            text: 'malloc(n * sizeof(int))',
+            note: '',
+            aiAnalysis: '【要点】申请未初始化堆内存',
+            color: '#8b5cf6',
+            style: 'underline',
+            label: '',
+            fraction: 0.8,
+            createdAt: 150,
+            updatedAt: 250,
+          },
+          {
+            id: 'ann-highlight-only',
+            cfi: 'epubcfi(/6/6!/4/8)',
+            sectionIndex: 2,
+            text: 'free(p)',
+            note: '   ',
+            color: '#f59e0b',
+            style: 'highlight',
+            label: '2.1 动态分配',
+            fraction: 0.9,
+            createdAt: 180,
+            updatedAt: 180,
+          },
+        ],
+        chapterMarkdownByPath: {
+          [doc1.relativePath]: [
+            '# 1.1 指针导论',
+            '',
+            '> “int *ptr”[^epub-1]',
+            '',
+            '补充笔记[^md-note]。',
+            '',
+            '[^epub-1]: <!-- epub:ann-synced --> **1.1 指针导论** · 声明指针变量',
+            '[^md-note]: 指针加法会自动乘以 `sizeof(*ptr)`。',
+          ].join('\n'),
+        },
+      },
+    );
+
+    const footnotes = graph.nodes.filter((n) => n.kind === 'footnote');
+    expect(graph.stats.footnotesCount).toBe(3);
+    expect(footnotes).toHaveLength(3);
+    // Chapter coverage remains 1 note / 4 TOC entries = 25% (not inflated by footnotes)
+    expect(graph.stats.completionPercentage).toBe(25);
+
+    const syncedNode = footnotes.find(
+      (n) => n.footnoteData?.annotationId === 'ann-synced',
+    )!;
+    expect(syncedNode).toBeDefined();
+    expect(syncedNode.parentId).toBe('planet-0-0');
+    expect(syncedNode.rootClusterId).toBe('cluster-0');
+    expect(syncedNode.isCurrent).toBe(true);
+    expect(syncedNode.footnoteData?.source).toBe('epub-note');
+    expect(syncedNode.footnoteData?.syncedNotePath).toBe(doc1.relativePath);
+    expect(syncedNode.footnoteData?.syncedFootnoteKey).toBe('epub-1');
+
+    const aiNode = footnotes.find(
+      (n) => n.footnoteData?.annotationId === 'ann-ai-only',
+    )!;
+    expect(aiNode).toBeDefined();
+    expect(aiNode.parentId).toBe('planet-1-0');
+    expect(aiNode.rootClusterId).toBe('cluster-1');
+    expect(aiNode.footnoteData?.source).toBe('epub-ai');
+
+    const mdNode = footnotes.find(
+      (n) => n.footnoteData?.source === 'markdown-footnote',
+    )!;
+    expect(mdNode).toBeDefined();
+    expect(mdNode.parentId).toBe('planet-0-0');
+    expect(mdNode.footnoteData?.footnoteKey).toBe('md-note');
+    expect(mdNode.footnoteData?.notePath).toBe(doc1.relativePath);
+
+    // Highlight without note or AI explanation does not create a footnote child
+    expect(
+      footnotes.some(
+        (n) => n.footnoteData?.annotationId === 'ann-highlight-only',
+      ),
+    ).toBe(false);
+
+    // Adjacency map bridges cluster-0 <-> footnote grandchildren
+    const adjacency = buildGalaxyAdjacencyMap(graph.nodes, graph.links);
+    expect(adjacency.get('cluster-0')?.has(syncedNode.id)).toBe(true);
+    expect(adjacency.get('cluster-0')?.has(mdNode.id)).toBe(true);
+    expect(adjacency.get(syncedNode.id)?.has('cluster-0')).toBe(true);
+
+    // Collapsed Choice-B footnotes follow moved parents without drifting behind
+    const sim = createGalaxyPhysicsState(graph);
+    const planet1 = sim.bodies.get('planet-1-0')!;
+    const collapsedAi = sim.bodies.get(aiNode.id)!;
+    const visibleWithoutCh2Footnotes = new Set(
+      graph.nodes.filter((n) => n.id !== aiNode.id).map((n) => n.id),
+    );
+
+    planet1.x += 120;
+    planet1.y -= 60;
+    stepGalaxyPhysics(
+      sim,
+      DEFAULT_GALAXY_PHYSICS_CONFIG,
+      visibleWithoutCh2Footnotes,
+    );
+
+    const expectedX =
+      planet1.x + Math.cos(collapsedAi.orbitAngle) * collapsedAi.orbitRadius;
+    const expectedY =
+      planet1.y + Math.sin(collapsedAi.orbitAngle) * collapsedAi.orbitRadius;
+    expect(
+      Math.hypot(collapsedAi.x - expectedX, collapsedAi.y - expectedY),
+    ).toBeLessThan(1.5);
   });
 });

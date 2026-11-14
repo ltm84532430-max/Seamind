@@ -1,7 +1,9 @@
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
+import type { EpubExam } from '../src/exams/epub-exams';
 import { EpubExamWorkspace } from '../src/exams/EpubExamWorkspace';
+import { ExamPaperSheet } from '../src/exams/ExamPaperSheet';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockImplementation((cmd: string) => {
@@ -259,11 +261,132 @@ describe('EpubExamWorkspace SSR Render', () => {
 
     // Verify layout buttons and mode controls
     expect(html).toContain('左右翻页');
-    expect(html).toContain('题目 / 工作区');
+    expect(html).toContain('分栏');
     expect(html).toContain('第6章 C控制语句：循环');
     expect(html).toContain('C 编程题');
     expect(html).toContain('编写一个函数计算累加和');
     expect(html).toContain('公开样例');
     expect(html).toContain('评分细则');
+  });
+
+  it('renders choiceKeys (A/B) and inline option grading in spread mode', () => {
+    const choiceExam: EpubExam = {
+      schemaVersion: 2,
+      id: 'exam-choice',
+      bookKey: 'book-choice',
+      bookTitle: '操作系统',
+      sourceFileFingerprint: 'fp-os',
+      sourceSectionIndex: 0,
+      sourceSectionHref: 'ch1.html',
+      sourceSectionLabel: '第1章 导论',
+      createdAt: 1700000000000,
+      questionCount: 1,
+      difficulty: 'easy',
+      status: 'submitted',
+      submittedAt: 1700000005000,
+      questions: [
+        {
+          id: 'q-s1',
+          type: 'singleChoice',
+          prompt: '以下哪项属于系统调用？',
+          options: ['printf', 'read', 'strlen'],
+          answer: 'read',
+          explanation: 'read 是 POSIX 系统调用。',
+          points: 2,
+        },
+      ],
+      answers: { 'q-s1': 'printf' },
+      selfReviews: { 'q-s1': 'review' },
+      grades: {},
+      attempts: [],
+    };
+
+    const html = renderToString(
+      React.createElement(EpubExamWorkspace, {
+        examId: 'exam-choice',
+        bookKey: 'book-choice',
+        onBack: () => {},
+        initialExam: choiceExam,
+      }),
+    );
+
+    expect(html).toContain('A.');
+    expect(html).toContain('B.');
+    expect(html).toContain('is-correct');
+    expect(html).toContain('is-wrong');
+  });
+
+  it('renders ExamPaperSheet sticky section nav, filter pills, wide/white-paper classes, and review toggle', () => {
+    const paperExam: EpubExam = {
+      schemaVersion: 2,
+      id: 'exam-paper-1',
+      bookKey: 'book-c',
+      bookTitle: 'C Primer Plus',
+      sourceFileFingerprint: 'fp-c',
+      sourceSectionIndex: 5,
+      sourceSectionHref: 'ch6.html',
+      sourceSectionLabel: '第6章 C控制语句：循环',
+      createdAt: 1700000000000,
+      questionCount: 2,
+      difficulty: 'medium',
+      status: 'submitted',
+      submittedAt: 1700000005000,
+      questions: [
+        {
+          id: 'pq-1',
+          type: 'singleChoice',
+          prompt: '以下哪种循环至少执行一次循环体？',
+          options: ['while', 'for', 'do while', 'if'],
+          answer: 'do while',
+          explanation: 'do while 先执行后判断。',
+          points: 2,
+        },
+        {
+          id: 'pq-2',
+          type: 'shortAnswer',
+          prompt: '简述 break 与 continue 的区别。',
+          answer: 'break 终止循环，continue 跳过本次迭代。',
+          explanation: '控制流基础。',
+          points: 5,
+        },
+      ],
+      answers: { 'pq-1': 'while' },
+      selfReviews: { 'pq-1': 'review' },
+      grades: {},
+      attempts: [],
+    };
+
+    const html = renderToString(
+      React.createElement(ExamPaperSheet, {
+        exam: paperExam,
+        answers: paperExam.answers,
+        submitted: true,
+        busy: false,
+        reviews: paperExam.selfReviews,
+        grades: {},
+        codeResults: {},
+        codeBusyId: '',
+        onAnswer: () => {},
+        onReview: () => {},
+        onRunCode: () => {},
+        onOverride: () => {},
+        focusId: 'pq-1',
+        wideWidth: true,
+        whiteSurface: true,
+      }),
+    );
+
+    const plain = html.replace(/<!-- -->/g, '');
+    expect(plain).toContain('exam-paper-scroll is-white-paper');
+    expect(plain).toContain('exam-paper-sheet is-wide');
+    expect(plain).toContain('exam-paper-sticky-bar');
+    expect(plain).toContain('一、单选');
+    expect(plain).toContain('二、简答');
+    expect(plain).toContain('全部 (2)');
+    expect(plain).toContain('未答 (1)');
+    expect(plain).toContain('错题·待复习 (1)');
+    expect(plain).toContain('展开全部解析');
+    expect(plain).toContain('data-question-id="pq-1"');
+    expect(plain).toContain('is-focused');
   });
 });
