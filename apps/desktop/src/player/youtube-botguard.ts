@@ -1,7 +1,7 @@
 import { getChallenge } from 'bgutils-js/botguard';
 import { GOOG_API_KEY, buildURL, parseLooseJSON } from 'bgutils-js/utils';
 import { createColdStartToken } from 'bgutils-js/webpo';
-import { invoke } from '@tauri-apps/api/core';
+import { playerApi } from './player-api';
 import { proxiedFetch } from './youtube-proxy';
 
 const WAA_REQUEST_KEY = 'O43z0dpjhgX20SCx4KAo';
@@ -305,17 +305,14 @@ class YouTubeBotGuard {
       interpreterHash: challenge.interpreterHash,
     };
     try {
-      const botguardResponse = await invoke<unknown>(
-        'youtube_botguard_snapshot',
-        {
-          requestId,
-          contentBinding,
-          challenge: challengeForRuntime,
-          interpreterJavascript: interpreter,
-          ytConfig: attestation?.ytConfig ?? null,
-          userAgent: navigator.userAgent,
-        },
-      );
+      const botguardResponse = await playerApi.botguardSnapshot({
+        requestId,
+        contentBinding,
+        challenge: challengeForRuntime,
+        interpreterJavascript: interpreter,
+        ytConfig: attestation?.ytConfig ?? null,
+        userAgent: navigator.userAgent,
+      });
       let integrityResponse = await proxiedFetch(buildURL('GenerateIT', true), {
         method: 'POST',
         headers: {
@@ -346,15 +343,13 @@ class YouTubeBotGuard {
       if (typeof integrityToken !== 'string' || !integrityToken)
         throw new Error('YouTube returned an empty BotGuard integrity token.');
 
-      return await invoke<string>('youtube_botguard_mint', {
+      return await playerApi.botguardMint({
         requestId,
         contentBinding,
         integrityToken,
       });
     } catch (error) {
-      await invoke('youtube_botguard_discard', { requestId }).catch(
-        () => undefined,
-      );
+      await playerApi.botguardDiscard({ requestId }).catch(() => undefined);
       throw error;
     }
   }

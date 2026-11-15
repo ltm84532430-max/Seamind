@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { playerApi } from './player-api';
 import { listen } from '@tauri-apps/api/event';
 import { NativePlaybackError } from './youtube-native-errors';
 import { resolveNativePlayback } from './youtube-native';
@@ -31,17 +31,15 @@ export interface InstallProgress {
 }
 
 export function fetchCapabilities(): Promise<YouTubePlaybackCapabilities> {
-  return invoke<YouTubePlaybackCapabilities>('youtube_playback_capabilities');
+  return playerApi.playbackCapabilities();
 }
 
 export function fetchSettings(): Promise<YouTubeSettings> {
-  return invoke<YouTubeSettings>('youtube_get_settings');
+  return playerApi.youtubeSettings();
 }
 
 export function saveProxy(proxyUrl: string): Promise<YouTubeSettings> {
-  return invoke<YouTubeSettings>('youtube_set_settings', {
-    proxyUrl: proxyUrl.trim() || null,
-  });
+  return playerApi.setYouTubeSettings({ proxyUrl: proxyUrl.trim() || null });
 }
 
 export async function installYtDlp(
@@ -52,7 +50,7 @@ export async function installYtDlp(
     (event) => onProgress(event.payload),
   );
   try {
-    return await invoke<YtDlpInstallResult>('youtube_install_ytdlp');
+    return await playerApi.installYtDlp();
   } finally {
     unlisten();
   }

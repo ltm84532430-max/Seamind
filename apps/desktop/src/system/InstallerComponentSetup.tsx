@@ -1,11 +1,6 @@
 import { useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-
-interface PendingComponents {
-  plantumlJava: boolean;
-  ytDlp: boolean;
-}
+import { systemApi, type PendingComponents } from './system-api';
 
 interface DownloadProgress {
   downloaded: number;
@@ -38,9 +33,7 @@ export default function InstallerComponentSetup() {
 
   useEffect(() => {
     let active = true;
-    void invoke<PendingComponents | null>(
-      'installer_get_pending_components',
-    ).then(
+    void systemApi.pendingComponents().then(
       (pending) => {
         if (active) setSelection(pending);
       },
@@ -55,7 +48,7 @@ export default function InstallerComponentSetup() {
 
   const closeAndClear = async () => {
     try {
-      await invoke('installer_clear_pending_components');
+      await systemApi.clearPendingComponents();
       setSelection(null);
       setDismissed(true);
     } catch (reason) {
@@ -78,7 +71,7 @@ export default function InstallerComponentSetup() {
         );
         try {
           setMessage('正在安装 PlantUML Java 运行环境…');
-          setMessage(await invoke<string>('plantuml_install_java_runtime'));
+          setMessage(await systemApi.installPlantUmlJava());
         } finally {
           unlisten();
         }
@@ -91,15 +84,13 @@ export default function InstallerComponentSetup() {
         );
         try {
           setMessage('正在安装 yt-dlp…');
-          const installed = await invoke<{ version: string }>(
-            'youtube_install_ytdlp',
-          );
+          const installed = await systemApi.installYtDlp();
           setMessage(`已安装 yt-dlp ${installed.version}。`);
         } finally {
           unlisten();
         }
       }
-      await invoke('installer_clear_pending_components');
+      await systemApi.clearPendingComponents();
       setState('done');
       setMessage('所选组件已准备完成。');
     } catch (reason) {

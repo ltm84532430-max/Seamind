@@ -1,0 +1,67 @@
+/* 电子书书架采用无缝三栏，分隔线贯穿侧栏并与主内容像素对齐。 */
+@media (min-width: 1481px) {
+  .ebook-shelf {
+    padding: 0;
+    align-items: stretch;
+    grid-template-columns:
+      var(--ebook-sidebar-width, 208px)
+      minmax(0, 1fr)
+      var(--ebook-exam-width, 276px);
+    column-gap: 0;
+  }
+
+  .ebook-shelf:not(.is-dashboard-collapsed) {
+    --ebook-sidebar-width: 240px;
+  }
+
+  .ebook-shelf:not(.is-exam-collapsed) {
+    --ebook-exam-width: 288px;
+  }
+
+  .ebook-shelf-content {
+    width: auto;
+    max-width: none;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 0 12px 24px;
+  }
+
+  .ebook-reading-dashboard,
+  .epub-exam-library {
+    align-self: stretch;
+    height: max(340px, calc(100vh - 142px));
+    min-height: 0;
+    max-height: none;
+    box-sizing: border-box;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .ebook-reading-dashboard {
+    padding: 16px 12px 18px;
+    border-right: 1px solid #d8dfe3;
+    background: #f7f8f9;
+  }
+
+  .epub-exam-library {
+    padding: 16px 12px 18px;
+    border-left: 1px solid #d8dfe3;
+    background: #f7f8f9;
+  }
+
+  .ebook-reading-dashboard:not(.is-collapsed) .ebook-dashboard-header,
+  .epub-exam-library:not(.is-collapsed) .epub-exam-library-heading {
+    margin-right: -12px;
+    margin-left: -12px;
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+    .ebook-reading-dashboard,
+  .app-shell[data-theme='dark'] .epub-exam-library {
+    border-color: var(--line, #303b42);
+    background: var(--panel, #182127);
+  }
+}

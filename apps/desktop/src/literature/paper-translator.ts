@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { literatureApi } from './literature-api';
 import { readProviderSettings } from '../app/app-storage';
 import {
   computePageContentHash,
@@ -69,18 +69,15 @@ export async function translatePaperSelection(
   }
 
   const provider = getEffectiveProvider();
-  const result = await invoke<PaperSelectionTranslation>(
-    'translate_paper_selection',
-    {
-      baseUrl: provider.baseUrl,
-      model: provider.model,
-      paperTitle: options.paperTitle,
-      text: options.text,
-      mode: resolvedMode,
-      contextBefore: options.contextBefore ?? null,
-      contextAfter: options.contextAfter ?? null,
-    },
-  );
+  const result = await literatureApi.translateSelection({
+    baseUrl: provider.baseUrl,
+    model: provider.model,
+    paperTitle: options.paperTitle,
+    text: options.text,
+    mode: resolvedMode,
+    contextBefore: options.contextBefore ?? null,
+    contextAfter: options.contextAfter ?? null,
+  });
 
   if (options.pdfSha256) {
     setCachedSelectionTranslation(
@@ -145,16 +142,13 @@ export async function translatePaperPage(
 
     while (attempt < maxAttempts) {
       try {
-        batchResult = await invoke<TranslatedPaperParagraph[]>(
-          'translate_paper_paragraphs',
-          {
-            baseUrl: provider.baseUrl,
-            model: provider.model,
-            paperTitle,
-            pageNumber,
-            paragraphs: batch,
-          },
-        );
+        batchResult = await literatureApi.translateParagraphs({
+          baseUrl: provider.baseUrl,
+          model: provider.model,
+          paperTitle,
+          pageNumber,
+          paragraphs: batch,
+        });
         break;
       } catch (err) {
         attempt += 1;
@@ -183,7 +177,7 @@ export async function translatePaperPage(
 }
 
 export async function checkPdf2ZhStatus(): Promise<Pdf2ZhStatus> {
-  return invoke<Pdf2ZhStatus>('check_pdf2zh_status');
+  return literatureApi.pdf2zhStatus();
 }
 
 export async function generateBilingualPaperPdf(
@@ -196,7 +190,7 @@ export async function generateBilingualPaperPdf(
   } catch {
     // Optional for non-OpenAI services like bing
   }
-  return invoke<DualPdfResult>('generate_bilingual_paper_pdf', {
+  return literatureApi.generateBilingualPdf({
     paperId,
     service: options?.service ?? null,
     baseUrl: settings.baseUrl || null,

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { terminalApi } from '../terminal/terminal-api';
 import { listen } from '@tauri-apps/api/event';
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
@@ -148,7 +148,7 @@ export default function TerminalPanel({
 
   const queueTerminalWrite = (sessionId: string, data: number[]) => {
     const nextWrite = writeQueueRef.current.then(async () => {
-      await invoke('terminal_write', { sessionId, data });
+      await terminalApi.write({ sessionId, data });
     });
     writeQueueRef.current = nextWrite.catch(() => undefined);
     return nextWrite;
@@ -204,9 +204,9 @@ export default function TerminalPanel({
     const result = output
       ? `${output}${suffix}${completed ? '' : `\n\n[${fallback}]`}`
       : fallback;
-    void invoke('terminal_remove_script', { path: capture.scriptPath }).catch(
-      () => undefined,
-    );
+    void terminalApi
+      .removeScript({ path: capture.scriptPath })
+      .catch(() => undefined);
     onCommandOutputRef.current(capture.id, result);
   };
 
@@ -250,16 +250,16 @@ export default function TerminalPanel({
     void (async () => {
       let scriptPath: string | null = null;
       try {
-        scriptPath = await invoke<string>('terminal_stage_script', {
+        scriptPath = await terminalApi.stageScript({
           source: command,
         });
         if (
           sessionIdRef.current !== sessionId ||
           pendingCommandRef.current?.id !== request.id
         ) {
-          void invoke('terminal_remove_script', { path: scriptPath }).catch(
-            () => undefined,
-          );
+          void terminalApi
+            .removeScript({ path: scriptPath })
+            .catch(() => undefined);
           return;
         }
 
@@ -298,9 +298,9 @@ export default function TerminalPanel({
           );
         } else {
           if (scriptPath)
-            void invoke('terminal_remove_script', { path: scriptPath }).catch(
-              () => undefined,
-            );
+            void terminalApi
+              .removeScript({ path: scriptPath })
+              .catch(() => undefined);
           onCommandOutputRef.current(
             request.id,
             error instanceof Error
@@ -484,11 +484,13 @@ export default function TerminalPanel({
         try {
           fitAddon.fit();
           if (sessionId)
-            void invoke('terminal_resize', {
-              sessionId,
-              cols: terminal.cols,
-              rows: terminal.rows,
-            }).catch(() => undefined);
+            void terminalApi
+              .resize({
+                sessionId,
+                cols: terminal.cols,
+                rows: terminal.rows,
+              })
+              .catch(() => undefined);
         } catch {
           // The terminal can briefly have a zero-sized host during layout.
         }
@@ -503,14 +505,14 @@ export default function TerminalPanel({
       resizeObserver = new ResizeObserver(scheduleResize);
       resizeObserver.observe(host);
 
-      sessionId = await invoke<string>('terminal_start', {
+      sessionId = await terminalApi.start({
         cwd,
         cols: terminal.cols,
         rows: terminal.rows,
       });
       sessionIdRef.current = sessionId;
       if (!active) {
-        void invoke('terminal_close', { sessionId }).catch(() => undefined);
+        void terminalApi.close({ sessionId }).catch(() => undefined);
         return;
       }
       setStatus(cwd || 'PowerShell');
@@ -565,7 +567,7 @@ export default function TerminalPanel({
       if (capture)
         completeCommandCapture(capture, '终端已关闭，命令未返回完成标记。');
       if (sessionId)
-        void invoke('terminal_close', { sessionId }).catch(() => undefined);
+        void terminalApi.close({ sessionId }).catch(() => undefined);
     };
   }, [cwd]);
 

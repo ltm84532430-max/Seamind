@@ -4,7 +4,7 @@ import type {
   PointerEvent as ReactPointerEvent,
   WheelEvent as ReactWheelEvent,
 } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { plantUmlApi } from './plantuml-api';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { sanitizeDiagramSvg } from '../workbench/code-blocks';
 import {
@@ -42,11 +42,6 @@ interface PlantUmlWorkspaceProps {
   onSourceChange: (nextSource: string) => void;
   onSourceSaved: (savedSource: string) => void;
   onClose: () => void;
-}
-
-interface PlantUmlRenderResult {
-  svg: string;
-  diagnostics: string[];
 }
 
 const workspaceEventName = 'seamind:open-plantuml-editor';
@@ -269,12 +264,13 @@ export default function PlantUmlWorkspace({
     const timer = window.setTimeout(() => {
       setRendering(true);
       setRenderError('');
-      void invoke<PlantUmlRenderResult>('render_plantuml', {
-        source,
-        dark: theme !== 'light',
-        authorizedIncludeDirectory: authorizedDirectory || null,
-        cacheKey: request.cacheKey ?? null,
-      })
+      void plantUmlApi
+        .render({
+          source,
+          dark: theme !== 'light',
+          authorizedIncludeDirectory: authorizedDirectory || null,
+          cacheKey: request.cacheKey ?? null,
+        })
         .then((result) => {
           if (revision !== renderRevisionRef.current) return;
           setSvgSnapshot(result.svg);

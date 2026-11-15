@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { playerApi } from './player-api';
 import {
   lazy,
   Suspense,
@@ -16,7 +16,6 @@ import { resolveNativePlayback } from './youtube-native';
 import { NativePlaybackError } from './youtube-native-errors';
 import type {
   YouTubeIframePlayer,
-  YouTubePlaybackResolution,
   YouTubePlaybackState,
 } from './youtube-player';
 import {
@@ -184,9 +183,9 @@ export default function YouTubePlayerPanel({
 
   const cancelBackgroundWork = () => {
     nativeAbortRef.current?.abort();
-    void invoke('youtube_cancel', { requestId: requestIdRef.current }).catch(
-      () => undefined,
-    );
+    void playerApi
+      .cancelYouTubeRequest({ requestId: requestIdRef.current })
+      .catch(() => undefined);
   };
 
   const onCloseRef = useRef(onClose);
@@ -255,9 +254,9 @@ export default function YouTubePlayerPanel({
   useEffect(
     () => () => {
       nativeAbortRef.current?.abort();
-      void invoke('youtube_cancel', { requestId: requestIdRef.current }).catch(
-        () => undefined,
-      );
+      void playerApi
+        .cancelYouTubeRequest({ requestId: requestIdRef.current })
+        .catch(() => undefined);
     },
     [],
   );
@@ -267,7 +266,7 @@ export default function YouTubePlayerPanel({
     setMpvBusy(true);
     setNotice('');
     try {
-      await invoke('youtube_open_with_mpv', {
+      await playerApi.openYouTubeWithMpv({
         videoId: selection.id,
         startSeconds: resumeRef.current,
         requestId: requestIdRef.current,
@@ -295,15 +294,12 @@ export default function YouTubePlayerPanel({
     setStatus('resolving');
     try {
       const resolution = browser
-        ? await invoke<YouTubePlaybackResolution>(
-            'youtube_resolve_playback_with_browser',
-            {
-              videoId: selection.id,
-              browser,
-              requestId: requestIdRef.current,
-            },
-          )
-        : await invoke<YouTubePlaybackResolution>('youtube_resolve_playback', {
+        ? await playerApi.resolveYouTubePlaybackWithBrowser({
+            videoId: selection.id,
+            browser,
+            requestId: requestIdRef.current,
+          })
+        : await playerApi.resolveYouTubePlayback({
             videoId: selection.id,
             requestId: requestIdRef.current,
           });
@@ -314,7 +310,7 @@ export default function YouTubePlayerPanel({
         setMessage('本地解析 · 已取得兼容的 MP4 流，使用 HTML5 播放。');
       } else {
         setStatus('ready');
-        await invoke('youtube_open_with_mpv', {
+        await playerApi.openYouTubeWithMpv({
           videoId: selection.id,
           startSeconds: resumeRef.current,
           requestId: requestIdRef.current,
@@ -533,9 +529,9 @@ export default function YouTubePlayerPanel({
       if (event.key !== 'Escape') return;
       event.preventDefault();
       nativeAbortRef.current?.abort();
-      void invoke('youtube_cancel', { requestId: requestIdRef.current }).catch(
-        () => undefined,
-      );
+      void playerApi
+        .cancelYouTubeRequest({ requestId: requestIdRef.current })
+        .catch(() => undefined);
       onCloseRef.current?.();
     };
     document.addEventListener('keydown', closeOnEscape);

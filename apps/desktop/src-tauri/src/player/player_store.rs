@@ -7,7 +7,7 @@
 //! it can be tested against an in-memory database. The Tauri commands and the network access live
 //! in `player.rs`.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -383,15 +383,38 @@ pub fn prepare(connection: &Connection) -> Result<(), String> {
              PRAGMA foreign_keys = ON;",
         )
         .map_err(db_error)?;
-    connection.execute_batch(SCHEMA).map_err(db_error)?;
-    connection
-        .execute_batch(&format!(
+    let version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(db_error)?;
+    if version > 1 {
+        return Err(format!("Unsupported player database version: {version}"));
+    }
+    if version == 1 {
+        return Ok(());
+    }
+    let transaction =
+        Transaction::new_unchecked(connection, TransactionBehavior::Immediate).map_err(db_error)?;
+    let current_version: i64 = transaction
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(db_error)?;
+    if current_version > 1 {
+        return Err(format!("Unsupported player database version: {current_version}"));
+    }
+    if current_version == 0 {
+        transaction.execute_batch(SCHEMA).map_err(db_error)?;
+        transaction
+            .execute_batch(&format!(
             "INSERT OR IGNORE INTO playlists(playlist_id, name, kind, created_at, updated_at, sort_order)
                  VALUES ('{FAVORITES_ID}', '收藏', 'local', 0, 0, 0);
              INSERT OR IGNORE INTO playlists(playlist_id, name, kind, created_at, updated_at, sort_order)
                  VALUES ('{WATCH_LATER_ID}', '稍后看', 'local', 0, 0, 1);"
         ))
-        .map_err(db_error)
+            .map_err(db_error)?;
+        transaction
+            .pragma_update(None, "user_version", 1)
+            .map_err(db_error)?;
+    }
+    transaction.commit().map_err(db_error)
 }
 
 // ---- validation helpers -------------------------------------------------------------------------
@@ -3239,6 +3262,144 @@ mod tests {
         let connection = Connection::open_in_memory().unwrap();
         prepare(&connection).unwrap();
         connection
+    }
+
+    #[test]
+    fn upgrades_existing_player_data_once() {
+        let connection = database();
+        connection
+            .execute(
+                "INSERT INTO playlists(playlist_id, name, kind, created_at, updated_at, sort_order)
+                 VALUES ('custom', 'Kept', 'local', 1, 1, 2)",
+                [],
+            )
+            .unwrap();
+        connection.pragma_update(None, "user_version", 0).unwrap();
+
+        prepare(&connection).unwrap();
+        prepare(&connection).unwrap();
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 1);
+        assert_eq!(
+            playlist(&connection, "custom").unwrap().unwrap().name,
+            "Kept"
+        );
+    }
+
+    #[test]
+    fn refuses_newer_player_schema_without_changing_data() {
+        let connection = database();
+        connection.pragma_update(None, "user_version", 2).unwrap();
+        assert!(prepare(&connection).unwrap_err().contains("version: 2"));
+        assert!(playlist(&connection, FAVORITES_ID).unwrap().is_some());
+    }
+
+    #[test]
+    fn copied_legacy_player_file_keeps_rows_and_leaves_the_source() {
+        let directory = std::env::temp_dir().join(format!(
+            "seamind-player-migration-{}",
+            uuid_suffix()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let source = directory.join("player.sqlite");
+        let copy = directory.join("player-copy.sqlite");
+        {
+            let connection = Connection::open(&source).unwrap();
+            connection.execute_batch(SCHEMA).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO playlists(playlist_id, name, kind, created_at, updated_at, sort_order)
+                     VALUES ('custom', 'Kept', 'local', 1, 1, 2)",
+                    [],
+                )
+                .unwrap();
+        }
+        std::fs::copy(&source, &copy).unwrap();
+        {
+            let connection = Connection::open(&copy).unwrap();
+            prepare(&connection).unwrap();
+            prepare(&connection).unwrap();
+            let version: i64 = connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            assert_eq!(version, 1);
+            assert_eq!(
+                playlist(&connection, "custom").unwrap().unwrap().name,
+                "Kept"
+            );
+            assert!(playlist(&connection, FAVORITES_ID).unwrap().is_some());
+        }
+        {
+            let connection = Connection::open(&source).unwrap();
+            let version: i64 = connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            assert_eq!(version, 0);
+            assert_eq!(
+                playlist(&connection, "custom").unwrap().unwrap().name,
+                "Kept"
+            );
+            assert!(playlist(&connection, FAVORITES_ID).unwrap().is_none());
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn copied_broken_player_file_rolls_back_without_changing_the_source() {
+        let directory = std::env::temp_dir().join(format!(
+            "seamind-player-rollback-{}",
+            uuid_suffix()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let source = directory.join("player.sqlite");
+        let copy = directory.join("player-copy.sqlite");
+        {
+            let connection = Connection::open(&source).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE playlists (playlist_id TEXT PRIMARY KEY);
+                     INSERT INTO playlists VALUES ('custom');",
+                )
+                .unwrap();
+        }
+        std::fs::copy(&source, &copy).unwrap();
+        {
+            let connection = Connection::open(&copy).unwrap();
+            assert!(prepare(&connection).is_err());
+            let version: i64 = connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            let count: i64 = connection
+                .query_row("SELECT count(*) FROM playlists", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(version, 0);
+            assert_eq!(count, 1);
+        }
+        {
+            let connection = Connection::open(&source).unwrap();
+            let version: i64 = connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            let count: i64 = connection
+                .query_row("SELECT count(*) FROM playlists", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(version, 0);
+            assert_eq!(count, 1);
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    fn uuid_suffix() -> String {
+        format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )
     }
 
     fn channel_input(id: &str, name: &str) -> ChannelInput {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { invokeLibraryCommand } from '../library/library-api';
 import { ActiveDocumentController, isDirty } from './active-document';
 import type { WorkbenchEnvironment } from './active-document';
 
@@ -12,7 +12,7 @@ export function useActiveDocument(environment: WorkbenchEnvironment) {
   latest.current = environment;
   const [controller] = useState(
     () =>
-      new ActiveDocumentController(invoke, {
+      new ActiveDocumentController(invokeLibraryCommand, {
         getSnapshot: () => latest.current.getSnapshot(),
         installSnapshot: (snapshot) => latest.current.installSnapshot(snapshot),
         refreshList: () => latest.current.refreshList(),

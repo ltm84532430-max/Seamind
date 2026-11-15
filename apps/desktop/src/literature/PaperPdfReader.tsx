@@ -24,10 +24,29 @@ import {
 } from './PaperSelectionPopover';
 import { PaperTranslationSidebar } from './PaperTranslationPanel';
 import {
+  ANNOTATION_COLORS,
+  bookmarkKey,
+  clamp,
   cleanPdfSelectionText,
   extractPageParagraphBlocks,
+  fitScaleFor,
   isShortTermSelection,
+  MAX_SCALE,
+  MIN_SCALE,
+  pagesForMode,
+  preferenceKey,
+  readBookmarks,
+  readPdfOutline,
+  readPreferences,
+  resolvedMode,
+  spreadStart,
+  type PaperBookmark,
   type PaperParagraphBlock,
+  type PaperSearchResult,
+  type PdfOutlineEntry,
+  type ReaderMode,
+  type SidebarTab,
+  type ZoomMode,
 } from './paper-pdf-layout';
 import {
   deletePaperPageTranslation,
@@ -59,205 +78,6 @@ interface SelectionDraft {
   rects: PaperAnnotationRect[];
   contextBefore: string;
   contextAfter: string;
-}
-
-type ReaderMode = 'auto' | 'single' | 'spread' | 'scroll';
-type ResolvedReaderMode = Exclude<ReaderMode, 'auto'>;
-type ZoomMode = 'fitPage' | 'fitWidth' | 'manual';
-type SidebarTab =
-  | 'outline'
-  | 'search'
-  | 'annotations'
-  | 'bookmarks'
-  | 'translation';
-
-interface ReaderPreferences {
-  mode: ReaderMode;
-  zoomMode: ZoomMode;
-  sidebarOpen: boolean;
-  sidebarTab: SidebarTab;
-}
-
-interface PdfOutlineNode {
-  title: string;
-  dest: string | unknown[] | null;
-  items: PdfOutlineNode[];
-}
-
-interface PdfOutlineEntry {
-  title: string;
-  pageNumber: number;
-  depth: number;
-}
-
-interface PaperBookmark {
-  id: string;
-  pageNumber: number;
-  label: string;
-  createdAt: number;
-}
-
-interface PaperSearchResult {
-  pageNumber: number;
-  excerpt: string;
-  matchCount: number;
-}
-
-const ANNOTATION_COLORS = ['#f4d35e', '#8bd3dd', '#b8a1e3', '#f4978e'];
-const MIN_SCALE = 0.35;
-const MAX_SCALE = 3;
-const DEFAULT_PREFERENCES: ReaderPreferences = {
-  mode: 'auto',
-  zoomMode: 'fitPage',
-  sidebarOpen: true,
-  sidebarTab: 'annotations',
-};
-
-const clamp = (value: number, min: number, max: number) =>
-  Math.min(max, Math.max(min, value));
-
-const preferenceKey = (paperId: string, sha256: string) =>
-  `seamind:paper-reader:v1:${encodeURIComponent(paperId)}:${sha256}`;
-
-const bookmarkKey = (paperId: string, sha256: string) =>
-  `seamind:paper-bookmarks:v1:${encodeURIComponent(paperId)}:${sha256}`;
-
-function readPreferences(paperId: string, sha256: string): ReaderPreferences {
-  try {
-    const stored = JSON.parse(
-      localStorage.getItem(preferenceKey(paperId, sha256)) || 'null',
-    );
-    if (!stored || typeof stored !== 'object') return DEFAULT_PREFERENCES;
-    return {
-      mode: ['auto', 'single', 'spread', 'scroll'].includes(stored.mode)
-        ? stored.mode
-        : DEFAULT_PREFERENCES.mode,
-      zoomMode: ['fitPage', 'fitWidth', 'manual'].includes(stored.zoomMode)
-        ? stored.zoomMode
-        : DEFAULT_PREFERENCES.zoomMode,
-      sidebarOpen:
-        typeof stored.sidebarOpen === 'boolean'
-          ? stored.sidebarOpen
-          : DEFAULT_PREFERENCES.sidebarOpen,
-      sidebarTab: [
-        'outline',
-        'search',
-        'annotations',
-        'bookmarks',
-        'translation',
-      ].includes(stored.sidebarTab)
-        ? stored.sidebarTab
-        : DEFAULT_PREFERENCES.sidebarTab,
-    };
-  } catch {
-    return DEFAULT_PREFERENCES;
-  }
-}
-
-function readBookmarks(paperId: string, sha256: string): PaperBookmark[] {
-  try {
-    const value = JSON.parse(
-      localStorage.getItem(bookmarkKey(paperId, sha256)) || '[]',
-    );
-    if (!Array.isArray(value)) return [];
-    return value.filter(
-      (entry): entry is PaperBookmark =>
-        entry &&
-        typeof entry.id === 'string' &&
-        Number.isInteger(entry.pageNumber) &&
-        typeof entry.label === 'string',
-    );
-  } catch {
-    return [];
-  }
-}
-
-function resolvedMode(
-  mode: ReaderMode,
-  width: number,
-  height: number,
-): ResolvedReaderMode {
-  if (mode === 'scroll') return 'scroll';
-  if (mode === 'single') return 'single';
-  if (mode === 'spread') return width < 720 ? 'single' : 'spread';
-  return width >= 1080 && height >= 470 ? 'spread' : 'single';
-}
-
-function pagesForMode(
-  pageNumber: number,
-  pageCount: number,
-  mode: ResolvedReaderMode,
-): number[] {
-  if (mode !== 'spread') return [pageNumber];
-  const first = pageNumber % 2 === 0 ? pageNumber - 1 : pageNumber;
-  return first + 1 <= pageCount ? [first, first + 1] : [first];
-}
-
-function spreadStart(pageNumber: number): number {
-  return pageNumber % 2 === 0 ? pageNumber - 1 : pageNumber;
-}
-
-async function fitScaleFor(
-  pdf: PDFDocumentProxy,
-  pageNumber: number,
-  pageCount: number,
-  mode: ResolvedReaderMode,
-  width: number,
-  height: number,
-  fit: Exclude<ZoomMode, 'manual'>,
-) {
-  const pages = pagesForMode(pageNumber, pageCount, mode);
-  const viewports = await Promise.all(
-    pages.map(async (number) =>
-      (await pdf.getPage(number)).getViewport({ scale: 1 }),
-    ),
-  );
-  const pageWidth =
-    viewports.reduce((total, viewport) => total + viewport.width, 0) +
-    (pages.length > 1 ? 18 : 0);
-  const pageHeight = Math.max(...viewports.map((viewport) => viewport.height));
-  const availableWidth = Math.max(180, width - 56);
-  const availableHeight = Math.max(160, height - 52);
-  const scale =
-    fit === 'fitWidth'
-      ? availableWidth / pageWidth
-      : Math.min(availableWidth / pageWidth, availableHeight / pageHeight);
-  return clamp(scale, MIN_SCALE, MAX_SCALE);
-}
-
-async function readPdfOutline(
-  pdf: PDFDocumentProxy,
-): Promise<PdfOutlineEntry[]> {
-  const nodes = (await pdf.getOutline()) as PdfOutlineNode[];
-  const entries: PdfOutlineEntry[] = [];
-
-  const visit = async (items: PdfOutlineNode[], depth: number) => {
-    for (const item of items) {
-      let destination: unknown[] | null = null;
-      if (typeof item.dest === 'string') {
-        destination = await pdf.getDestination(item.dest);
-      } else if (Array.isArray(item.dest)) {
-        destination = item.dest;
-      }
-      const reference = destination?.[0];
-      if (reference) {
-        try {
-          const pageIndex = await pdf.getPageIndex(reference as never);
-          entries.push({
-            title: item.title || `第 ${pageIndex + 1} 页`,
-            pageNumber: pageIndex + 1,
-            depth,
-          });
-        } catch {
-          // Ignore destinations that refer to missing or malformed pages.
-        }
-      }
-      if (item.items?.length) await visit(item.items, depth + 1);
-    }
-  };
-
-  if (nodes?.length) await visit(nodes, 0);
-  return entries;
 }
 
 export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({

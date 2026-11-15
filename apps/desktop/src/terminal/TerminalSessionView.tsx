@@ -7,7 +7,7 @@ import {
   forwardRef,
 } from 'react';
 import type { CSSProperties } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { terminalApi } from './terminal-api';
 import { listen } from '@tauri-apps/api/event';
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
@@ -160,7 +160,7 @@ export const TerminalSessionView = forwardRef<
   const queueTerminalInput = useCallback(
     (sessionId: string, data: number[]) => {
       const nextWrite = writeQueueRef.current.then(async () => {
-        await invoke('terminal_write', { sessionId, data });
+        await terminalApi.write({ sessionId, data });
       });
       writeQueueRef.current = nextWrite.catch(() => undefined);
       return nextWrite;
@@ -305,11 +305,13 @@ export const TerminalSessionView = forwardRef<
         try {
           fitAddon.fit();
           if (sessionId) {
-            void invoke('terminal_resize', {
-              sessionId,
-              cols: terminal.cols,
-              rows: terminal.rows,
-            }).catch(() => undefined);
+            void terminalApi
+              .resize({
+                sessionId,
+                cols: terminal.cols,
+                rows: terminal.rows,
+              })
+              .catch(() => undefined);
           }
         } catch {
           // ignore layout transition errors
@@ -327,7 +329,7 @@ export const TerminalSessionView = forwardRef<
       resizeObserver = new ResizeObserver(scheduleResize);
       resizeObserver.observe(host);
 
-      sessionId = await invoke<string>('terminal_start', {
+      sessionId = await terminalApi.start({
         cwd: tab.cwd,
         cols: terminal.cols,
         rows: terminal.rows,
@@ -336,7 +338,7 @@ export const TerminalSessionView = forwardRef<
 
       sessionIdRef.current = sessionId;
       if (!alive) {
-        void invoke('terminal_close', { sessionId }).catch(() => undefined);
+        void terminalApi.close({ sessionId }).catch(() => undefined);
         return;
       }
 
@@ -382,7 +384,7 @@ export const TerminalSessionView = forwardRef<
       terminalRef.current = null;
       fitAddonRef.current = null;
       if (sessionId) {
-        void invoke('terminal_close', { sessionId }).catch(() => undefined);
+        void terminalApi.close({ sessionId }).catch(() => undefined);
       }
     };
   }, [tab.id, tab.shell, tab.cwd]);

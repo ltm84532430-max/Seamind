@@ -1,5 +1,6 @@
 import type { EditorView as CodeMirrorEditorView } from 'codemirror';
-import { invoke } from '@tauri-apps/api/core';
+import { plantUmlApi } from '../mindmap/plantuml-api';
+import { systemApi } from '../system/system-api';
 import {
   createMathVisualizationOption,
   parseMathVisualizationSpec,
@@ -401,15 +402,12 @@ async function renderPlantUml(
   if (source.length > maxVisualizationSource)
     throw new Error('PlantUML 源码超过 50 KB。');
   if (signal.aborted || !output.isConnected) return;
-  const result = await invoke<{ svg: string; diagnostics: string[] }>(
-    'render_plantuml',
-    {
-      source,
-      dark: theme !== 'light',
-      authorizedIncludeDirectory: null,
-      cacheKey: null,
-    },
-  );
+  const result = await plantUmlApi.render({
+    source,
+    dark: theme !== 'light',
+    authorizedIncludeDirectory: null,
+    cacheKey: null,
+  });
   if (signal.aborted || !output.isConnected) return;
   const diagram = sanitizeMermaidSvg(result.svg);
   if (!diagram) throw new Error('PlantUML 输出未通过 SVG 安全检查。');
@@ -1136,15 +1134,6 @@ function createTerminalCommandPanel(
   return panel;
 }
 
-interface CRunResult {
-  success: boolean;
-  stdout: string;
-  stderr: string;
-  exitCode?: number | null;
-  durationMs: number;
-  stage: string;
-}
-
 function createCPanel(
   pre: HTMLElement,
   source: string,
@@ -1373,7 +1362,7 @@ function createCPanel(
       const stdinInput = stdinTextarea.value.trim()
         ? stdinTextarea.value
         : null;
-      const result = await invoke<CRunResult>('c_run_code', {
+      const result = await systemApi.runCCode({
         source: currentSource,
         stdinInput,
         isCpp,

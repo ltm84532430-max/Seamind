@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { playerApi } from './player-api';
 
 export interface YouTubeProxyEndpoint {
   origin: string;
@@ -39,12 +39,10 @@ export function isYouTubeDebugEnabled(): boolean {
 }
 
 export function getYouTubeProxyEndpoint(): Promise<YouTubeProxyEndpoint> {
-  endpointPromise ??= invoke<YouTubeProxyEndpoint>('youtube_proxy_info').catch(
-    (error: unknown) => {
-      endpointPromise = null;
-      throw error;
-    },
-  );
+  endpointPromise ??= playerApi.proxyInfo().catch((error: unknown) => {
+    endpointPromise = null;
+    throw error;
+  });
   return endpointPromise;
 }
 

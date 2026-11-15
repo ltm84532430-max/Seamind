@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { epubApi } from '../ebook/epub-api';
 
 export type EpubExamStatus = 'inProgress' | 'submitted';
 export type EpubExamDifficulty = 'easy' | 'medium' | 'hard';
@@ -177,7 +177,5 @@ export function formatEpubExamDate(timestamp: number): string {
 export async function listEpubExams(
   bookKey?: string,
 ): Promise<EpubExamSummary[]> {
-  return invoke<EpubExamSummary[]>('list_epub_exams', {
-    bookKey: bookKey ?? null,
-  });
+  return epubApi.listExams({ bookKey: bookKey ?? null });
 }

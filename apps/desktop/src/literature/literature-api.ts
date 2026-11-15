@@ -16,6 +16,14 @@ import type {
   PaperPdfAttempt,
   ParsedBibEntry,
 } from './types';
+import type {
+  DualPdfResult,
+  PaperPageTranslationRecord,
+  PaperPageTranslationSummary,
+  PaperSelectionTranslation,
+  Pdf2ZhStatus,
+  TranslatedPaperParagraph,
+} from './paper-translation-store';
 
 export const literatureApi = {
   overview: () => invoke<LiteratureOverview>('literature_overview'),
@@ -120,4 +128,47 @@ export const literatureApi = {
 
   generateMindmap: (id: string) =>
     invoke<string>('literature_generate_mindmap', { id }),
+
+  getPageTranslation: (args: { pdfSha256: string; pageNumber: number }) =>
+    invoke<PaperPageTranslationRecord | null>(
+      'get_paper_page_translation',
+      args,
+    ),
+  savePageTranslation: (args: {
+    pdfSha256: string;
+    pageNumber: number;
+    pageContentHash: string;
+    model: string;
+    paragraphs: TranslatedPaperParagraph[];
+  }) => invoke<PaperPageTranslationRecord>('save_paper_page_translation', args),
+  deletePageTranslation: (args: { pdfSha256: string; pageNumber: number }) =>
+    invoke<boolean>('delete_paper_page_translation', args),
+  clearTranslations: (args: { pdfSha256: string }) =>
+    invoke<boolean>('clear_paper_translations', args),
+  listTranslatedPages: (args: { pdfSha256: string }) =>
+    invoke<PaperPageTranslationSummary[]>('list_paper_translated_pages', args),
+  translateSelection: (args: {
+    baseUrl: string;
+    model: string;
+    paperTitle: string;
+    text: string;
+    mode: string;
+    contextBefore: string | null;
+    contextAfter: string | null;
+  }) => invoke<PaperSelectionTranslation>('translate_paper_selection', args),
+  translateParagraphs: (args: {
+    baseUrl: string;
+    model: string;
+    paperTitle: string;
+    pageNumber: number;
+    paragraphs: Array<{ id: number; text: string }>;
+  }) => invoke<TranslatedPaperParagraph[]>('translate_paper_paragraphs', args),
+  pdf2zhStatus: () => invoke<Pdf2ZhStatus>('check_pdf2zh_status'),
+  generateBilingualPdf: (args: {
+    paperId: string;
+    service: string | null;
+    baseUrl: string | null;
+    model: string | null;
+    force: boolean;
+  }) => invoke<DualPdfResult>('generate_bilingual_paper_pdf', args),
 };
