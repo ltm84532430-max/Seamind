@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { epubApi } from '../ebook/epub-api';
 import type {
   EpubExam,
   EpubExamAnswer,
@@ -125,7 +125,8 @@ export function useExamSession({
     let active = true;
     setLoading(true);
     setError('');
-    void invoke<EpubExam>('get_epub_exam', { bookKey, examId: activeExamId })
+    void epubApi
+      .getExam({ bookKey, examId: activeExamId })
       .then((loaded) => {
         if (!active) return;
         const normalized = normalizeExam(loaded);
@@ -163,7 +164,7 @@ export function useExamSession({
       const operation = saveQueueRef.current
         .catch(() => undefined)
         .then(() =>
-          invoke<EpubExam>('save_epub_exam_progress', {
+          epubApi.saveExamProgress({
             bookKey,
             examId: activeExamId,
             answers: nextAnswers,
@@ -239,7 +240,7 @@ export function useExamSession({
             : (question.codeSpec?.starterCode ?? '');
       setCodeBusyId(questionId);
       try {
-        const result = await invoke<ExamCodeResult>('run_epub_exam_code', {
+        const result = await epubApi.runExamCode({
           bookKey,
           examId: activeExamId,
           questionId,
@@ -265,15 +266,12 @@ export function useExamSession({
     }
     setGradingBusy(true);
     try {
-      const result = await invoke<Record<string, EpubExamGrade>>(
-        'grade_epub_exam_subjective',
-        {
-          bookKey,
-          examId: activeExamId,
-          baseUrl: provider.baseUrl,
-          model: provider.model,
-        },
-      );
+      const result = await epubApi.gradeSubjective({
+        bookKey,
+        examId: activeExamId,
+        baseUrl: provider.baseUrl,
+        model: provider.model,
+      });
       setGrades((current) => ({ ...current, ...result }));
       setError('');
     } catch (cause) {
@@ -289,7 +287,7 @@ export function useExamSession({
     async (questionId: string, earned: number) => {
       if (!Number.isFinite(earned)) return;
       try {
-        const grade = await invoke<EpubExamGrade>('override_epub_exam_grade', {
+        const grade = await epubApi.overrideGrade({
           bookKey,
           examId: activeExamId,
           questionId,
@@ -364,7 +362,7 @@ export function useExamSession({
         await enqueueSave(answers, selfReviews, true);
         dirtyRef.current = false;
       }
-      const restarted = await invoke<EpubExam>('restart_epub_exam', {
+      const restarted = await epubApi.restartExam({
         bookKey,
         examId: activeExamId,
       });
@@ -410,7 +408,7 @@ export function useExamSession({
     setError('');
     try {
       await saveQueueRef.current.catch(() => undefined);
-      await invoke('delete_epub_exam', { bookKey, examId: activeExamId });
+      await epubApi.deleteExam({ bookKey, examId: activeExamId });
       const remaining = bookExams.filter((item) => item.id !== activeExamId);
       if (remaining.length > 0) {
         setBookExams(remaining);

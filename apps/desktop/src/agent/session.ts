@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { agentApi } from './agent-api';
 import type { AgentCapabilities } from './tool-api';
 import type { AgentProfile } from './profiles';
 import { agentToolDefinitionsFor, executeAgentTool } from './tools/registry';
@@ -358,7 +358,7 @@ export async function runAgentSession(args: {
     args.onEvent?.({ ...requestEvent, status: 'running' });
     let assistant: AgentCompletionResponse;
     try {
-      assistant = await invoke<AgentCompletionResponse>('agent_completion', {
+      assistant = await agentApi.complete({
         baseUrl: args.provider.baseUrl,
         model: args.provider.model,
         messages: workingMessages,

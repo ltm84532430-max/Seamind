@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { epubApi } from './epub-api';
 
 export interface EpubParagraphTranslation {
   id: number;
@@ -36,13 +36,10 @@ export async function getChapterTranslation(
   sectionIndex: number,
 ): Promise<EpubChapterTranslationRecord | null> {
   try {
-    const remote = await invoke<EpubChapterTranslationRecord | null>(
-      'get_epub_chapter_translation',
-      {
-        bookKey,
-        sectionIndex,
-      },
-    );
+    const remote = await epubApi.getChapterTranslation({
+      bookKey,
+      sectionIndex,
+    });
     if (remote) return remote;
   } catch {
     // Fall back to local storage if running in browser or backend unavailable
@@ -68,17 +65,14 @@ export async function saveChapterTranslation(input: {
   paragraphs: EpubParagraphTranslation[];
 }): Promise<EpubChapterTranslationRecord> {
   try {
-    const saved = await invoke<EpubChapterTranslationRecord>(
-      'save_epub_chapter_translation',
-      {
-        bookKey: input.bookKey,
-        sectionIndex: input.sectionIndex,
-        sectionHref: input.sectionHref ?? null,
-        chapterTitle: input.chapterTitle ?? null,
-        model: input.model,
-        paragraphs: input.paragraphs,
-      },
-    );
+    const saved = await epubApi.saveChapterTranslation({
+      bookKey: input.bookKey,
+      sectionIndex: input.sectionIndex,
+      sectionHref: input.sectionHref ?? null,
+      chapterTitle: input.chapterTitle ?? null,
+      model: input.model,
+      paragraphs: input.paragraphs,
+    });
     // Also save a fallback copy in local storage
     try {
       localStorage.setItem(
@@ -123,10 +117,7 @@ export async function deleteChapterTranslation(
     // Ignore
   }
   try {
-    return await invoke<boolean>('delete_epub_chapter_translation', {
-      bookKey,
-      sectionIndex,
-    });
+    return await epubApi.deleteChapterTranslation({ bookKey, sectionIndex });
   } catch {
     return true;
   }
@@ -136,12 +127,7 @@ export async function listBookTranslations(
   bookKey: string,
 ): Promise<EpubChapterTranslationSummary[]> {
   try {
-    return await invoke<EpubChapterTranslationSummary[]>(
-      'list_epub_book_translations',
-      {
-        bookKey,
-      },
-    );
+    return await epubApi.listBookTranslations({ bookKey });
   } catch {
     // Search localStorage
     const summaries: EpubChapterTranslationSummary[] = [];

@@ -13,7 +13,7 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
 } from 'react';
-import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -72,6 +72,9 @@ import type { YouTubePreviewSelection } from './player/YouTubePlayerDialog';
 import { installYouTubeDebugHook } from './player/youtube-debug';
 import 'katex/dist/katex.min.css';
 import LibraryPanel from './library/LibraryPanel';
+import { libraryApi } from './library/library-api';
+import { epubApi } from './ebook/epub-api';
+import { terminalApi } from './terminal/terminal-api';
 import ExamCenterWorkspace from './exams/ExamCenterWorkspace';
 import MindmapMiniTree from './mindmap/MindmapMiniTree';
 import type { MindmapMiniTreeNode } from './mindmap/MindmapMiniTree';
@@ -94,6 +97,7 @@ import {
   type EpubAnnotation,
 } from './ebook/ebook-storage';
 import AgentPanel from './agent/AgentPanel';
+import { agentApi } from './agent/agent-api';
 import { createAgentCapabilities } from './agent/adapters';
 import {
   agentToolCatalogForWorkspace,
@@ -158,7 +162,6 @@ import type {
   EpubBookDocument,
   LibrarySnapshot,
   MapDocument,
-  OpenedDocument,
   PlantUmlDocument,
   SaveDocumentInput,
   TextDocument,
@@ -327,32 +330,6 @@ interface CliAgentToolRequest {
   requestId: string;
   name: string;
   arguments: Record<string, unknown>;
-}
-
-interface EpubOutline {
-  title: string;
-  markdown: string;
-  chapterCount: number;
-  sectionCount: number;
-  enrichedChapterCount: number;
-  skippedChapterCount: number;
-  warnings: string[];
-  sourceFile: string;
-}
-
-interface EpubSummaryResult {
-  markdown: string;
-  summarizedChapterCount: number;
-  unavailableChapterCount: number;
-  omittedChapterCount: number;
-  truncatedChapterCount: number;
-  notSummarizedChapterCount: number;
-}
-
-interface ImportedHtmlAsset {
-  assetId: string;
-  entryPath: string;
-  title: string;
 }
 
 interface TerminalCommandRequest {
@@ -734,7 +711,7 @@ export default function App() {
       const entries = await Promise.all(
         bookDocs.map(async (doc) => {
           try {
-            const opened = await invoke<OpenedDocument>('open_document', {
+            const opened = await libraryApi.openDocument({
               relativePath: doc.relativePath,
             });
             return [doc.relativePath, opened.markdown] as const;
@@ -934,9 +911,10 @@ export default function App() {
       return;
     }
 
-    void invoke<string>('open_epub_book', {
-      relativePath: book.relativePath,
-    })
+    void libraryApi
+      .openEpubBook({
+        relativePath: book.relativePath,
+      })
       .then((path) => {
         setEpubReader({
           source: convertFileSrc(path),
@@ -1659,12 +1637,11 @@ export default function App() {
     mindmap: {
       getCurrentMindmap: getAgentMindmap,
       searchLibrary: (query, category) =>
-        invoke<MapDocument[]>('search_library', {
+        libraryApi.search({
           query,
           category: category || null,
         }),
-      readDocument: (relativePath) =>
-        invoke<OpenedDocument>('open_document', { relativePath }),
+      readDocument: (relativePath) => libraryApi.openDocument({ relativePath }),
       proposeNodeEdit: proposeAgentNodeEdit,
       proposeNodeBranch: proposeAgentNodeBranch,
     },
@@ -1687,7 +1664,7 @@ export default function App() {
     const specs = mcpToolSpecs(tools);
     mcpToolChain.current = mcpToolChain.current
       .catch(() => undefined)
-      .then(() => invoke('agent_bridge_set_tools', { tools: specs }))
+      .then(() => agentApi.setBridgeTools({ tools: specs }))
       .then(() => {
         if (!cancelled) setAgentBridgeError('');
       })
@@ -1716,11 +1693,13 @@ export default function App() {
         const { requestId, name, arguments: input } = event.payload;
         const capabilities = agentCapabilitiesRef.current;
         if (!capabilities) {
-          await invoke('agent_bridge_resolve', {
-            requestId,
-            result: {},
-            error: 'Seamind 能力尚未初始化。',
-          }).catch(() => undefined);
+          await agentApi
+            .resolveBridge({
+              requestId,
+              result: {},
+              error: 'Seamind 能力尚未初始化。',
+            })
+            .catch(() => undefined);
           return;
         }
         try {
@@ -1730,11 +1709,13 @@ export default function App() {
             capabilities,
           );
           const blocked = (message: string) =>
-            invoke('agent_bridge_resolve', {
-              requestId,
-              result: {},
-              error: message,
-            }).catch(() => undefined);
+            agentApi
+              .resolveBridge({
+                requestId,
+                result: {},
+                error: message,
+              })
+              .catch(() => undefined);
           if (pendingCliProposalRef.current) {
             const waitingOnMindmap = Boolean(execution.proposal);
             if (
@@ -1808,7 +1789,7 @@ export default function App() {
             permission: execution.permission,
             ...execution.result,
           };
-          await invoke('agent_bridge_resolve', {
+          await agentApi.resolveBridge({
             requestId,
             result: {
               content: [
@@ -1819,11 +1800,14 @@ export default function App() {
             error: null,
           });
         } catch (caught) {
-          await invoke('agent_bridge_resolve', {
-            requestId,
-            result: {},
-            error: caught instanceof Error ? caught.message : '工具执行失败。',
-          }).catch(() => undefined);
+          await agentApi
+            .resolveBridge({
+              requestId,
+              result: {},
+              error:
+                caught instanceof Error ? caught.message : '工具执行失败。',
+            })
+            .catch(() => undefined);
         }
       },
     )
@@ -1857,7 +1841,7 @@ export default function App() {
         throw new Error('请先保存当前思维导图，再插入生成的 HTML 资源。');
       }
       const assetIds = proposal.htmlAssets.map((asset) => asset.assetId);
-      await invoke('save_generated_html_assets', {
+      await libraryApi.saveGeneratedHtmlAssets({
         documentRelativePath: current.relativePath,
         assets: proposal.htmlAssets,
       });
@@ -1867,10 +1851,12 @@ export default function App() {
         latest.relativePath !== proposal.baseRelativePath ||
         latest.markdown !== proposal.baseMarkdown
       ) {
-        await invoke('discard_generated_html_assets', {
-          documentRelativePath: current.relativePath,
-          assetIds,
-        }).catch(() => undefined);
+        await libraryApi
+          .discardGeneratedHtmlAssets({
+            documentRelativePath: current.relativePath,
+            assetIds,
+          })
+          .catch(() => undefined);
         return null;
       }
     }
@@ -1896,11 +1882,13 @@ export default function App() {
       pendingCliProposalRef.current = null;
       setPendingCliProposal(null);
       setPendingCliError('');
-      await invoke('agent_bridge_resolve', {
-        requestId: pending.requestId,
-        result: {},
-        error,
-      }).catch(() => undefined);
+      await agentApi
+        .resolveBridge({
+          requestId: pending.requestId,
+          result: {},
+          error,
+        })
+        .catch(() => undefined);
       return;
     }
 
@@ -1911,36 +1899,43 @@ export default function App() {
       try {
         appliedRevision = await applyAgentProposal(pending.proposal);
       } catch (error) {
-        await invoke('agent_bridge_resolve', {
-          requestId: pending.requestId,
-          result: {},
-          error: errorMessage(error, '无法保存下探分支资源。'),
-        }).catch(() => undefined);
+        await agentApi
+          .resolveBridge({
+            requestId: pending.requestId,
+            result: {},
+            error: errorMessage(error, '无法保存下探分支资源。'),
+          })
+          .catch(() => undefined);
         return;
       }
       if (appliedRevision === null) {
-        await invoke('agent_bridge_resolve', {
-          requestId: pending.requestId,
-          result: {},
-          error: '当前导图在提案生成后发生了变化。请重新读取导图并提出新提案。',
-        }).catch(() => undefined);
+        await agentApi
+          .resolveBridge({
+            requestId: pending.requestId,
+            result: {},
+            error:
+              '当前导图在提案生成后发生了变化。请重新读取导图并提出新提案。',
+          })
+          .catch(() => undefined);
         return;
       }
-      await invoke('agent_bridge_resolve', {
-        requestId: pending.requestId,
-        result: {
-          content: [
-            { type: 'text', text: '用户已在 Seamind 中确认并应用修改。' },
-          ],
-          structuredContent: {
-            status: 'applied',
-            title: pending.proposal.title,
-            relativePath: pending.proposal.baseRelativePath,
-            revision: appliedRevision,
+      await agentApi
+        .resolveBridge({
+          requestId: pending.requestId,
+          result: {
+            content: [
+              { type: 'text', text: '用户已在 Seamind 中确认并应用修改。' },
+            ],
+            structuredContent: {
+              status: 'applied',
+              title: pending.proposal.title,
+              relativePath: pending.proposal.baseRelativePath,
+              revision: appliedRevision,
+            },
           },
-        },
-        error: null,
-      }).catch(() => undefined);
+          error: null,
+        })
+        .catch(() => undefined);
       return;
     }
 
@@ -1963,27 +1958,29 @@ export default function App() {
           id: playerOpenLearningPathRequestIdRef.current,
           pathId: saved.summary.pathId,
         });
-        await invoke('agent_bridge_resolve', {
-          requestId: pending.requestId,
-          result: {
-            content: [
-              {
-                type: 'text',
-                text: `用户已确认并保存学习路径「${saved.summary.title}」。`,
+        await agentApi
+          .resolveBridge({
+            requestId: pending.requestId,
+            result: {
+              content: [
+                {
+                  type: 'text',
+                  text: `用户已确认并保存学习路径「${saved.summary.title}」。`,
+                },
+              ],
+              structuredContent: {
+                status: 'applied',
+                permission: 'user_approval',
+                name: 'learning_path_propose',
+                pathId: saved.summary.pathId,
+                title: saved.summary.title,
+                nodeCount: saved.summary.nodeCount,
+                videoCount: saved.summary.videoCount,
               },
-            ],
-            structuredContent: {
-              status: 'applied',
-              permission: 'user_approval',
-              name: 'learning_path_propose',
-              pathId: saved.summary.pathId,
-              title: saved.summary.title,
-              nodeCount: saved.summary.nodeCount,
-              videoCount: saved.summary.videoCount,
             },
-          },
-          error: null,
-        }).catch(() => undefined);
+            error: null,
+          })
+          .catch(() => undefined);
         return;
       }
       if (pending.kind === 'favorites') {
@@ -1998,25 +1995,27 @@ export default function App() {
         setPlayerOpenFavoritesRequestId(
           playerOpenFavoritesRequestIdRef.current,
         );
-        await invoke('agent_bridge_resolve', {
-          requestId: pending.requestId,
-          result: {
-            content: [
-              {
-                type: 'text',
-                text: `用户已确认并应用收藏视频智能归类：新建 ${result.createdCategories} 个分类、归类 ${result.assignedVideos} 个视频。`,
+        await agentApi
+          .resolveBridge({
+            requestId: pending.requestId,
+            result: {
+              content: [
+                {
+                  type: 'text',
+                  text: `用户已确认并应用收藏视频智能归类：新建 ${result.createdCategories} 个分类、归类 ${result.assignedVideos} 个视频。`,
+                },
+              ],
+              structuredContent: {
+                status: 'applied',
+                permission: 'user_approval',
+                name: 'favorites_propose_categorization',
+                createdCategories: result.createdCategories,
+                assignedVideos: result.assignedVideos,
               },
-            ],
-            structuredContent: {
-              status: 'applied',
-              permission: 'user_approval',
-              name: 'favorites_propose_categorization',
-              createdCategories: result.createdCategories,
-              assignedVideos: result.assignedVideos,
             },
-          },
-          error: null,
-        }).catch(() => undefined);
+            error: null,
+          })
+          .catch(() => undefined);
         return;
       }
 
@@ -2076,14 +2075,16 @@ export default function App() {
       }
       pendingCliProposalRef.current = null;
       setPendingCliProposal(null);
-      await invoke('agent_bridge_resolve', {
-        requestId: pending.requestId,
-        result: {
-          content: [{ type: 'text', text }],
-          structuredContent,
-        },
-        error: null,
-      }).catch(() => undefined);
+      await agentApi
+        .resolveBridge({
+          requestId: pending.requestId,
+          result: {
+            content: [{ type: 'text', text }],
+            structuredContent,
+          },
+          error: null,
+        })
+        .catch(() => undefined);
     } catch (error) {
       const fallback =
         pending.kind === 'learning-path'
@@ -2114,10 +2115,12 @@ export default function App() {
       title: proposal.baseTitle,
     });
     if (proposal.htmlAssets?.length && proposal.baseRelativePath) {
-      await invoke('discard_generated_html_assets', {
-        documentRelativePath: proposal.baseRelativePath,
-        assetIds: proposal.htmlAssets.map((asset) => asset.assetId),
-      }).catch(() => undefined);
+      await libraryApi
+        .discardGeneratedHtmlAssets({
+          documentRelativePath: proposal.baseRelativePath,
+          assetIds: proposal.htmlAssets.map((asset) => asset.assetId),
+        })
+        .catch(() => undefined);
     }
     return true;
   };
@@ -2183,11 +2186,7 @@ export default function App() {
       try {
         const isCpp =
           language === 'cpp' || language === 'c++' || language === 'cxx';
-        const stageResult = await invoke<{
-          filePath: string;
-          fileName: string;
-          command: string;
-        }>('c_stage_source_file', {
+        const stageResult = await terminalApi.stageCSource({
           source,
           suggestedName: title ?? null,
           workspaceRoot: librarySnapshot?.rootPath ?? null,
@@ -2258,7 +2257,7 @@ export default function App() {
     category = categoryFilter,
   ) => {
     const sequence = ++searchRequestRef.current;
-    const documents = await invoke<MapDocument[]>('search_library', {
+    const documents = await libraryApi.search({
       query,
       category: category || null,
       kind: 'mindmap',
@@ -2273,10 +2272,7 @@ export default function App() {
     setHistoryLoading(true);
     setHistoryError('');
     try {
-      const snapshot = await invoke<DocumentVersionSnapshot>(
-        'load_document_version',
-        { documentId, versionId },
-      );
+      const snapshot = await libraryApi.loadVersion({ documentId, versionId });
       if (
         request === historyLoadRequestRef.current &&
         draftRef.current.id === documentId
@@ -2320,10 +2316,7 @@ export default function App() {
       return;
     }
     try {
-      const versions = await invoke<DocumentVersion[]>(
-        'list_document_versions',
-        { documentId: target.id },
-      );
+      const versions = await libraryApi.listVersions({ documentId: target.id });
       if (
         request !== historyLoadRequestRef.current ||
         draftRef.current.id !== target.id
@@ -2361,14 +2354,11 @@ export default function App() {
         setHistoryError('当前思维导图已变化，未执行恢复。');
         return;
       }
-      const restored = await invoke<OpenedDocument>(
-        'restore_document_version',
-        {
-          documentId: selected.documentId,
-          relativePath: latest.relativePath,
-          versionId: selected.versionId,
-        },
-      );
+      const restored = await libraryApi.restoreVersion({
+        documentId: selected.documentId,
+        relativePath: latest.relativePath,
+        versionId: selected.versionId,
+      });
       installDraft(
         createDraft({
           id: restored.document.id,
@@ -2450,7 +2440,7 @@ export default function App() {
     setSaveMessage('正在保存…');
     const task = (async () => {
       try {
-        const savedDocument = await invoke<MapDocument>('save_document', {
+        const savedDocument = await libraryApi.saveDocument({
           input,
         });
         const latest = draftRef.current;
@@ -2617,7 +2607,7 @@ export default function App() {
     if (!(await canLeaveMindmapDraft())) return false;
     setSaveMessage('正在打开思维导图…');
     try {
-      const opened = await invoke<OpenedDocument>('open_document', {
+      const opened = await libraryApi.openDocument({
         relativePath: document.relativePath,
       });
       const next = createDraft({
@@ -2664,7 +2654,7 @@ export default function App() {
   const loadLibrary = async (openRecent: boolean) => {
     setLibraryBusy(true);
     try {
-      const snapshot = await invoke<LibrarySnapshot>('library_status');
+      const snapshot = await libraryApi.status();
       installLibrarySnapshot(snapshot);
       setLibraryError('');
       setSaveMessage(snapshot.rootPath ? '文件库已就绪' : '请选择文件库目录');
@@ -2697,7 +2687,7 @@ export default function App() {
       if (!(await workbench.controller.leave())) return;
       const keepKnowledgeWorkspace = activeWorkspace === 'knowledge';
       setLibraryBusy(true);
-      const snapshot = await invoke<LibrarySnapshot>('set_library_root', {
+      const snapshot = await libraryApi.setRoot({
         path: selected,
       });
       installLibrarySnapshot(snapshot);
@@ -2774,7 +2764,7 @@ export default function App() {
     setSaveMessage('正在读取 EPUB 目录…');
     setLibraryError('');
     try {
-      const outline = await invoke<EpubOutline>('import_epub_toc', { path });
+      const outline = await epubApi.importToc({ path });
       const currentDraft = draftRef.current;
       const importedDraft = createDraft({
         title: outline.title,
@@ -2807,15 +2797,12 @@ export default function App() {
       if (includeAiSummary) {
         setSaveMessage('目录已导入，正在将章节正文发送到当前 AI 模型生成摘要…');
         try {
-          const result = await invoke<EpubSummaryResult>(
-            'summarize_epub_chapters',
-            {
-              path,
-              baseUrl: providerSettings.baseUrl,
-              model: providerSettings.model,
-              markdown: outline.markdown,
-            },
-          );
+          const result = await epubApi.summarizeChapters({
+            path,
+            baseUrl: providerSettings.baseUrl,
+            model: providerSettings.model,
+            markdown: outline.markdown,
+          });
           if (draftRef.current === importedDraft) {
             installDraft({
               ...importedDraft,
@@ -2896,7 +2883,7 @@ export default function App() {
   const openLibraryEpub = async (book: EpubBookDocument) => {
     if (!leavePlantUmlSession()) return false;
     try {
-      const path = await invoke<string>('open_epub_book', {
+      const path = await libraryApi.openEpubBook({
         relativePath: book.relativePath,
       });
       epubRestoreAttemptedRef.current = true;
@@ -3021,7 +3008,7 @@ export default function App() {
   const openLibraryPlantUml = async (file: PlantUmlDocument) => {
     if (!(await workbench.controller.leave())) return;
     try {
-      const source = await invoke<string>('open_plantuml_document', {
+      const source = await libraryApi.openPlantUml({
         relativePath: file.relativePath,
       });
       openPlantUmlWorkspace({
@@ -3031,13 +3018,10 @@ export default function App() {
         cacheKey: `file:${file.relativePath}`,
         documentTitle: file.title,
         onSave: async (nextSource) => {
-          const saved = await invoke<PlantUmlDocument>(
-            'save_plantuml_document',
-            {
-              relativePath: file.relativePath,
-              source: nextSource,
-            },
-          );
+          const saved = await libraryApi.savePlantUml({
+            relativePath: file.relativePath,
+            source: nextSource,
+          });
           const snapshot = librarySnapshotRef.current;
           if (snapshot) {
             installLibrarySnapshot({
@@ -3061,7 +3045,7 @@ export default function App() {
 
   const deleteLibraryPlantUmlFile = async (file: PlantUmlDocument) => {
     try {
-      await invoke('delete_plantuml_document', {
+      await libraryApi.deletePlantUml({
         relativePath: file.relativePath,
       });
       const snapshot = librarySnapshotRef.current;
@@ -3173,7 +3157,7 @@ export default function App() {
         channelName: payload.channelName,
       },
     };
-    let currentDoc = await invoke<MapDocument>('save_document', { input });
+    let currentDoc = await libraryApi.saveDocument({ input });
     upsertSavedInLibrary(currentDoc);
     void searchLibrary().catch(() => undefined);
     setLibraryError('');
@@ -3217,7 +3201,7 @@ export default function App() {
           historySource: isPlayerManualEdit ? 'manual' : 'ai',
           kind: 'doc',
         };
-        currentDoc = await invoke<MapDocument>('save_document', {
+        currentDoc = await libraryApi.saveDocument({
           input: updateInput,
         });
         upsertSavedInLibrary(currentDoc);
@@ -3284,7 +3268,7 @@ export default function App() {
         channelName: cleanChannel,
       },
     };
-    let currentDoc = await invoke<MapDocument>('save_document', { input });
+    let currentDoc = await libraryApi.saveDocument({ input });
     upsertSavedInLibrary(currentDoc);
     void searchLibrary().catch(() => undefined);
     setLibraryError('');
@@ -3326,7 +3310,7 @@ export default function App() {
           origin: 'player',
           sourceRef: currentDoc.sourceRef,
         };
-        currentDoc = await invoke<MapDocument>('save_document', {
+        currentDoc = await libraryApi.saveDocument({
           input: updateInput,
         });
         upsertSavedInLibrary(currentDoc);
@@ -3353,7 +3337,7 @@ export default function App() {
       );
       if (!doc) return null;
       try {
-        const opened = await invoke<OpenedDocument>('open_document', {
+        const opened = await libraryApi.openDocument({
           relativePath: doc.relativePath,
         });
         let currentDoc = doc;
@@ -3394,7 +3378,7 @@ export default function App() {
               origin: 'player',
               sourceRef: currentDoc.sourceRef,
             };
-            currentDoc = await invoke<MapDocument>('save_document', {
+            currentDoc = await libraryApi.saveDocument({
               input: updateInput,
             });
             upsertSavedInLibrary(currentDoc);
@@ -3425,7 +3409,7 @@ export default function App() {
       return false;
     }
     try {
-      const snapshot = await invoke<LibrarySnapshot>('create_category', {
+      const snapshot = await libraryApi.createCategory({
         category: clean,
         kind: 'doc',
       });
@@ -3485,7 +3469,7 @@ export default function App() {
       // A save that is still running must not bring the file back once it is deleted.
       if (workbench.controller.getState()?.relativePath === file.relativePath)
         await workbench.controller.discard();
-      await invoke('delete_text_document', { relativePath: file.relativePath });
+      await libraryApi.deleteTextDocument({ relativePath: file.relativePath });
       const snapshot = librarySnapshotRef.current;
       if (snapshot) {
         installLibrarySnapshot({
@@ -3515,10 +3499,11 @@ export default function App() {
       if (!(await workbench.controller.leave())) return;
       try {
         const template = NEW_FILE_TEMPLATES.plantuml;
-        const created = await invoke<PlantUmlDocument>(
-          'create_plantuml_document',
-          { category, title: template.title, source: template.source },
-        );
+        const created = await libraryApi.createPlantUml({
+          category,
+          title: template.title,
+          source: template.source,
+        });
         const snapshot = librarySnapshotRef.current;
         if (snapshot) {
           installLibrarySnapshot({
@@ -3998,10 +3983,10 @@ export default function App() {
         );
       } else {
         if (draftRef.current.dirty && !(await saveDraft())) return;
-        const path = await invoke<string>('open_epub_book', {
+        const path = await libraryApi.openEpubBook({
           relativePath: book.relativePath,
         });
-        const outline = await invoke<EpubOutline>('import_epub_toc', { path });
+        const outline = await epubApi.importToc({ path });
         const title = target.title;
         const markdown = outline.markdown.trim() || `# ${title}\n`;
         const next = createDraft({
@@ -4040,7 +4025,7 @@ export default function App() {
   };
 
   const deleteLibraryEpubBook = async (book: EpubBookDocument) => {
-    await invoke('delete_epub_book', { relativePath: book.relativePath });
+    await libraryApi.deleteEpubBook({ relativePath: book.relativePath });
     const snapshot = librarySnapshotRef.current;
     if (snapshot) {
       installLibrarySnapshot({
@@ -4076,10 +4061,10 @@ export default function App() {
       setLibraryBusy(true);
       setLibraryError('');
       setSaveMessage('正在保存 EPUB 到书架…');
-      const imported = await invoke<EpubBookDocument>('import_epub_book', {
+      const imported = await libraryApi.importEpubBook({
         sourcePath: selected,
       });
-      const snapshot = await invoke<LibrarySnapshot>('library_status');
+      const snapshot = await libraryApi.status();
       installLibrarySnapshot(snapshot);
       const book =
         snapshot.books.find(
@@ -4135,7 +4120,7 @@ export default function App() {
 
       setHtmlImportBusy(true);
       setSaveMessage('正在导入 HTML 资源…');
-      const imported = await invoke<ImportedHtmlAsset>('import_html_asset', {
+      const imported = await libraryApi.importHtmlAsset({
         documentRelativePath: current.relativePath,
         sourcePath: selected,
       });
@@ -4184,7 +4169,7 @@ export default function App() {
         .split('/')
         .map((part) => part.trim())
         .join('/');
-      const snapshot = await invoke<LibrarySnapshot>('create_category', {
+      const snapshot = await libraryApi.createCategory({
         category: categoryDraft.trim(),
         kind: 'mindmap',
       });
@@ -4219,7 +4204,7 @@ export default function App() {
         throw new Error('当前导图保存失败，请处理保存错误后再重命名文件夹。');
       }
 
-      const snapshot = await invoke<LibrarySnapshot>('rename_library_folder', {
+      const snapshot = await libraryApi.renameFolder({
         relativePath,
         newName,
       });
@@ -4277,13 +4262,10 @@ export default function App() {
           ...currentPlantUml.request,
           cacheKey: `file:${nextPlantUmlPath}`,
           onSave: async (nextSource) => {
-            const saved = await invoke<PlantUmlDocument>(
-              'save_plantuml_document',
-              {
-                relativePath: nextPlantUmlPath,
-                source: nextSource,
-              },
-            );
+            const saved = await libraryApi.savePlantUml({
+              relativePath: nextPlantUmlPath,
+              source: nextSource,
+            });
             const currentLibrary = librarySnapshotRef.current;
             if (currentLibrary) {
               installLibrarySnapshot({
@@ -4336,7 +4318,7 @@ export default function App() {
         workbench.controller.getState()?.relativePath === document.relativePath
       )
         await workbench.controller.discard();
-      await invoke('delete_document', { relativePath: document.relativePath });
+      await libraryApi.deleteDocument({ relativePath: document.relativePath });
       if (draftRef.current.relativePath === document.relativePath) {
         installDraft(
           createDraft({
@@ -4358,7 +4340,7 @@ export default function App() {
     setGenerationError('');
     setIsGenerating(true);
     try {
-      const generatedMarkdown = await invoke<string>('generate_mindmap', {
+      const generatedMarkdown = await agentApi.generateMindmap({
         baseUrl: providerSettings.baseUrl,
         model: providerSettings.model,
         prompt: prompt.trim(),
@@ -4405,7 +4387,7 @@ export default function App() {
     setProviderModels([]);
     setProviderModelsError('');
     try {
-      const models = await invoke<string[]>('list_provider_models', {
+      const models = await agentApi.listProviderModels({
         baseUrl: providerSettings.baseUrl,
       });
       setProviderModels(models);
@@ -4441,7 +4423,8 @@ export default function App() {
   const openSettings = () => {
     setSettingsMessage('');
     setSettingsOpen(true);
-    void invoke<boolean>('has_api_key')
+    void agentApi
+      .hasApiKey()
       .then(setApiKeySaved)
       .catch((error) =>
         setSettingsMessage(errorMessage(error, '无法读取密钥状态。')),
@@ -4453,7 +4436,7 @@ export default function App() {
     if (!apiKeyDraft.trim()) return;
     setSettingsMessage('正在安全保存…');
     try {
-      await invoke('save_api_key', { apiKey: apiKeyDraft.trim() });
+      await agentApi.saveApiKey({ apiKey: apiKeyDraft.trim() });
       setApiKeyDraft('');
       setApiKeySaved(true);
       setSettingsMessage('密钥已保存到 Windows 凭据管理器。');
@@ -4465,7 +4448,7 @@ export default function App() {
   const removeApiKey = async () => {
     setSettingsMessage('');
     try {
-      await invoke('delete_api_key');
+      await agentApi.deleteApiKey();
       setApiKeySaved(false);
       setSettingsMessage('已删除保存的 API 密钥。');
     } catch (error) {
@@ -4562,7 +4545,8 @@ export default function App() {
   }, [mindmapStyleMenuOpen]);
 
   useEffect(() => {
-    void invoke<boolean>('has_api_key')
+    void agentApi
+      .hasApiKey()
       .then(setApiKeySaved)
       .catch(() => setApiKeySaved(false));
     void loadLibrary(true);
@@ -4638,11 +4622,12 @@ export default function App() {
     if (!librarySnapshot?.rootPath) return;
     const sequence = ++searchRequestRef.current;
     const timer = window.setTimeout(() => {
-      void invoke<MapDocument[]>('search_library', {
-        query: libraryQuery,
-        category: categoryFilter || null,
-        kind: 'mindmap',
-      })
+      void libraryApi
+        .search({
+          query: libraryQuery,
+          category: categoryFilter || null,
+          kind: 'mindmap',
+        })
         .then((documents) => {
           if (sequence === searchRequestRef.current)
             setMindmapDocuments(documents);
@@ -5016,11 +5001,12 @@ export default function App() {
     let active = true;
     setHtmlPreviewSrc('');
     setHtmlPreviewError('');
-    void invoke<string>('resolve_html_asset', {
-      documentRelativePath: htmlPreview.documentRelativePath,
-      assetId: htmlPreview.assetId,
-      entryPath: htmlPreview.entryPath,
-    })
+    void libraryApi
+      .resolveHtmlAsset({
+        documentRelativePath: htmlPreview.documentRelativePath,
+        assetId: htmlPreview.assetId,
+        entryPath: htmlPreview.entryPath,
+      })
       .then((path) => {
         if (active) setHtmlPreviewSrc(convertFileSrc(path));
       })

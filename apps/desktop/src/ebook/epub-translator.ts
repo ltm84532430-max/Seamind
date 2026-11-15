@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { epubApi } from './epub-api';
 import type { EpubParagraphTranslation } from './epub-translation-store';
 
 export interface TranslateChapterOptions {
@@ -18,7 +18,7 @@ export async function translateChapterBatch(
     provider: { baseUrl: string; model: string };
   },
 ): Promise<EpubParagraphTranslation[]> {
-  return invoke<EpubParagraphTranslation[]>('translate_epub_paragraphs', {
+  return epubApi.translateParagraphs({
     baseUrl: options.provider.baseUrl,
     model: options.provider.model,
     bookTitle: options.bookTitle,

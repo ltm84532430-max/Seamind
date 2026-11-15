@@ -1,4 +1,5 @@
-import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { convertFileSrc } from '@tauri-apps/api/core';
+import { libraryApi } from '../library/library-api';
 import type { PasteMediaCandidate } from './knowledge-paste';
 
 export interface ImportedDocumentMedia {
@@ -32,17 +33,14 @@ export async function importDocumentMedia(
       : candidate.kind === 'data'
         ? { bytesBase64: String(candidate.value).split(',', 2)[1] ?? '' }
         : { bytesBase64: await fileBase64(candidate.value as File) };
-  return invoke<ImportedDocumentMedia>('import_document_media', {
-    documentRelativePath,
-    input,
-  });
+  return libraryApi.importDocumentMedia({ documentRelativePath, input });
 }
 
 export async function resolveDocumentMedia(
   documentRelativePath: string,
   mediaId: string,
 ): Promise<string> {
-  const path = await invoke<string>('resolve_document_media', {
+  const path = await libraryApi.resolveDocumentMedia({
     documentRelativePath,
     mediaId,
   });

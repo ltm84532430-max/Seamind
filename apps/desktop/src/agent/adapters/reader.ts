@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { libraryApi } from '../../library/library-api';
 import {
   normalizeLibraryPath,
   saveEpubKnowledgePath,
@@ -24,7 +24,6 @@ import type {
   EpubBookDocument,
   LibrarySnapshot,
   MapDocument,
-  OpenedDocument,
 } from '../../library/library';
 import type { ActiveDocument } from '../../workbench/active-document';
 import type { AgentCapabilities } from '../tool-api';
@@ -162,7 +161,7 @@ export function createReaderCapabilities(
         };
       }
       if (chapterTarget.document) {
-        const opened = await invoke<OpenedDocument>('open_document', {
+        const opened = await libraryApi.openDocument({
           relativePath: chapterTarget.document.relativePath,
         });
         return {
@@ -216,7 +215,7 @@ export function createReaderCapabilities(
       };
     }
     if (target.document) {
-      const opened = await invoke<OpenedDocument>('open_document', {
+      const opened = await libraryApi.openDocument({
         relativePath: target.document.relativePath,
       });
       return {
@@ -270,7 +269,7 @@ export function createReaderCapabilities(
     if (isCurrentlyOpen && currentDoc) {
       baseMarkdown = currentDoc.source;
     } else if (target.document) {
-      const opened = await invoke<OpenedDocument>('open_document', {
+      const opened = await libraryApi.openDocument({
         relativePath: target.document.relativePath,
       });
       baseMarkdown = opened.markdown;
@@ -297,7 +296,7 @@ export function createReaderCapabilities(
       deps.editOpenDocument(nextMarkdown);
       await deps.saveOpenDocument();
     } else if (target.document) {
-      await invoke<MapDocument>('save_document', {
+      await libraryApi.saveDocument({
         input: {
           id: target.document.id,
           relativePath: target.document.relativePath,

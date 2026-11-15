@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { playerApi } from '../player-api';
 import type { AgentProviderSettings } from '../../agent/runtime';
 import {
   applyRefinedStageOutput,
@@ -17,15 +17,6 @@ export interface TranscriptStageProgress {
   refinedStages: number;
   fallbackStages: number;
   errorMessage?: string;
-}
-
-interface RustRefineStageResponse {
-  stageTitle: string;
-  paragraphs: Array<{
-    anchorId: number;
-    text: string;
-    translation?: string;
-  }>;
 }
 
 function buildPreviousContextTail(stage: TranscriptStageChunk): string {
@@ -168,23 +159,20 @@ export async function refineTranscriptStagesProgressively(
     });
 
     try {
-      const response = await invoke<RustRefineStageResponse>(
-        'refine_transcript_stage',
-        {
-          request: {
-            baseUrl: options.provider.baseUrl,
-            model: options.provider.model,
-            videoTitle: options.videoTitle?.trim() ?? '',
-            channelName: options.channelName?.trim() ?? '',
-            stageIndex: i,
-            totalStages,
-            timeRange,
-            mode: options.viewMode,
-            previousContextTail,
-            items,
-          },
+      const response = await playerApi.refineTranscriptStage({
+        request: {
+          baseUrl: options.provider.baseUrl,
+          model: options.provider.model,
+          videoTitle: options.videoTitle?.trim() ?? '',
+          channelName: options.channelName?.trim() ?? '',
+          stageIndex: i,
+          totalStages,
+          timeRange,
+          mode: options.viewMode,
+          previousContextTail,
+          items,
         },
-      );
+      });
 
       const candidate: RefinedTranscriptStageCandidate = {
         stageTitle: response.stageTitle,

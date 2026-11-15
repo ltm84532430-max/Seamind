@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { literatureApi } from './literature-api';
 
 export interface TranslatedPaperParagraph {
   id: number;
@@ -140,26 +140,23 @@ export async function getPaperPageTranslation(
   pageNumber: number,
 ): Promise<PaperPageTranslationRecord | null> {
   if (!pdfSha256) return null;
-  const native = await invoke<PaperPageTranslationRecord | null>(
-    'get_paper_page_translation',
-    { pdfSha256, pageNumber },
-  );
+  const native = await literatureApi.getPageTranslation({
+    pdfSha256,
+    pageNumber,
+  });
   const legacy = legacyPage(pdfSha256, pageNumber);
   if (native && (!legacy || native.translatedAt >= legacy.translatedAt)) {
     removeLegacyPage(pdfSha256, pageNumber);
     return native;
   }
   if (!legacy) return null;
-  const migrated = await invoke<PaperPageTranslationRecord>(
-    'save_paper_page_translation',
-    {
-      pdfSha256,
-      pageNumber,
-      pageContentHash: legacy.pageContentHash,
-      model: legacy.model,
-      paragraphs: legacy.paragraphs,
-    },
-  );
+  const migrated = await literatureApi.savePageTranslation({
+    pdfSha256,
+    pageNumber,
+    pageContentHash: legacy.pageContentHash,
+    model: legacy.model,
+    paragraphs: legacy.paragraphs,
+  });
   removeLegacyPage(pdfSha256, pageNumber);
   return migrated;
 }
@@ -171,10 +168,13 @@ export async function savePaperPageTranslation(
   model: string,
   paragraphs: TranslatedPaperParagraph[],
 ): Promise<PaperPageTranslationRecord> {
-  const saved = await invoke<PaperPageTranslationRecord>(
-    'save_paper_page_translation',
-    { pdfSha256, pageNumber, pageContentHash, model, paragraphs },
-  );
+  const saved = await literatureApi.savePageTranslation({
+    pdfSha256,
+    pageNumber,
+    pageContentHash,
+    model,
+    paragraphs,
+  });
   removeLegacyPage(pdfSha256, pageNumber);
   return saved;
 }
@@ -184,7 +184,7 @@ export async function deletePaperPageTranslation(
   pageNumber: number,
 ): Promise<boolean> {
   const hadLegacy = legacyPage(pdfSha256, pageNumber) !== null;
-  const deleted = await invoke<boolean>('delete_paper_page_translation', {
+  const deleted = await literatureApi.deletePageTranslation({
     pdfSha256,
     pageNumber,
   });
@@ -195,9 +195,7 @@ export async function deletePaperPageTranslation(
 export async function clearPaperTranslations(
   pdfSha256: string,
 ): Promise<boolean> {
-  const cleared = await invoke<boolean>('clear_paper_translations', {
-    pdfSha256,
-  });
+  const cleared = await literatureApi.clearTranslations({ pdfSha256 });
   try {
     const prefix = `${LOCAL_PAGE_PREFIX}${pdfSha256.toLowerCase()}:`;
     const toRemove: string[] = [];
@@ -236,7 +234,5 @@ export async function listPaperTranslatedPages(
   for (const pageNumber of legacyPages) {
     await getPaperPageTranslation(pdfSha256, pageNumber);
   }
-  return invoke<PaperPageTranslationSummary[]>('list_paper_translated_pages', {
-    pdfSha256,
-  });
+  return literatureApi.listTranslatedPages({ pdfSha256 });
 }

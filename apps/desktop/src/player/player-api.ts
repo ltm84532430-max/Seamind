@@ -1,5 +1,11 @@
 import { invoke } from '@tauri-apps/api/core';
 import type {
+  YouTubePlaybackCapabilities,
+  YouTubePlaybackResolution,
+  YouTubeSettings,
+} from './youtube-player';
+import type { YouTubeProxyEndpoint } from './youtube-proxy';
+import type {
   BackupSummary,
   ChannelInput,
   FavoriteCategory,
@@ -132,6 +138,95 @@ export const playerApi = {
     }),
   fetchVideoInfo: (videoId: string) =>
     invoke<VideoBasics>('player_fetch_video_info', { videoId }),
+  cancelYouTubeRequest: (args: { requestId: string }) =>
+    invoke<void>('youtube_cancel', args),
+  openYouTubeWithMpv: (args: {
+    videoId: string;
+    startSeconds: number;
+    requestId: string;
+  }) => invoke<void>('youtube_open_with_mpv', args),
+  resolveYouTubePlayback: (args: { videoId: string; requestId: string }) =>
+    invoke<YouTubePlaybackResolution>('youtube_resolve_playback', args),
+  resolveYouTubePlaybackWithBrowser: (args: {
+    videoId: string;
+    browser: 'firefox' | 'edge' | 'chrome';
+    requestId: string;
+  }) =>
+    invoke<YouTubePlaybackResolution>(
+      'youtube_resolve_playback_with_browser',
+      args,
+    ),
+  playbackCapabilities: () =>
+    invoke<YouTubePlaybackCapabilities>('youtube_playback_capabilities'),
+  youtubeSettings: () => invoke<YouTubeSettings>('youtube_get_settings'),
+  setYouTubeSettings: (args: { proxyUrl: string | null }) =>
+    invoke<YouTubeSettings>('youtube_set_settings', args),
+  installYtDlp: () =>
+    invoke<{ path: string; version: string; sha256: string }>(
+      'youtube_install_ytdlp',
+    ),
+  proxyInfo: () => invoke<YouTubeProxyEndpoint>('youtube_proxy_info'),
+  playerCacheGet: (args: { key: string }) =>
+    invoke<string | null>('youtube_player_cache_get', args),
+  playerCacheSet: (args: { key: string; value: string }) =>
+    invoke<void>('youtube_player_cache_set', args),
+  evalScript: (args: { script: string }) =>
+    invoke<string>('youtube_eval_script', args),
+  botguardSnapshot: (args: {
+    requestId: string;
+    contentBinding: string;
+    challenge: {
+      globalName: string;
+      program: string;
+      interpreterHash: string;
+    };
+    interpreterJavascript: string;
+    ytConfig: unknown;
+    userAgent: string;
+  }) => invoke<unknown>('youtube_botguard_snapshot', args),
+  botguardMint: (args: {
+    requestId: string;
+    contentBinding: string;
+    integrityToken: string;
+  }) => invoke<string>('youtube_botguard_mint', args),
+  botguardDiscard: (args: { requestId: string }) =>
+    invoke<void>('youtube_botguard_discard', args),
+  refineTranscriptStage: (args: {
+    request: {
+      baseUrl: string;
+      model: string;
+      videoTitle: string;
+      channelName: string;
+      stageIndex: number;
+      totalStages: number;
+      timeRange: string;
+      mode: string;
+      previousContextTail: string;
+      items: Array<{
+        id: number;
+        time: string;
+        text: string;
+        translation?: string;
+      }>;
+    };
+  }) =>
+    invoke<{
+      stageTitle: string;
+      paragraphs: Array<{
+        anchorId: number;
+        text: string;
+        translation?: string;
+      }>;
+    }>('refine_transcript_stage', args),
+  transcriptCommand: <T>(
+    command:
+      | 'youtube_transcript_list'
+      | 'youtube_transcript_fetch'
+      | 'youtube_transcript_embed_fetch'
+      | 'youtube_transcript_ytdlp_fetch'
+      | 'youtube_transcript_browser_fetch',
+    args: Record<string, unknown>,
+  ) => invoke<T>(command, args),
 };
 
 export type PlayerApi = typeof playerApi;

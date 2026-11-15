@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { playerApi } from './player-api';
 import {
   classifyPlayability,
   isDefinitiveFailure,
@@ -168,14 +168,12 @@ class PlayerCache {
   readonly cache_dir = '';
 
   async get(key: string): Promise<ArrayBuffer | undefined> {
-    const text = await invoke<string | null>('youtube_player_cache_get', {
-      key,
-    });
+    const text = await playerApi.playerCacheGet({ key });
     return text ? base64ToBuffer(text) : undefined;
   }
 
   async set(key: string, value: ArrayBuffer): Promise<void> {
-    await invoke('youtube_player_cache_set', {
+    await playerApi.playerCacheSet({
       key,
       value: bufferToBase64(value),
     });
@@ -196,9 +194,7 @@ function loadLibrary(): Promise<Library> {
     .then((library) => {
       // The deciphering script is Google's code; it runs in a QuickJS sandbox on the Rust side.
       library.Platform.shim.eval = async (data) =>
-        JSON.parse(
-          await invoke<string>('youtube_eval_script', { script: data.output }),
-        );
+        JSON.parse(await playerApi.evalScript({ script: data.output }));
       return library;
     })
     .catch((error: unknown) => {

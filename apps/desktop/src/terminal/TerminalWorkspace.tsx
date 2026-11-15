@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { terminalApi } from './terminal-api';
 import type { Theme } from '../app/app-storage';
 import type { EpubBookDocument } from '../library/library';
 import {
@@ -183,7 +183,8 @@ export default function TerminalWorkspace({
   // Detect available shells from Tauri backend
   useEffect(() => {
     if (!active) return;
-    invoke<TerminalShellOption[]>('terminal_detect_shells')
+    terminalApi
+      .detectShells()
       .then((detected) => {
         if (Array.isArray(detected) && detected.length > 0) {
           setShells(detected);

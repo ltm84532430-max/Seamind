@@ -3,7 +3,8 @@ import type { ReactNode } from 'react';
 import { notifyResourceProgress } from '../tasks/task-api';
 import ResourceTaskLinks from '../tasks/ResourceTaskLinks';
 import type { KeyboardEvent } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { epubApi } from './epub-api';
+import { systemApi } from '../system/system-api';
 import {
   epubBookIdentity,
   loadEpubBookMetadata,
@@ -1580,7 +1581,7 @@ export default function EpubReader({
     setAiAnalysisBusy(true);
     setAiAnalysisError('');
     try {
-      const result = await invoke<string>('analyze_epub_highlight', {
+      const result = await epubApi.analyzeHighlight({
         baseUrl: provider.baseUrl,
         model: provider.model,
         chapterLabel: selected.label.slice(0, 200),
@@ -1635,7 +1636,7 @@ export default function EpubReader({
     setSavedFootnoteBusy(true);
     setSavedFootnoteError('');
     try {
-      const result = await invoke<string>('analyze_epub_highlight', {
+      const result = await epubApi.analyzeHighlight({
         baseUrl: provider.baseUrl,
         model: provider.model,
         chapterLabel: annotation.label.slice(0, 200),
@@ -1676,19 +1677,16 @@ export default function EpubReader({
         setExamProgress(
           `正在生成第 ${index + 1} / ${draft.batches.length} 批…`,
         );
-        const questions = await invoke<EpubExamQuestion[]>(
-          'generate_epub_exam_batch',
-          {
-            bookTitle: title,
-            scopeLabel: draft.label,
-            sources: batch.sources,
-            mix: batch.mix,
-            avoidPrompts: working.questions.map((question) => question.prompt),
-            difficulty: examDifficulty,
-            baseUrl: provider.baseUrl,
-            model: provider.model,
-          },
-        );
+        const questions = await epubApi.generateExamBatch({
+          bookTitle: title,
+          scopeLabel: draft.label,
+          sources: batch.sources,
+          mix: batch.mix,
+          avoidPrompts: working.questions.map((question) => question.prompt),
+          difficulty: examDifficulty,
+          baseUrl: provider.baseUrl,
+          model: provider.model,
+        });
         const existing = new Set(
           working.questions.map((q) =>
             q.prompt.normalize('NFKC').replace(/\s+/g, ''),
@@ -1737,7 +1735,7 @@ export default function EpubReader({
       };
       setExamProgress('正在保存试卷…');
       try {
-        await invoke('save_epub_exam', { exam });
+        await epubApi.saveExam({ exam });
       } catch (cause) {
         setUnsavedExam(exam);
         throw new Error(
@@ -1808,10 +1806,7 @@ export default function EpubReader({
         ];
       }
       if (examMix.cProgramming > 0) {
-        const environment = await invoke<{
-          available: boolean;
-          error?: string;
-        }>('c_check_environment');
+        const environment = await systemApi.checkCEnvironment();
         if (!environment.available)
           throw new Error(
             environment.error || '未检测到本地 C 编译器，请将编程题数设为 0。',
@@ -1842,7 +1837,7 @@ export default function EpubReader({
     setExamGenerating(true);
     setExamError('');
     try {
-      await invoke('save_epub_exam', { exam: unsavedExam });
+      await epubApi.saveExam({ exam: unsavedExam });
       setUnsavedExam(null);
       setExamDialogOpen(false);
       setNavigationNotice({

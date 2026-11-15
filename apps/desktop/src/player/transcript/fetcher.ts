@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { playerApi } from '../player-api';
 import {
   clearCachedNativeTranscriptInfo,
   resolveNativeTranscriptInfo,
@@ -247,7 +247,15 @@ async function callBackend<T>(
   signal.throwIfAborted();
   let reply: BackendReply<T>;
   try {
-    reply = await invoke<BackendReply<T>>(command, args);
+    reply = await playerApi.transcriptCommand<BackendReply<T>>(
+      command as
+        | 'youtube_transcript_list'
+        | 'youtube_transcript_fetch'
+        | 'youtube_transcript_embed_fetch'
+        | 'youtube_transcript_ytdlp_fetch'
+        | 'youtube_transcript_browser_fetch',
+      args,
+    );
   } catch {
     signal.throwIfAborted();
     throw new TranscriptFetchError(
