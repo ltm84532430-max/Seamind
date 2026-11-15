@@ -41,6 +41,8 @@ mod literature;
 mod literature_resolver;
 #[path = "literature/literature_store.rs"]
 mod literature_store;
+#[path = "literature/paper_translation.rs"]
+mod paper_translation;
 
 #[path = "mindmap/java_runtime.rs"]
 mod java_runtime;
@@ -291,6 +293,15 @@ pub fn run() {
             literature::literature_import_bibtex_text,
             literature::literature_export_bibtex_text,
             literature::literature_generate_mindmap,
+            paper_translation::translate_paper_selection,
+            paper_translation::translate_paper_paragraphs,
+            paper_translation::save_paper_page_translation,
+            paper_translation::get_paper_page_translation,
+            paper_translation::delete_paper_page_translation,
+            paper_translation::clear_paper_translations,
+            paper_translation::list_paper_translated_pages,
+            paper_translation::check_pdf2zh_status,
+            paper_translation::generate_bilingual_paper_pdf,
             feed::feed_get_overview,
             feed::feed_list_channels,
             feed::feed_create_category,
@@ -708,7 +719,7 @@ pub(crate) async fn request_chat_completion(
     .await
 }
 
-fn load_stored_api_key() -> Result<String, String> {
+pub(crate) fn load_stored_api_key() -> Result<String, String> {
     #[cfg(windows)]
     {
         match api_key_entry()?.get_password() {

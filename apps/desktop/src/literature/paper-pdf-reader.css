@@ -826,6 +826,513 @@
   font: 9px var(--mono);
 }
 
+.paper-reader-stage-shell {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.paper-reader-translation-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.paper-reader-translation-toolbar button {
+  min-height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.paper-reader-translation-toolbar button.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.paper-reader-translation-toolbar select {
+  height: 28px;
+  padding: 0 18px 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: 11px;
+}
+
+/* Floating selection popover */
+.paper-selection-popover {
+  position: absolute;
+  z-index: 22;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 28%);
+  overflow: hidden;
+}
+
+.paper-selection-popover-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 94%, var(--accent));
+}
+
+.paper-selection-popover-bar button {
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.paper-selection-popover-bar button.is-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--panel);
+}
+
+.paper-selection-popover-bar button.is-close {
+  margin-left: auto;
+  border-color: transparent;
+  background: transparent;
+  padding: 0 6px;
+  font-size: 14px;
+}
+
+.paper-selection-popover-body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 9px 10px;
+}
+
+.paper-selection-popover-source {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 5px;
+  border-bottom: 1px dashed var(--line);
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.paper-selection-popover-source span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.paper-selection-popover-source small {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font: 10px var(--mono);
+}
+
+.paper-selection-popover-status {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.paper-selection-popover-error {
+  color: #e05d4d;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.paper-selection-popover-result {
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.paper-selection-popover-note {
+  padding: 5px 7px;
+  border-left: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.paper-selection-popover-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
+  padding-top: 2px;
+}
+
+.paper-selection-popover-actions button {
+  min-height: 23px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+}
+
+/* PDF Page overlay / gutter bilingual markers */
+.paper-pdf-trans-focus {
+  position: absolute;
+  border-radius: 2px;
+  background: rgb(99 102 241 / 16%);
+  outline: 1.5px solid rgb(99 102 241 / 52%);
+}
+
+.paper-pdf-translation-layer {
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  pointer-events: none;
+}
+
+.paper-pdf-para-marker {
+  position: absolute;
+  width: 5px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 42%, transparent);
+  cursor: pointer;
+  pointer-events: auto;
+  transition:
+    width 120ms ease,
+    background-color 120ms ease;
+}
+
+.paper-pdf-para-marker:hover,
+.paper-pdf-para-marker.is-active {
+  width: 7px;
+  background: var(--accent);
+}
+
+.paper-pdf-overlay-block {
+  position: absolute;
+  box-sizing: border-box;
+  padding: 2px 5px;
+  border-radius: 2px;
+  background: rgb(255 255 255 / 95%);
+  color: #18222d;
+  line-height: 1.42;
+  pointer-events: auto;
+  overflow: auto;
+  scrollbar-width: none;
+  box-shadow: 0 0 0 1px rgb(15 23 42 / 7%);
+}
+
+.paper-pdf-overlay-block::-webkit-scrollbar {
+  display: none;
+}
+
+.paper-pdf-overlay-block.is-heading .paper-pdf-overlay-text {
+  font-weight: 600;
+}
+
+.paper-pdf-overlay-block.is-active {
+  box-shadow: 0 0 0 1.5px var(--accent);
+}
+
+.paper-pdf-overlay-block.is-peeking {
+  background: rgb(255 255 255 / 6%);
+  box-shadow: inset 0 0 0 1px rgb(99 102 241 / 38%);
+}
+
+.paper-pdf-peek-btn {
+  position: sticky;
+  top: 0;
+  float: right;
+  margin-left: 4px;
+  padding: 0 4px;
+  border: 1px solid rgb(0 0 0 / 15%);
+  border-radius: 2px;
+  background: rgb(255 255 255 / 88%);
+  color: #42505d;
+  cursor: pointer;
+  font-size: 9px;
+  line-height: 14px;
+  opacity: 0.25;
+  transition: opacity 120ms ease;
+}
+
+.paper-pdf-overlay-block:hover .paper-pdf-peek-btn,
+.paper-pdf-overlay-block.is-peeking .paper-pdf-peek-btn {
+  opacity: 1;
+}
+
+.paper-pdf-bilingual-popover {
+  position: absolute;
+  z-index: 9;
+  padding: 8px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 24%);
+  pointer-events: auto;
+}
+
+.paper-pdf-bilingual-popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 5px;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.paper-pdf-bilingual-popover-head button {
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.paper-pdf-bilingual-popover p {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+/* Sidebar bilingual translation tab */
+.paper-translation-sidebar {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.paper-translation-controls {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.paper-translation-primary-row,
+.paper-translation-mode-row,
+.paper-translation-dualpdf-actions {
+  display: flex;
+  gap: 5px;
+}
+
+.paper-translation-primary-row button,
+.paper-translation-mode-row button,
+.paper-translation-dualpdf-actions button,
+.paper-translation-dualpdf-head button,
+.paper-translation-page-heading button,
+.paper-translation-card-head button {
+  min-height: 25px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+}
+
+.paper-translation-primary-row button.is-primary {
+  flex: 1 1 auto;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--panel);
+}
+
+.paper-translation-primary-row button.is-danger {
+  flex: 1 1 auto;
+  border-color: #d9534f;
+  background: #d9534f;
+  color: #fff;
+}
+
+.paper-translation-mode-row button {
+  flex: 1 1 0;
+  padding: 0 4px;
+}
+
+.paper-translation-mode-row button.is-active,
+.paper-translation-dualpdf-actions button.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.paper-translation-meta-line {
+  color: var(--muted);
+  font: 10px var(--mono);
+}
+
+.paper-translation-error {
+  padding: 6px 8px;
+  border: 1px solid rgb(224 93 77 / 40%);
+  border-radius: 2px;
+  background: rgb(224 93 77 / 10%);
+  color: #e05d4d;
+  font-size: 10.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.paper-translation-blocks {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 8px;
+  scrollbar-width: none;
+}
+
+.paper-translation-blocks::-webkit-scrollbar {
+  display: none;
+}
+
+.paper-translation-empty {
+  padding: 16px 10px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.paper-translation-page-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  padding: 2px 2px 4px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font: 10px var(--mono);
+}
+
+.paper-translation-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+
+.paper-translation-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+
+.paper-translation-card.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.paper-translation-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font: 9.5px var(--mono);
+}
+
+.paper-translation-card-head button {
+  min-height: 20px;
+  padding: 0 6px;
+  font-size: 9.5px;
+}
+
+.paper-translation-source {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.paper-translation-target {
+  margin: 0;
+  color: var(--ink);
+  font-size: 11.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.paper-translation-card.is-heading .paper-translation-target {
+  font-weight: 600;
+}
+
+.paper-translation-pending {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-style: italic;
+}
+
+.paper-translation-dualpdf-box {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 6px;
+  padding: 9px 10px;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 95%, var(--accent));
+}
+
+.paper-translation-dualpdf-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.paper-translation-dualpdf-head strong {
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.paper-translation-dualpdf-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 850px) {
   .paper-reader-notes {
     position: absolute;

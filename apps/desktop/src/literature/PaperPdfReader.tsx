@@ -17,7 +17,32 @@ import type {
   PaperAnnotationRect,
   PaperItem,
 } from './types';
-import { PaperPdfPage } from './PaperPdfPage';
+import { PaperPdfPage, type PaperTranslationDisplayMode } from './PaperPdfPage';
+import {
+  PaperSelectionPopover,
+  type SelectionPopoverAnchor,
+} from './PaperSelectionPopover';
+import { PaperTranslationSidebar } from './PaperTranslationPanel';
+import {
+  cleanPdfSelectionText,
+  extractPageParagraphBlocks,
+  isShortTermSelection,
+  type PaperParagraphBlock,
+} from './paper-pdf-layout';
+import {
+  deletePaperPageTranslation,
+  getPaperPageTranslation,
+  type DualPdfResult,
+  type PaperPageTranslationRecord,
+  type PaperSelectionTranslation,
+  type Pdf2ZhStatus,
+} from './paper-translation-store';
+import {
+  checkPdf2ZhStatus,
+  generateBilingualPaperPdf,
+  translatePaperPage,
+  translatePaperSelection,
+} from './paper-translator';
 import './paper-pdf-reader.css';
 
 GlobalWorkerOptions.workerSrc = workerUrl;
@@ -39,7 +64,12 @@ interface SelectionDraft {
 type ReaderMode = 'auto' | 'single' | 'spread' | 'scroll';
 type ResolvedReaderMode = Exclude<ReaderMode, 'auto'>;
 type ZoomMode = 'fitPage' | 'fitWidth' | 'manual';
-type SidebarTab = 'outline' | 'search' | 'annotations' | 'bookmarks';
+type SidebarTab =
+  | 'outline'
+  | 'search'
+  | 'annotations'
+  | 'bookmarks'
+  | 'translation';
 
 interface ReaderPreferences {
   mode: ReaderMode;
@@ -109,9 +139,13 @@ function readPreferences(paperId: string, sha256: string): ReaderPreferences {
         typeof stored.sidebarOpen === 'boolean'
           ? stored.sidebarOpen
           : DEFAULT_PREFERENCES.sidebarOpen,
-      sidebarTab: ['outline', 'search', 'annotations', 'bookmarks'].includes(
-        stored.sidebarTab,
-      )
+      sidebarTab: [
+        'outline',
+        'search',
+        'annotations',
+        'bookmarks',
+        'translation',
+      ].includes(stored.sidebarTab)
         ? stored.sidebarTab
         : DEFAULT_PREFERENCES.sidebarTab,
     };
@@ -266,6 +300,41 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
   const [searchProgress, setSearchProgress] = useState(0);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   const [pageInput, setPageInput] = useState('1');
+  const [popoverAnchor, setPopoverAnchor] =
+    useState<SelectionPopoverAnchor | null>(null);
+  const [selectionTranslating, setSelectionTranslating] = useState(false);
+  const [selectionTranslation, setSelectionTranslation] =
+    useState<PaperSelectionTranslation | null>(null);
+  const [selectionTransError, setSelectionTransError] = useState<string | null>(
+    null,
+  );
+  const [copiedTransNotice, setCopiedTransNotice] = useState(false);
+  const [translationDisplayMode, setTranslationDisplayMode] =
+    useState<PaperTranslationDisplayMode>('off');
+  const [blocksByPage, setBlocksByPage] = useState<
+    Record<number, PaperParagraphBlock[]>
+  >({});
+  const [translationsByPage, setTranslationsByPage] = useState<
+    Record<number, PaperPageTranslationRecord>
+  >({});
+  const [translatingPage, setTranslatingPage] = useState<number | null>(null);
+  const [translationProgress, setTranslationProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
+  const [translationError, setTranslationError] = useState<string | null>(null);
+  const [activeTranslatedBlock, setActiveTranslatedBlock] = useState<{
+    pageNumber: number;
+    blockId: number;
+  } | null>(null);
+  const [pdf2ZhStatus, setPdf2ZhStatus] = useState<Pdf2ZhStatus | null>(null);
+  const [checkingPdf2Zh, setCheckingPdf2Zh] = useState(false);
+  const [generatingDualPdf, setGeneratingDualPdf] = useState(false);
+  const [dualPdfResult, setDualPdfResult] = useState<DualPdfResult | null>(
+    null,
+  );
+  const [viewingDualPdf, setViewingDualPdf] = useState(false);
+  const [dualPdfError, setDualPdfError] = useState<string | null>(null);
   const effectiveMode = resolvedMode(
     mode,
     stageSize.width || window.innerWidth,
@@ -273,6 +342,9 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
   );
   const stageRef = useRef<HTMLElement>(null);
   const shellRef = useRef<HTMLDivElement>(null);
+  const originalPdfPathRef = useRef('');
+  const pdfTaskRef = useRef<ReturnType<typeof getDocument> | null>(null);
+  const translationCancelRef = useRef(false);
   const preferencesReadyRef = useRef(false);
   const searchRequestRef = useRef(0);
   const scrollFrameRef = useRef<number | null>(null);
@@ -290,6 +362,18 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
     }
     return map;
   }, [annotations]);
+
+  const translationMapsByPage = useMemo(() => {
+    const result: Record<number, Record<number, string>> = {};
+    for (const [pageKey, record] of Object.entries(translationsByPage)) {
+      const lookup: Record<number, string> = {};
+      for (const item of record.paragraphs) {
+        lookup[item.id] = item.translation;
+      }
+      result[Number(pageKey)] = lookup;
+    }
+    return result;
+  }, [translationsByPage]);
 
   const staleAnnotationIds = useMemo(
     () =>
@@ -359,6 +443,18 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
     setError(null);
     setPdf(null);
     setOutline([]);
+    setPopoverAnchor(null);
+    setSelectionDraft(null);
+    setSelectionTranslation(null);
+    setSelectionTransError(null);
+    setBlocksByPage({});
+    setTranslationsByPage({});
+    setActiveTranslatedBlock(null);
+    setTranslationError(null);
+    setDualPdfResult(null);
+    setViewingDualPdf(false);
+    setDualPdfError(null);
+    originalPdfPathRef.current = '';
 
     const load = async () => {
       try {
@@ -368,6 +464,7 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
           literatureApi.getReadingProgress(paper.id),
         ]);
         if (cancelled) return;
+        originalPdfPathRef.current = opened.path;
         const preferences = readPreferences(paper.id, opened.sha256);
         setPdfSha256(opened.sha256);
         setAnnotations(savedAnnotations);
@@ -380,6 +477,7 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
 
         const task = getDocument({ url: convertFileSrc(opened.path) });
         loadingTask = task;
+        pdfTaskRef.current = task;
         const loadedPdf = await task.promise;
         if (cancelled) {
           await task.destroy();
@@ -449,8 +547,75 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
     return () => {
       cancelled = true;
       if (loadingTask) void loadingTask.destroy();
+      if (pdfTaskRef.current && pdfTaskRef.current !== loadingTask) {
+        void pdfTaskRef.current.destroy();
+      }
+      pdfTaskRef.current = null;
     };
   }, [onReadStarted, paper.id]);
+
+  const ensurePageLayoutAndCache = useCallback(
+    async (targetPage: number): Promise<PaperParagraphBlock[]> => {
+      if (!pdf) return [];
+      const cachedBlocks = blocksByPage[targetPage];
+      let resolvedBlocks = cachedBlocks;
+      if (!resolvedBlocks) {
+        try {
+          const pdfPage = await pdf.getPage(targetPage);
+          resolvedBlocks = await extractPageParagraphBlocks(pdfPage);
+          setBlocksByPage((prev) =>
+            prev[targetPage]
+              ? prev
+              : { ...prev, [targetPage]: resolvedBlocks! },
+          );
+        } catch {
+          resolvedBlocks = [];
+        }
+      }
+      if (pdfSha256 && !translationsByPage[targetPage]) {
+        try {
+          const cachedTrans = await getPaperPageTranslation(
+            pdfSha256,
+            targetPage,
+          );
+          if (cachedTrans) {
+            setTranslationsByPage((prev) =>
+              prev[targetPage] ? prev : { ...prev, [targetPage]: cachedTrans },
+            );
+          }
+        } catch {
+          // Ignore cache miss errors
+        }
+      }
+      return resolvedBlocks;
+    },
+    [blocksByPage, pdf, pdfSha256, translationsByPage],
+  );
+
+  useEffect(() => {
+    if (!pdf || loading) return;
+    if (translationDisplayMode === 'off' && sidebarTab !== 'translation')
+      return;
+    const priorityPages =
+      effectiveMode === 'scroll'
+        ? [pageNumber, pageNumber + 1, pageNumber - 1].filter(
+            (n) => n >= 1 && n <= pageCount,
+          )
+        : visiblePages;
+    for (const pg of priorityPages) {
+      void ensurePageLayoutAndCache(pg);
+    }
+  }, [
+    effectiveMode,
+    ensurePageLayoutAndCache,
+    loading,
+    pageCount,
+    pageNumber,
+    pdf,
+    sidebarTab,
+    translationDisplayMode,
+    visiblePages,
+  ]);
 
   useEffect(() => {
     if (!pdfSha256 || !preferencesReadyRef.current) return;
@@ -608,8 +773,10 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
 
   const captureSelection = () => {
     const selection = window.getSelection();
-    if (!selection || selection.isCollapsed || selection.rangeCount === 0)
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+      setPopoverAnchor(null);
       return;
+    }
     const range = selection.getRangeAt(0);
     const commonNode = range.commonAncestorContainer;
     const commonElement =
@@ -625,7 +792,8 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
       !layer.contains(commonElement)
     )
       return;
-    const selectedText = selection.toString().trim();
+    const rawSelectedText = selection.toString().trim();
+    const selectedText = cleanPdfSelectionText(rawSelectedText);
     if (!selectedText) return;
 
     const pageBounds = pageElement.getBoundingClientRect();
@@ -657,46 +825,66 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
       .filter((rect) => rect.width > 0 && rect.height > 0);
     if (!rects.length) return;
 
+    const stageBounds = stageRef.current?.getBoundingClientRect();
+    const rangeBounds = range.getBoundingClientRect();
+    if (stageBounds && stageBounds.width > 0 && stageBounds.height > 0) {
+      setPopoverAnchor({
+        centerX: rangeBounds.left + rangeBounds.width / 2 - stageBounds.left,
+        top: rangeBounds.top - stageBounds.top,
+        bottom: rangeBounds.bottom - stageBounds.top,
+        stageWidth: stageBounds.width,
+        stageHeight: stageBounds.height,
+      });
+    } else {
+      setPopoverAnchor(null);
+    }
+
     const pageText = layer.innerText || '';
-    const textIndex = pageText.indexOf(selectedText);
+    const textIndex = pageText.indexOf(rawSelectedText);
     setSelectionDraft({
       pageNumber: Number(pageElement.dataset.paperPageNumber),
       selectedText,
       rects,
       contextBefore:
         textIndex >= 0
-          ? pageText.slice(Math.max(0, textIndex - 80), textIndex)
+          ? pageText.slice(Math.max(0, textIndex - 100), textIndex)
           : '',
       contextAfter:
         textIndex >= 0
           ? pageText.slice(
-              textIndex + selectedText.length,
-              textIndex + selectedText.length + 80,
+              textIndex + rawSelectedText.length,
+              textIndex + rawSelectedText.length + 100,
             )
           : '',
     });
-    setSidebarTab('annotations');
-    setSidebarOpen(true);
+    setSelectionComment('');
+    setSelectionTranslation(null);
+    setSelectionTransError(null);
+    setCopiedTransNotice(false);
   };
 
-  const saveSelection = async () => {
-    if (!selectionDraft) return;
+  const persistDraftAnnotation = async (
+    draft: SelectionDraft,
+    commentText: string,
+  ) => {
     setSaving(true);
     try {
       const saved = await literatureApi.saveAnnotation({
         paperId: paper.id,
-        pageNumber: selectionDraft.pageNumber,
-        selectedText: selectionDraft.selectedText,
-        comment: selectionComment.trim() || null,
+        pageNumber: draft.pageNumber,
+        selectedText: draft.selectedText,
+        comment: commentText.trim() || null,
         color: selectionColor,
-        rects: selectionDraft.rects,
-        contextBefore: selectionDraft.contextBefore,
-        contextAfter: selectionDraft.contextAfter,
+        rects: draft.rects,
+        contextBefore: draft.contextBefore,
+        contextAfter: draft.contextAfter,
       });
       setAnnotations((current) => [...current, saved]);
       setActiveAnnotationId(saved.id);
       setSelectionDraft(null);
       setSelectionComment('');
+      setPopoverAnchor(null);
+      setSelectionTranslation(null);
       window.getSelection()?.removeAllRanges();
     } catch (saveError) {
       setError(
@@ -704,6 +892,256 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
       );
     } finally {
       setSaving(false);
+    }
+  };
+
+  const saveSelection = async () => {
+    if (!selectionDraft) return;
+    await persistDraftAnnotation(selectionDraft, selectionComment);
+  };
+
+  const formatSelectionTranslationNote = (
+    item: PaperSelectionTranslation,
+  ): string => {
+    const parts = [`【译文】${item.translation}`];
+    if (item.phoneticOrPos) {
+      parts[0] = `【译文】(${item.phoneticOrPos}) ${item.translation}`;
+    }
+    if (item.termNote) {
+      parts.push(`【术语】${item.termNote}`);
+    }
+    return parts.join('\n');
+  };
+
+  const handleTranslateSelection = async (
+    preferredMode?: 'word' | 'passage',
+    appendToNote = false,
+  ) => {
+    if (!selectionDraft) return;
+    const modeToUse =
+      preferredMode ??
+      (isShortTermSelection(selectionDraft.selectedText) ? 'word' : 'passage');
+    setSelectionTranslating(true);
+    setSelectionTransError(null);
+    setCopiedTransNotice(false);
+    try {
+      const result = await translatePaperSelection({
+        pdfSha256,
+        paperTitle: paper.title,
+        text: selectionDraft.selectedText,
+        mode: modeToUse,
+        contextBefore: selectionDraft.contextBefore,
+        contextAfter: selectionDraft.contextAfter,
+      });
+      setSelectionTranslation(result);
+      if (appendToNote) {
+        const note = formatSelectionTranslationNote(result);
+        setSelectionComment((prev) =>
+          prev.trim() ? `${prev.trim()}\n${note}` : note,
+        );
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setSelectionTransError(message);
+      if (appendToNote) {
+        setError(message);
+      }
+    } finally {
+      setSelectionTranslating(false);
+    }
+  };
+
+  const handlePopoverQuickHighlight = async (withTranslation = false) => {
+    if (!selectionDraft) return;
+    const note =
+      withTranslation && selectionTranslation
+        ? formatSelectionTranslationNote(selectionTranslation)
+        : selectionComment;
+    await persistDraftAnnotation(selectionDraft, note);
+    setSidebarTab('annotations');
+    setSidebarOpen(true);
+  };
+
+  const handlePopoverOpenNote = (withTranslation = false) => {
+    if (withTranslation && selectionTranslation) {
+      const formatted = formatSelectionTranslationNote(selectionTranslation);
+      setSelectionComment((prev) =>
+        prev.trim() ? `${prev.trim()}\n${formatted}` : formatted,
+      );
+    }
+    setPopoverAnchor(null);
+    setSidebarTab('annotations');
+    setSidebarOpen(true);
+  };
+
+  const handleCopySelectionTranslation = async () => {
+    if (!selectionTranslation?.translation) return;
+    try {
+      await navigator.clipboard.writeText(selectionTranslation.translation);
+      setCopiedTransNotice(true);
+      window.setTimeout(() => setCopiedTransNotice(false), 1800);
+    } catch {
+      // Ignore clipboard failures in restricted contexts
+    }
+  };
+
+  const handleTranslatePage = async (targetPage: number, force = false) => {
+    if (!pdf) return;
+    translationCancelRef.current = false;
+    setTranslationError(null);
+    setTranslatingPage(targetPage);
+    setTranslationProgress(null);
+    try {
+      const blocks = await ensurePageLayoutAndCache(targetPage);
+      const record = await translatePaperPage({
+        paperTitle: paper.title,
+        pdfSha256,
+        pageNumber: targetPage,
+        blocks,
+        force,
+        onProgress: (done, total) => setTranslationProgress({ done, total }),
+        isCancelled: () => translationCancelRef.current,
+      });
+      setTranslationsByPage((prev) => ({
+        ...prev,
+        [targetPage]: record,
+      }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes('已取消')) {
+        setTranslationError(msg);
+      }
+    } finally {
+      setTranslatingPage(null);
+      setTranslationProgress(null);
+    }
+  };
+
+  const handleCancelPageTranslation = () => {
+    translationCancelRef.current = true;
+  };
+
+  const handleClearPageTranslationCache = async (targetPage: number) => {
+    if (!pdfSha256) return;
+    await deletePaperPageTranslation(pdfSha256, targetPage);
+    setTranslationsByPage((prev) => {
+      const next = { ...prev };
+      delete next[targetPage];
+      return next;
+    });
+  };
+
+  const handleSelectTranslatedBlock = (targetPage: number, blockId: number) => {
+    if (blockId < 0) {
+      setActiveTranslatedBlock(null);
+      return;
+    }
+    setActiveTranslatedBlock({ pageNumber: targetPage, blockId });
+    goToPage(targetPage);
+    window.setTimeout(() => {
+      const focusNode = stageRef.current?.querySelector<HTMLElement>(
+        `[data-paper-page-number="${targetPage}"] .paper-pdf-trans-focus`,
+      );
+      focusNode?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }, 60);
+  };
+
+  const handleSaveBlockAsAnnotation = async (
+    block: PaperParagraphBlock,
+    translation: string,
+  ) => {
+    setSaving(true);
+    try {
+      const saved = await literatureApi.saveAnnotation({
+        paperId: paper.id,
+        pageNumber: block.pageNumber,
+        selectedText: block.text,
+        comment: `【双语译文】${translation}`,
+        color: selectionColor,
+        rects: block.rects.slice(0, 24),
+        contextBefore: null,
+        contextAfter: null,
+      });
+      setAnnotations((current) => [...current, saved]);
+      setActiveAnnotationId(saved.id);
+    } catch (err) {
+      setTranslationError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleToggleBilingualMode = () => {
+    if (translationDisplayMode === 'off') {
+      setTranslationDisplayMode('sidebar');
+      setSidebarTab('translation');
+      setSidebarOpen(true);
+      if (!translationsByPage[pageNumber] && translatingPage === null) {
+        void handleTranslatePage(pageNumber, false);
+      }
+    } else {
+      setTranslationDisplayMode('off');
+    }
+  };
+
+  const handleCheckPdf2Zh = async () => {
+    setCheckingPdf2Zh(true);
+    setDualPdfError(null);
+    try {
+      const status = await checkPdf2ZhStatus();
+      setPdf2ZhStatus(status);
+    } catch (err) {
+      setDualPdfError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCheckingPdf2Zh(false);
+    }
+  };
+
+  const switchLoadedPdfPath = async (targetPath: string) => {
+    const task = getDocument({ url: convertFileSrc(targetPath) });
+    const previousTask = pdfTaskRef.current;
+    pdfTaskRef.current = task;
+    const loadedPdf = await task.promise;
+    const firstPage = await loadedPdf.getPage(1);
+    const vp = firstPage.getViewport({ scale: 1 });
+    setBasePageSize({ width: vp.width, height: vp.height });
+    setPageCount(loadedPdf.numPages);
+    setPageNumber((curr) => clamp(curr, 1, loadedPdf.numPages));
+    setPdf(loadedPdf);
+    setBlocksByPage({});
+    if (previousTask && previousTask !== task) {
+      void previousTask.destroy();
+    }
+  };
+
+  const handleGenerateDualPdf = async (force = false) => {
+    setGeneratingDualPdf(true);
+    setDualPdfError(null);
+    try {
+      const result = await generateBilingualPaperPdf(paper.id, { force });
+      setDualPdfResult(result);
+      await switchLoadedPdfPath(result.dualPdfPath);
+      setViewingDualPdf(true);
+    } catch (err) {
+      setDualPdfError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setGeneratingDualPdf(false);
+    }
+  };
+
+  const handleToggleDualPdf = async () => {
+    if (!dualPdfResult) return;
+    setDualPdfError(null);
+    try {
+      const nextViewingDual = !viewingDualPdf;
+      const targetPath = nextViewingDual
+        ? dualPdfResult.dualPdfPath
+        : originalPdfPathRef.current;
+      if (!targetPath) return;
+      await switchLoadedPdfPath(targetPath);
+      setViewingDualPdf(nextViewingDual);
+    } catch (err) {
+      setDualPdfError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -1051,54 +1489,151 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
           >
             {currentBookmark ? '已加书签' : '添加书签'}
           </button>
+
+          <div className="paper-reader-translation-toolbar">
+            <button
+              type="button"
+              className={translationDisplayMode !== 'off' ? 'is-selected' : ''}
+              onClick={handleToggleBilingualMode}
+              disabled={loading}
+              aria-pressed={translationDisplayMode !== 'off'}
+              title="开启/关闭论文双语对照翻译"
+            >
+              {translationDisplayMode !== 'off' ? '双语：开' : '双语对照'}
+            </button>
+            {translationDisplayMode !== 'off' && (
+              <select
+                aria-label="双语译文显示方式"
+                value={translationDisplayMode}
+                onChange={(event) =>
+                  setTranslationDisplayMode(
+                    event.target.value as PaperTranslationDisplayMode,
+                  )
+                }
+              >
+                <option value="sidebar">侧栏对照</option>
+                <option value="overlay">页内覆盖</option>
+                <option value="bilingual">页内浮卡</option>
+              </select>
+            )}
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => {
+                if (translatingPage !== null) {
+                  handleCancelPageTranslation();
+                } else {
+                  if (translationDisplayMode === 'off') {
+                    setTranslationDisplayMode('sidebar');
+                  }
+                  setSidebarTab('translation');
+                  setSidebarOpen(true);
+                  void handleTranslatePage(pageNumber, false);
+                }
+              }}
+              title="使用 AI 翻译当前页全部段落"
+            >
+              {translatingPage !== null
+                ? translationProgress
+                  ? `停止 (${translationProgress.done}/${translationProgress.total})`
+                  : '停止翻译'
+                : '翻译本页'}
+            </button>
+          </div>
+
           <span className="paper-reader-hint">
-            ← → 翻页 · 选中文字可高亮或写批注
+            ← → 翻页 · 选中文字可翻译、高亮或批注
           </span>
         </div>
 
         <div
           className={`paper-reader-body${sidebarOpen ? '' : ' is-sidebar-closed'}`}
         >
-          <main
-            className={`paper-reader-stage is-${effectiveMode}`}
-            ref={stageRef}
-            onScroll={handleStageScroll}
-          >
-            {loading && (
-              <div className="paper-reader-message" role="status">
-                正在打开并绘制 PDF…
-              </div>
+          <div className="paper-reader-stage-shell">
+            <main
+              className={`paper-reader-stage is-${effectiveMode}`}
+              ref={stageRef}
+              onScroll={handleStageScroll}
+            >
+              {loading && (
+                <div className="paper-reader-message" role="status">
+                  正在打开并绘制 PDF…
+                </div>
+              )}
+              {error && (
+                <div className="paper-reader-error" role="alert">
+                  {error}
+                </div>
+              )}
+              {!loading && !error && pdf && (
+                <div
+                  className={`paper-reader-page-scroller is-${effectiveMode}`}
+                  onMouseUp={captureSelection}
+                >
+                  {visiblePages.map((number) => (
+                    <PaperPdfPage
+                      key={number}
+                      pdf={pdf}
+                      pageNumber={number}
+                      scale={scale}
+                      pdfSha256={pdfSha256}
+                      annotations={annotationsByPage.get(number) ?? []}
+                      activeAnnotationId={activeAnnotationId}
+                      lazy={effectiveMode === 'scroll'}
+                      shouldRender={
+                        effectiveMode !== 'scroll' ||
+                        Math.abs(number - pageNumber) <= 3
+                      }
+                      baseSize={basePageSize}
+                      paragraphBlocks={blocksByPage[number]}
+                      pageTranslations={translationMapsByPage[number]}
+                      translationDisplayMode={
+                        viewingDualPdf ? 'off' : translationDisplayMode
+                      }
+                      activeTranslatedBlockId={
+                        activeTranslatedBlock?.pageNumber === number
+                          ? activeTranslatedBlock.blockId
+                          : null
+                      }
+                      onSelectTranslatedBlock={(pg, blockId) => {
+                        handleSelectTranslatedBlock(pg, blockId);
+                        if (
+                          blockId >= 0 &&
+                          translationDisplayMode === 'sidebar'
+                        ) {
+                          setSidebarTab('translation');
+                          setSidebarOpen(true);
+                        }
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+            </main>
+
+            {selectionDraft && popoverAnchor && (
+              <PaperSelectionPopover
+                selectedText={selectionDraft.selectedText}
+                anchor={popoverAnchor}
+                translating={selectionTranslating}
+                translation={selectionTranslation}
+                error={selectionTransError}
+                savingHighlight={saving}
+                copiedNotice={copiedTransNotice}
+                onTranslate={(preferredMode) =>
+                  void handleTranslateSelection(preferredMode)
+                }
+                onQuickHighlight={(withTranslation) =>
+                  void handlePopoverQuickHighlight(withTranslation)
+                }
+                onOpenAnnotationNote={(withTranslation) =>
+                  handlePopoverOpenNote(withTranslation)
+                }
+                onCopyTranslation={() => void handleCopySelectionTranslation()}
+                onClose={() => setPopoverAnchor(null)}
+              />
             )}
-            {error && (
-              <div className="paper-reader-error" role="alert">
-                {error}
-              </div>
-            )}
-            {!loading && !error && pdf && (
-              <div
-                className={`paper-reader-page-scroller is-${effectiveMode}`}
-                onMouseUp={captureSelection}
-              >
-                {visiblePages.map((number) => (
-                  <PaperPdfPage
-                    key={number}
-                    pdf={pdf}
-                    pageNumber={number}
-                    scale={scale}
-                    pdfSha256={pdfSha256}
-                    annotations={annotationsByPage.get(number) ?? []}
-                    activeAnnotationId={activeAnnotationId}
-                    lazy={effectiveMode === 'scroll'}
-                    shouldRender={
-                      effectiveMode !== 'scroll' ||
-                      Math.abs(number - pageNumber) <= 3
-                    }
-                    baseSize={basePageSize}
-                  />
-                ))}
-              </div>
-            )}
-          </main>
+          </div>
 
           {sidebarOpen && (
             <aside className="paper-reader-notes" aria-label="论文导航与批注">
@@ -1111,6 +1646,7 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
                   [
                     ['outline', '目录'],
                     ['search', '搜索'],
+                    ['translation', '译文'],
                     ['annotations', `批注 ${annotations.length}`],
                     ['bookmarks', `书签 ${bookmarks.length}`],
                   ] as Array<[SidebarTab, string]>
@@ -1127,6 +1663,59 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
                   </button>
                 ))}
               </div>
+
+              {sidebarTab === 'translation' && (
+                <div className="paper-reader-sidebar-content">
+                  <div className="paper-reader-sidebar-title">
+                    双语对照译文 <span>P.{pageNumber}</span>
+                  </div>
+                  <PaperTranslationSidebar
+                    visiblePages={
+                      effectiveMode === 'scroll' ? [pageNumber] : visiblePages
+                    }
+                    pageNumber={pageNumber}
+                    displayMode={
+                      translationDisplayMode === 'off'
+                        ? 'sidebar'
+                        : translationDisplayMode
+                    }
+                    onChangeDisplayMode={(nextMode) =>
+                      setTranslationDisplayMode(nextMode)
+                    }
+                    blocksByPage={blocksByPage}
+                    translationsByPage={translationsByPage}
+                    translatingPage={translatingPage}
+                    progress={translationProgress}
+                    translationError={translationError}
+                    activeBlock={activeTranslatedBlock}
+                    onTranslatePage={(targetPage, force) => {
+                      if (translationDisplayMode === 'off') {
+                        setTranslationDisplayMode('sidebar');
+                      }
+                      void handleTranslatePage(targetPage, force);
+                    }}
+                    onCancelTranslate={handleCancelPageTranslation}
+                    onClearPageCache={(targetPage) =>
+                      void handleClearPageTranslationCache(targetPage)
+                    }
+                    onSelectBlock={handleSelectTranslatedBlock}
+                    onSaveBlockAsAnnotation={(block, translatedText) =>
+                      void handleSaveBlockAsAnnotation(block, translatedText)
+                    }
+                    pdf2ZhStatus={pdf2ZhStatus}
+                    checkingPdf2Zh={checkingPdf2Zh}
+                    generatingDualPdf={generatingDualPdf}
+                    dualPdfResult={dualPdfResult}
+                    viewingDualPdf={viewingDualPdf}
+                    dualPdfError={dualPdfError}
+                    onCheckPdf2Zh={() => void handleCheckPdf2Zh()}
+                    onGenerateDualPdf={(force) =>
+                      void handleGenerateDualPdf(force)
+                    }
+                    onToggleDualPdf={() => void handleToggleDualPdf()}
+                  />
+                </div>
+              )}
 
               {sidebarTab === 'outline' && (
                 <div className="paper-reader-sidebar-content">
@@ -1292,6 +1881,15 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
                         rows={3}
                       />
                       <div className="paper-reader-selection-actions">
+                        <button
+                          type="button"
+                          disabled={selectionTranslating}
+                          onClick={() =>
+                            void handleTranslateSelection(undefined, true)
+                          }
+                        >
+                          {selectionTranslating ? '翻译中…' : 'AI 译入笔记'}
+                        </button>
                         <button
                           type="button"
                           onClick={() => setSelectionDraft(null)}

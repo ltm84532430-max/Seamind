@@ -3,6 +3,14 @@ import { TextLayer } from 'pdfjs-dist';
 import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist';
 import type { PaperAnnotation, PaperAnnotationRect } from './types';
 
+import type { PaperParagraphBlock } from './paper-pdf-layout';
+
+export type PaperTranslationDisplayMode =
+  | 'off'
+  | 'sidebar'
+  | 'overlay'
+  | 'bilingual';
+
 interface PaperPdfPageProps {
   pdf: PDFDocumentProxy;
   pageNumber: number;
@@ -13,6 +21,11 @@ interface PaperPdfPageProps {
   lazy: boolean;
   shouldRender: boolean;
   baseSize: { width: number; height: number };
+  paragraphBlocks?: PaperParagraphBlock[];
+  pageTranslations?: Record<number, string>;
+  translationDisplayMode?: PaperTranslationDisplayMode;
+  activeTranslatedBlockId?: number | null;
+  onSelectTranslatedBlock?: (pageNumber: number, blockId: number) => void;
 }
 
 const DEFAULT_HIGHLIGHT = '#f4d35e';
@@ -27,7 +40,15 @@ export const PaperPdfPage: React.FC<PaperPdfPageProps> = ({
   lazy,
   shouldRender,
   baseSize,
+  paragraphBlocks = [],
+  pageTranslations,
+  translationDisplayMode = 'off',
+  activeTranslatedBlockId = null,
+  onSelectTranslatedBlock,
 }) => {
+  const [peekingBlockIds, setPeekingBlockIds] = useState<
+    Record<number, boolean>
+  >({});
   const wrapperRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
@@ -159,8 +180,122 @@ export const PaperPdfPage: React.FC<PaperPdfPageProps> = ({
             />
           )),
         )}
+        {translationDisplayMode !== 'off' &&
+          activeTranslatedBlockId !== null &&
+          paragraphBlocks
+            .filter((block) => block.id === activeTranslatedBlockId)
+            .flatMap((block) =>
+              block.rects.map((rect, index) => (
+                <span
+                  key={`trans-focus-${block.id}-${index}`}
+                  className="paper-pdf-trans-focus"
+                  style={{
+                    left: `${rect.x * 100}%`,
+                    top: `${rect.y * 100}%`,
+                    width: `${rect.width * 100}%`,
+                    height: `${rect.height * 100}%`,
+                  }}
+                />
+              )),
+            )}
       </div>
       <div className="textLayer" ref={textLayerRef} />
+      {translationDisplayMode !== 'off' &&
+        pageTranslations &&
+        paragraphBlocks.length > 0 && (
+          <div
+            className={`paper-pdf-translation-layer is-${translationDisplayMode}`}
+            aria-label={`第 ${pageNumber} 页双语译文层`}
+          >
+            {paragraphBlocks.map((block) => {
+              const translation = pageTranslations[block.id];
+              if (!translation) return null;
+              const isActive = activeTranslatedBlockId === block.id;
+              const isPeeking = Boolean(peekingBlockIds[block.id]);
+
+              if (translationDisplayMode === 'overlay') {
+                return (
+                  <div
+                    key={`overlay-${block.id}`}
+                    className={`paper-pdf-overlay-block ${isActive ? 'is-active' : ''} ${isPeeking ? 'is-peeking' : ''} ${block.isHeading ? 'is-heading' : ''}`}
+                    style={{
+                      left: `${block.bbox.x * 100}%`,
+                      top: `${block.bbox.y * 100}%`,
+                      width: `${Math.max(8, block.bbox.width * 100)}%`,
+                      minHeight: `${Math.max(1.5, block.bbox.height * 100)}%`,
+                      fontSize: `${Math.max(10, Math.round((block.isHeading ? 12 : 10.2) * scale))}px`,
+                    }}
+                    onClick={() =>
+                      onSelectTranslatedBlock?.(pageNumber, block.id)
+                    }
+                  >
+                    {!isPeeking && (
+                      <div className="paper-pdf-overlay-text">
+                        {translation}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      className="paper-pdf-peek-btn"
+                      title={isPeeking ? '恢复中文译文' : '查看英文原文'}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setPeekingBlockIds((prev) => ({
+                          ...prev,
+                          [block.id]: !prev[block.id],
+                        }));
+                      }}
+                    >
+                      {isPeeking ? '译' : '原'}
+                    </button>
+                  </div>
+                );
+              }
+
+              return (
+                <React.Fragment key={`marker-${block.id}`}>
+                  <button
+                    type="button"
+                    className={`paper-pdf-para-marker ${isActive ? 'is-active' : ''}`}
+                    style={{
+                      left: `${Math.max(0.3, (block.bbox.x - 0.015) * 100)}%`,
+                      top: `${block.bbox.y * 100}%`,
+                      height: `${Math.max(1.4, block.bbox.height * 100)}%`,
+                    }}
+                    title="点击查看或定位该段译文"
+                    onClick={() =>
+                      onSelectTranslatedBlock?.(pageNumber, block.id)
+                    }
+                  />
+                  {translationDisplayMode === 'bilingual' && isActive && (
+                    <div
+                      className="paper-pdf-bilingual-popover"
+                      style={{
+                        left: `${Math.min(54, Math.max(3, block.bbox.x * 100))}%`,
+                        top: `${Math.min(78, (block.bbox.y + block.bbox.height) * 100 + 0.8)}%`,
+                        width: `${Math.max(38, Math.min(84, block.bbox.width * 100))}%`,
+                      }}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <div className="paper-pdf-bilingual-popover-head">
+                        <span>段 {block.id + 1} 译文</span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onSelectTranslatedBlock?.(pageNumber, -1)
+                          }
+                        >
+                          ×
+                        </button>
+                      </div>
+                      <p>{translation}</p>
+                    </div>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </div>
+        )}
       {renderStatus === 'loading' && (
         <div className="paper-pdf-page-status" role="status">
           正在绘制第 {pageNumber} 页…
