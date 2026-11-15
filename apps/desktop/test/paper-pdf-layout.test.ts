@@ -4,6 +4,9 @@ import {
   computePageContentHash,
   groupTextBoxesIntoParagraphs,
   isShortTermSelection,
+  pagesForMode,
+  resolvedMode,
+  spreadStart,
   type RawTextBox,
 } from '../src/literature/paper-pdf-layout';
 
@@ -186,5 +189,17 @@ describe('groupTextBoxesIntoParagraphs', () => {
     ]);
     expect(hashA).toMatch(/^[0-9a-f]{64}$/);
     expect(hashA).toBe(hashB);
+  });
+});
+
+describe('paper reader layout', () => {
+  it('picks a spread on a wide page and keeps a single page on a narrow one', () => {
+    expect(resolvedMode('auto', 1200, 800)).toBe('spread');
+    expect(resolvedMode('auto', 900, 800)).toBe('single');
+    expect(resolvedMode('scroll', 1200, 800)).toBe('scroll');
+    expect(spreadStart(4)).toBe(3);
+    expect(pagesForMode(4, 10, 'spread')).toEqual([3, 4]);
+    expect(pagesForMode(10, 10, 'spread')).toEqual([9, 10]);
+    expect(pagesForMode(3, 10, 'single')).toEqual([3]);
   });
 });

@@ -1,9 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  blankTask,
   collectTaskDescendantIds,
   compareTasksBy,
   countPlanActiveTasks,
   extractSortedVideoIds,
+  groupArchivedTasks,
+  readTaskView,
+  writeTaskView,
 } from '../src/tasks/task-list-model';
 
 describe('task list model', () => {
@@ -86,6 +90,52 @@ describe('task list model', () => {
       { id: 'b', parentId: 'a' },
     ];
     expect([...collectTaskDescendantIds(cyclic, 'a')]).toEqual(['b']);
+  });
+
+  it('builds a blank task from an ebook resource and groups archives by day', () => {
+    const draft = blankTask(null, {
+      kind: 'ebook',
+      resourceId: 'book',
+      title: '线性代数',
+      rootPath: '/library',
+      relativePath: 'math.epub',
+    });
+    expect(draft.title).toBe('阅读 线性代数');
+    expect(draft.resources).toHaveLength(1);
+    expect(draft.status).toBe('todo');
+
+    const archived = groupArchivedTasks([
+      {
+        id: 'a',
+        title: '较早',
+        archivedAt: Date.parse('2026-11-14T08:00:00'),
+        completedAt: null,
+        position: 1,
+      } as never,
+      {
+        id: 'b',
+        title: '较晚',
+        archivedAt: Date.parse('2026-11-15T08:00:00'),
+        completedAt: null,
+        position: 2,
+      } as never,
+    ]);
+    expect(archived.map((group) => group.tasks.map((task) => task.id))).toEqual(
+      [['b'], ['a']],
+    );
+  });
+
+  it('remembers the task board view', () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    });
+    writeTaskView('calendar');
+    expect(readTaskView()).toBe('calendar');
+    writeTaskView('board');
+    expect(readTaskView()).toBe('board');
+    vi.unstubAllGlobals();
   });
 
   it('extracts sorted unique YouTube resource ids', () => {
