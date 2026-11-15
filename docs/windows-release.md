@@ -2,16 +2,18 @@
 
 Seamind releases are built on GitHub Actions from version tags. The workflow builds the NSIS installer, signs its updater artifact, and publishes `latest.json` with the release assets.
 
+The release workflow derives the updater endpoint from `GITHUB_REPOSITORY` and passes it as a Tauri build config override. The checked-in base config has no updater endpoint, so local builds cannot accidentally point at a maintainer's personal repository. Existing installed builds still use the endpoint embedded when they were built: keep the previous repository's `latest.json` available until those clients have upgraded. Preserve the app identifier, credential service name, and signing key during a repository handoff.
+
 ## Signing key
 
 The Tauri updater rejects unsigned packages. The private key and its password must remain outside the repository; only the public key belongs in `apps/desktop/src-tauri/tauri.conf.json`.
 
-On the release maintainer's Windows machine, authenticate GitHub CLI and set these repository Actions secrets from local files. Do not paste key material into source files or commit it:
+On the release maintainer's Windows machine, authenticate GitHub CLI, replace `OWNER` with the release repository owner, and set these repository Actions secrets from local files. Do not paste key material into source files or commit it:
 
 ```powershell
 gh auth login
-cmd.exe /d /c 'gh secret set TAURI_SIGNING_PRIVATE_KEY --repo ltm84532430-max/Seamind < "%USERPROFILE%\.tauri\seamind.key"'
-cmd.exe /d /c 'gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --repo ltm84532430-max/Seamind < "%USERPROFILE%\.tauri\seamind-signing-password.txt"'
+cmd.exe /d /c 'gh secret set TAURI_SIGNING_PRIVATE_KEY --repo OWNER/Seamind < "%USERPROFILE%\.tauri\seamind.key"'
+cmd.exe /d /c 'gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --repo OWNER/Seamind < "%USERPROFILE%\.tauri\seamind-signing-password.txt"'
 ```
 
 Keep a protected offline backup of both local files. Losing the private key prevents publishing trusted updates for already installed builds. Never replace it without a planned key rotation.

@@ -583,8 +583,8 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
               prev[targetPage] ? prev : { ...prev, [targetPage]: cachedTrans },
             );
           }
-        } catch {
-          // Ignore cache miss errors
+        } catch (err) {
+          setTranslationError(err instanceof Error ? err.message : String(err));
         }
       }
       return resolvedBlocks;
@@ -1023,12 +1023,16 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
 
   const handleClearPageTranslationCache = async (targetPage: number) => {
     if (!pdfSha256) return;
-    await deletePaperPageTranslation(pdfSha256, targetPage);
-    setTranslationsByPage((prev) => {
-      const next = { ...prev };
-      delete next[targetPage];
-      return next;
-    });
+    try {
+      await deletePaperPageTranslation(pdfSha256, targetPage);
+      setTranslationsByPage((prev) => {
+        const next = { ...prev };
+        delete next[targetPage];
+        return next;
+      });
+    } catch (err) {
+      setTranslationError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   const handleSelectTranslatedBlock = (targetPage: number, blockId: number) => {

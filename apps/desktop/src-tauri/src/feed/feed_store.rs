@@ -174,43 +174,83 @@ pub struct FeedOverview {
     pub categories: Vec<CategoryStats>,
 }
 
+fn ensure_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|e| format!("Cannot inspect feed schema: {e}"))?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| format!("Cannot inspect feed schema: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Cannot inspect feed schema: {e}"))?;
+    if !columns.iter().any(|name| name == column) {
+        conn.execute_batch(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+        ))
+        .map_err(|e| format!("Cannot upgrade feed schema: {e}"))?;
+    }
+    Ok(())
+}
+
 pub fn open(path: &std::path::Path) -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(|e| format!("无法打开订阅数据库：{e}"))?;
     conn.execute_batch("PRAGMA foreign_keys = ON;")
         .map_err(|e| format!("启用订阅数据库关联约束失败：{e}"))?;
-    conn.execute_batch(SCHEMA)
-        .map_err(|e| format!("初始化订阅数据库结构失败：{e}"))?;
+    let version: i64 = conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(|e| format!("Cannot read feed schema version: {e}"))?;
+    if version > 1 {
+        return Err(format!("Unsupported feed database version: {version}"));
+    }
+    if version == 0 {
+        conn.execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| format!("Cannot begin feed migration: {e}"))?;
+        let current_version: i64 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .map_err(|e| format!("Cannot read feed schema version: {e}"))?;
+        if current_version == 0 {
+            conn.execute_batch(SCHEMA)
+                .map_err(|e| format!("初始化订阅数据库结构失败：{e}"))?;
 
-    // 增量热迁移：为已有数据库扩展音频支持字段
-    let _ = conn.execute("ALTER TABLE feed_articles ADD COLUMN audio_url TEXT;", []);
-    let _ = conn.execute("ALTER TABLE feed_articles ADD COLUMN audio_type TEXT;", []);
-    let _ = conn.execute(
-        "ALTER TABLE feed_articles ADD COLUMN audio_duration INTEGER;",
-        [],
-    );
-    // 旧订阅库启动时补齐封面地址列，不丢失已有文章数据。
-    let _ = conn.execute("ALTER TABLE feed_articles ADD COLUMN image_url TEXT;", []);
-    // 旧库先补齐音频列，再创建依赖新列的索引，避免启动时整库打不开。
-    let _ = conn.execute(
+            // 增量热迁移：为已有数据库扩展音频支持字段
+            ensure_column(&conn, "feed_articles", "audio_url", "TEXT")?;
+            ensure_column(&conn, "feed_articles", "audio_type", "TEXT")?;
+            ensure_column(&conn, "feed_articles", "audio_duration", "INTEGER")?;
+            // 旧订阅库启动时补齐封面地址列，不丢失已有文章数据。
+            ensure_column(&conn, "feed_articles", "image_url", "TEXT")?;
+            // 旧库先补齐音频列，再创建依赖新列的索引，避免启动时整库打不开。
+            conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_feed_articles_audio ON feed_articles(audio_url) WHERE audio_url IS NOT NULL;",
         [],
-    );
+    ).map_err(|e| format!("Cannot create feed audio index: {e}"))?;
 
-    conn.execute(
-        "UPDATE feed_channels SET category = CASE
+            conn.execute(
+                "UPDATE feed_channels SET category = CASE
             WHEN trim(category) = '' THEN '默认分类'
             ELSE trim(category)
          END",
-        [],
-    )
-    .map_err(|e| format!("规范化订阅分类失败：{e}"))?;
-    backfill_categories(&conn)?;
-    repair_category_color_collisions(&conn)?;
-    conn.execute_batch(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_feed_categories_color
+                [],
+            )
+            .map_err(|e| format!("规范化订阅分类失败：{e}"))?;
+            backfill_categories(&conn)?;
+            repair_category_color_collisions(&conn)?;
+            conn.execute_batch(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_feed_categories_color
          ON feed_categories(color);",
-    )
-    .map_err(|e| format!("建立订阅分类颜色唯一约束失败：{e}"))?;
+            )
+            .map_err(|e| format!("建立订阅分类颜色唯一约束失败：{e}"))?;
+
+            conn.pragma_update(None, "user_version", 1)
+                .map_err(|e| format!("Cannot record feed schema version: {e}"))?;
+        }
+        conn.execute_batch("COMMIT")
+            .map_err(|e| format!("Cannot commit feed migration: {e}"))?;
+    }
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -218,9 +258,9 @@ pub fn open(path: &std::path::Path) -> Result<Connection, String> {
         .unwrap_or(0);
     let channel_count: usize = conn
         .query_row("SELECT count(*) FROM feed_channels", [], |r| r.get(0))
-        .unwrap_or(0);
+        .map_err(|e| format!("Cannot count feed channels: {e}"))?;
     if channel_count == 0 {
-        let _ = seed_default_sources(&conn, now, true);
+        seed_default_sources(&conn, now, false)?;
     }
 
     Ok(conn)
@@ -696,10 +736,6 @@ pub fn seed_default_sources(
     force: bool,
 ) -> Result<Vec<String>, String> {
     const SEED_KEY: &str = "starter-feeds-v3-podcast-military";
-    let channel_count: usize = conn
-        .query_row("SELECT count(*) FROM feed_channels", [], |r| r.get(0))
-        .unwrap_or(0);
-
     let already_seeded: bool = conn
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM feed_seed_state WHERE key = ?1)",
@@ -708,7 +744,7 @@ pub fn seed_default_sources(
         )
         .map_err(|e| format!("检查默认订阅源状态失败：{e}"))?;
 
-    if already_seeded && channel_count > 0 && !force {
+    if already_seeded && !force {
         return Ok(Vec::new());
     }
 
@@ -1422,6 +1458,46 @@ mod tests {
         let conn2 = open(&db_path).unwrap();
         let overview2 = get_feed_overview(&conn2).unwrap();
         assert_eq!(overview2.channels.len(), overview.channels.len());
+        conn2.execute("DELETE FROM feed_channels", []).unwrap();
+        drop(conn2);
+        let conn3 = open(&db_path).unwrap();
+        assert!(get_feed_overview(&conn3).unwrap().channels.is_empty());
+        drop(conn3);
         let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn upgrades_legacy_articles_and_records_schema_version() {
+        let db_path = std::env::temp_dir().join(format!("legacy_feed_{}.sqlite3", Uuid::new_v4()));
+        let legacy = Connection::open(&db_path).unwrap();
+        legacy
+            .execute_batch(
+                "CREATE TABLE feed_articles (
+                id TEXT PRIMARY KEY, channel_id TEXT, guid TEXT, title TEXT, author TEXT,
+                url TEXT, content TEXT, summary TEXT, published_at INTEGER,
+                read_status TEXT, starred INTEGER, reading_time_min INTEGER, created_at INTEGER
+             );",
+            )
+            .unwrap();
+        drop(legacy);
+
+        let conn = open(&db_path).unwrap();
+        let version: i64 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 1);
+        let mut stmt = conn.prepare("PRAGMA table_info(feed_articles)").unwrap();
+        let columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        for column in ["audio_url", "audio_type", "audio_duration", "image_url"] {
+            assert!(columns.iter().any(|name| name == column));
+        }
+        drop(stmt);
+        drop(conn);
+        assert!(open(&db_path).is_ok());
+        std::fs::remove_file(db_path).unwrap();
     }
 }

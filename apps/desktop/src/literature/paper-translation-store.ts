@@ -53,6 +53,40 @@ function pageFallbackKey(pdfSha256: string, pageNumber: number): string {
   return `${LOCAL_PAGE_PREFIX}${pdfSha256.toLowerCase()}:${pageNumber}`;
 }
 
+function legacyPage(
+  pdfSha256: string,
+  pageNumber: number,
+): PaperPageTranslationRecord | null {
+  try {
+    const raw = localStorage.getItem(pageFallbackKey(pdfSha256, pageNumber));
+    if (!raw) return null;
+    const record = JSON.parse(raw) as PaperPageTranslationRecord;
+    return record.pdfSha256 === pdfSha256.toLowerCase() &&
+      record.pageNumber === pageNumber &&
+      typeof record.pageContentHash === 'string' &&
+      Number.isFinite(record.translatedAt) &&
+      typeof record.model === 'string' &&
+      Array.isArray(record.paragraphs) &&
+      record.paragraphs.every(
+        (paragraph) =>
+          Number.isSafeInteger(paragraph.id) &&
+          typeof paragraph.translation === 'string',
+      )
+      ? record
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function removeLegacyPage(pdfSha256: string, pageNumber: number): void {
+  try {
+    localStorage.removeItem(pageFallbackKey(pdfSha256, pageNumber));
+  } catch {
+    // The native store already holds the durable record.
+  }
+}
+
 function selectionCacheKey(
   pdfSha256: string,
   mode: string,
@@ -106,19 +140,28 @@ export async function getPaperPageTranslation(
   pageNumber: number,
 ): Promise<PaperPageTranslationRecord | null> {
   if (!pdfSha256) return null;
-  try {
-    return await invoke<PaperPageTranslationRecord | null>(
-      'get_paper_page_translation',
-      { pdfSha256, pageNumber },
-    );
-  } catch {
-    try {
-      const raw = localStorage.getItem(pageFallbackKey(pdfSha256, pageNumber));
-      return raw ? (JSON.parse(raw) as PaperPageTranslationRecord) : null;
-    } catch {
-      return null;
-    }
+  const native = await invoke<PaperPageTranslationRecord | null>(
+    'get_paper_page_translation',
+    { pdfSha256, pageNumber },
+  );
+  const legacy = legacyPage(pdfSha256, pageNumber);
+  if (native && (!legacy || native.translatedAt >= legacy.translatedAt)) {
+    removeLegacyPage(pdfSha256, pageNumber);
+    return native;
   }
+  if (!legacy) return null;
+  const migrated = await invoke<PaperPageTranslationRecord>(
+    'save_paper_page_translation',
+    {
+      pdfSha256,
+      pageNumber,
+      pageContentHash: legacy.pageContentHash,
+      model: legacy.model,
+      paragraphs: legacy.paragraphs,
+    },
+  );
+  removeLegacyPage(pdfSha256, pageNumber);
+  return migrated;
 }
 
 export async function savePaperPageTranslation(
@@ -128,61 +171,33 @@ export async function savePaperPageTranslation(
   model: string,
   paragraphs: TranslatedPaperParagraph[],
 ): Promise<PaperPageTranslationRecord> {
-  const fallbackRecord: PaperPageTranslationRecord = {
-    schemaVersion: 1,
-    pdfSha256: pdfSha256.toLowerCase(),
-    pageNumber,
-    pageContentHash: pageContentHash.toLowerCase(),
-    translatedAt: Date.now(),
-    model,
-    paragraphs,
-  };
-  try {
-    localStorage.setItem(
-      pageFallbackKey(pdfSha256, pageNumber),
-      JSON.stringify(fallbackRecord),
-    );
-  } catch {
-    // Ignore quota errors
-  }
-  try {
-    return await invoke<PaperPageTranslationRecord>(
-      'save_paper_page_translation',
-      {
-        pdfSha256,
-        pageNumber,
-        pageContentHash,
-        model,
-        paragraphs,
-      },
-    );
-  } catch {
-    return fallbackRecord;
-  }
+  const saved = await invoke<PaperPageTranslationRecord>(
+    'save_paper_page_translation',
+    { pdfSha256, pageNumber, pageContentHash, model, paragraphs },
+  );
+  removeLegacyPage(pdfSha256, pageNumber);
+  return saved;
 }
 
 export async function deletePaperPageTranslation(
   pdfSha256: string,
   pageNumber: number,
 ): Promise<boolean> {
-  try {
-    localStorage.removeItem(pageFallbackKey(pdfSha256, pageNumber));
-  } catch {
-    // Ignore
-  }
-  try {
-    return await invoke<boolean>('delete_paper_page_translation', {
-      pdfSha256,
-      pageNumber,
-    });
-  } catch {
-    return true;
-  }
+  const hadLegacy = legacyPage(pdfSha256, pageNumber) !== null;
+  const deleted = await invoke<boolean>('delete_paper_page_translation', {
+    pdfSha256,
+    pageNumber,
+  });
+  removeLegacyPage(pdfSha256, pageNumber);
+  return deleted || hadLegacy;
 }
 
 export async function clearPaperTranslations(
   pdfSha256: string,
 ): Promise<boolean> {
+  const cleared = await invoke<boolean>('clear_paper_translations', {
+    pdfSha256,
+  });
   try {
     const prefix = `${LOCAL_PAGE_PREFIX}${pdfSha256.toLowerCase()}:`;
     const toRemove: string[] = [];
@@ -194,47 +209,34 @@ export async function clearPaperTranslations(
     }
     toRemove.forEach((k) => localStorage.removeItem(k));
   } catch {
-    // Ignore
+    // The native store has already been cleared.
   }
-  try {
-    return await invoke<boolean>('clear_paper_translations', { pdfSha256 });
-  } catch {
-    return true;
-  }
+  return cleared;
 }
 
 export async function listPaperTranslatedPages(
   pdfSha256: string,
 ): Promise<PaperPageTranslationSummary[]> {
   if (!pdfSha256) return [];
+  const legacyPages: number[] = [];
+  const prefix = `${LOCAL_PAGE_PREFIX}${pdfSha256.toLowerCase()}:`;
   try {
-    return await invoke<PaperPageTranslationSummary[]>(
-      'list_paper_translated_pages',
-      { pdfSha256 },
-    );
-  } catch {
-    const summaries: PaperPageTranslationSummary[] = [];
-    const prefix = `${LOCAL_PAGE_PREFIX}${pdfSha256.toLowerCase()}:`;
-    try {
-      for (let i = 0; i < localStorage.length; i += 1) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith(prefix)) {
-          const raw = localStorage.getItem(key);
-          if (!raw) continue;
-          const item = JSON.parse(raw) as PaperPageTranslationRecord;
-          summaries.push({
-            pageNumber: item.pageNumber,
-            pageContentHash: item.pageContentHash,
-            translatedAt: item.translatedAt,
-            model: item.model,
-            paragraphCount: item.paragraphs?.length ?? 0,
-          });
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(prefix)) {
+        const pageNumber = Number(key.slice(prefix.length));
+        if (Number.isSafeInteger(pageNumber) && pageNumber > 0) {
+          legacyPages.push(pageNumber);
         }
       }
-    } catch {
-      // Ignore
     }
-    summaries.sort((a, b) => a.pageNumber - b.pageNumber);
-    return summaries;
+  } catch {
+    // The native store remains available even if browser storage is blocked.
   }
+  for (const pageNumber of legacyPages) {
+    await getPaperPageTranslation(pdfSha256, pageNumber);
+  }
+  return invoke<PaperPageTranslationSummary[]>('list_paper_translated_pages', {
+    pdfSha256,
+  });
 }

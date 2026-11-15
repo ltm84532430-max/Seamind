@@ -41,6 +41,14 @@ jobs:
       - name: Check desktop TypeScript
         run: corepack pnpm@9.15.9 --filter @markmap/desktop exec tsc --noEmit -p tsconfig.json
 
+      - name: Configure release updater
+        shell: pwsh
+        run: |
+          $endpoint = "https://github.com/$env:GITHUB_REPOSITORY/releases/latest/download/latest.json"
+          @{ plugins = @{ updater = @{ endpoints = @($endpoint) } } } |
+            ConvertTo-Json -Depth 5 |
+            Set-Content -LiteralPath apps/desktop/src-tauri/tauri.release.conf.json -Encoding utf8
+
       - name: Build and publish signed release
         uses: tauri-apps/tauri-action@v1
         env:
@@ -60,4 +68,4 @@ jobs:
           uploadUpdaterJson: true
           updaterJsonPreferNsis: true
           retryAttempts: 2
-          args: --bundles nsis
+          args: --bundles nsis --config src-tauri/tauri.release.conf.json

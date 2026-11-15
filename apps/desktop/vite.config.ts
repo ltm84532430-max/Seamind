@@ -1,6 +1,7 @@
 /// <reference types="vitest" />
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import postcssNested from 'postcss-nested';
 import type { Plugin, PreviewServer, ViteDevServer } from 'vite';
 import { createReadStream, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -72,7 +73,7 @@ export default defineConfig({
   },
   css: {
     postcss: {
-      plugins: [],
+      plugins: [postcssNested()],
     },
   },
   envPrefix: ['VITE_', 'TAURI_ENV_*'],

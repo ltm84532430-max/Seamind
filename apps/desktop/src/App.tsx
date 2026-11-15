@@ -72,8 +72,6 @@ import type { YouTubePreviewSelection } from './player/YouTubePlayerDialog';
 import { installYouTubeDebugHook } from './player/youtube-debug';
 import 'katex/dist/katex.min.css';
 import LibraryPanel from './library/LibraryPanel';
-import EpubReader from './ebook/EpubReader';
-import EbookWorkspace from './ebook/EbookWorkspace';
 import ExamCenterWorkspace from './exams/ExamCenterWorkspace';
 import MindmapMiniTree from './mindmap/MindmapMiniTree';
 import type { MindmapMiniTreeNode } from './mindmap/MindmapMiniTree';
@@ -143,6 +141,8 @@ import {
   type MarkdownNodeSource,
 } from './mindmap/commands';
 const TerminalPanel = lazy(() => import('./system/TerminalPanel'));
+const EpubReader = lazy(() => import('./ebook/EpubReader'));
+const EbookWorkspace = lazy(() => import('./ebook/EbookWorkspace'));
 const PlayerWorkspace = lazy(() => import('./player/PlayerWorkspace'));
 const TaskWorkspace = lazy(() => import('./tasks/TaskWorkspace'));
 import type { TaskCreateRequest } from './tasks/TaskWorkspace';
@@ -384,6 +384,9 @@ export default function App() {
   // playing in the background and the lists keep their place.
   const [playerOpened, setPlayerOpened] = useState(
     () => activeWorkspace === 'player',
+  );
+  const [readerOpened, setReaderOpened] = useState(
+    () => activeWorkspace === 'reader',
   );
   // 终端页首次打开后保持挂载，切换工作区时保留 PTY 会话与屏幕缓冲。
   const [terminalWorkspaceOpened, setTerminalWorkspaceOpened] = useState(
@@ -808,6 +811,7 @@ export default function App() {
       // The active workspace remains available for this session.
     }
     if (activeWorkspace === 'player') setPlayerOpened(true);
+    if (activeWorkspace === 'reader') setReaderOpened(true);
     if (activeWorkspace === 'terminal') setTerminalWorkspaceOpened(true);
   }, [activeWorkspace]);
 
@@ -6793,69 +6797,75 @@ export default function App() {
         aria-label="电子书工作区"
         aria-hidden={activeWorkspace !== 'reader'}
       >
-        {epubReader ? (
-          <EpubReader
-            key={epubReader.progressKey}
-            selection={epubReader}
-            theme={theme}
-            provider={providerSettings}
-            embedded
-            knowledgeOpen={readerKnowledgeActive}
-            knowledgeExists={Boolean(activeBookKnowledgeTarget?.document)}
-            knowledgeBusy={bookKnowledgeBusy}
-            mindmapOpen={readerSplitActive}
-            mindmapExists={Boolean(activeBookMindmapTarget?.document)}
-            mindmapBusy={bookMindmapBusy}
-            chapterNavigationRequest={epubChapterNavigation}
-            onOpenTask={openLinkedTask}
-            onCreateTask={(chapter) => {
-              const book = librarySnapshot?.books.find(
-                (item) => item.relativePath === epubReader.relativePath,
-              );
-              if (book) createBookTask(book, chapter);
-              else setLibraryError('找不到当前电子书，请刷新文件库。');
-            }}
-            onToggleKnowledge={() => void toggleBookKnowledge()}
-            onToggleMindmap={() => void toggleBookMindmap()}
-            onWakeAi={() => {
-              setTerminalDockAndStore('right');
-              setTerminalOpen(true);
-            }}
-            onAgentBridgeChange={(bridge) => {
-              readerAgentBridgeRef.current = bridge;
-            }}
-            onChapterChange={(info) => {
-              setCurrentEpubChapter(info);
-            }}
-            onAnnotationsChange={(annotations) => {
-              setEpubAnnotations(annotations);
-            }}
-            onWriteFootnoteToNote={(payload) => {
-              void handleWriteEpubFootnoteToNote(payload);
-            }}
-            onClose={() => {
-              setReaderKnowledgeOpen(false);
-              setReaderSplitOpen(false);
-              setEpubChapterNavigation(null);
-              setEpubReader(null);
-            }}
-          />
-        ) : (
-          <EbookWorkspace
-            active={activeWorkspace === 'reader'}
-            snapshot={librarySnapshot}
-            busy={libraryBusy}
-            onImport={() => void importEpubBook()}
-            onRefresh={() => void loadLibrary(false)}
-            onChooseRoot={() => void chooseLibraryRoot()}
-            onOpenBook={(book) => void openLibraryEpub(book)}
-            onCreateTask={(book) => createBookTask(book)}
-            onDeleteBook={deleteLibraryEpubBook}
-            onOpenExams={(bookKey) => {
-              setExamBookFilter(bookKey);
-              setActiveWorkspace('exams');
-            }}
-          />
+        {readerOpened && (
+          <Suspense
+            fallback={<div className="ebook-loading">正在载入电子书…</div>}
+          >
+            {epubReader ? (
+              <EpubReader
+                key={epubReader.progressKey}
+                selection={epubReader}
+                theme={theme}
+                provider={providerSettings}
+                embedded
+                knowledgeOpen={readerKnowledgeActive}
+                knowledgeExists={Boolean(activeBookKnowledgeTarget?.document)}
+                knowledgeBusy={bookKnowledgeBusy}
+                mindmapOpen={readerSplitActive}
+                mindmapExists={Boolean(activeBookMindmapTarget?.document)}
+                mindmapBusy={bookMindmapBusy}
+                chapterNavigationRequest={epubChapterNavigation}
+                onOpenTask={openLinkedTask}
+                onCreateTask={(chapter) => {
+                  const book = librarySnapshot?.books.find(
+                    (item) => item.relativePath === epubReader.relativePath,
+                  );
+                  if (book) createBookTask(book, chapter);
+                  else setLibraryError('找不到当前电子书，请刷新文件库。');
+                }}
+                onToggleKnowledge={() => void toggleBookKnowledge()}
+                onToggleMindmap={() => void toggleBookMindmap()}
+                onWakeAi={() => {
+                  setTerminalDockAndStore('right');
+                  setTerminalOpen(true);
+                }}
+                onAgentBridgeChange={(bridge) => {
+                  readerAgentBridgeRef.current = bridge;
+                }}
+                onChapterChange={(info) => {
+                  setCurrentEpubChapter(info);
+                }}
+                onAnnotationsChange={(annotations) => {
+                  setEpubAnnotations(annotations);
+                }}
+                onWriteFootnoteToNote={(payload) => {
+                  void handleWriteEpubFootnoteToNote(payload);
+                }}
+                onClose={() => {
+                  setReaderKnowledgeOpen(false);
+                  setReaderSplitOpen(false);
+                  setEpubChapterNavigation(null);
+                  setEpubReader(null);
+                }}
+              />
+            ) : (
+              <EbookWorkspace
+                active={activeWorkspace === 'reader'}
+                snapshot={librarySnapshot}
+                busy={libraryBusy}
+                onImport={() => void importEpubBook()}
+                onRefresh={() => void loadLibrary(false)}
+                onChooseRoot={() => void chooseLibraryRoot()}
+                onOpenBook={(book) => void openLibraryEpub(book)}
+                onCreateTask={(book) => createBookTask(book)}
+                onDeleteBook={deleteLibraryEpubBook}
+                onOpenExams={(bookKey) => {
+                  setExamBookFilter(bookKey);
+                  setActiveWorkspace('exams');
+                }}
+              />
+            )}
+          </Suspense>
         )}
       </section>
 

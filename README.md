@@ -58,10 +58,10 @@ Seamind 是一个本地优先的 Windows 学习与知识工作台。它以 Markd
 
 ## 获取与启动
 
-在 PowerShell 中克隆仓库并启动桌面开发版：
+在 PowerShell 中克隆仓库并启动桌面开发版；先将 `REPOSITORY_URL` 替换为当前仓库的 HTTPS 地址：
 
 ```powershell
-git clone --recurse-submodules https://github.com/ltm84532430-max/Seamind.git
+git clone --recurse-submodules REPOSITORY_URL
 cd Seamind
 corepack pnpm@9.15.9 install --frozen-lockfile
 corepack pnpm@9.15.9 --filter @markmap/desktop tauri dev
@@ -83,7 +83,7 @@ corepack pnpm@9.15.9 --filter @markmap/desktop tauri build
 
 Tauri 将打包产物写入 `apps/desktop/src-tauri/target/release/bundle/`。
 
-正式 Windows 安装包发布在 [GitHub Releases](https://github.com/ltm84532430-max/Seamind/releases)。安装时可以选择 PlantUML Java 和 yt-dlp；选中的组件会在首次启动后下载并校验。应用内可在**模型设置 → Seamind 软件更新**手动检查 GitHub 上的新版本，更新包会先经过签名校验。发布流程和签名密钥保管方式见[Windows 发布说明](docs/windows-release.md)。
+正式 Windows 安装包发布在仓库的 GitHub Releases 页面。安装时可以选择 PlantUML Java 和 yt-dlp；选中的组件会在首次启动后下载并校验。应用内可在**模型设置 → Seamind 软件更新**手动检查 GitHub 上的新版本，更新包会先经过签名校验。发布流程和签名密钥保管方式见[Windows 发布说明](docs/windows-release.md)。
 
 ## 配置
 

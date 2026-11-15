@@ -335,57 +335,97 @@ fn seed_habit_categories(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+fn ensure_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(db_error)?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)?;
+    if !columns.iter().any(|name| name == column) {
+        conn.execute_batch(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+        ))
+        .map_err(db_error)?;
+    }
+    Ok(())
+}
+
 fn open_path(path: &Path) -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(db_error)?;
     conn.busy_timeout(Duration::from_secs(5))
         .map_err(db_error)?;
     conn.pragma_update(None, "foreign_keys", "ON")
         .map_err(db_error)?;
-    conn.execute_batch(SCHEMA).map_err(db_error)?;
-    seed_habit_categories(&conn)?;
-    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN completed_at INTEGER", []);
-    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN archived_at INTEGER", []);
-    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN source_key TEXT", []);
-    let _ = conn.execute(
-        "ALTER TABLE tasks ADD COLUMN source_present INTEGER NOT NULL DEFAULT 1",
-        [],
-    );
-    let _ = conn.execute("ALTER TABLE tasks ADD COLUMN source_snapshot_json TEXT", []);
-    let source_order_column_added = conn
-        .execute(
-            "ALTER TABLE plan_sources ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
-            [],
-        )
-        .is_ok();
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source_key, source_present)",
-        [],
-    )
-    .map_err(db_error)?;
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_tasks_archived ON tasks(archived_at)",
-        [],
-    )
-    .map_err(db_error)?;
-    conn.execute(
+    let version: i64 = conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(db_error)?;
+    if version > 1 {
+        return Err(format!("Unsupported task database version: {version}"));
+    }
+    if version == 0 {
+        conn.execute_batch("BEGIN IMMEDIATE").map_err(db_error)?;
+        let current_version: i64 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .map_err(db_error)?;
+        if current_version == 0 {
+            conn.execute_batch(SCHEMA).map_err(db_error)?;
+            seed_habit_categories(&conn)?;
+            ensure_column(&conn, "tasks", "completed_at", "INTEGER")?;
+            ensure_column(&conn, "tasks", "archived_at", "INTEGER")?;
+            ensure_column(&conn, "tasks", "source_key", "TEXT")?;
+            ensure_column(
+                &conn,
+                "tasks",
+                "source_present",
+                "INTEGER NOT NULL DEFAULT 1",
+            )?;
+            ensure_column(&conn, "tasks", "source_snapshot_json", "TEXT")?;
+            ensure_column(
+                &conn,
+                "plan_sources",
+                "sort_order",
+                "INTEGER NOT NULL DEFAULT 0",
+            )?;
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source_key, source_present)",
+                [],
+            )
+            .map_err(db_error)?;
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tasks_archived ON tasks(archived_at)",
+                [],
+            )
+            .map_err(db_error)?;
+            conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_plan_sources_order ON plan_sources(plan_id,sort_order,source_key)",
         [],
     )
     .map_err(db_error)?;
-    backfill_legacy_plan_sources(&conn)?;
-    if source_order_column_added {
-        let mut stmt = conn
-            .prepare("SELECT DISTINCT plan_id FROM plan_sources ORDER BY plan_id")
-            .map_err(db_error)?;
-        let plan_ids = stmt
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(db_error)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(db_error)?;
-        drop(stmt);
-        for plan_id in plan_ids {
-            normalize_plan_source_order(&conn, &plan_id)?;
+            backfill_legacy_plan_sources(&conn)?;
+            let mut stmt = conn
+                .prepare("SELECT DISTINCT plan_id FROM plan_sources ORDER BY plan_id")
+                .map_err(db_error)?;
+            let plan_ids = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(db_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db_error)?;
+            drop(stmt);
+            for plan_id in plan_ids {
+                normalize_plan_source_order(&conn, &plan_id)?;
+            }
+            conn.pragma_update(None, "user_version", 1)
+                .map_err(db_error)?;
         }
+        conn.execute_batch("COMMIT").map_err(db_error)?;
     }
     Ok(conn)
 }
@@ -1912,6 +1952,37 @@ mod tests {
     use super::*;
     fn db() -> Connection {
         open_path(Path::new(":memory:")).unwrap()
+    }
+
+    #[test]
+    fn upgrades_legacy_schema_once_and_preserves_existing_tasks() {
+        let path = std::env::temp_dir().join(format!("learning-tasks-{}.sqlite3", Uuid::new_v4()));
+        let legacy = Connection::open(&path).unwrap();
+        legacy.execute_batch(
+            "CREATE TABLE plans (id TEXT PRIMARY KEY, title TEXT, description TEXT, origin_key TEXT, created_at INTEGER, updated_at INTEGER);
+             CREATE TABLE tasks (id TEXT PRIMARY KEY, plan_id TEXT, parent_id TEXT, title TEXT, note TEXT, status TEXT,
+                priority INTEGER, due_date TEXT, position INTEGER, optional INTEGER, resources_json TEXT,
+                origin_key TEXT, revision INTEGER, created_at INTEGER, updated_at INTEGER);
+             CREATE TABLE plan_sources (source_key TEXT PRIMARY KEY, plan_id TEXT, source_kind TEXT, title TEXT, last_synced_at INTEGER);
+             INSERT INTO tasks(id,title,status,priority,position,optional,resources_json,revision,created_at,updated_at)
+                VALUES ('legacy','kept','todo',0,0,0,'[]',1,1,1);",
+        ).unwrap();
+        drop(legacy);
+
+        let conn = open_path(&path).unwrap();
+        let version: i64 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 1);
+        let title: String = conn
+            .query_row("SELECT title FROM tasks WHERE id='legacy'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(title, "kept");
+        drop(conn);
+        assert!(open_path(&path).is_ok());
+        std::fs::remove_file(path).unwrap();
     }
     fn task(id: &str) -> TaskInput {
         TaskInput {

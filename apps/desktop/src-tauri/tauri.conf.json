@@ -55,9 +55,7 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ4RUFDMkY4NDUzRjJGNUIKUldSYkx6OUYrTUxxU0pSK05HeHRkYzJWN1VCN09qdjB6RjV4anlvOTFkVi9JTGFqci80aFRhbGEK",
-      "endpoints": [
-        "https://github.com/ltm84532430-max/Seamind/releases/latest/download/latest.json"
-      ],
+      "endpoints": [],
       "requireSignedVersion": true,
       "windows": {
         "installMode": "passive"
