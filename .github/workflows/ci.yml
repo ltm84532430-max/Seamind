@@ -28,10 +28,17 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri -> target
+      - name: Install frontend dependencies
+        run: |
+          corepack enable
+          corepack pnpm@9.15.9 install --frozen-lockfile
       - name: Cargo Check
         run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
       - name: Cargo Test

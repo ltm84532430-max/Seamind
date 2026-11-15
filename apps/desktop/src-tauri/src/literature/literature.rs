@@ -72,7 +72,7 @@ fn http_client() -> Result<reqwest::Client, String> {
     let mut headers = HeaderMap::new();
     headers.insert(
         USER_AGENT,
-        HeaderValue::from_static("Seamind-Desktop/0.1.0"),
+        HeaderValue::from_static("Seamind-Desktop/0.1.1"),
     );
     headers.insert(
         ACCEPT,
