@@ -1,6 +1,6 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use notify::Watcher;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -1601,9 +1601,9 @@ fn effective_media_proxy() -> Option<String> {
             ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"]
                 .into_iter()
                 .find_map(|key| {
-                    std::env::var(key)
-                        .ok()
-                        .and_then(|val| crate::youtube_net::normalize_proxy_url(&val).ok().flatten())
+                    std::env::var(key).ok().and_then(|val| {
+                        crate::youtube_net::normalize_proxy_url(&val).ok().flatten()
+                    })
                 })
         })
 }
@@ -2271,11 +2271,39 @@ fn history_database_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn open_history_database(app: &AppHandle) -> Result<Connection, String> {
     let connection = Connection::open(history_database_path(app)?).map_err(history_db_error)?;
+    prepare_history_database(&connection)?;
+    Ok(connection)
+}
+
+fn prepare_history_database(connection: &Connection) -> Result<(), String> {
     connection
-        .execute_batch(
-            "PRAGMA journal_mode = WAL;
-             PRAGMA busy_timeout = 3000;
-             CREATE TABLE IF NOT EXISTS document_versions (
+        .execute_batch("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 3000;")
+        .map_err(history_db_error)?;
+    let version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(history_db_error)?;
+    if version > 1 {
+        return Err(format!(
+            "Unsupported document history database version: {version}"
+        ));
+    }
+    if version == 1 {
+        return Ok(());
+    }
+    let transaction = Transaction::new_unchecked(connection, TransactionBehavior::Immediate)
+        .map_err(history_db_error)?;
+    let current_version: i64 = transaction
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(history_db_error)?;
+    if current_version > 1 {
+        return Err(format!(
+            "Unsupported document history database version: {current_version}"
+        ));
+    }
+    if current_version == 0 {
+        transaction
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS document_versions (
                  version_id TEXT PRIMARY KEY NOT NULL,
                  document_id TEXT NOT NULL,
                  relative_path TEXT NOT NULL,
@@ -2289,9 +2317,13 @@ fn open_history_database(app: &AppHandle) -> Result<Connection, String> {
              );
              CREATE INDEX IF NOT EXISTS idx_document_versions_recent
                  ON document_versions(document_id, created_at DESC);",
-        )
-        .map_err(history_db_error)?;
-    Ok(connection)
+            )
+            .map_err(history_db_error)?;
+        transaction
+            .pragma_update(None, "user_version", 1)
+            .map_err(history_db_error)?;
+    }
+    transaction.commit().map_err(history_db_error)
 }
 
 fn record_document_version(
@@ -2413,11 +2445,37 @@ fn record_document_version(
 
 fn open_database(app: &AppHandle) -> Result<Connection, String> {
     let connection = Connection::open(database_path(app)?).map_err(db_error)?;
+    prepare_database(&connection)?;
+    Ok(connection)
+}
+
+fn prepare_database(connection: &Connection) -> Result<(), String> {
     connection
-        .execute_batch(
-            "PRAGMA journal_mode = WAL;
-             PRAGMA busy_timeout = 3000;
-             CREATE TABLE IF NOT EXISTS maps (
+        .execute_batch("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 3000;")
+        .map_err(db_error)?;
+    let version: i64 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(db_error)?;
+    if version > 1 {
+        return Err(format!(
+            "Unsupported library index database version: {version}"
+        ));
+    }
+    if version == 1 {
+        return Ok(());
+    }
+    let transaction =
+        Transaction::new_unchecked(connection, TransactionBehavior::Immediate).map_err(db_error)?;
+    let current_version: i64 = transaction
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(db_error)?;
+    if current_version > 1 {
+        return Err(format!("Unsupported library index database version: {current_version}"));
+    }
+    if current_version == 0 {
+        transaction
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS maps (
                  id TEXT PRIMARY KEY NOT NULL,
                  relative_path TEXT NOT NULL UNIQUE,
                  title TEXT NOT NULL,
@@ -2431,17 +2489,21 @@ fn open_database(app: &AppHandle) -> Result<Connection, String> {
              CREATE INDEX IF NOT EXISTS idx_maps_updated ON maps(updated_at DESC);
              CREATE INDEX IF NOT EXISTS idx_maps_category ON maps(category);
              CREATE INDEX IF NOT EXISTS idx_maps_type ON maps(map_type);",
-        )
-        .map_err(db_error)?;
-    ensure_maps_kind_column(&connection)?;
-    ensure_maps_origin_columns(&connection)?;
-    connection
-        .execute(
-            "CREATE INDEX IF NOT EXISTS idx_maps_kind_category_updated ON maps(kind, category, updated_at DESC)",
-            [],
-        )
-        .map_err(db_error)?;
-    Ok(connection)
+            )
+            .map_err(db_error)?;
+        ensure_maps_kind_column(&transaction)?;
+        ensure_maps_origin_columns(&transaction)?;
+        transaction
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_maps_kind_category_updated ON maps(kind, category, updated_at DESC)",
+                [],
+            )
+            .map_err(db_error)?;
+        transaction
+            .pragma_update(None, "user_version", 1)
+            .map_err(db_error)?;
+    }
+    transaction.commit().map_err(db_error)
 }
 
 fn ensure_maps_origin_columns(connection: &Connection) -> Result<(), String> {
@@ -2451,8 +2513,8 @@ fn ensure_maps_origin_columns(connection: &Connection) -> Result<(), String> {
     let names: HashSet<String> = statement
         .query_map([], |row| row.get::<_, String>(1))
         .map_err(db_error)?
-        .filter_map(Result::ok)
-        .collect();
+        .collect::<Result<_, _>>()
+        .map_err(db_error)?;
     drop(statement);
     if !names.contains("origin") {
         connection
@@ -2476,13 +2538,13 @@ fn ensure_maps_kind_column(connection: &Connection) -> Result<(), String> {
     let mut statement = connection
         .prepare("PRAGMA table_info(maps)")
         .map_err(db_error)?;
-    let has_kind = statement
+    let names: HashSet<String> = statement
         .query_map([], |row| row.get::<_, String>(1))
         .map_err(db_error)?
-        .filter_map(Result::ok)
-        .any(|name| name == "kind");
+        .collect::<Result<_, _>>()
+        .map_err(db_error)?;
     drop(statement);
-    if !has_kind {
+    if !names.contains("kind") {
         connection
             .execute(
                 "ALTER TABLE maps ADD COLUMN kind TEXT NOT NULL DEFAULT 'mindmap'",
@@ -3817,10 +3879,12 @@ mod tests {
                  INSERT INTO maps VALUES ('a', 'a.md', 't', 'c', 'm', '[]', 'x', 1, 2);",
             )
             .unwrap();
-        ensure_maps_kind_column(&connection).unwrap();
-        ensure_maps_kind_column(&connection).unwrap();
-        ensure_maps_origin_columns(&connection).unwrap();
-        ensure_maps_origin_columns(&connection).unwrap();
+        prepare_database(&connection).unwrap();
+        prepare_database(&connection).unwrap();
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 1);
         let kind: String = connection
             .query_row("SELECT kind FROM maps WHERE id = 'a'", [], |row| row.get(0))
             .unwrap();
@@ -3856,6 +3920,197 @@ mod tests {
             })
             .unwrap();
         assert_eq!(origin, "manual");
+    }
+
+    #[test]
+    fn history_schema_upgrade_preserves_old_versions() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE document_versions (
+                    version_id TEXT PRIMARY KEY, document_id TEXT, relative_path TEXT,
+                    title TEXT, category TEXT, map_type TEXT, tags TEXT, source TEXT,
+                    created_at INTEGER, markdown TEXT);
+                 INSERT INTO document_versions VALUES
+                    ('v1', 'doc', 'doc.md', 'Title', 'General', 'Map', '[]', 'manual', 1, '# Old');",
+            )
+            .unwrap();
+        prepare_history_database(&connection).unwrap();
+        prepare_history_database(&connection).unwrap();
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        let markdown: String = connection
+            .query_row(
+                "SELECT markdown FROM document_versions WHERE version_id = 'v1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, 1);
+        assert_eq!(markdown, "# Old");
+    }
+
+    #[test]
+    fn failed_index_upgrade_rolls_back_schema_version() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch("CREATE TABLE maps (id TEXT PRIMARY KEY, relative_path TEXT);")
+            .unwrap();
+        assert!(prepare_database(&connection).is_err());
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 0);
+        let count: i64 = connection
+            .query_row("SELECT count(*) FROM maps", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn copied_legacy_index_file_upgrades_without_changing_the_source() {
+        let scratch = Scratch::new();
+        let source = scratch.0.join("index.sqlite");
+        let copy = scratch.0.join("index-copy.sqlite");
+        {
+            let connection = Connection::open(&source).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE maps (
+                         id TEXT PRIMARY KEY NOT NULL, relative_path TEXT NOT NULL UNIQUE,
+                         title TEXT NOT NULL, category TEXT NOT NULL, map_type TEXT NOT NULL,
+                         tags TEXT NOT NULL, content TEXT NOT NULL,
+                         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+                     INSERT INTO maps VALUES ('a', 'a.md', 't', 'c', 'm', '[]', 'kept', 1, 2);",
+                )
+                .unwrap();
+        }
+        fs::copy(&source, &copy).unwrap();
+        {
+            let connection = Connection::open(&copy).unwrap();
+            prepare_database(&connection).unwrap();
+            let version: i64 = connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            let content: String = connection
+                .query_row("SELECT content FROM maps WHERE id = 'a'", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            let kind: String = connection
+                .query_row("SELECT kind FROM maps WHERE id = 'a'", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(version, 1);
+            assert_eq!(content, "kept");
+            assert_eq!(kind, "mindmap");
+        }
+        {
+            let connection = Connection::open(&source).unwrap();
+            let version: i64 = connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            let names = table_column_names(&connection, "maps");
+            assert_eq!(version, 0);
+            assert!(!names.contains("kind"));
+            assert!(!names.contains("origin"));
+        }
+    }
+
+    #[test]
+    fn copied_broken_index_file_rolls_back_without_changing_the_source() {
+        let scratch = Scratch::new();
+        let source = scratch.0.join("broken.sqlite");
+        let copy = scratch.0.join("broken-copy.sqlite");
+        {
+            let connection = Connection::open(&source).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE maps (id TEXT PRIMARY KEY, relative_path TEXT);
+                     INSERT INTO maps VALUES ('a', 'a.md');",
+                )
+                .unwrap();
+        }
+        fs::copy(&source, &copy).unwrap();
+        {
+            let connection = Connection::open(&copy).unwrap();
+            assert!(prepare_database(&connection).is_err());
+            let version: i64 = connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            let count: i64 = connection
+                .query_row("SELECT count(*) FROM maps", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(version, 0);
+            assert_eq!(count, 1);
+            assert!(!table_column_names(&connection, "maps").contains("kind"));
+        }
+        {
+            let connection = Connection::open(&source).unwrap();
+            let version: i64 = connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            let count: i64 = connection
+                .query_row("SELECT count(*) FROM maps", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(version, 0);
+            assert_eq!(count, 1);
+        }
+    }
+
+    #[test]
+    fn copied_legacy_history_file_keeps_markdown_and_leaves_the_source() {
+        let scratch = Scratch::new();
+        let source = scratch.0.join("history.sqlite");
+        let copy = scratch.0.join("history-copy.sqlite");
+        {
+            let connection = Connection::open(&source).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE document_versions (
+                        version_id TEXT PRIMARY KEY, document_id TEXT, relative_path TEXT,
+                        title TEXT, category TEXT, map_type TEXT, tags TEXT, source TEXT,
+                        created_at INTEGER, markdown TEXT);
+                     INSERT INTO document_versions VALUES
+                        ('v1', 'doc', 'doc.md', 'Title', 'General', 'Map', '[]', 'manual', 1, '# Kept');",
+                )
+                .unwrap();
+        }
+        fs::copy(&source, &copy).unwrap();
+        {
+            let connection = Connection::open(&copy).unwrap();
+            prepare_history_database(&connection).unwrap();
+            let version: i64 = connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            let markdown: String = connection
+                .query_row(
+                    "SELECT markdown FROM document_versions WHERE version_id = 'v1'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(version, 1);
+            assert_eq!(markdown, "# Kept");
+        }
+        {
+            let connection = Connection::open(&source).unwrap();
+            let version: i64 = connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            assert_eq!(version, 0);
+        }
+    }
+
+    fn table_column_names(connection: &Connection, table: &str) -> HashSet<String> {
+        let mut statement = connection
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .unwrap();
+        statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
     }
 
     #[test]
@@ -3932,20 +4187,44 @@ mod tests {
         assert!(!is_tun_fake_ip("8.8.8.8".parse().unwrap()));
         assert!(!is_tun_fake_ip("192.168.1.1".parse().unwrap()));
 
-        assert!(validate_media_https_url(&url::Url::parse("https://miro.medium.com/v2/resize:fit:1400/test").unwrap()).is_ok());
-        assert!(validate_media_https_url(&url::Url::parse("http://miro.medium.com/test.png").unwrap()).is_err());
-        assert!(validate_media_https_url(&url::Url::parse("https://198.18.0.1/test.png").unwrap()).is_err());
-        assert!(validate_media_https_url(&url::Url::parse("https://localhost/test.png").unwrap()).is_err());
-        assert!(validate_media_https_url(&url::Url::parse("https://internal.local/test.png").unwrap()).is_err());
+        assert!(validate_media_https_url(
+            &url::Url::parse("https://miro.medium.com/v2/resize:fit:1400/test").unwrap()
+        )
+        .is_ok());
+        assert!(validate_media_https_url(
+            &url::Url::parse("http://miro.medium.com/test.png").unwrap()
+        )
+        .is_err());
+        assert!(
+            validate_media_https_url(&url::Url::parse("https://198.18.0.1/test.png").unwrap())
+                .is_err()
+        );
+        assert!(
+            validate_media_https_url(&url::Url::parse("https://localhost/test.png").unwrap())
+                .is_err()
+        );
+        assert!(validate_media_https_url(
+            &url::Url::parse("https://internal.local/test.png").unwrap()
+        )
+        .is_err());
 
         assert!(is_compatible_declared_media_type("", "image/jpeg"));
-        assert!(is_compatible_declared_media_type("application/octet-stream", "image/webp"));
+        assert!(is_compatible_declared_media_type(
+            "application/octet-stream",
+            "image/webp"
+        ));
         assert!(is_compatible_declared_media_type("image/jpg", "image/jpeg"));
-        assert!(!is_compatible_declared_media_type("image/png", "image/jpeg"));
+        assert!(!is_compatible_declared_media_type(
+            "image/png",
+            "image/jpeg"
+        ));
         assert!(!is_compatible_declared_media_type("text/html", "image/png"));
 
         assert!(looks_like_html_response("text/html", b"anything"));
-        assert!(looks_like_html_response("application/octet-stream", b"  <!DOCTYPE html><html></html>"));
+        assert!(looks_like_html_response(
+            "application/octet-stream",
+            b"  <!DOCTYPE html><html></html>"
+        ));
         assert!(!looks_like_html_response("image/png", b"\x89PNG\r\n\x1a\n"));
         assert_eq!(
             media_type_from_bytes(b"\x00\x00\x00\x20ftypavif\x00\x00\x00\x00"),
