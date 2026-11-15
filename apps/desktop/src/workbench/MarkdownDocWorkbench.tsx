@@ -28,6 +28,7 @@ import { createKnowledgeEditorExtensions } from '../knowledge/knowledge-completi
 import { enhanceKnowledgePreviewHtml } from '../knowledge/knowledge-markdown';
 import {
   analyzeKnowledgePaste,
+  finalizeSkippedPasteMedia,
   needsKnowledgePasteReview,
   pasteTextWithMedia,
 } from '../knowledge/knowledge-paste';
@@ -97,6 +98,57 @@ interface PendingKnowledgePaste extends KnowledgePasteDraft {
   baseSource: string;
   from: number;
   to: number;
+  importedByKey?: Record<string, ImportedPasteVisual>;
+  failedByKey?: Record<string, string>;
+}
+
+const PASTE_IMPORT_CONCURRENCY = 4;
+
+async function importCandidatesWithPartialTolerance(
+  candidates: readonly KnowledgePasteDraft['media'][number][],
+  documentRelativePath: string,
+  cached: Record<string, ImportedPasteVisual>,
+): Promise<{
+  importedByKey: Record<string, ImportedPasteVisual>;
+  failedByKey: Record<string, string>;
+}> {
+  const importedByKey: Record<string, ImportedPasteVisual> = { ...cached };
+  const failedByKey: Record<string, string> = {};
+  const pending = candidates.filter(
+    (candidate) => !importedByKey[candidate.key],
+  );
+  let cursor = 0;
+
+  const worker = async () => {
+    while (cursor < pending.length) {
+      const candidate = pending[cursor];
+      cursor += 1;
+      try {
+        if (candidate.kind === 'svg') {
+          importedByKey[candidate.key] = {
+            candidate,
+            svgSource: preparePastedSvg(String(candidate.value)),
+          };
+        } else {
+          const result = await importDocumentMedia(
+            documentRelativePath,
+            candidate,
+          );
+          importedByKey[candidate.key] = {
+            candidate,
+            mediaId: result.mediaId,
+          };
+        }
+      } catch (error) {
+        failedByKey[candidate.key] =
+          error instanceof Error ? error.message : String(error);
+      }
+    }
+  };
+
+  const workerCount = Math.min(PASTE_IMPORT_CONCURRENCY, pending.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return { importedByKey, failedByKey };
 }
 
 interface FootnoteComposerState {
@@ -225,6 +277,20 @@ export default function MarkdownDocWorkbench({
     [document.session],
   );
 
+  const applyWithPartialImported = useCallback(
+    (
+      paste: PendingKnowledgePaste,
+      importedByKey: Record<string, ImportedPasteVisual>,
+    ) => {
+      const ordered = paste.media
+        .filter((candidate) => candidate.selected)
+        .map((candidate) => importedByKey[candidate.key])
+        .filter((item): item is ImportedPasteVisual => Boolean(item));
+      applyPendingPaste(paste, pasteTextWithMedia(paste.text, ordered));
+    },
+    [applyPendingPaste],
+  );
+
   const confirmKnowledgePaste = useCallback(async () => {
     const paste = pendingPaste;
     if (!paste || pasteBusy) return;
@@ -245,28 +311,27 @@ export default function MarkdownDocWorkbench({
     }
     setPasteBusy(true);
     setPasteError('');
-    const imported: ImportedPasteVisual[] = [];
     try {
-      for (const candidate of selected) {
-        try {
-          if (candidate.kind === 'svg') {
-            imported.push({
-              candidate,
-              svgSource: preparePastedSvg(String(candidate.value)),
-            });
-            continue;
-          }
-          const result = await importDocumentMedia(
-            document.relativePath,
-            candidate,
-          );
-          imported.push({ candidate, mediaId: result.mediaId });
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : String(error);
-          throw new Error(`“${candidate.label}”导入失败：${detail}`);
-        }
+      const { importedByKey, failedByKey } =
+        await importCandidatesWithPartialTolerance(
+          selected,
+          document.relativePath,
+          paste.importedByKey ?? {},
+        );
+      const failedCount = Object.keys(failedByKey).length;
+      if (failedCount === 0) {
+        applyWithPartialImported(paste, importedByKey);
+        return;
       }
-      applyPendingPaste(paste, pasteTextWithMedia(paste.text, imported));
+      const importedCount = selected.filter((c) => importedByKey[c.key]).length;
+      setPendingPaste((current) =>
+        current && current.session === paste.session
+          ? { ...current, importedByKey, failedByKey }
+          : current,
+      );
+      setPasteError(
+        `${failedCount} 项导入失败${importedCount > 0 ? `，已缓存 ${importedCount} 项成功结果` : ''}。可点击“重试失败项”，或选择“跳过失败项并粘贴”。`,
+      );
     } catch (error) {
       setPasteError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -277,7 +342,7 @@ export default function MarkdownDocWorkbench({
     pasteBusy,
     document.relativePath,
     document.session,
-    applyPendingPaste,
+    applyWithPartialImported,
   ]);
 
   const switchViewMode = useCallback((mode: DocViewMode) => {
@@ -289,14 +354,43 @@ export default function MarkdownDocWorkbench({
   const showPreview = viewMode === 'split' || viewMode === 'read';
 
   const previewMarkdown = useDebouncedValue(document.source, 260);
-  const preview = useMemo(() => {
+  const basePreview = useMemo(() => {
     if (!showPreview) return { html: '', source: '' };
-    const base = renderPreview(previewMarkdown);
+    return renderPreview(previewMarkdown);
+  }, [renderPreview, previewMarkdown, showPreview]);
+
+  const wikilinkDocsCacheRef = useRef<{
+    signature: string;
+    docs: readonly MapDocument[];
+  }>({ signature: '', docs: [] });
+
+  const stableWikilinkDocs = useMemo(() => {
+    if (!basePreview.html.includes('[[')) {
+      return wikilinkDocsCacheRef.current.docs;
+    }
+    const list = documents ?? [];
+    const signature = list
+      .map((doc) => `${doc.kind}:${doc.relativePath}:${doc.title}`)
+      .join('\n');
+    if (signature !== wikilinkDocsCacheRef.current.signature) {
+      wikilinkDocsCacheRef.current = { signature, docs: list };
+    }
+    return wikilinkDocsCacheRef.current.docs;
+  }, [basePreview.html, documents]);
+
+  const preview = useMemo(() => {
+    if (!basePreview.html) return basePreview;
     return {
-      html: enhanceKnowledgePreviewHtml(base.html, documents ?? []),
-      source: base.source,
+      html: enhanceKnowledgePreviewHtml(basePreview.html, stableWikilinkDocs),
+      source: basePreview.source,
     };
-  }, [renderPreview, previewMarkdown, showPreview, documents]);
+  }, [basePreview, stableWikilinkDocs]);
+
+  const handleOpenYouTubeFromPreview = useMemo(() => {
+    if (!onOpenYouTubeLink) return undefined;
+    return (videoId: string, startSeconds: number) =>
+      onOpenYouTubeLink(videoId, startSeconds, document.title);
+  }, [onOpenYouTubeLink, document.title]);
 
   const headings = useMemo(
     () => extractMarkdownHeadings(document.source),
@@ -757,12 +851,7 @@ export default function MarkdownDocWorkbench({
               scrollToFootnoteRequest={activeFootnoteJump}
               onCodeChange={handleCodeChange}
               onOpenWikilink={onOpenWikilink}
-              onOpenYouTubeLink={
-                onOpenYouTubeLink
-                  ? (videoId, startSeconds) =>
-                      onOpenYouTubeLink(videoId, startSeconds, document.title)
-                  : undefined
-              }
+              onOpenYouTubeLink={handleOpenYouTubeFromPreview}
               onRunInTerminal={onRunInTerminal}
               onEditFootnote={openEditFootnoteComposer}
             />
@@ -933,43 +1022,58 @@ export default function MarkdownDocWorkbench({
             )}
             {pendingPaste.media.length > 0 && (
               <div className="workbench-paste-media" aria-label="待导入图形">
-                {pendingPaste.media.map((candidate) => (
-                  <label
-                    key={candidate.key}
-                    className="workbench-paste-media-row"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={candidate.selected}
-                      disabled={pasteBusy}
-                      onChange={(event) =>
-                        setPendingPaste((current) =>
-                          current
-                            ? {
-                                ...current,
-                                media: current.media.map((item) =>
-                                  item.key === candidate.key
-                                    ? {
-                                        ...item,
-                                        selected: event.target.checked,
-                                      }
-                                    : item,
-                                ),
-                              }
-                            : null,
-                        )
-                      }
-                    />
-                    <span title={candidate.label}>{candidate.label}</span>
-                    <small>
-                      {candidate.kind === 'svg'
-                        ? '可编辑 SVG'
-                        : candidate.kind === 'remote'
-                          ? '网络图片'
-                          : '剪贴板图片'}
-                    </small>
-                  </label>
-                ))}
+                {pendingPaste.media.map((candidate) => {
+                  const rowError = pendingPaste.failedByKey?.[candidate.key];
+                  const isImported = Boolean(
+                    pendingPaste.importedByKey?.[candidate.key],
+                  );
+                  return (
+                    <label
+                      key={candidate.key}
+                      className={`workbench-paste-media-row${rowError ? ' is-failed' : isImported ? ' is-imported' : ''}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={candidate.selected}
+                        disabled={pasteBusy}
+                        onChange={(event) =>
+                          setPendingPaste((current) => {
+                            if (!current) return null;
+                            const nextFailed = { ...current.failedByKey };
+                            delete nextFailed[candidate.key];
+                            return {
+                              ...current,
+                              failedByKey: nextFailed,
+                              media: current.media.map((item) =>
+                                item.key === candidate.key
+                                  ? {
+                                      ...item,
+                                      selected: event.target.checked,
+                                    }
+                                  : item,
+                              ),
+                            };
+                          })
+                        }
+                      />
+                      <span title={candidate.label}>{candidate.label}</span>
+                      <small>
+                        {rowError
+                          ? '导入失败'
+                          : isImported
+                            ? '已就绪'
+                            : candidate.kind === 'svg'
+                              ? '可编辑 SVG'
+                              : candidate.kind === 'remote'
+                                ? '网络图片'
+                                : '剪贴板图片'}
+                      </small>
+                      {rowError && (
+                        <p className="workbench-paste-row-error">{rowError}</p>
+                      )}
+                    </label>
+                  );
+                })}
               </div>
             )}
             <p className="workbench-paste-footnote">
@@ -993,11 +1097,28 @@ export default function MarkdownDocWorkbench({
                 type="button"
                 disabled={pasteBusy}
                 onClick={() =>
-                  applyPendingPaste(pendingPaste, pendingPaste.text)
+                  applyPendingPaste(
+                    pendingPaste,
+                    finalizeSkippedPasteMedia(pendingPaste.text),
+                  )
                 }
               >
                 仅粘贴文本
               </button>
+              {Object.keys(pendingPaste.failedByKey ?? {}).length > 0 && (
+                <button
+                  type="button"
+                  disabled={pasteBusy}
+                  onClick={() =>
+                    applyWithPartialImported(
+                      pendingPaste,
+                      pendingPaste.importedByKey ?? {},
+                    )
+                  }
+                >
+                  跳过失败项并粘贴
+                </button>
+              )}
               <button
                 type="button"
                 className="is-primary"
@@ -1005,7 +1126,15 @@ export default function MarkdownDocWorkbench({
                 autoFocus
                 onClick={() => void confirmKnowledgePaste()}
               >
-                {pasteBusy ? '正在导入…' : '确认粘贴'}
+                {pasteBusy
+                  ? '正在导入…'
+                  : pendingPaste.media.some(
+                        (candidate) =>
+                          candidate.selected &&
+                          Boolean(pendingPaste.failedByKey?.[candidate.key]),
+                      )
+                    ? '重试失败项'
+                    : '确认粘贴'}
               </button>
             </div>
           </section>

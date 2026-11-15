@@ -965,7 +965,7 @@ export default function App() {
         const svg = sanitizeSvgMarkup(token.content);
         return svg
           ? `${svg}\n`
-          : `<pre><code>${escapeHtmlText(token.content)}</code></pre>\n`;
+          : `<pre><code class="language-svg">${escapeHtmlText(token.content)}</code></pre>\n`;
       }
       if (language === 'seamind-html-card') {
         const card = parseHtmlCardDefinition(token.content);

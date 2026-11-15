@@ -1422,13 +1422,22 @@ select option {
 .markdown-rendered-preview .seamind-viz-output {
   height: 360px;
 }
-.markdown-rendered-preview .seamind-svg-panel .seamind-viz-output {
+.markdown-rendered-preview .seamind-svg-panel .seamind-viz-output,
+.markdown-rendered-preview .seamind-mermaid-panel .seamind-viz-output,
+.markdown-rendered-preview .seamind-plantuml-panel .seamind-viz-output {
   height: auto;
   min-height: 120px;
+  overflow: auto;
 }
 .markdown-rendered-preview .seamind-pele-panel .seamind-viz-output {
   height: auto;
   min-height: 220px;
+}
+.markdown-rendered-preview > svg {
+  display: block;
+  max-width: min(100%, 900px);
+  height: auto;
+  margin: 16px auto;
 }
 .markdown-rendered-preview .seamind-math-controls[hidden],
 .markdown-rendered-preview .seamind-math-control-actions[hidden],

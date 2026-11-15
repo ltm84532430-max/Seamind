@@ -197,10 +197,15 @@ export function normalizeKatexDelimiters(markdown: string): string {
       if (displayClose) return `${displayClose[1]}$$`;
 
       const convertInline = (text: string) =>
-        text.replace(
-          /\\{1,2}\((.+?)\\{1,2}\)/g,
-          (_, formula: string) => `$${normalizeTex(formula)}$`,
-        );
+        text
+          .replace(/\\{1,2}\((.+?)\\{1,2}\)/g, (original, formula: string) => {
+            const trimmed = normalizeTex(formula).trim();
+            return trimmed ? `$${trimmed}$` : original;
+          })
+          .replace(/\\{1,2}\[(.+?)\\{1,2}\]/g, (original, formula: string) => {
+            const trimmed = normalizeTex(formula).trim();
+            return trimmed ? `$${trimmed}$` : original;
+          });
       let result = '';
       let cursor = 0;
       while (cursor < line.length) {

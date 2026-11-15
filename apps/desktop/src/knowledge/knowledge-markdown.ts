@@ -209,7 +209,7 @@ function enhanceTextNodes(
     if (
       parent &&
       !parent.closest(
-        'pre, code, a, button, script, style, .katex, .seamind-callout-header',
+        'pre, code, a, button, script, style, svg, .katex, .seamind-callout-header, .seamind-footnotes',
       )
     ) {
       textNodes.push(current as Text);

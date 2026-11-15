@@ -1,13 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
+import { createPortal } from 'react-dom';
 import { hydrateCodeBlocks } from './code-blocks';
 import type { CodeBlockHandlers } from './code-blocks';
 import { createMarkdownPreviewMinimap } from './markdown-minimap';
 import { computeFootnotePopoverGeometry } from './markdown-footnotes';
+import {
+  clampLightboxZoom,
+  classifyPreviewLinkHref,
+  isPreviewImageHref,
+} from './markdown-preview-links';
 import { parseYouTubeEmbedInput } from '../player/youtube';
 import { resolveDocumentMedia } from '../knowledge/document-media';
 import { mediaIdFromSource } from '../knowledge/knowledge-paste';
 import type { Theme } from '../app/app-storage';
+
+type ActiveImagePreview = {
+  src: string;
+  alt: string;
+  externalHref?: string;
+};
 
 type ActiveFootnoteCard = {
   id: string;
@@ -62,6 +74,12 @@ export default function MarkdownPreview({
   const flashTimerRef = useRef<number | null>(null);
   const [activeFootnote, setActiveFootnote] =
     useState<ActiveFootnoteCard | null>(null);
+  const [activeImage, setActiveImage] = useState<ActiveImagePreview | null>(
+    null,
+  );
+  const [imageZoom, setImageZoom] = useState(1);
+  const [fittedWidth, setFittedWidth] = useState<number | null>(null);
+  const lightboxImageRef = useRef<HTMLImageElement>(null);
   const hoverCloseTimerRef = useRef<number | null>(null);
   const activeAnchorRef = useRef<HTMLElement | null>(null);
   // React sets the markup again whenever it gets a new object, even for the same string, and that
@@ -116,6 +134,17 @@ export default function MarkdownPreview({
     };
   }, [markup, mediaDocumentPath]);
 
+  const handlersRef = useRef({
+    onCodeChange,
+    onOpenPlantUmlEditor,
+    onRunInTerminal,
+  });
+  handlersRef.current = {
+    onCodeChange,
+    onOpenPlantUmlEditor,
+    onRunInTerminal,
+  };
+
   useEffect(() => {
     const root = rootRef.current;
     const minimapHost = minimapHostRef.current;
@@ -131,7 +160,13 @@ export default function MarkdownPreview({
       root,
       theme,
       controller.signal,
-      { onCodeChange, onOpenPlantUmlEditor, onRunInTerminal },
+      {
+        onCodeChange: (...args) => handlersRef.current.onCodeChange?.(...args),
+        onOpenPlantUmlEditor: (...args) =>
+          handlersRef.current.onOpenPlantUmlEditor?.(...args),
+        onRunInTerminal: (...args) =>
+          handlersRef.current.onRunInTerminal?.(...args),
+      },
       { mode: 'markdown-preview' },
     ).then((release) => {
       if (disposed) release();
@@ -143,15 +178,7 @@ export default function MarkdownPreview({
       cleanup();
       minimap?.destroy();
     };
-  }, [
-    html,
-    source,
-    theme,
-    hideMinimap,
-    onCodeChange,
-    onOpenPlantUmlEditor,
-    onRunInTerminal,
-  ]);
+  }, [markup, source, theme, hideMinimap]);
 
   const scrollAndFlashElement = useCallback((el: Element | null) => {
     const scroller = rootRef.current;
@@ -192,6 +219,40 @@ export default function MarkdownPreview({
     setActiveFootnote(null);
   }, [cancelHoverClose]);
 
+  const closeImagePreview = useCallback(() => {
+    setActiveImage(null);
+    setImageZoom(1);
+    setFittedWidth(null);
+  }, []);
+
+  const openImagePreview = useCallback(
+    (src: string, alt: string, externalHref?: string) => {
+      setActiveImage({ src, alt, externalHref });
+      setImageZoom(1);
+      setFittedWidth(null);
+    },
+    [],
+  );
+
+  const resetImageZoom = useCallback(() => {
+    setImageZoom(1);
+    setFittedWidth(null);
+  }, []);
+
+  const stepImageZoom = useCallback(
+    (delta: number) => {
+      if (fittedWidth === null) {
+        const renderedWidth =
+          lightboxImageRef.current?.getBoundingClientRect().width;
+        if (renderedWidth && imageZoom > 0) {
+          setFittedWidth(Math.max(40, Math.round(renderedWidth / imageZoom)));
+        }
+      }
+      setImageZoom((prev) => clampLightboxZoom(prev + delta));
+    },
+    [fittedWidth, imageZoom],
+  );
+
   const scheduleHoverClose = useCallback(() => {
     cancelHoverClose();
     hoverCloseTimerRef.current = window.setTimeout(() => {
@@ -220,6 +281,32 @@ export default function MarkdownPreview({
   }, [html, closeActiveFootnote]);
 
   useEffect(() => {
+    closeImagePreview();
+  }, [mediaDocumentPath, closeImagePreview]);
+
+  useEffect(() => {
+    if (!activeImage) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        closeImagePreview();
+      } else if (event.key === '+' || event.key === '=') {
+        event.preventDefault();
+        stepImageZoom(0.25);
+      } else if (event.key === '-') {
+        event.preventDefault();
+        stepImageZoom(-0.25);
+      } else if (event.key === '0') {
+        event.preventDefault();
+        resetImageZoom();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [activeImage, closeImagePreview, resetImageZoom, stepImageZoom]);
+
+  useEffect(() => {
     if (!activeFootnote?.pinned) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -231,6 +318,7 @@ export default function MarkdownPreview({
       if (!(target instanceof Element)) return;
       if (
         target.closest('.seamind-fn-hover-card') ||
+        target.closest('.seamind-image-lightbox') ||
         target.closest('a[data-footnote-id], a[data-footnote-preview]')
       ) {
         return;
@@ -399,15 +487,60 @@ export default function MarkdownPreview({
         return;
       }
     }
-    if (onOpenYouTubeLink) {
-      const anchor = target.closest<HTMLAnchorElement>('a[href]');
-      const rawHref = anchor?.getAttribute('href')?.trim();
-      if (rawHref) {
-        const youtube = parseYouTubeEmbedInput(rawHref);
-        if (youtube) {
-          event.preventDefault();
-          onOpenYouTubeLink(youtube.id, youtube.startSeconds);
+
+    const anchor = target.closest<HTMLAnchorElement>('a[href]');
+    const rawHref = anchor?.getAttribute('href')?.trim() ?? '';
+
+    if (onOpenYouTubeLink && rawHref) {
+      const youtube = parseYouTubeEmbedInput(rawHref);
+      if (youtube) {
+        event.preventDefault();
+        onOpenYouTubeLink(youtube.id, youtube.startSeconds);
+        return;
+      }
+    }
+
+    const clickedImage = target.closest<HTMLImageElement>('img');
+    if (clickedImage && !clickedImage.closest('.katex')) {
+      event.preventDefault();
+      event.stopPropagation();
+      const src =
+        clickedImage.currentSrc ||
+        clickedImage.getAttribute('src')?.trim() ||
+        '';
+      if (src) {
+        openImagePreview(
+          src,
+          clickedImage.getAttribute('alt')?.trim() || '图片预览',
+          rawHref && /^https?:\/\//i.test(rawHref) ? rawHref : undefined,
+        );
+      }
+      return;
+    }
+
+    if (anchor && rawHref) {
+      event.preventDefault();
+      const action = classifyPreviewLinkHref(rawHref);
+      if (action.kind === 'hash') {
+        if (action.id && rootRef.current) {
+          const escapedId = CSS.escape(action.id);
+          const targetEl =
+            rootRef.current.querySelector(`#${escapedId}`) ??
+            rootRef.current.querySelector(`[name="${escapedId}"]`);
+          if (targetEl) scrollAndFlashElement(targetEl);
         }
+        return;
+      }
+      if (action.kind === 'image') {
+        openImagePreview(
+          action.url,
+          anchor.textContent?.trim() || '图片预览',
+          action.url,
+        );
+        return;
+      }
+      if (action.kind === 'external') {
+        window.open(action.url, '_blank', 'noopener,noreferrer');
       }
     }
   };
@@ -420,6 +553,121 @@ export default function MarkdownPreview({
     closeActiveFootnote();
     scrollAndFlashElement(defEl);
   };
+
+  const lightboxNode =
+    activeImage && typeof document !== 'undefined'
+      ? createPortal(
+          <div
+            className="seamind-image-lightbox"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`图片预览：${activeImage.alt}`}
+            onClick={(event) => {
+              if (event.target === event.currentTarget) {
+                closeImagePreview();
+              }
+            }}
+          >
+            <div className="seamind-image-lightbox-toolbar">
+              <span
+                className="seamind-image-lightbox-title"
+                title={activeImage.alt}
+              >
+                {activeImage.alt}
+              </span>
+              <div className="seamind-image-lightbox-controls">
+                <button
+                  type="button"
+                  onClick={() => stepImageZoom(-0.25)}
+                  aria-label="缩小图片"
+                  title="缩小 (-)"
+                >
+                  −
+                </button>
+                <button
+                  type="button"
+                  className="seamind-image-lightbox-zoom-reset"
+                  onClick={resetImageZoom}
+                  title="恢复适应窗口 (0)"
+                >
+                  {Math.round(imageZoom * 100)}%
+                </button>
+                <button
+                  type="button"
+                  onClick={() => stepImageZoom(0.25)}
+                  aria-label="放大图片"
+                  title="放大 (+)"
+                >
+                  +
+                </button>
+                {activeImage.externalHref &&
+                  !isPreviewImageHref(activeImage.externalHref) && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        window.open(
+                          activeImage.externalHref,
+                          '_blank',
+                          'noopener,noreferrer',
+                        )
+                      }
+                      title="在新窗口打开来源网页"
+                    >
+                      来源链接
+                    </button>
+                  )}
+                <button
+                  type="button"
+                  className="seamind-image-lightbox-exit"
+                  onClick={closeImagePreview}
+                  aria-label="退出图片预览"
+                  title="退出预览 (Esc)"
+                  autoFocus
+                >
+                  × 退出预览
+                </button>
+              </div>
+            </div>
+            <div
+              className="seamind-image-lightbox-stage"
+              onClick={(event) => {
+                if (event.target === event.currentTarget) {
+                  closeImagePreview();
+                }
+              }}
+            >
+              <img
+                ref={lightboxImageRef}
+                className={`seamind-image-lightbox-img${imageZoom !== 1 ? ' is-zoomed' : ''}`}
+                src={activeImage.src}
+                alt={activeImage.alt}
+                onWheel={(event) => {
+                  if (event.ctrlKey || event.metaKey) {
+                    event.preventDefault();
+                    stepImageZoom(event.deltaY < 0 ? 0.25 : -0.25);
+                  }
+                }}
+                onDoubleClick={() => {
+                  if (imageZoom === 1) stepImageZoom(0.5);
+                  else resetImageZoom();
+                }}
+                style={
+                  imageZoom !== 1 && fittedWidth
+                    ? {
+                        width: `${Math.round(fittedWidth * imageZoom)}px`,
+                        height: 'auto',
+                        maxWidth: 'none',
+                        maxHeight: 'none',
+                      }
+                    : undefined
+                }
+              />
+            </div>
+          </div>,
+          (rootRef.current?.closest('.app-shell') as HTMLElement | null) ??
+            document.body,
+        )
+      : null;
 
   return (
     <div
@@ -522,6 +770,7 @@ export default function MarkdownPreview({
       {!hideMinimap && (
         <div ref={minimapHostRef} className="markdown-preview-minimap-host" />
       )}
+      {lightboxNode}
     </div>
   );
 }

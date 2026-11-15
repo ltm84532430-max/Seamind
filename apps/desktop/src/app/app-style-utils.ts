@@ -5,6 +5,9 @@ import {
   type MarkdownNodeSource,
 } from '../mindmap/commands';
 import type { MindmapStyle, Theme } from './app-storage';
+import { sanitizeSvgMarkup, sanitizeSvgTree } from './svg-sanitize';
+
+export { sanitizeSvgMarkup, sanitizeSvgTree };
 
 export interface HtmlCardDefinition {
   assetId: string;
@@ -127,88 +130,6 @@ const katexStyleKeywordValues: Record<string, Set<string>> = {
   'text-align': new Set(['left', 'right', 'center']),
   'max-width': new Set(['none']),
 };
-const katexSvgElements = new Set(['svg', 'path', 'line']);
-const katexSvgAttributes = new Set([
-  'xmlns',
-  'width',
-  'height',
-  'viewbox',
-  'preserveaspectratio',
-  'd',
-  'x1',
-  'y1',
-  'x2',
-  'y2',
-  'stroke-width',
-  'class',
-  'style',
-  'aria-hidden',
-]);
-
-const safeSvgElements = new Set([
-  'svg',
-  'g',
-  'path',
-  'line',
-  'circle',
-  'rect',
-  'ellipse',
-  'polyline',
-  'polygon',
-  'text',
-  'tspan',
-  'title',
-  'desc',
-]);
-const safeSvgAttributes = new Set([
-  'xmlns',
-  'width',
-  'height',
-  'viewbox',
-  'preserveaspectratio',
-  'x',
-  'y',
-  'cx',
-  'cy',
-  'r',
-  'rx',
-  'ry',
-  'x1',
-  'y1',
-  'x2',
-  'y2',
-  'd',
-  'points',
-  'fill',
-  'stroke',
-  'stroke-width',
-  'stroke-linecap',
-  'stroke-linejoin',
-  'fill-rule',
-  'opacity',
-  'fill-opacity',
-  'stroke-opacity',
-  'font-family',
-  'font-size',
-  'font-weight',
-  'text-anchor',
-  'dominant-baseline',
-  'dx',
-  'dy',
-  'letter-spacing',
-  'transform',
-  'role',
-  'aria-label',
-  'aria-hidden',
-]);
-
-const svgNumber = /^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?(?:px|%)?$/i;
-const svgNonNegativeNumber =
-  /^(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?(?:px|%)?$/i;
-const svgViewBox =
-  /^\s*[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?(?:[\s,]+[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?){3}\s*$/i;
-const svgPathData = /^[MmLlHhVvCcSsQqTtAaZz0-9.,+\-\s]+$/;
-const svgPoints = /^[-+\d.eE,\s]+$/;
 
 export const htmlCardParserOptions = {
   ...defaultHtmlParserOptions,
@@ -223,31 +144,6 @@ export const htmlCardParserOptions = {
     >[0]) => getContent($node),
   },
 };
-
-function isSafeKatexSvgAttribute(name: string, value: string): boolean {
-  const normalizedValue = value.trim();
-  if (name === 'xmlns') return normalizedValue === 'http://www.w3.org/2000/svg';
-  if (name === 'viewbox')
-    return /^[-+\d.]+(?:\s+[-+\d.]+){3}$/.test(normalizedValue);
-  if (name === 'preserveaspectratio')
-    return /^(?:xMin|xMid|xMax)(?:YMin|YMid|YMax)(?:\s+(?:meet|slice))?$/i.test(
-      normalizedValue,
-    );
-  if (name === 'd')
-    return /^[MmLlHhVvCcSsQqTtAaZz0-9.,+\-\s]+$/.test(normalizedValue);
-  if (
-    name === 'width' ||
-    name === 'height' ||
-    name === 'stroke-width' ||
-    /^x[12]$|^y[12]$/.test(name)
-  ) {
-    return katexLength.test(normalizedValue);
-  }
-  if (name === 'aria-hidden')
-    return normalizedValue === 'true' || normalizedValue === 'false';
-  if (name === 'class') return /^[\w\s-]*$/.test(normalizedValue);
-  return name === 'style';
-}
 
 export function sanitizeKatexStyle(
   element: Element,
@@ -275,116 +171,6 @@ export function sanitizeKatexStyle(
   }
 
   return safeStyle.length ? safeStyle.cssText : null;
-}
-
-function isSafeSvgAttribute(name: string, value: string): boolean {
-  const normalizedValue = value.trim();
-  const boundedNumber = (allowNegative: boolean) => {
-    const matcher = allowNegative ? svgNumber : svgNonNegativeNumber;
-    if (!matcher.test(normalizedValue)) return false;
-    const number = Number(normalizedValue.replace(/(?:px|%)$/i, ''));
-    return Number.isFinite(number) && Math.abs(number) <= 100_000;
-  };
-  if (name === 'xmlns') return normalizedValue === 'http://www.w3.org/2000/svg';
-  if (name === 'viewbox') {
-    if (!svgViewBox.test(normalizedValue)) return false;
-    const values = normalizedValue
-      .trim()
-      .split(/[\s,]+/)
-      .map(Number);
-    return (
-      values.every(
-        (number) => Number.isFinite(number) && Math.abs(number) <= 1_000_000,
-      ) &&
-      values[2] > 0 &&
-      values[3] > 0
-    );
-  }
-  if (name === 'preserveaspectratio')
-    return /^(?:none|xMinYMin|xMidYMin|xMaxYMin|xMinYMid|xMidYMid|xMaxYMid|xMinYMax|xMidYMax|xMaxYMax)(?:\s+(?:meet|slice))?$/i.test(
-      normalizedValue,
-    );
-  if (name === 'd') return svgPathData.test(normalizedValue);
-  if (name === 'points') return svgPoints.test(normalizedValue);
-  if (['width', 'height', 'r', 'rx', 'ry', 'stroke-width'].includes(name))
-    return boundedNumber(false);
-  if (['x', 'y', 'cx', 'cy', 'x1', 'y1', 'x2', 'y2'].includes(name))
-    return boundedNumber(true);
-  if (['dx', 'dy', 'letter-spacing'].includes(name)) return boundedNumber(true);
-  if (name === 'font-size') return boundedNumber(false);
-  if (name === 'font-weight')
-    return /^(?:normal|bold|[1-9]00)$/i.test(normalizedValue);
-  if (name === 'font-family') return /^[\w\s,'-]{1,80}$/.test(normalizedValue);
-  if (name === 'text-anchor')
-    return ['start', 'middle', 'end'].includes(normalizedValue);
-  if (name === 'dominant-baseline')
-    return [
-      'auto',
-      'middle',
-      'central',
-      'hanging',
-      'text-before-edge',
-      'text-after-edge',
-    ].includes(normalizedValue);
-  if (['fill', 'stroke'].includes(name))
-    return /^(?:none|currentcolor|transparent|#[\da-f]{3,8}|[a-z]{1,20})$/i.test(
-      normalizedValue,
-    );
-  if (name === 'stroke-linecap')
-    return ['butt', 'round', 'square'].includes(normalizedValue);
-  if (name === 'stroke-linejoin')
-    return ['miter', 'round', 'bevel'].includes(normalizedValue);
-  if (name === 'fill-rule')
-    return normalizedValue === 'evenodd' || normalizedValue === 'nonzero';
-  if (['opacity', 'fill-opacity', 'stroke-opacity'].includes(name)) {
-    const number = Number(normalizedValue);
-    return Number.isFinite(number) && number >= 0 && number <= 1;
-  }
-  if (name === 'transform')
-    return /^(?:\s*(?:matrix|translate|scale|rotate|skewX|skewY)\s*\(\s*[-+\d.eE,\s]+\)\s*)+$/i.test(
-      normalizedValue,
-    );
-  if (name === 'role')
-    return ['img', 'presentation', 'graphics-symbol'].includes(normalizedValue);
-  if (name === 'aria-hidden')
-    return normalizedValue === 'true' || normalizedValue === 'false';
-  if (name === 'aria-label') return normalizedValue.length <= 240;
-  return false;
-}
-
-export function sanitizeSvgTree(root: Element, isKatex = false): void {
-  const allowedElements = isKatex ? katexSvgElements : safeSvgElements;
-  const elements = [root, ...Array.from(root.querySelectorAll('*'))];
-  elements.forEach((element) => {
-    if (!allowedElements.has(element.localName.toLowerCase())) {
-      element.remove();
-      return;
-    }
-    Array.from(element.attributes).forEach((attribute) => {
-      const name = attribute.name.toLowerCase();
-      const isAllowed = isKatex
-        ? katexSvgAttributes.has(name) &&
-          isSafeKatexSvgAttribute(name, attribute.value)
-        : safeSvgAttributes.has(name) &&
-          isSafeSvgAttribute(name, attribute.value);
-      if (!isAllowed) element.removeAttribute(attribute.name);
-    });
-  });
-}
-
-export function sanitizeSvgMarkup(source: string): string | null {
-  if (source.length > 100_000 || /<!doctype|<!entity/i.test(source))
-    return null;
-  const parsed = new DOMParser().parseFromString(source, 'image/svg+xml');
-  const root = parsed.documentElement;
-  if (
-    parsed.querySelector('parsererror') ||
-    root.localName.toLowerCase() !== 'svg' ||
-    root.namespaceURI !== 'http://www.w3.org/2000/svg'
-  )
-    return null;
-  sanitizeSvgTree(root);
-  return new XMLSerializer().serializeToString(root);
 }
 
 export function escapeHtmlText(value: string): string {
@@ -568,26 +354,24 @@ export function sanitizeNode(
     .querySelectorAll(
       'script,style,iframe,object,embed,form,input,button,meta,base,link,audio,video,source,track',
     )
-    .forEach((element) => element.remove());
-  document.body
-    .querySelectorAll('svg')
-    .forEach((element) =>
-      sanitizeSvgTree(element, Boolean(element.closest('.katex'))),
-    );
+    .forEach((element) => {
+      if (
+        element.localName.toLowerCase() === 'style' &&
+        element.closest('svg')
+      ) {
+        return;
+      }
+      element.remove();
+    });
+  document.body.querySelectorAll('svg').forEach((element) => {
+    if (element.parentElement?.closest('svg')) return;
+    sanitizeSvgTree(element, Boolean(element.closest('.katex')));
+  });
   document.body.querySelectorAll('*').forEach((element) => {
+    if (element.closest('svg')) return;
     Array.from(element.attributes).forEach((attribute) => {
       const name = attribute.name.toLowerCase();
-      if (element.namespaceURI === 'http://www.w3.org/2000/svg') {
-        const isKatex = Boolean(element.closest('.katex'));
-        const allowed = isKatex
-          ? katexSvgElements.has(element.localName.toLowerCase()) &&
-            katexSvgAttributes.has(name) &&
-            isSafeKatexSvgAttribute(name, attribute.value)
-          : safeSvgElements.has(element.localName.toLowerCase()) &&
-            safeSvgAttributes.has(name) &&
-            isSafeSvgAttribute(name, attribute.value);
-        if (!allowed) element.removeAttribute(attribute.name);
-      } else if (name === 'style') {
+      if (name === 'style') {
         const safeStyle = sanitizeKatexStyle(element, attribute.value);
         if (safeStyle) element.setAttribute(attribute.name, safeStyle);
         else element.removeAttribute(attribute.name);

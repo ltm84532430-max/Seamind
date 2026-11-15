@@ -1500,10 +1500,17 @@ fn media_type_from_bytes(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
         Some(("image/gif", "gif"))
     } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
         Some(("image/webp", "webp"))
+    } else if bytes.len() >= 12
+        && &bytes[4..8] == b"ftyp"
+        && matches!(&bytes[8..12], b"avif" | b"avis")
+    {
+        Some(("image/avif", "avif"))
     } else {
         None
     }
 }
+
+const MAX_MEDIA_REDIRECTS: usize = 5;
 
 fn is_public_media_ip(ip: IpAddr) -> bool {
     match ip {
@@ -1533,8 +1540,29 @@ fn is_public_media_ip(ip: IpAddr) -> bool {
     }
 }
 
-async fn download_document_media(remote_url: &str) -> Result<(Vec<u8>, String), String> {
-    let mut url = url::Url::parse(remote_url.trim()).map_err(|_| "图片网址无效。".to_string())?;
+/// Clash / sing-box / Surge TUN Fake-IP uses RFC 2544 (`198.18.0.0/15`) for virtual domain routes.
+fn is_tun_fake_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let [a, b, _, _] = ip.octets();
+            a == 198 && (b == 18 || b == 19)
+        }
+        IpAddr::V6(ip) => ip
+            .to_ipv4_mapped()
+            .is_some_and(|mapped| is_tun_fake_ip(IpAddr::V4(mapped))),
+    }
+}
+
+fn is_disallowed_media_host(domain: &str) -> bool {
+    let lower = domain.trim_end_matches('.').to_ascii_lowercase();
+    lower == "localhost"
+        || lower.ends_with(".localhost")
+        || lower.ends_with(".local")
+        || lower.ends_with(".internal")
+        || lower.ends_with(".localdomain")
+}
+
+fn validate_media_https_url(url: &url::Url) -> Result<(), String> {
     if url.scheme() != "https"
         || url.port_or_known_default() != Some(443)
         || !url.username().is_empty()
@@ -1542,15 +1570,9 @@ async fn download_document_media(remote_url: &str) -> Result<(Vec<u8>, String), 
     {
         return Err("只允许从不含账号信息的 HTTPS 图片地址导入。".to_string());
     }
-    url.set_fragment(None);
     let host = url
         .host()
         .ok_or_else(|| "图片网址缺少主机名。".to_string())?;
-    let mut builder = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(15));
     match host {
         url::Host::Ipv4(ip) => {
             if !is_public_media_ip(IpAddr::V4(ip)) {
@@ -1563,29 +1585,148 @@ async fn download_document_media(remote_url: &str) -> Result<(Vec<u8>, String), 
             }
         }
         url::Host::Domain(domain) => {
-            let resolved = tokio::time::timeout(
-                Duration::from_secs(5),
-                tokio::net::lookup_host((domain, 443)),
-            )
-            .await
-            .map_err(|_| "图片域名解析超时。".to_string())?
-            .map_err(|error| format!("无法解析图片域名：{error}"))?;
-            let public_address = resolved
-                .filter(|address| is_public_media_ip(address.ip()))
-                .next()
-                .ok_or_else(|| "图片域名未解析到公共网络地址。".to_string())?;
-            // Pin the checked address: a second DNS lookup must not redirect the request inward.
-            builder = builder.resolve(domain, public_address);
+            if is_disallowed_media_host(domain) {
+                return Err("图片地址不能指向本机或内网。".to_string());
+            }
         }
     }
-    let client = builder
-        .build()
-        .map_err(|error| format!("无法创建图片请求：{error}"))?;
-    let mut response = client
-        .get(url.as_str())
-        .send()
+    Ok(())
+}
+
+fn effective_media_proxy() -> Option<String> {
+    crate::youtube_net::load_settings()
+        .proxy_url
+        .or_else(crate::youtube_net::detected_system_proxy)
+        .or_else(|| {
+            ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"]
+                .into_iter()
+                .find_map(|key| {
+                    std::env::var(key)
+                        .ok()
+                        .and_then(|val| crate::youtube_net::normalize_proxy_url(&val).ok().flatten())
+                })
+        })
+}
+
+fn is_compatible_declared_media_type(declared_type: &str, actual_type: &str) -> bool {
+    let normalized = declared_type.trim().to_ascii_lowercase();
+    if normalized.is_empty()
+        || matches!(
+            normalized.as_str(),
+            "application/octet-stream" | "binary/octet-stream" | "image/*" | "*/*"
+        )
+    {
+        return true;
+    }
+    let mapped = match normalized.as_str() {
+        "image/jpg" | "image/pjpeg" => "image/jpeg",
+        "image/x-png" => "image/png",
+        other => other,
+    };
+    mapped == actual_type
+}
+
+fn looks_like_html_response(declared_type: &str, bytes: &[u8]) -> bool {
+    if matches!(declared_type, "text/html" | "application/xhtml+xml") {
+        return true;
+    }
+    let trimmed = bytes
+        .iter()
+        .position(|b| !b.is_ascii_whitespace())
+        .map(|idx| &bytes[idx..])
+        .unwrap_or(&[]);
+    let head = String::from_utf8_lossy(&trimmed[..trimmed.len().min(32)]).to_ascii_lowercase();
+    head.starts_with("<!doctype html") || head.starts_with("<html")
+}
+
+async fn build_media_hop_client(
+    url: &url::Url,
+    proxy: Option<&str>,
+) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder()
+        .user_agent(crate::youtube_net::default_user_agent())
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(8))
+        .timeout(Duration::from_secs(20));
+
+    if let Some(proxy_url) = proxy {
+        let parsed_proxy =
+            reqwest::Proxy::all(proxy_url).map_err(|_| "代理地址无效。".to_string())?;
+        builder = builder.proxy(parsed_proxy);
+    } else if let Some(url::Host::Domain(domain)) = url.host() {
+        let resolved: Vec<_> = tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::net::lookup_host((domain, 443)),
+        )
         .await
-        .map_err(|error| format!("无法下载图片：{error}"))?;
+        .map_err(|_| "图片域名解析超时。".to_string())?
+        .map_err(|error| format!("无法解析图片域名：{error}"))?
+        .collect();
+        let target_address = resolved
+            .iter()
+            .copied()
+            .find(|address| is_public_media_ip(address.ip()))
+            .or_else(|| {
+                resolved
+                    .iter()
+                    .copied()
+                    .find(|address| is_tun_fake_ip(address.ip()))
+            })
+            .ok_or_else(|| "图片域名未解析到公共网络地址。".to_string())?;
+        // Pin the validated address (or TUN Fake-IP route) so redirects cannot re-resolve inward.
+        builder = builder.resolve(domain, target_address);
+    }
+
+    builder
+        .build()
+        .map_err(|error| format!("无法创建图片请求：{error}"))
+}
+
+async fn download_document_media(remote_url: &str) -> Result<(Vec<u8>, String), String> {
+    let mut current_url =
+        url::Url::parse(remote_url.trim()).map_err(|_| "图片网址无效。".to_string())?;
+    let proxy = effective_media_proxy();
+    let mut referer: Option<String> = None;
+
+    let mut final_response = None;
+    for hop in 0..=MAX_MEDIA_REDIRECTS {
+        current_url.set_fragment(None);
+        validate_media_https_url(&current_url)?;
+        let client = build_media_hop_client(&current_url, proxy.as_deref()).await?;
+        let mut request = client.get(current_url.as_str()).header(
+            reqwest::header::ACCEPT,
+            "image/webp,image/png,image/jpeg,image/gif,image/avif,*/*;q=0.8",
+        );
+        if let Some(ref ref_origin) = referer {
+            request = request.header(reqwest::header::REFERER, ref_origin);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|error| format!("无法下载图片：{error}"))?;
+        if response.status().is_redirection() {
+            if hop == MAX_MEDIA_REDIRECTS {
+                return Err("图片重定向次数过多。".to_string());
+            }
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| "图片跳转缺少目标地址。".to_string())?;
+            let next_url = current_url
+                .join(location)
+                .map_err(|_| "图片跳转地址无效。".to_string())?;
+            if let Some(host) = current_url.host_str() {
+                referer = Some(format!("https://{host}/"));
+            }
+            current_url = next_url;
+            continue;
+        }
+        final_response = Some(response);
+        break;
+    }
+
+    let mut response = final_response.ok_or_else(|| "图片重定向次数过多。".to_string())?;
     if !response.status().is_success() {
         return Err(format!("图片服务器返回 {}。", response.status()));
     }
@@ -1616,12 +1757,15 @@ async fn download_document_media(remote_url: &str) -> Result<(Vec<u8>, String), 
         }
         bytes.extend_from_slice(&chunk);
     }
+    if looks_like_html_response(&declared_type, &bytes) {
+        return Err("图片地址返回了网页内容而非图片（可能需要登录或被站点拦截）。".to_string());
+    }
     let (actual_type, _) = media_type_from_bytes(&bytes)
-        .ok_or_else(|| "图片格式不受支持，仅接受 PNG、JPEG、GIF、WebP。".to_string())?;
-    if !declared_type.is_empty() && declared_type != actual_type {
+        .ok_or_else(|| "图片格式不受支持，仅接受 PNG、JPEG、GIF、WebP、AVIF。".to_string())?;
+    if !is_compatible_declared_media_type(&declared_type, actual_type) {
         return Err("图片内容与服务器声明的媒体类型不一致。".to_string());
     }
-    Ok((bytes, url.to_string()))
+    Ok((bytes, current_url.to_string()))
 }
 
 #[tauri::command]
@@ -1660,7 +1804,7 @@ fn persist_document_media(
     source_url: Option<&str>,
 ) -> Result<DocumentMediaAsset, String> {
     let (mime_type, extension) = media_type_from_bytes(&bytes)
-        .ok_or_else(|| "图片格式不受支持，仅接受 PNG、JPEG、GIF、WebP。".to_string())?;
+        .ok_or_else(|| "图片格式不受支持，仅接受 PNG、JPEG、GIF、WebP、AVIF。".to_string())?;
     let digest = Sha256::digest(&bytes);
     let media_id = digest
         .iter()
@@ -1709,7 +1853,7 @@ pub fn resolve_document_media(
         return Err("图片资源编号无效。".to_string());
     }
     let (root, media_relative) = document_media_directory(&app, &document_relative_path)?;
-    for extension in ["png", "jpg", "gif", "webp"] {
+    for extension in ["png", "jpg", "gif", "webp", "avif"] {
         let path = root
             .join(&media_relative)
             .join(format!("{media_id}.{extension}"));
@@ -3779,5 +3923,33 @@ mod tests {
         let second = persist_document_media(&scratch.0, relative, bytes, None).unwrap();
         assert_eq!(second.media_id, first.media_id);
         assert!(second.reused);
+    }
+
+    #[test]
+    fn document_media_allows_tun_fake_ip_for_domains_and_normalizes_mime() {
+        assert!(is_tun_fake_ip("198.18.0.1".parse().unwrap()));
+        assert!(is_tun_fake_ip("198.19.255.254".parse().unwrap()));
+        assert!(!is_tun_fake_ip("8.8.8.8".parse().unwrap()));
+        assert!(!is_tun_fake_ip("192.168.1.1".parse().unwrap()));
+
+        assert!(validate_media_https_url(&url::Url::parse("https://miro.medium.com/v2/resize:fit:1400/test").unwrap()).is_ok());
+        assert!(validate_media_https_url(&url::Url::parse("http://miro.medium.com/test.png").unwrap()).is_err());
+        assert!(validate_media_https_url(&url::Url::parse("https://198.18.0.1/test.png").unwrap()).is_err());
+        assert!(validate_media_https_url(&url::Url::parse("https://localhost/test.png").unwrap()).is_err());
+        assert!(validate_media_https_url(&url::Url::parse("https://internal.local/test.png").unwrap()).is_err());
+
+        assert!(is_compatible_declared_media_type("", "image/jpeg"));
+        assert!(is_compatible_declared_media_type("application/octet-stream", "image/webp"));
+        assert!(is_compatible_declared_media_type("image/jpg", "image/jpeg"));
+        assert!(!is_compatible_declared_media_type("image/png", "image/jpeg"));
+        assert!(!is_compatible_declared_media_type("text/html", "image/png"));
+
+        assert!(looks_like_html_response("text/html", b"anything"));
+        assert!(looks_like_html_response("application/octet-stream", b"  <!DOCTYPE html><html></html>"));
+        assert!(!looks_like_html_response("image/png", b"\x89PNG\r\n\x1a\n"));
+        assert_eq!(
+            media_type_from_bytes(b"\x00\x00\x00\x20ftypavif\x00\x00\x00\x00"),
+            Some(("image/avif", "avif"))
+        );
     }
 }

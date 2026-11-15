@@ -13,6 +13,9 @@ import {
   type MathSurface3dController,
 } from './math-surface-3d';
 import type { Theme } from '../app/app-storage';
+import { parseSafeSvgElement, preparePastedSvg } from '../app/svg-sanitize';
+
+export { preparePastedSvg };
 
 type AppTheme = Theme;
 
@@ -270,221 +273,16 @@ function replacePre(
   });
 }
 
-const safeSvgElements = new Set([
-  'svg',
-  'g',
-  'path',
-  'line',
-  'circle',
-  'rect',
-  'ellipse',
-  'polyline',
-  'polygon',
-  'text',
-  'tspan',
-  'title',
-  'desc',
-  'defs',
-  'marker',
-  'clippath',
-  'style',
-]);
-
-const safeSvgAttributes = new Set([
-  'xmlns',
-  'width',
-  'height',
-  'viewbox',
-  'preserveaspectratio',
-  'x',
-  'y',
-  'cx',
-  'cy',
-  'r',
-  'rx',
-  'ry',
-  'x1',
-  'y1',
-  'x2',
-  'y2',
-  'd',
-  'points',
-  'fill',
-  'stroke',
-  'stroke-width',
-  'stroke-linecap',
-  'stroke-linejoin',
-  'fill-rule',
-  'opacity',
-  'fill-opacity',
-  'stroke-opacity',
-  'font-family',
-  'font-size',
-  'font-weight',
-  'text-anchor',
-  'dominant-baseline',
-  'dx',
-  'dy',
-  'letter-spacing',
-  'transform',
-  'class',
-  'id',
-  'style',
-  'marker-start',
-  'marker-mid',
-  'marker-end',
-  'markerwidth',
-  'markerheight',
-  'markerunits',
-  'refx',
-  'refy',
-  'orient',
-  'clip-path',
-  'stroke-dasharray',
-  'font-style',
-  'role',
-  'aria-label',
-  'aria-hidden',
-]);
-
-function isSafeSvgStyle(value: string): boolean {
-  return (
-    value.length <= 100_000 &&
-    !/(?:@import|expression\s*\(|javascript:|behavior\s*:|-moz-binding|url\(\s*(?!#))/i.test(
-      value,
-    ) &&
-    /^[\w\s#.,:;{}()%[\]"'+/!*>-]+$/.test(value)
-  );
-}
-
-const safeSvgPathData = /^[MmLlHhVvCcSsQqTtAaZz0-9.,+\-\s]+$/;
-const safeSvgPoints = /^[-+\d.eE,\s]+$/;
-// Pele colours its shapes with CSS variables, e.g. fill="var(--_bg)" or
-// stroke="var(--pele-series-1,#4c78a8)". A variable reference cannot load anything or run script,
-// and its fallback is limited to a plain colour.
-const safeSvgPaint =
-  /^(?:none|currentcolor|transparent|#[\da-f]{3,8}|[a-z]{1,20}|rgba?\([\d.,%\s]+\))$/i;
-const safeCssVariable =
-  /^var\(\s*--[\w-]{1,40}\s*(?:,\s*(?:#[\da-f]{3,8}|[a-z]{1,20}|rgba?\([\d.,%\s]+\))\s*)?\)$/i;
-
-function sanitizeMermaidSvg(source: string): SVGSVGElement | null {
-  if (source.length > 300_000 || /<!doctype|<!entity/i.test(source))
-    return null;
-  const parsed = new DOMParser().parseFromString(source, 'image/svg+xml');
-  const root = parsed.documentElement;
-  if (
-    parsed.querySelector('parsererror') ||
-    root.localName.toLowerCase() !== 'svg' ||
-    root.namespaceURI !== 'http://www.w3.org/2000/svg'
-  )
-    return null;
-
-  const elements = [root, ...Array.from(root.querySelectorAll('*'))];
-  elements.forEach((element) => {
-    const name = element.localName.toLowerCase();
-    if (!safeSvgElements.has(name)) {
-      element.remove();
-      return;
-    }
-    if (name === 'style') {
-      if (!isSafeSvgStyle(element.textContent ?? '')) element.remove();
-      return;
-    }
-    Array.from(element.attributes).forEach((attribute) => {
-      const key = attribute.name.toLowerCase();
-      const value = attribute.value.trim();
-      const valid =
-        (key === 'xmlns' && value === 'http://www.w3.org/2000/svg') ||
-        (key === 'viewbox' && /^[-+\d.eE,\s]+$/.test(value)) ||
-        (key === 'd' &&
-          value.length <= 200_000 &&
-          safeSvgPathData.test(value)) ||
-        (key === 'points' &&
-          value.length <= 100_000 &&
-          safeSvgPoints.test(value)) ||
-        (key === 'preserveaspectratio' &&
-          /^(?:none|x(?:Min|Mid|Max)Y(?:Min|Mid|Max)(?:\s+(?:meet|slice))?)$/i.test(
-            value,
-          )) ||
-        (key === 'id' && /^[\w-]{1,120}$/.test(value)) ||
-        (key === 'class' && /^[\w\s-]{0,300}$/.test(value)) ||
-        (key === 'style' && isSafeSvgStyle(value)) ||
-        (['marker-start', 'marker-mid', 'marker-end', 'clip-path'].includes(
-          key,
-        ) &&
-          /^url\(#[\w-]{1,120}\)$/.test(value)) ||
-        ((key === 'fill' || key === 'stroke') &&
-          (safeSvgPaint.test(value) || safeCssVariable.test(value))) ||
-        (key === 'transform' &&
-          /^(?:(?:matrix|translate|scale|rotate|skewX|skewY)\([-+\d.eE,\s]+\)\s*)+$/i.test(
-            value,
-          )) ||
-        (key === 'orient' &&
-          /^(?:auto|auto-start-reverse|[-+\d.eE]+)$/i.test(value)) ||
-        (key === 'markerunits' &&
-          /^(?:strokewidth|userspaceonuse)$/i.test(value)) ||
-        (key === 'font-style' && /^(?:normal|italic|oblique)$/i.test(value)) ||
-        (key === 'stroke-dasharray' &&
-          /^(?:none|[-+\d.eE,\s]+)$/i.test(value)) ||
-        (key === 'font-family' && /^[\w\s,'-]{1,100}$/.test(value)) ||
-        (key === 'font-weight' &&
-          (/^(?:normal|bold|[1-9]00)$/i.test(value) ||
-            safeCssVariable.test(value))) ||
-        (key === 'stroke-linecap' &&
-          ['butt', 'round', 'square'].includes(value)) ||
-        (key === 'stroke-linejoin' &&
-          ['miter', 'round', 'bevel'].includes(value)) ||
-        (key === 'text-anchor' && ['start', 'middle', 'end'].includes(value)) ||
-        (key === 'role' && ['img', 'presentation'].includes(value)) ||
-        (key === 'aria-hidden' && ['true', 'false'].includes(value)) ||
-        (key === 'aria-label' && value.length <= 240) ||
-        (safeSvgAttributes.has(key) &&
-          /^(?:[-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?(?:px|%)?|[-+\d.eE,\s]+)$/i.test(
-            value,
-          ));
-      if (!safeSvgAttributes.has(key) || !valid) {
-        element.removeAttribute(attribute.name);
-      }
-    });
-  });
-  return root as unknown as SVGSVGElement;
-}
+const sanitizeMermaidSvg = parseSafeSvgElement;
 
 export const sanitizeDiagramSvg = sanitizeMermaidSvg;
-
-/** 将剪贴板中的 SVG 收敛为可编辑、可离线渲染的安全图形源码。 */
-export function preparePastedSvg(source: string): string {
-  if (source.length > 300_000) throw new Error('SVG 图形超过 300 KB。');
-  const parsed = new DOMParser().parseFromString(source, 'image/svg+xml');
-  if (
-    parsed.querySelector('parsererror') ||
-    parsed.documentElement.localName.toLowerCase() !== 'svg'
-  )
-    throw new Error('剪贴板中的 SVG 格式无效。');
-  if (
-    parsed.querySelector(
-      'foreignObject, image, use, script, iframe, object, embed',
-    )
-  )
-    throw new Error(
-      'SVG 含有网页内容或外部图像，无法完整安全导入；请复制图形截图。',
-    );
-  const safe = sanitizeMermaidSvg(source);
-  if (
-    !safe ||
-    !safe.querySelector('path,line,circle,rect,ellipse,polyline,polygon,text')
-  )
-    throw new Error('SVG 没有可保留的图形元素；请复制图形截图。');
-  safe.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-  return new XMLSerializer().serializeToString(safe);
-}
 
 function renderStaticSvg(source: string, output: HTMLElement): void {
   const diagram = sanitizeMermaidSvg(source);
   if (
     !diagram ||
     !diagram.querySelector(
-      'path,line,circle,rect,ellipse,polyline,polygon,text',
+      'path,line,circle,rect,ellipse,polyline,polygon,text,tspan,foreignObject,foreignobject,use',
     )
   )
     throw new Error('SVG 图形未通过安全检查。');
