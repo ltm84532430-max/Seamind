@@ -7,12 +7,19 @@ export const terminalApi = {
     cwd: string;
     cols: number;
     rows: number;
+    pixelWidth?: number;
+    pixelHeight?: number;
     shell?: TerminalShellType;
   }) => invoke<string>('terminal_start', args),
   write: (args: { sessionId: string; data: number[] }) =>
     invoke<void>('terminal_write', args),
-  resize: (args: { sessionId: string; cols: number; rows: number }) =>
-    invoke<void>('terminal_resize', args),
+  resize: (args: {
+    sessionId: string;
+    cols: number;
+    rows: number;
+    pixelWidth?: number;
+    pixelHeight?: number;
+  }) => invoke<void>('terminal_resize', args),
   close: (args: { sessionId: string }) => invoke<void>('terminal_close', args),
   stageScript: (args: { source: string }) =>
     invoke<string>('terminal_stage_script', args),

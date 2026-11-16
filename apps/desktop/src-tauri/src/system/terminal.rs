@@ -111,6 +111,133 @@ struct TerminalExit {
     session_id: String,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalCwdEvent {
+    session_id: String,
+    cwd: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalBellEvent {
+    session_id: String,
+}
+
+const MAX_OUTPUT_BATCH_BYTES: usize = 32_768;
+const OUTPUT_COALESCE_WINDOW_MS: u64 = 4;
+const BELL_THROTTLE_MS: u64 = 450;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OscScanState {
+    Normal,
+    Esc,
+    Osc,
+    OscEsc,
+}
+
+struct OscTelemetryScanner {
+    state: OscScanState,
+    osc_buf: Vec<u8>,
+}
+
+impl OscTelemetryScanner {
+    fn new() -> Self {
+        Self {
+            state: OscScanState::Normal,
+            osc_buf: Vec::with_capacity(256),
+        }
+    }
+
+    fn feed(&mut self, bytes: &[u8]) -> (Option<String>, bool) {
+        let mut latest_cwd: Option<String> = None;
+        let mut rang_bell = false;
+
+        for &b in bytes {
+            match self.state {
+                OscScanState::Normal => {
+                    if b == 0x1b {
+                        self.state = OscScanState::Esc;
+                    } else if b == 0x07 {
+                        rang_bell = true;
+                    }
+                }
+                OscScanState::Esc => {
+                    if b == b']' {
+                        self.state = OscScanState::Osc;
+                        self.osc_buf.clear();
+                    } else if b == 0x1b {
+                        self.state = OscScanState::Esc;
+                    } else {
+                        self.state = OscScanState::Normal;
+                    }
+                }
+                OscScanState::Osc => {
+                    if b == 0x07 {
+                        if let Some(cwd) = parse_osc7_payload(&self.osc_buf) {
+                            latest_cwd = Some(cwd);
+                        }
+                        self.osc_buf.clear();
+                        self.state = OscScanState::Normal;
+                    } else if b == 0x1b {
+                        self.state = OscScanState::OscEsc;
+                    } else if self.osc_buf.len() < 1024 {
+                        self.osc_buf.push(b);
+                    }
+                }
+                OscScanState::OscEsc => {
+                    if b == b'\\' {
+                        if let Some(cwd) = parse_osc7_payload(&self.osc_buf) {
+                            latest_cwd = Some(cwd);
+                        }
+                        self.osc_buf.clear();
+                        self.state = OscScanState::Normal;
+                    } else {
+                        self.osc_buf.clear();
+                        self.state = if b == b']' {
+                            OscScanState::Osc
+                        } else if b == 0x1b {
+                            OscScanState::Esc
+                        } else {
+                            OscScanState::Normal
+                        };
+                    }
+                }
+            }
+        }
+
+        (latest_cwd, rang_bell)
+    }
+}
+
+fn strip_windows_verbatim_prefix(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = path.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        path.to_string()
+    }
+}
+
+fn parse_osc7_payload(payload: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(payload).ok()?;
+    let rest = text.strip_prefix("7;")?;
+    let trimmed = rest.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.starts_with("file://") {
+        let parsed = url::Url::parse(trimmed).ok()?;
+        if let Ok(path_buf) = parsed.to_file_path() {
+            return Some(strip_windows_verbatim_prefix(&path_buf.to_string_lossy()));
+        }
+        // 兼容在 Windows 上运行 WSL/Linux shell 时发出的类 Unix OSC 7 路径
+        return Some(parsed.path().to_string());
+    }
+    Some(strip_windows_verbatim_prefix(trimmed))
+}
+
 #[tauri::command]
 pub fn terminal_stage_script(source: String) -> Result<String, String> {
     if source.as_bytes().len() > MAX_TERMINAL_SCRIPT_BYTES {
@@ -158,12 +285,17 @@ pub fn terminal_remove_script(path: String) -> Result<(), String> {
     }
 }
 
-fn terminal_size(cols: u16, rows: u16) -> PtySize {
+fn terminal_size(
+    cols: u16,
+    rows: u16,
+    pixel_width: Option<u16>,
+    pixel_height: Option<u16>,
+) -> PtySize {
     PtySize {
         rows: rows.clamp(1, 200),
         cols: cols.clamp(2, 500),
-        pixel_width: 0,
-        pixel_height: 0,
+        pixel_width: pixel_width.unwrap_or(0),
+        pixel_height: pixel_height.unwrap_or(0),
     }
 }
 
@@ -248,12 +380,14 @@ pub fn terminal_start(
     cwd: String,
     cols: u16,
     rows: u16,
+    pixel_width: Option<u16>,
+    pixel_height: Option<u16>,
     shell: Option<String>,
 ) -> Result<String, String> {
     let requested_path = if cwd.trim().is_empty() {
         std::env::current_dir().map_err(|_| "无法读取当前工作目录。".to_string())?
     } else {
-        PathBuf::from(cwd.trim())
+        PathBuf::from(strip_windows_verbatim_prefix(cwd.trim()))
     };
     let raw_directory = requested_path
         .canonicalize()
@@ -266,7 +400,7 @@ pub fn terminal_start(
 
     let pty_system = native_pty_system();
     let pair = pty_system
-        .openpty(terminal_size(cols, rows))
+        .openpty(terminal_size(cols, rows, pixel_width, pixel_height))
         .map_err(|error| format!("创建终端失败：{error}"))?;
 
     let cli_session = agent_bridge.create_cli_session()?;
@@ -381,19 +515,98 @@ pub fn terminal_start(
     drop(session_map);
     reservation.commit();
 
-    let output_app = app.clone();
-    let output_session_id = session_id.clone();
+    let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(64);
     thread::spawn(move || {
         let mut buffer = [0_u8; 8192];
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) | Err(_) => break,
                 Ok(length) => {
+                    if tx.send(buffer[..length].to_vec()).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    let output_app = app.clone();
+    let output_session_id = session_id.clone();
+    thread::spawn(move || {
+        let mut scanner = OscTelemetryScanner::new();
+        let mut last_cwd: Option<String> = None;
+        let mut last_bell: Option<std::time::Instant> = None;
+        let coalesce_window = std::time::Duration::from_millis(OUTPUT_COALESCE_WINDOW_MS);
+        let bell_throttle = std::time::Duration::from_millis(BELL_THROTTLE_MS);
+
+        while let Ok(first) = rx.recv() {
+            let mut batch = first;
+            if batch.len() < MAX_OUTPUT_BATCH_BYTES {
+                let deadline = std::time::Instant::now() + coalesce_window;
+                loop {
+                    match rx.try_recv() {
+                        Ok(more) => {
+                            batch.extend_from_slice(&more);
+                            if batch.len() >= MAX_OUTPUT_BATCH_BYTES {
+                                break;
+                            }
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {
+                            if batch.len() < 512 {
+                                // 按键回显等小包零延迟直发
+                                break;
+                            }
+                            let remaining =
+                                deadline.saturating_duration_since(std::time::Instant::now());
+                            if remaining.is_zero() {
+                                break;
+                            }
+                            match rx.recv_timeout(remaining) {
+                                Ok(more) => {
+                                    batch.extend_from_slice(&more);
+                                    if batch.len() >= MAX_OUTPUT_BATCH_BYTES {
+                                        break;
+                                    }
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                    }
+                }
+            }
+
+            let (cwd_update, rang_bell) = scanner.feed(&batch);
+            let _ = output_app.emit(
+                "seamind-terminal-output",
+                TerminalOutput {
+                    session_id: output_session_id.clone(),
+                    data: batch,
+                },
+            );
+            if let Some(next_cwd) = cwd_update {
+                if last_cwd.as_deref() != Some(next_cwd.as_str()) {
+                    last_cwd = Some(next_cwd.clone());
                     let _ = output_app.emit(
-                        "seamind-terminal-output",
-                        TerminalOutput {
+                        "seamind-terminal-cwd",
+                        TerminalCwdEvent {
                             session_id: output_session_id.clone(),
-                            data: buffer[..length].to_vec(),
+                            cwd: next_cwd,
+                        },
+                    );
+                }
+            }
+            if rang_bell {
+                let now = std::time::Instant::now();
+                let should_emit = last_bell
+                    .map(|prev| now.duration_since(prev) >= bell_throttle)
+                    .unwrap_or(true);
+                if should_emit {
+                    last_bell = Some(now);
+                    let _ = output_app.emit(
+                        "seamind-terminal-bell",
+                        TerminalBellEvent {
+                            session_id: output_session_id.clone(),
                         },
                     );
                 }
@@ -455,6 +668,8 @@ pub fn terminal_resize(
     session_id: String,
     cols: u16,
     rows: u16,
+    pixel_width: Option<u16>,
+    pixel_height: Option<u16>,
 ) -> Result<(), String> {
     let master = {
         let sessions = state
@@ -470,7 +685,7 @@ pub fn terminal_resize(
         .lock()
         .map_err(|_| "终端会话控制通道不可用。".to_string())?;
     master
-        .resize(terminal_size(cols, rows))
+        .resize(terminal_size(cols, rows, pixel_width, pixel_height))
         .map_err(|error| format!("调整终端大小失败：{error}"))
 }
 
@@ -497,7 +712,7 @@ fn create_powershell_bootstrap(
     let agy_dir = agy_workspace_dir.to_string_lossy().replace('\'', "''");
     let endpoint = endpoint.replace('\'', "''");
     format!(
-        r#"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; [Console]::InputEncoding = [System.Text.Encoding]::UTF8; chcp 65001 | Out-Null; $env:SEAMIND_AGY_DIR = '{agy_dir}'; $env:SEAMIND_CLAUDE_MCP_CONFIG = '{config_path}'; $env:GEMINI_CLI_SYSTEM_DEFAULTS_PATH = '{config_path}'; $env:SEAMIND_MCP_URL = '{endpoint}'; function global:Resolve-SeamindAgyPath {{ $cmd = Get-Command agy -All -ErrorAction SilentlyContinue | Where-Object {{ $_.CommandType -in @('Application', 'ExternalScript') }} | Select-Object -First 1; if ($cmd) {{ return $cmd.Source }}; foreach ($candidate in @("$env:LOCALAPPDATA\agy\bin\agy.exe", "$env:LOCALAPPDATA\agy\bin\agy.cmd", "$env:USERPROFILE\.gemini\antigravity\bin\agy.exe", "$env:USERPROFILE\.gemini\antigravity\bin\agy.cmd", "$env:LOCALAPPDATA\Programs\Antigravity IDE\bin\agy.cmd", "$env:LOCALAPPDATA\Programs\Antigravity IDE\bin\agy.exe")) {{ if ($candidate -and (Test-Path -LiteralPath $candidate)) {{ return $candidate }} }}; return $null }}; function global:seamind-agy {{ $exe = Resolve-SeamindAgyPath; if (-not $exe) {{ Write-Error 'Google Antigravity CLI (agy) 未安装或不在 PATH 中。'; return }}; if ($args.Count -gt 0 -and $args[0] -in @('mcp', 'plugin', 'auth', 'login', 'logout', 'update', 'upgrade', 'help', 'version', '--help', '-h', '--version', '-v')) {{ & $exe @args; return }}; & $exe --add-dir $env:SEAMIND_AGY_DIR @args }}; function global:agy {{ seamind-agy @args }}; $global:SeamindClaudeExecutable = Get-Command claude -All -ErrorAction SilentlyContinue | Where-Object {{ $_.CommandType -in @('Application', 'ExternalScript') }} | Select-Object -First 1; function global:seamind-claude {{ if (-not $global:SeamindClaudeExecutable) {{ Write-Error 'Claude Code CLI 未安装或不在 PATH 中。'; return }}; & $global:SeamindClaudeExecutable.Source --mcp-config $env:SEAMIND_CLAUDE_MCP_CONFIG @args }}; function global:claude {{ seamind-claude @args }}; $global:SeamindCodexExecutable = Get-Command codex -All -ErrorAction SilentlyContinue | Where-Object {{ $_.CommandType -in @('Application', 'ExternalScript') }} | Select-Object -First 1; function global:seamind-codex {{ if (-not $global:SeamindCodexExecutable) {{ Write-Error 'Codex CLI 未安装或不在 PATH 中。'; return }}; & $global:SeamindCodexExecutable.Source -c "mcp_servers.seamind.url=""$env:SEAMIND_MCP_URL""" -c 'mcp_servers.seamind.bearer_token_env_var="SEAMIND_MCP_TOKEN"' @args }}; function global:codex {{ seamind-codex @args }}; Write-Host 'Seamind MCP 已接入当前终端会话。运行 agy / claude / codex 即可调用导图、知识库与播放器学习路径工具。' -ForegroundColor DarkCyan"#
+        r#"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; [Console]::InputEncoding = [System.Text.Encoding]::UTF8; chcp 65001 | Out-Null; $env:SEAMIND_AGY_DIR = '{agy_dir}'; $env:SEAMIND_CLAUDE_MCP_CONFIG = '{config_path}'; $env:GEMINI_CLI_SYSTEM_DEFAULTS_PATH = '{config_path}'; $env:SEAMIND_MCP_URL = '{endpoint}'; function global:Resolve-SeamindAgyPath {{ $cmd = Get-Command agy -All -ErrorAction SilentlyContinue | Where-Object {{ $_.CommandType -in @('Application', 'ExternalScript') }} | Select-Object -First 1; if ($cmd) {{ return $cmd.Source }}; foreach ($candidate in @("$env:LOCALAPPDATA\agy\bin\agy.exe", "$env:LOCALAPPDATA\agy\bin\agy.cmd", "$env:USERPROFILE\.gemini\antigravity\bin\agy.exe", "$env:USERPROFILE\.gemini\antigravity\bin\agy.cmd", "$env:LOCALAPPDATA\Programs\Antigravity IDE\bin\agy.cmd", "$env:LOCALAPPDATA\Programs\Antigravity IDE\bin\agy.exe")) {{ if ($candidate -and (Test-Path -LiteralPath $candidate)) {{ return $candidate }} }}; return $null }}; function global:seamind-agy {{ $exe = Resolve-SeamindAgyPath; if (-not $exe) {{ Write-Error 'Google Antigravity CLI (agy) 未安装或不在 PATH 中。'; return }}; if ($args.Count -gt 0 -and $args[0] -in @('mcp', 'plugin', 'auth', 'login', 'logout', 'update', 'upgrade', 'help', 'version', '--help', '-h', '--version', '-v')) {{ & $exe @args; return }}; & $exe --add-dir $env:SEAMIND_AGY_DIR @args }}; function global:agy {{ seamind-agy @args }}; $global:SeamindClaudeExecutable = Get-Command claude -All -ErrorAction SilentlyContinue | Where-Object {{ $_.CommandType -in @('Application', 'ExternalScript') }} | Select-Object -First 1; function global:seamind-claude {{ if (-not $global:SeamindClaudeExecutable) {{ Write-Error 'Claude Code CLI 未安装或不在 PATH 中。'; return }}; & $global:SeamindClaudeExecutable.Source --mcp-config $env:SEAMIND_CLAUDE_MCP_CONFIG @args }}; function global:claude {{ seamind-claude @args }}; $global:SeamindCodexExecutable = Get-Command codex -All -ErrorAction SilentlyContinue | Where-Object {{ $_.CommandType -in @('Application', 'ExternalScript') }} | Select-Object -First 1; function global:seamind-codex {{ if (-not $global:SeamindCodexExecutable) {{ Write-Error 'Codex CLI 未安装或不在 PATH 中。'; return }}; & $global:SeamindCodexExecutable.Source -c "mcp_servers.seamind.url=""$env:SEAMIND_MCP_URL""" -c 'mcp_servers.seamind.bearer_token_env_var="SEAMIND_MCP_TOKEN"' @args }}; function global:codex {{ seamind-codex @args }}; $global:__SeamindOrigPrompt = $function:prompt; function global:prompt {{ try {{ if ($PWD.Provider.Name -eq 'FileSystem') {{ [Console]::Write(([char]27) + ']7;' + ([System.Uri]::new($PWD.ProviderPath)).AbsoluteUri + ([char]7)) }} }} catch {{}}; if ($global:__SeamindOrigPrompt) {{ & $global:__SeamindOrigPrompt }} else {{ "PS $PWD> " }} }}; Write-Host 'Seamind MCP 已接入当前终端会话。运行 agy / claude / codex 即可调用导图、知识库与播放器学习路径工具。' -ForegroundColor DarkCyan"#
     )
 }
 
@@ -508,5 +723,45 @@ fn remove_temp_files(paths: &[PathBuf]) {
         } else {
             let _ = std::fs::remove_file(path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn osc_scanner_parses_split_osc7_cwd_and_distinguishes_bell() {
+        let mut scanner = OscTelemetryScanner::new();
+        let (cwd1, bell1) = scanner.feed(b"\x1b]7;file:///C:/Users/l8453/Desk");
+        assert_eq!(cwd1, None);
+        assert!(!bell1);
+
+        let (cwd2, bell2) = scanner.feed(b"top/books\x07PS> \x07");
+        assert!(bell2);
+        let cwd_text = cwd2.expect("cwd should parse");
+        assert!(cwd_text.ends_with("books"), "unexpected cwd: {cwd_text}");
+
+        // ST 结束符 (\x1b\) 也应正确解析且不触发铃声
+        let (cwd3, bell3) = scanner.feed(b"\x1b]7;file://wsl/home/demo\x1b\\ok");
+        assert!(!bell3);
+        assert!(cwd3.as_deref().unwrap_or_default().ends_with("demo"));
+
+        // 无 host 的 Unix 路径在 Windows 宿主下回退保留 /path
+        let (cwd4, bell4) = scanner.feed(b"\x1b]7;file:///var/log/app\x1b\\");
+        assert!(!bell4);
+        assert_eq!(cwd4.as_deref(), Some("/var/log/app"));
+    }
+
+    #[test]
+    fn strip_windows_verbatim_handles_local_and_unc_paths() {
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\C:\Users\l8453\Desktop\books"),
+            r"C:\Users\l8453\Desktop\books"
+        );
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\UNC\server\share\dir"),
+            r"\\server\share\dir"
+        );
     }
 }

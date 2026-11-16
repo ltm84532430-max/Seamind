@@ -1,4 +1,3 @@
-/// <reference types="vitest" />
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import postcssNested from 'postcss-nested';
@@ -63,9 +62,6 @@ const sourcePath = (packageName: string) =>
   );
 
 export default defineConfig({
-  test: {
-    include: ['test/**/*.test.ts'],
-  },
   plugins: [react(), pyodideAssetsPlugin()],
   clearScreen: false,
   server: {

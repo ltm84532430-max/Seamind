@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { terminalApi } from './terminal-api';
 import type { Theme } from '../app/app-storage';
 import type { EpubBookDocument } from '../library/library';
@@ -22,14 +22,23 @@ import {
   knowledgeShells,
 } from './terminal-knowledge';
 import {
+  DEFAULT_TERMINAL_PREFERENCES,
+  loadTerminalPreferences,
+  onTerminalPreferencesChanged,
+  saveTerminalPreferences,
+} from './terminal-preferences';
+import { normalizeDisplayPath } from './terminal-alacritty';
+import {
   TerminalSessionView,
   type TerminalSessionViewHandle,
 } from './TerminalSessionView';
 import type {
-  TerminalTab,
-  TerminalShellType,
-  TerminalShellOption,
   SplitLayoutMode,
+  TerminalCliPreset,
+  TerminalPreferences,
+  TerminalShellOption,
+  TerminalShellType,
+  TerminalTab,
 } from './terminal-types';
 import {
   COMMAND_LIBRARY_SHORTCUT_LABEL,
@@ -42,6 +51,11 @@ import {
   terminalTabShortcutIndex,
   type TerminalToolId,
 } from './terminal-tools';
+import {
+  normalizePaneTabAssignments,
+  openStandaloneTerminalWindow,
+  visiblePaneCountForMode,
+} from './terminal-window';
 import './terminal-workspace.css';
 
 interface TerminalWorkspaceProps {
@@ -50,6 +64,9 @@ interface TerminalWorkspaceProps {
   theme: Theme;
   books?: EpubBookDocument[];
   onOpenBook?: (book: EpubBookDocument) => void;
+  standalone?: boolean;
+  initialShell?: TerminalShellType;
+  initialCli?: TerminalCliPreset;
 }
 
 const DEFAULT_SHELLS: TerminalShellOption[] = [
@@ -83,6 +100,16 @@ const DEFAULT_SHELLS: TerminalShellOption[] = [
   },
 ];
 
+const CLI_PRESETS: ReadonlyArray<{
+  id: TerminalCliPreset;
+  label: string;
+  desc: string;
+}> = [
+  { id: 'agy', label: 'agy', desc: 'Antigravity CLI（含 Seamind 工作区）' },
+  { id: 'claude', label: 'claude', desc: 'Claude Code CLI（已注入 MCP）' },
+  { id: 'codex', label: 'codex', desc: 'Codex CLI（已注入 MCP）' },
+];
+
 const COMMAND_FAVORITES_KEY = 'seamind:terminal-command-favorites:v1';
 const COMMAND_RECENTS_KEY = 'seamind:terminal-command-recents:v1';
 const MAX_WORKSPACE_TABS = 16;
@@ -98,28 +125,112 @@ function readCommandIds(key: string): string[] {
   }
 }
 
+function makeTabId(): string {
+  return `tab-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function LayoutIcon({ mode }: { mode: SplitLayoutMode }) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      aria-hidden="true"
+    >
+      <rect x="1.5" y="2.5" width="13" height="11" />
+      {mode === 'vertical' && <line x1="8" y1="2.5" x2="8" y2="13.5" />}
+      {mode === 'horizontal' && <line x1="1.5" y1="8" x2="14.5" y2="8" />}
+      {mode === 'tri' && (
+        <>
+          <line x1="8" y1="2.5" x2="8" y2="13.5" />
+          <line x1="8" y1="8" x2="14.5" y2="8" />
+        </>
+      )}
+      {mode === 'quad' && (
+        <>
+          <line x1="8" y1="2.5" x2="8" y2="13.5" />
+          <line x1="1.5" y1="8" x2="14.5" y2="8" />
+        </>
+      )}
+    </svg>
+  );
+}
+
+function DrawerSplitIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      aria-hidden="true"
+    >
+      <rect x="1.5" y="2.5" width="13" height="11" />
+      <line x1="10.5" y1="2.5" x2="10.5" y2="13.5" />
+    </svg>
+  );
+}
+
+function PopoutWindowIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      aria-hidden="true"
+    >
+      <rect x="1.5" y="4.5" width="9.5" height="9" />
+      <polyline points="8.5 2 14 2 14 7.5" />
+      <line x1="7" y1="9" x2="13.8" y2="2.2" />
+    </svg>
+  );
+}
+
 export default function TerminalWorkspace({
   active,
   cwd,
   theme,
   books = [],
   onOpenBook,
+  standalone = false,
+  initialShell = 'powershell',
+  initialCli,
 }: TerminalWorkspaceProps) {
+  const initialCleanCwd = normalizeDisplayPath(cwd);
+  const initialTabRef = useRef<TerminalTab>({
+    id: 'tab-1',
+    title: initialCli
+      ? `${initialCli.toUpperCase()} · ${initialShell.toUpperCase()}`
+      : `${initialShell === 'powershell' ? 'PowerShell' : initialShell.toUpperCase()} 1`,
+    shell: initialShell,
+    cwd: initialCleanCwd,
+    initialCli,
+    status: 'starting',
+    createdAt: Date.now(),
+  });
+
   const [shells, setShells] = useState<TerminalShellOption[]>(DEFAULT_SHELLS);
-  const [tabs, setTabs] = useState<TerminalTab[]>([
-    {
-      id: 'tab-1',
-      title: 'PowerShell 1',
-      shell: 'powershell',
-      cwd,
-      status: 'starting',
-      createdAt: Date.now(),
-    },
-  ]);
-  const [activeTabId, setActiveTabId] = useState<string>('tab-1');
-  const [secondaryTabId, setSecondaryTabId] = useState<string>('tab-1');
+  const [tabs, setTabs] = useState<TerminalTab[]>([initialTabRef.current]);
+  const [paneTabIds, setPaneTabIds] = useState<string[]>(['tab-1']);
+  const [focusedPaneIndex, setFocusedPaneIndex] = useState<number>(0);
   const [splitMode, setSplitMode] = useState<SplitLayoutMode>('single');
   const [splitRatio, setSplitRatio] = useState<number>(0.5);
+
+  const [prefs, setPrefs] = useState<TerminalPreferences>(() =>
+    loadTerminalPreferences(),
+  );
+  const [showPrefsMenu, setShowPrefsMenu] = useState(false);
+  const [showPopoutMenu, setShowPopoutMenu] = useState(false);
+  const [windowNotice, setWindowNotice] = useState('');
+
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerPinned, setDrawerPinned] = useState(false);
   const [drawerTab, setDrawerTab] = useState<TerminalToolId>(() =>
@@ -151,19 +262,48 @@ export default function TerminalWorkspace({
     shell: TerminalShellType;
     cwd: string;
   } | null>(null);
-  const [showShellMenu, setShowShellMenu] = useState<boolean>(false);
+  const [showShellMenu, setShowShellMenu] = useState(false);
   const [editingTabId, setEditingTabId] = useState<string | null>(null);
-  const [editingTitle, setEditingTitle] = useState<string>('');
+  const [editingTitle, setEditingTitle] = useState('');
 
   const terminalRefs = useRef<Map<string, TerminalSessionViewHandle>>(
     new Map(),
   );
   const toolsMenuRef = useRef<HTMLDivElement>(null);
   const shellMenuRef = useRef<HTMLDivElement>(null);
+  const prefsMenuRef = useRef<HTMLDivElement>(null);
+  const popoutMenuRef = useRef<HTMLDivElement>(null);
   const commandSearchRef = useRef<HTMLInputElement>(null);
   const commandPanelRef = useRef<HTMLDivElement>(null);
   const knowledgeSearchRef = useRef<HTMLInputElement>(null);
   const knowledgePanelRef = useRef<HTMLDivElement>(null);
+
+  const visibleCount = visiblePaneCountForMode(splitMode);
+  const activePaneIds = useMemo(
+    () =>
+      normalizePaneTabAssignments(
+        paneTabIds,
+        tabs.map((t) => t.id),
+        visibleCount,
+      ),
+    [paneTabIds, tabs, visibleCount],
+  );
+  const safeFocusedPane = Math.min(
+    focusedPaneIndex,
+    Math.max(0, activePaneIds.length - 1),
+  );
+  const activeTabId = activePaneIds[safeFocusedPane] ?? tabs[0]?.id ?? '';
+
+  const showTempNotice = (msg: string) => {
+    setWindowNotice(msg);
+    window.setTimeout(() => {
+      setWindowNotice((curr) => (curr === msg ? '' : curr));
+    }, 2600);
+  };
+
+  useEffect(() => {
+    return onTerminalPreferencesChanged(setPrefs);
+  }, []);
 
   const focusActiveTerminal = () => {
     terminalRefs.current.get(activeTabId)?.focus();
@@ -180,7 +320,6 @@ export default function TerminalWorkspace({
     if (!result.open) focusActiveTerminal();
   };
 
-  // Detect available shells from Tauri backend
   useEffect(() => {
     if (!active) return;
     terminalApi
@@ -199,12 +338,14 @@ export default function TerminalWorkspace({
     try {
       localStorage.setItem(LAST_TERMINAL_TOOL_KEY, drawerTab);
     } catch {
-      // 上次打开的工具仍可在当前进程中使用。
+      // noop
     }
   }, [drawerTab]);
 
   useEffect(() => {
-    if (!showShellMenu && !toolsMenuOpen) return;
+    if (!showShellMenu && !toolsMenuOpen && !showPrefsMenu && !showPopoutMenu) {
+      return;
+    }
     const onPointerDown = (event: MouseEvent) => {
       const target = event.target;
       if (!(target instanceof Node)) return;
@@ -222,10 +363,24 @@ export default function TerminalWorkspace({
       ) {
         setToolsMenuOpen(false);
       }
+      if (
+        showPrefsMenu &&
+        prefsMenuRef.current &&
+        !prefsMenuRef.current.contains(target)
+      ) {
+        setShowPrefsMenu(false);
+      }
+      if (
+        showPopoutMenu &&
+        popoutMenuRef.current &&
+        !popoutMenuRef.current.contains(target)
+      ) {
+        setShowPopoutMenu(false);
+      }
     };
     document.addEventListener('mousedown', onPointerDown);
     return () => document.removeEventListener('mousedown', onPointerDown);
-  }, [showShellMenu, toolsMenuOpen]);
+  }, [showShellMenu, toolsMenuOpen, showPrefsMenu, showPopoutMenu]);
 
   useEffect(() => {
     if (!active) return;
@@ -244,9 +399,19 @@ export default function TerminalWorkspace({
         if (!tab) return;
         event.preventDefault();
         event.stopPropagation();
-        setActiveTabId(tab.id);
+        const alreadyPane = activePaneIds.indexOf(tab.id);
+        if (alreadyPane >= 0) {
+          setFocusedPaneIndex(alreadyPane);
+        } else {
+          setPaneTabIds((prev) => {
+            const next = [...prev];
+            next[safeFocusedPane] = tab.id;
+            return next;
+          });
+        }
         setShowShellMenu(false);
         setToolsMenuOpen(false);
+        requestAnimationFrame(() => terminalRefs.current.get(tab.id)?.focus());
         return;
       }
       if (isCommandLibraryShortcut(keyEvent)) {
@@ -261,6 +426,16 @@ export default function TerminalWorkspace({
         return;
       }
       if (event.key !== 'Escape') return;
+      if (showPrefsMenu) {
+        event.preventDefault();
+        setShowPrefsMenu(false);
+        return;
+      }
+      if (showPopoutMenu) {
+        event.preventDefault();
+        setShowPopoutMenu(false);
+        return;
+      }
       const target = terminalEscapeTarget({
         open: drawerOpen,
         tool: drawerTab,
@@ -286,12 +461,16 @@ export default function TerminalWorkspace({
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [
     active,
+    activePaneIds,
     activeTabId,
     drawerOpen,
     drawerPinned,
     drawerTab,
     editingTabId,
     pendingCommand,
+    safeFocusedPane,
+    showPopoutMenu,
+    showPrefsMenu,
     showShellMenu,
     tabs,
     toolsMenuOpen,
@@ -317,38 +496,147 @@ export default function TerminalWorkspace({
     [tabs, activeTabId],
   );
 
-  const addTab = (shell: TerminalShellType = 'powershell') => {
-    if (tabs.length >= MAX_WORKSPACE_TABS) return;
+  const focusedLiveCwd =
+    terminalRefs.current.get(activeTabId)?.getCwd() ||
+    activeTab?.cwd ||
+    initialCleanCwd;
+
+  const createNewTab = (
+    shell: TerminalShellType = activeTab?.shell ?? 'powershell',
+    cliPreset?: TerminalCliPreset,
+    targetPaneIdx?: number,
+  ): TerminalTab | null => {
+    if (tabs.length >= MAX_WORKSPACE_TABS) return null;
     const nextIndex = tabs.length + 1;
     const shellDef = shells.find((s) => s.id === shell);
-    const title = `${shellDef?.name ?? shell.toUpperCase()} ${nextIndex}`;
+    const title = cliPreset
+      ? `${cliPreset.toUpperCase()} · ${nextIndex}`
+      : `${shellDef?.name ?? shell.toUpperCase()} ${nextIndex}`;
     const newTab: TerminalTab = {
-      id: `tab-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      id: makeTabId(),
       title,
       shell,
-      cwd,
+      cwd: normalizeDisplayPath(focusedLiveCwd),
+      initialCli: cliPreset,
       status: 'starting',
       createdAt: Date.now(),
     };
     setTabs((prev) => [...prev, newTab]);
-    setActiveTabId(newTab.id);
-    if (splitMode !== 'single' && tabs.length === 1) {
-      setSecondaryTabId(newTab.id);
-    }
+    const slot = targetPaneIdx ?? safeFocusedPane;
+    setPaneTabIds((prev) => {
+      const next = [...prev];
+      next[slot] = newTab.id;
+      return next;
+    });
+    setFocusedPaneIndex(slot);
     setShowShellMenu(false);
+    return newTab;
+  };
+
+  /**
+   * 图二风格的多窗格布局切换：若当前会话数不足目标窗格数，
+   * 自动新建并填入干净会话（继承当前真实工作目录），无需手动再配对标签。
+   */
+  const switchLayoutMode = (nextMode: SplitLayoutMode) => {
+    const needed = visiblePaneCountForMode(nextMode);
+    if (tabs.length < needed && tabs.length < MAX_WORKSPACE_TABS) {
+      const missingCount = Math.min(
+        needed - tabs.length,
+        MAX_WORKSPACE_TABS - tabs.length,
+      );
+      const inheritCwd = normalizeDisplayPath(focusedLiveCwd);
+      const inheritShell = activeTab?.shell ?? 'powershell';
+      const spawned: TerminalTab[] = [];
+      for (let i = 0; i < missingCount; i += 1) {
+        const idx = tabs.length + i + 1;
+        spawned.push({
+          id: makeTabId(),
+          title: `${inheritShell === 'powershell' ? 'PowerShell' : inheritShell.toUpperCase()} ${idx}`,
+          shell: inheritShell,
+          cwd: inheritCwd,
+          status: 'starting',
+          createdAt: Date.now(),
+        });
+      }
+      const combinedIds = [...tabs, ...spawned].map((t) => t.id);
+      setTabs((prev) => [...prev, ...spawned]);
+      setPaneTabIds((prev) =>
+        normalizePaneTabAssignments(prev, combinedIds, needed),
+      );
+    }
+    setSplitMode(nextMode);
+    setFocusedPaneIndex((idx) => Math.min(idx, needed - 1));
+  };
+
+  /** 在当前窗格快速向右/网格拆出并新增一个独立会话窗格（图二核心交互）。 */
+  const splitOutPane = (fromPaneIdx: number, cliPreset?: TerminalCliPreset) => {
+    const currCount = visiblePaneCountForMode(splitMode);
+    let nextMode: SplitLayoutMode = splitMode;
+    if (currCount === 1) nextMode = 'vertical';
+    else if (currCount === 2) nextMode = 'tri';
+    else if (currCount === 3) nextMode = 'quad';
+
+    const nextVisibleCount = visiblePaneCountForMode(nextMode);
+    if (tabs.length < MAX_WORKSPACE_TABS) {
+      const targetSlot =
+        currCount < 4 ? currCount : Math.min(fromPaneIdx + 1, 3);
+      createNewTab(activeTab?.shell ?? 'powershell', cliPreset, targetSlot);
+    } else if (cliPreset && activePaneIds[fromPaneIdx]) {
+      terminalRefs.current
+        .get(activePaneIds[fromPaneIdx])
+        ?.sendCommand(cliPreset, true);
+    }
+    if (nextMode !== splitMode) {
+      setSplitMode(nextMode);
+      setFocusedPaneIndex(Math.min(currCount, nextVisibleCount - 1));
+    }
+  };
+
+  const closePaneSlot = (paneIdx: number) => {
+    const count = visiblePaneCountForMode(splitMode);
+    if (count <= 1) return;
+    const nextSlots = activePaneIds.filter((_, idx) => idx !== paneIdx);
+    setPaneTabIds(nextSlots);
+    const nextMode: SplitLayoutMode =
+      count === 4 ? 'tri' : count === 3 ? 'vertical' : 'single';
+    setSplitMode(nextMode);
+    setFocusedPaneIndex((curr) => Math.max(0, Math.min(curr, count - 2)));
+  };
+
+  const handlePopoutWindow = async (
+    cliPreset?: TerminalCliPreset,
+    sourceTabId?: string,
+  ) => {
+    setShowPopoutMenu(false);
+    const srcTab =
+      tabs.find((t) => t.id === (sourceTabId ?? activeTabId)) ?? activeTab;
+    const targetCwd =
+      terminalRefs.current.get(srcTab?.id ?? '')?.getCwd() ||
+      srcTab?.cwd ||
+      initialCleanCwd;
+    const result = await openStandaloneTerminalWindow({
+      cwd: normalizeDisplayPath(targetCwd),
+      shell: srcTab?.shell ?? 'powershell',
+      cli: cliPreset,
+      theme,
+    });
+    if (result.ok) {
+      showTempNotice(
+        cliPreset ? `已在独立窗口启动 ${cliPreset}` : '已打开独立终端窗口',
+      );
+    } else {
+      showTempNotice(result.error || '独立窗口创建失败');
+    }
   };
 
   const closeTab = (tabId: string, event?: React.MouseEvent) => {
     event?.stopPropagation();
-    if (tabs.length <= 1) return; // Keep at least one tab
+    if (tabs.length <= 1) return;
     const nextTabs = tabs.filter((t) => t.id !== tabId);
     setTabs(nextTabs);
-    if (activeTabId === tabId) {
-      setActiveTabId(nextTabs[0]?.id ?? '');
-    }
-    if (secondaryTabId === tabId) {
-      setSecondaryTabId(nextTabs[0]?.id ?? '');
-    }
+    setPaneTabIds((prev) =>
+      prev.map((id) => (id === tabId ? (nextTabs[0]?.id ?? '') : id)),
+    );
     terminalRefs.current.delete(tabId);
   };
 
@@ -378,13 +666,12 @@ export default function TerminalWorkspace({
 
   useEffect(() => {
     try {
-      // 只保存内置卡片 ID，不落盘保存终端命令或用户输入，避免记录凭据。
       localStorage.setItem(
         COMMAND_FAVORITES_KEY,
         JSON.stringify(favoriteCommandIds),
       );
     } catch {
-      // 收藏状态仍可在当前进程中使用。
+      // noop
     }
   }, [favoriteCommandIds]);
 
@@ -395,7 +682,7 @@ export default function TerminalWorkspace({
         JSON.stringify(recentCommandIds),
       );
     } catch {
-      // 最近使用记录仍可在当前进程中使用。
+      // noop
     }
   }, [recentCommandIds]);
 
@@ -427,7 +714,7 @@ export default function TerminalWorkspace({
         command,
         tabId: activeTabId,
         shell: activeTab?.shell ?? 'powershell',
-        cwd: activeTab?.cwd ?? cwd,
+        cwd: focusedLiveCwd,
       });
       return;
     }
@@ -614,105 +901,61 @@ export default function TerminalWorkspace({
     applyKnowledgeAction(item, event.shiftKey);
   };
 
+  const tabToPaneIndex = useMemo(() => {
+    const map = new Map<string, number>();
+    activePaneIds.forEach((tabId, paneIdx) => {
+      if (!map.has(tabId)) map.set(tabId, paneIdx);
+    });
+    return map;
+  }, [activePaneIds]);
+
   return (
-    <main className="terminal-workspace" aria-label="终端与系统实验工作区">
-      {/* 1. Header Toolbar */}
-      <header className="terminal-workspace-header">
-        <div className="terminal-header-actions">
-          {/* 分屏切换按钮 */}
-          <div className="terminal-split-selector" aria-label="分屏布局切换">
-            <button
-              type="button"
-              className={`split-btn ${splitMode === 'single' ? 'is-active' : ''}`}
-              onClick={() => setSplitMode('single')}
-              title="单窗格显示"
-            >
-              单屏
-            </button>
-            <button
-              type="button"
-              className={`split-btn ${splitMode === 'vertical' ? 'is-active' : ''}`}
-              onClick={() => {
-                setSplitMode('vertical');
-                if (tabs.length > 1 && secondaryTabId === activeTabId) {
-                  const alt = tabs.find((t) => t.id !== activeTabId);
-                  if (alt) setSecondaryTabId(alt.id);
-                }
-              }}
-              title="左右分屏对照"
-            >
-              左右
-            </button>
-            <button
-              type="button"
-              className={`split-btn ${splitMode === 'horizontal' ? 'is-active' : ''}`}
-              onClick={() => {
-                setSplitMode('horizontal');
-                if (tabs.length > 1 && secondaryTabId === activeTabId) {
-                  const alt = tabs.find((t) => t.id !== activeTabId);
-                  if (alt) setSecondaryTabId(alt.id);
-                }
-              }}
-              title="上下分屏对照"
-            >
-              上下
-            </button>
-          </div>
-
-          <div className="terminal-tools-container" ref={toolsMenuRef}>
-            <button
-              type="button"
-              className={`terminal-tools-btn ${drawerOpen || toolsMenuOpen ? 'is-active' : ''}`}
-              aria-expanded={toolsMenuOpen}
-              aria-haspopup="menu"
-              onClick={() => {
-                setToolsMenuOpen((open) => !open);
-                setShowShellMenu(false);
-              }}
-              title={`打开命令库或知识修正（${COMMAND_LIBRARY_SHORTCUT_LABEL} 打开命令库）`}
-              aria-keyshortcuts="Control+Shift+L"
-            >
-              工具
-            </button>
-            {toolsMenuOpen && (
-              <div className="terminal-tools-menu" role="menu">
-                {TERMINAL_TOOLS.map((tool) => {
-                  const selected = drawerOpen && drawerTab === tool.id;
-                  return (
-                    <button
-                      key={tool.id}
-                      type="button"
-                      role="menuitemradio"
-                      aria-checked={selected}
-                      className={`terminal-tools-option ${selected ? 'is-active' : ''}`}
-                      onClick={() => applyTool(tool.id)}
-                    >
-                      {tool.label}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-      </header>
-
-      {/* 2. Multi-Tab Navigation Bar */}
-      <nav className="terminal-tab-bar" aria-label="终端会话标签栏">
-        <div className="terminal-tabs-track">
+    <main
+      className={`terminal-workspace${standalone ? ' is-standalone' : ''}`}
+      aria-label="终端与多窗格 CLI 工作区"
+    >
+      {/* Unified Session Tabs & Image-2 Multi-Window Controls */}
+      <nav className="terminal-topbar" aria-label="终端会话与多开控制">
+        <div className="terminal-tabs-track" role="tablist">
           {tabs.map((tab, index) => {
+            const assignedPane = tabToPaneIndex.get(tab.id);
+            const isVisible = assignedPane !== undefined;
             const isActive = tab.id === activeTabId;
             const isEditing = editingTabId === tab.id;
             return (
               <div
                 key={tab.id}
-                className={`terminal-tab-item ${isActive ? 'is-active' : ''}`}
-                onClick={() => setActiveTabId(tab.id)}
+                className={`terminal-tab-item${isActive ? ' is-active' : ''}${isVisible ? ' is-visible-in-pane' : ''}`}
+                onClick={() => {
+                  const paneIdx = activePaneIds.indexOf(tab.id);
+                  if (paneIdx >= 0) {
+                    setFocusedPaneIndex(paneIdx);
+                  } else {
+                    setPaneTabIds((prev) => {
+                      const next = [...prev];
+                      next[safeFocusedPane] = tab.id;
+                      return next;
+                    });
+                  }
+                  if (tab.bellCount) {
+                    setTabs((prev) =>
+                      prev.map((item) =>
+                        item.id === tab.id ? { ...item, bellCount: 0 } : item,
+                      ),
+                    );
+                  }
+                  requestAnimationFrame(() =>
+                    terminalRefs.current.get(tab.id)?.focus(),
+                  );
+                }}
                 onDoubleClick={() => startRenameTab(tab)}
                 role="tab"
                 aria-selected={isActive}
               >
                 <span className="tab-shell-tag">{tab.shell.toUpperCase()}</span>
+                {tab.bellCount ? (
+                  <span className="tab-bell-dot" title="该会话刚完成响铃提醒" />
+                ) : null}
                 {isEditing ? (
                   <input
                     type="text"
@@ -749,66 +992,312 @@ export default function TerminalWorkspace({
               </div>
             );
           })}
+
+          <div className="terminal-new-tab-container" ref={shellMenuRef}>
+            <button
+              type="button"
+              className="terminal-new-tab-btn"
+              onClick={() => {
+                setShowShellMenu((prev) => !prev);
+                setToolsMenuOpen(false);
+                setShowPrefsMenu(false);
+                setShowPopoutMenu(false);
+              }}
+              disabled={tabs.length >= MAX_WORKSPACE_TABS}
+              aria-expanded={showShellMenu}
+              title="新建终端或一键开启 AI CLI 会话"
+            >
+              + 新建
+            </button>
+
+            {showShellMenu && (
+              <div className="terminal-shell-menu">
+                <div className="shell-menu-header">一键启动 CLI 模型会话</div>
+                <div className="shell-cli-quick-row">
+                  {CLI_PRESETS.map((cli) => (
+                    <button
+                      key={cli.id}
+                      type="button"
+                      className="shell-cli-quick-btn"
+                      disabled={tabs.length >= MAX_WORKSPACE_TABS}
+                      onClick={() => createNewTab('powershell', cli.id)}
+                      title={cli.desc}
+                    >
+                      ⚡ {cli.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="shell-menu-header">选择 Shell 外壳</div>
+                {tabs.length >= MAX_WORKSPACE_TABS && (
+                  <div className="shell-menu-limit">
+                    已达到 {MAX_WORKSPACE_TABS} 个会话上限，请先关闭不用的标签。
+                  </div>
+                )}
+                {shells.map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    className={`shell-menu-option ${opt.available ? '' : 'is-unavailable'}`}
+                    disabled={
+                      !opt.available || tabs.length >= MAX_WORKSPACE_TABS
+                    }
+                    onClick={() => createNewTab(opt.id)}
+                  >
+                    <div className="option-main">
+                      <span className="option-badge">{opt.badge}</span>
+                      <strong className="option-name">{opt.name}</strong>
+                      {!opt.available && (
+                        <span className="option-status">未检测到</span>
+                      )}
+                    </div>
+                    <span className="option-desc">{opt.description}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* 新建标签菜单 */}
-        <div className="terminal-new-tab-container" ref={shellMenuRef}>
-          <button
-            type="button"
-            className="terminal-new-tab-btn"
-            onClick={() => {
-              setShowShellMenu((prev) => !prev);
-              setToolsMenuOpen(false);
-            }}
-            disabled={tabs.length >= MAX_WORKSPACE_TABS}
-            aria-expanded={showShellMenu}
-            title="新建终端会话"
-          >
-            + 新建终端
-          </button>
-
-          {showShellMenu && (
-            <div className="terminal-shell-menu">
-              <div className="shell-menu-header">选择会话环境</div>
-              {tabs.length >= MAX_WORKSPACE_TABS && (
-                <div className="shell-menu-limit">
-                  当前工作区已达到 {MAX_WORKSPACE_TABS}{' '}
-                  个会话上限，请先关闭一个标签。
-                </div>
-              )}
-              {shells.map((opt) => (
-                <button
-                  key={opt.id}
-                  type="button"
-                  className={`shell-menu-option ${opt.available ? '' : 'is-unavailable'}`}
-                  disabled={!opt.available || tabs.length >= MAX_WORKSPACE_TABS}
-                  onClick={() => addTab(opt.id)}
-                >
-                  <div className="option-main">
-                    <span className="option-badge">{opt.badge}</span>
-                    <strong className="option-name">{opt.name}</strong>
-                    {!opt.available && (
-                      <span className="option-status">未检测到</span>
-                    )}
-                  </div>
-                  <span className="option-desc">{opt.description}</span>
-                </button>
-              ))}
-              <p className="shell-menu-install">
-                安装 WSL：在终端运行 <code>wsl --install</code>
-              </p>
-            </div>
+        {/* Right Window & Multi-Pane Controls (Aligned with Image 2) */}
+        <div className="terminal-window-controls">
+          {windowNotice && (
+            <span className="terminal-topbar-notice">{windowNotice}</span>
           )}
+
+          <div
+            className="terminal-layout-icons"
+            role="group"
+            aria-label="多窗格分屏交互"
+          >
+            {(
+              [
+                ['single', '单窗格'],
+                ['vertical', '左右并排双开（自动新建右窗）'],
+                ['horizontal', '上下双开（自动新建下窗）'],
+                ['tri', '三窗格布局（左主 + 右上下）'],
+                ['quad', '四宫格多开（最多 4 窗同时运行 CLI）'],
+              ] as const
+            ).map(([mode, title]) => (
+              <button
+                key={mode}
+                type="button"
+                className={`terminal-icon-btn${splitMode === mode ? ' is-active' : ''}`}
+                onClick={() => switchLayoutMode(mode)}
+                title={title}
+                aria-label={title}
+              >
+                <LayoutIcon mode={mode} />
+              </button>
+            ))}
+          </div>
+
+          <div className="terminal-popout-container" ref={popoutMenuRef}>
+            <button
+              type="button"
+              className={`terminal-icon-btn terminal-popout-btn${showPopoutMenu ? ' is-active' : ''}`}
+              onClick={() => {
+                setShowPopoutMenu((prev) => !prev);
+                setShowShellMenu(false);
+                setShowPrefsMenu(false);
+                setToolsMenuOpen(false);
+              }}
+              title="多开独立窗口（新开原生桌面窗，可同时看书并跑多个 CLI 模型）"
+              aria-expanded={showPopoutMenu}
+            >
+              <PopoutWindowIcon />
+              <span>多开窗</span>
+            </button>
+
+            {showPopoutMenu && (
+              <div className="terminal-popout-menu" role="menu">
+                <div className="shell-menu-header">多开独立桌面窗口</div>
+                <button
+                  type="button"
+                  className="terminal-tools-option"
+                  onClick={() => void handlePopoutWindow(undefined)}
+                >
+                  新建独立 Shell 窗口
+                </button>
+                {CLI_PRESETS.map((cli) => (
+                  <button
+                    key={cli.id}
+                    type="button"
+                    className="terminal-tools-option"
+                    onClick={() => void handlePopoutWindow(cli.id)}
+                  >
+                    独立窗口启动 ⚡ {cli.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="terminal-prefs-container" ref={prefsMenuRef}>
+            <button
+              type="button"
+              className={`terminal-icon-btn${showPrefsMenu ? ' is-active' : ''}`}
+              onClick={() => {
+                setShowPrefsMenu((prev) => !prev);
+                setShowShellMenu(false);
+                setShowPopoutMenu(false);
+                setToolsMenuOpen(false);
+              }}
+              title="终端外观与 Alacritty 交互设置"
+              aria-expanded={showPrefsMenu}
+            >
+              配置
+            </button>
+
+            {showPrefsMenu && (
+              <div className="terminal-prefs-popover">
+                <div className="shell-menu-header">
+                  Alacritty 交互与渲染设置
+                </div>
+                <div className="terminal-prefs-row">
+                  <span>字号</span>
+                  <div className="terminal-prefs-stepper">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        saveTerminalPreferences({
+                          fontSize: prefs.fontSize - 1,
+                        })
+                      }
+                    >
+                      -
+                    </button>
+                    <strong>{prefs.fontSize}px</strong>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        saveTerminalPreferences({
+                          fontSize: prefs.fontSize + 1,
+                        })
+                      }
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+
+                <div className="terminal-prefs-row">
+                  <span>光标形态</span>
+                  <div className="terminal-prefs-seg">
+                    {(['block', 'underline', 'bar'] as const).map((style) => (
+                      <button
+                        key={style}
+                        type="button"
+                        className={
+                          prefs.cursorStyle === style ? 'is-active' : ''
+                        }
+                        onClick={() =>
+                          saveTerminalPreferences({ cursorStyle: style })
+                        }
+                      >
+                        {style === 'block'
+                          ? '方块'
+                          : style === 'underline'
+                            ? '底线'
+                            : '竖线'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <label className="terminal-prefs-check">
+                  <input
+                    type="checkbox"
+                    checked={prefs.cursorBlink}
+                    onChange={(e) =>
+                      saveTerminalPreferences({ cursorBlink: e.target.checked })
+                    }
+                  />
+                  <span>光标闪烁</span>
+                </label>
+
+                <label className="terminal-prefs-check">
+                  <input
+                    type="checkbox"
+                    checked={prefs.saveOnSelect}
+                    onChange={(e) =>
+                      saveTerminalPreferences({
+                        saveOnSelect: e.target.checked,
+                      })
+                    }
+                  />
+                  <span>鼠标选中自动复制 (save_to_clipboard)</span>
+                </label>
+
+                <label className="terminal-prefs-check">
+                  <input
+                    type="checkbox"
+                    checked={prefs.smartCopyPaste}
+                    onChange={(e) =>
+                      saveTerminalPreferences({
+                        smartCopyPaste: e.target.checked,
+                      })
+                    }
+                  />
+                  <span>智能 Ctrl+C（有选区时复制，无选区中断）</span>
+                </label>
+
+                <label className="terminal-prefs-check">
+                  <input
+                    type="checkbox"
+                    checked={prefs.webglEnabled}
+                    onChange={(e) =>
+                      saveTerminalPreferences({
+                        webglEnabled: e.target.checked,
+                      })
+                    }
+                  />
+                  <span>WebGL2 GPU 加速（重开会话生效）</span>
+                </label>
+
+                <div className="terminal-prefs-footer">
+                  <button
+                    type="button"
+                    className="terminal-status-btn"
+                    onClick={() =>
+                      saveTerminalPreferences(DEFAULT_TERMINAL_PREFERENCES)
+                    }
+                  >
+                    恢复默认
+                  </button>
+                  <span>Vi: Ctrl+Shift+Space · Hints: Ctrl+Shift+O</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="terminal-tools-container" ref={toolsMenuRef}>
+            <button
+              type="button"
+              className={`terminal-icon-btn terminal-drawer-toggle-btn${drawerOpen || toolsMenuOpen ? ' is-active' : ''}`}
+              aria-expanded={drawerOpen}
+              onClick={() => {
+                setDrawerOpen((open) => !open);
+                setToolsMenuOpen(false);
+                setShowShellMenu(false);
+                setShowPopoutMenu(false);
+                setShowPrefsMenu(false);
+              }}
+              title={`切换命令库 / 知识修正侧栏 (${COMMAND_LIBRARY_SHORTCUT_LABEL})`}
+              aria-keyshortcuts="Control+Shift+L"
+            >
+              <DrawerSplitIcon />
+              <span>工具栏</span>
+            </button>
+          </div>
         </div>
       </nav>
 
-      {/* 3. Center Workspace Body (Split Stage + Right Drawer) */}
+      {/* Center Multi-Pane Stage + Optional Right Drawer */}
       <div className="terminal-workspace-body">
-        {/* 中央主舞台：支持单屏与多分屏 */}
-        {/* 每个标签只挂载一个 xterm；切换分屏只改变网格区域，不重建 PTY。 */}
         <section
           className={`terminal-stage-panes is-${splitMode}`}
-          aria-label="终端画布"
+          aria-label="终端多窗格画布"
           style={
             {
               '--primary-pane-size': `${splitRatio}fr`,
@@ -816,67 +1305,132 @@ export default function TerminalWorkspace({
             } as React.CSSProperties
           }
         >
-          <div className="pane-header pane-header-primary">
-            <span className="pane-label">
-              {splitMode === 'single' ? '当前会话' : '窗格 A'}
-            </span>
-            <select
-              className="pane-tab-select"
-              value={activeTabId}
-              onChange={(event) => setActiveTabId(event.target.value)}
-              aria-label="窗格 A 关联会话"
-            >
-              {tabs.map((tab) => (
-                <option key={tab.id} value={tab.id}>
-                  [{tab.shell.toUpperCase()}] {tab.title} ·{' '}
-                  {tab.status === 'ready'
-                    ? '就绪'
-                    : tab.status === 'starting'
-                      ? '启动中'
-                      : tab.status === 'exited'
-                        ? '已退出'
-                        : '错误'}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {splitMode !== 'single' && (
-            <div className="pane-header pane-header-secondary">
-              <span className="pane-label">窗格 B</span>
-              <select
-                className="pane-tab-select"
-                value={secondaryTabId}
-                onChange={(event) => setSecondaryTabId(event.target.value)}
-                aria-label="窗格 B 关联会话"
+          {/* Compact Pane Chrome Headers (one per visible pane slot) */}
+          {activePaneIds.map((paneTabId, paneIdx) => {
+            const paneTab = tabs.find((t) => t.id === paneTabId) ?? tabs[0];
+            if (!paneTab) return null;
+            const isPaneFocused = paneIdx === safeFocusedPane;
+            return (
+              <div
+                key={`header-${paneIdx}`}
+                className={`pane-header pane-header-${paneIdx}${isPaneFocused ? ' is-focused' : ''}`}
+                style={{ gridArea: `header${paneIdx}` }}
+                onMouseDown={() => {
+                  setFocusedPaneIndex(paneIdx);
+                  requestAnimationFrame(() =>
+                    terminalRefs.current.get(paneTab.id)?.focus(),
+                  );
+                }}
               >
-                {tabs.map((tab) => (
-                  <option key={tab.id} value={tab.id}>
-                    [{tab.shell.toUpperCase()}] {tab.title}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
+                <div className="pane-header-left">
+                  <span
+                    className={`pane-status-dot is-${paneTab.status}`}
+                    aria-hidden="true"
+                  />
+                  <select
+                    className="pane-tab-select"
+                    value={paneTab.id}
+                    onChange={(event) => {
+                      const nextId = event.target.value;
+                      setPaneTabIds((prev) => {
+                        const next = [...prev];
+                        next[paneIdx] = nextId;
+                        return next;
+                      });
+                      setFocusedPaneIndex(paneIdx);
+                    }}
+                    aria-label={`窗格 ${paneIdx + 1} 会话`}
+                  >
+                    {tabs.map((tab) => (
+                      <option key={tab.id} value={tab.id}>
+                        [{tab.shell.toUpperCase()}] {tab.title}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-          {splitMode !== 'single' && (
+                <div className="pane-header-actions">
+                  {CLI_PRESETS.map((cli) => (
+                    <button
+                      key={cli.id}
+                      type="button"
+                      className="pane-mini-cli-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setFocusedPaneIndex(paneIdx);
+                        terminalRefs.current
+                          .get(paneTab.id)
+                          ?.sendCommand(cli.id, true);
+                      }}
+                      title={`在当前窗格运行 ${cli.desc}`}
+                    >
+                      {cli.label}
+                    </button>
+                  ))}
+
+                  <button
+                    type="button"
+                    className="pane-mini-icon-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      splitOutPane(paneIdx);
+                    }}
+                    title="向侧边新增分屏窗格"
+                  >
+                    <DrawerSplitIcon />
+                  </button>
+
+                  <button
+                    type="button"
+                    className="pane-mini-icon-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handlePopoutWindow(undefined, paneTab.id);
+                    }}
+                    title="将此目录弹出到新独立窗口"
+                  >
+                    <PopoutWindowIcon />
+                  </button>
+
+                  {visibleCount > 1 && (
+                    <button
+                      type="button"
+                      className="pane-mini-icon-btn is-close"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        closePaneSlot(paneIdx);
+                      }}
+                      title="关闭此分屏窗格（后台会话仍保留在标签栏）"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Drag divider for 2-pane splits and tri vertical split */}
+          {(splitMode === 'vertical' ||
+            splitMode === 'horizontal' ||
+            splitMode === 'tri') && (
             <div
               className="terminal-pane-divider"
               role="separator"
               aria-orientation={
-                splitMode === 'vertical' ? 'vertical' : 'horizontal'
+                splitMode === 'horizontal' ? 'horizontal' : 'vertical'
               }
               onPointerDown={(event) => {
                 const container = event.currentTarget.parentElement;
                 if (!container) return;
                 const rect = container.getBoundingClientRect();
-                const isVertical = splitMode === 'vertical';
+                const isHorizontal = splitMode === 'horizontal';
                 const onPointerMove = (moveEvent: PointerEvent) => {
-                  const ratio = isVertical
-                    ? (moveEvent.clientX - rect.left) / rect.width
-                    : (moveEvent.clientY - rect.top - 60) /
-                      Math.max(1, rect.height - 65);
-                  setSplitRatio(Math.max(0.2, Math.min(0.8, ratio)));
+                  const ratio = isHorizontal
+                    ? (moveEvent.clientY - rect.top - 28) /
+                      Math.max(1, rect.height - 56)
+                    : (moveEvent.clientX - rect.left) / Math.max(1, rect.width);
+                  setSplitRatio(Math.max(0.22, Math.min(0.78, ratio)));
                 };
                 const onPointerUp = () => {
                   window.removeEventListener('pointermove', onPointerMove);
@@ -893,47 +1447,61 @@ export default function TerminalWorkspace({
             </div>
           )}
 
-          {tabs.map((tab) => (
-            <TerminalSessionView
-              key={tab.id}
-              ref={(instance) => {
-                if (instance) terminalRefs.current.set(tab.id, instance);
-                else terminalRefs.current.delete(tab.id);
-              }}
-              tab={tab}
-              theme={theme}
-              style={{
-                gridArea: tab.id === activeTabId ? 'primary' : 'secondary',
-              }}
-              active={
-                active &&
-                (tab.id === activeTabId ||
-                  (splitMode !== 'single' &&
-                    tab.id === secondaryTabId &&
-                    tab.id !== activeTabId))
-              }
-              onStatusChange={(status, message) => {
-                setTabs((previous) =>
-                  previous.map((item) =>
-                    item.id === tab.id
-                      ? { ...item, status, statusMessage: message }
-                      : item,
-                  ),
-                );
-              }}
-            />
-          ))}
-
-          {splitMode !== 'single' && activeTabId === secondaryTabId && (
-            <div
-              className="terminal-pane-empty"
-              style={{ gridArea: 'secondary' }}
-            >
-              选择另一个会话以打开第二个窗格
-            </div>
-          )}
+          {/* Stably mounted PTY instances mapped cleanly onto pane0..pane3 */}
+          {tabs.map((tab) => {
+            const assignedPane = tabToPaneIndex.get(tab.id);
+            const isVisibleInStage = assignedPane !== undefined;
+            const isFocused = assignedPane === safeFocusedPane;
+            return (
+              <TerminalSessionView
+                key={tab.id}
+                ref={(instance) => {
+                  if (instance) terminalRefs.current.set(tab.id, instance);
+                  else terminalRefs.current.delete(tab.id);
+                }}
+                tab={tab}
+                theme={theme}
+                isFocused={isFocused}
+                style={{
+                  gridArea: isVisibleInStage ? `pane${assignedPane}` : 'pane0',
+                }}
+                active={active && isVisibleInStage}
+                onFocusPane={() => {
+                  if (assignedPane !== undefined) {
+                    setFocusedPaneIndex(assignedPane);
+                  }
+                }}
+                onStatusChange={(status, message) => {
+                  setTabs((previous) =>
+                    previous.map((item) =>
+                      item.id === tab.id
+                        ? { ...item, status, statusMessage: message }
+                        : item,
+                    ),
+                  );
+                }}
+                onCwdChange={(nextCwd) => {
+                  setTabs((previous) =>
+                    previous.map((item) =>
+                      item.id === tab.id ? { ...item, cwd: nextCwd } : item,
+                    ),
+                  );
+                }}
+                onBell={() => {
+                  setTabs((previous) =>
+                    previous.map((item) =>
+                      item.id === tab.id && item.id !== activeTabId
+                        ? { ...item, bellCount: (item.bellCount ?? 0) + 1 }
+                        : item,
+                    ),
+                  );
+                }}
+              />
+            );
+          })}
         </section>
-        {/* 4. Right Collapsible Drawer: Linux 实操与跨界面知识联动 */}
+
+        {/* Collapsible Command & Knowledge Drawer */}
         {drawerOpen && (
           <aside
             className="terminal-knowledge-drawer"
@@ -1028,7 +1596,7 @@ export default function TerminalWorkspace({
                     ))}
                   </div>
                   <div className="command-shell-context">
-                    当前环境：
+                    目标窗格 #{safeFocusedPane + 1} ·{' '}
                     {shells.find((shell) => shell.id === activeShell)?.name ??
                       activeShell}
                     {' · Enter 填入 · Shift+Enter 运行'}
@@ -1075,7 +1643,7 @@ export default function TerminalWorkspace({
                           data-command-id={item.id}
                           title={
                             sessionReady
-                              ? '填入当前终端，不回车'
+                              ? '填入当前聚焦终端，不回车'
                               : '终端还没就绪'
                           }
                           onMouseEnter={() => setFocusedCommandId(item.id)}
@@ -1149,7 +1717,7 @@ export default function TerminalWorkspace({
                                   title={
                                     item.requiresConfirmation
                                       ? '运行前需要确认'
-                                      : '在当前终端运行'
+                                      : '在当前聚焦终端运行'
                                   }
                                   onClick={() =>
                                     runOrConfirmCommand(
@@ -1189,7 +1757,7 @@ export default function TerminalWorkspace({
                                           ? `用${shell.name}新建标签`
                                           : '未检测到'
                                       }
-                                      onClick={() => addTab(shell.id)}
+                                      onClick={() => createNewTab(shell.id)}
                                     >
                                       用{shell.name}新建标签
                                     </button>
@@ -1260,7 +1828,7 @@ export default function TerminalWorkspace({
                     aria-label="搜索知识动作"
                   />
                   <div className="command-shell-context">
-                    当前环境：
+                    目标窗格 #{safeFocusedPane + 1} ·{' '}
                     {shells.find((shell) => shell.id === activeShell)?.name ??
                       activeShell}
                     {' · Enter 填入 · Shift+Enter 运行'}
@@ -1290,7 +1858,7 @@ export default function TerminalWorkspace({
                           data-knowledge-id={item.id}
                           title={
                             sessionReady
-                              ? '填入当前终端，不回车'
+                              ? '填入当前聚焦终端，不回车'
                               : '终端还没就绪'
                           }
                           onMouseEnter={() => setFocusedKnowledgeId(item.id)}
@@ -1342,7 +1910,7 @@ export default function TerminalWorkspace({
                                     type="button"
                                     className="command-row-fill"
                                     disabled={!sessionReady}
-                                    title="填入当前终端，不回车"
+                                    title="填入当前聚焦终端，不回车"
                                     onClick={() =>
                                       applyKnowledgeAction(item, false)
                                     }
@@ -1356,7 +1924,7 @@ export default function TerminalWorkspace({
                                     title={
                                       item.requiresConfirmation
                                         ? '运行前需要确认'
-                                        : '在当前终端运行'
+                                        : '在当前聚焦终端运行'
                                     }
                                     onClick={() =>
                                       applyKnowledgeAction(item, true)
@@ -1392,7 +1960,7 @@ export default function TerminalWorkspace({
                                           ? `用${shell.name}新建标签`
                                           : '未检测到'
                                       }
-                                      onClick={() => addTab(shell.id)}
+                                      onClick={() => createNewTab(shell.id)}
                                     >
                                       用{shell.name}新建标签
                                     </button>
@@ -1416,6 +1984,7 @@ export default function TerminalWorkspace({
           </aside>
         )}
       </div>
+
       {pendingCommand && (
         <div
           className="terminal-command-confirm-backdrop"

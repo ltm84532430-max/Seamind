@@ -1,10 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
-import { terminalApi } from '../terminal/terminal-api';
 import { listen } from '@tauri-apps/api/event';
 import { FitAddon } from '@xterm/addon-fit';
+import type { SearchAddon } from '@xterm/addon-search';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import type { Theme } from '../app/app-storage';
+import { attachStandardXtermAddons } from '../terminal/terminal-addons';
+import { normalizeDisplayPath } from '../terminal/terminal-alacritty';
+import { terminalApi } from '../terminal/terminal-api';
+import {
+  loadTerminalPreferences,
+  onTerminalPreferencesChanged,
+  saveTerminalPreferences,
+} from '../terminal/terminal-preferences';
+import { openStandaloneTerminalWindow } from '../terminal/terminal-window';
 
 type AppTheme = Theme;
 
@@ -15,6 +24,11 @@ interface TerminalOutputEvent {
 
 interface TerminalExitEvent {
   sessionId: string;
+}
+
+interface TerminalCwdEvent {
+  sessionId: string;
+  cwd: string;
 }
 
 interface PendingTerminalCommand {
@@ -129,6 +143,9 @@ export default function TerminalPanel({
 }: TerminalPanelProps) {
   const terminalHostRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
+  const searchAddonRef = useRef<SearchAddon | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const sessionIdRef = useRef<string | null>(null);
   const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
   const pendingCommandRef = useRef(pendingCommand);
@@ -140,11 +157,36 @@ export default function TerminalPanel({
   const submittedRawIdsRef = useRef(new Set<string>());
   const commandCaptureRef = useRef<CommandCapture | null>(null);
   const [status, setStatus] = useState('正在启动…');
+  const [liveCwd, setLiveCwd] = useState(() => normalizeDisplayPath(cwd));
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [prefs, setPrefs] = useState(() => loadTerminalPreferences());
+  const prefsRef = useRef(prefs);
+  prefsRef.current = prefs;
   pendingCommandRef.current = pendingCommand;
   pendingRawInputRef.current = pendingRawInput;
   onCommandSubmittedRef.current = onCommandSubmitted;
   onCommandOutputRef.current = onCommandOutput;
   onRawInputSentRef.current = onRawInputSent;
+
+  useEffect(() => {
+    setLiveCwd(normalizeDisplayPath(cwd));
+  }, [cwd]);
+
+  useEffect(() => {
+    return onTerminalPreferencesChanged(setPrefs);
+  }, []);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+    terminal.options.fontSize = prefs.fontSize;
+    terminal.options.lineHeight = prefs.lineHeight;
+    terminal.options.fontFamily = prefs.fontFamily;
+    terminal.options.cursorStyle = prefs.cursorStyle;
+    terminal.options.cursorBlink = prefs.cursorBlink;
+    fitAddonRef.current?.fit();
+  }, [prefs]);
 
   const queueTerminalWrite = (sessionId: string, data: number[]) => {
     const nextWrite = writeQueueRef.current.then(async () => {
@@ -328,8 +370,11 @@ export default function TerminalPanel({
     let fitAddon: FitAddon | null = null;
     let resizeObserver: ResizeObserver | null = null;
     let disposeInput: { dispose: () => void } | null = null;
+    let disposeSelection: { dispose: () => void } | null = null;
     let unlistenOutput: (() => void) | null = null;
     let unlistenExit: (() => void) | null = null;
+    let unlistenCwd: (() => void) | null = null;
+    let disposeAddons: (() => void) | null = null;
     let resizeTimer: number | null = null;
     let outputFrame: number | null = null;
     let outputChunks: Uint8Array[] = [];
@@ -434,36 +479,77 @@ export default function TerminalPanel({
           }
         },
       );
+      const cwdListener = await listen<TerminalCwdEvent>(
+        'seamind-terminal-cwd',
+        (event) => {
+          if (active && event.payload.sessionId === sessionId) {
+            const cleaned = normalizeDisplayPath(event.payload.cwd);
+            if (cleaned) {
+              setLiveCwd(cleaned);
+              setStatus(cleaned);
+            }
+          }
+        },
+      );
       if (!active) {
         outputListener();
         exitListener();
+        cwdListener();
         return;
       }
       unlistenOutput = outputListener;
       unlistenExit = exitListener;
+      unlistenCwd = cwdListener;
 
+      const initPrefs = prefsRef.current;
       terminal = new Terminal({
-        allowProposedApi: false,
+        allowProposedApi: true,
         convertEol: false,
-        cursorBlink: true,
-        fontFamily: 'Cascadia Code, Consolas, monospace',
-        fontSize: 13,
-        lineHeight: 1.25,
-        scrollback: 5000,
+        cursorBlink: initPrefs.cursorBlink,
+        cursorStyle: initPrefs.cursorStyle,
+        fontFamily: initPrefs.fontFamily,
+        fontSize: initPrefs.fontSize,
+        lineHeight: initPrefs.lineHeight,
+        scrollback: initPrefs.scrollback,
         theme: terminalTheme(theme),
       });
       terminalRef.current = terminal;
+      disposeSelection = terminal.onSelectionChange(() => {
+        if (!prefsRef.current.saveOnSelect || !terminal?.hasSelection()) return;
+        void copyTerminalText(terminal.getSelection());
+      });
       terminal.attachCustomKeyEventHandler((event) => {
-        const isCopyShortcut =
-          (event.ctrlKey || event.metaKey) &&
-          !event.shiftKey &&
-          event.key.toLowerCase() === 'c';
+        if (event.type !== 'keydown') return true;
+        const lower = event.key.toLowerCase();
+        if (event.ctrlKey && event.shiftKey && lower === 'f') {
+          event.preventDefault();
+          event.stopPropagation();
+          setSearchOpen(true);
+          requestAnimationFrame(() => searchInputRef.current?.focus());
+          return false;
+        }
         if (
-          event.type !== 'keydown' ||
-          !isCopyShortcut ||
-          event.repeat ||
-          !terminal?.hasSelection()
+          event.ctrlKey &&
+          !event.altKey &&
+          (event.key === '=' || event.key === '+')
         ) {
+          event.preventDefault();
+          saveTerminalPreferences({ fontSize: prefsRef.current.fontSize + 1 });
+          return false;
+        }
+        if (event.ctrlKey && !event.altKey && event.key === '-') {
+          event.preventDefault();
+          saveTerminalPreferences({ fontSize: prefsRef.current.fontSize - 1 });
+          return false;
+        }
+        if (event.ctrlKey && !event.altKey && event.key === '0') {
+          event.preventDefault();
+          saveTerminalPreferences({ fontSize: 13 });
+          return false;
+        }
+        const isCopyShortcut =
+          (event.ctrlKey || event.metaKey) && !event.shiftKey && lower === 'c';
+        if (!isCopyShortcut || event.repeat || !terminal?.hasSelection()) {
           return true;
         }
 
@@ -474,9 +560,14 @@ export default function TerminalPanel({
         });
         return false;
       });
-      fitAddon = new FitAddon();
-      terminal.loadAddon(fitAddon);
       terminal.open(host);
+      const attached = attachStandardXtermAddons(terminal, {
+        webglEnabled: initPrefs.webglEnabled,
+      });
+      fitAddon = attached.fitAddon;
+      fitAddonRef.current = fitAddon;
+      searchAddonRef.current = attached.searchAddon;
+      disposeAddons = attached.dispose;
       fitAddon.fit();
 
       const applyResize = () => {
@@ -489,6 +580,8 @@ export default function TerminalPanel({
                 sessionId,
                 cols: terminal.cols,
                 rows: terminal.rows,
+                pixelWidth: Math.max(0, Math.round(host.clientWidth)),
+                pixelHeight: Math.max(0, Math.round(host.clientHeight)),
               })
               .catch(() => undefined);
         } catch {
@@ -505,18 +598,21 @@ export default function TerminalPanel({
       resizeObserver = new ResizeObserver(scheduleResize);
       resizeObserver.observe(host);
 
+      const cleanCwd = normalizeDisplayPath(cwd);
       sessionId = await terminalApi.start({
-        cwd,
+        cwd: cleanCwd,
         cols: terminal.cols,
         rows: terminal.rows,
+        pixelWidth: Math.max(0, Math.round(host.clientWidth)),
+        pixelHeight: Math.max(0, Math.round(host.clientHeight)),
       });
       sessionIdRef.current = sessionId;
       if (!active) {
         void terminalApi.close({ sessionId }).catch(() => undefined);
         return;
       }
-      setStatus(cwd || 'PowerShell');
-      terminal.writeln(`Seamind terminal  ·  ${cwd || '默认工作目录'}`);
+      setStatus(cleanCwd || 'PowerShell');
+      terminal.writeln(`Seamind terminal  ·  ${cleanCwd || '默认工作目录'}`);
       pendingOutput.splice(0).forEach((event) => {
         pendingOutputBytes -= event.data.byteLength;
         if (event.sessionId === sessionId) queueOutput(event.data);
@@ -559,8 +655,13 @@ export default function TerminalPanel({
       queuedOutputBytes = 0;
       pendingOutputBytes = 0;
       disposeInput?.dispose();
+      disposeSelection?.dispose();
       unlistenOutput?.();
       unlistenExit?.();
+      unlistenCwd?.();
+      disposeAddons?.();
+      searchAddonRef.current = null;
+      fitAddonRef.current = null;
       terminal?.dispose();
       terminalRef.current = null;
       const capture = commandCaptureRef.current;
@@ -587,13 +688,24 @@ export default function TerminalPanel({
     writeRawToSession(sessionId, cliCommand, true);
   };
 
+  const handlePopoutCli = (cli?: 'agy' | 'claude' | 'codex') => {
+    void openStandaloneTerminalWindow({
+      cwd: liveCwd || normalizeDisplayPath(cwd),
+      shell: 'powershell',
+      cli,
+      theme,
+    }).then((res) => {
+      if (!res.ok && res.error) setStatus(res.error);
+    });
+  };
+
   return (
     <section className="seamind-terminal" aria-label="Seamind 终端">
       <header className="seamind-terminal-heading">
         <div>
           <strong>{title ?? '终端 · CLI'}</strong>
           {badge && <span className="seamind-terminal-badge">{badge}</span>}
-          <span title={cwd}>{status}</span>
+          <span title={liveCwd || cwd}>{status}</span>
         </div>
         <div className="seamind-terminal-actions">
           {!hideDockButton && (
@@ -612,6 +724,13 @@ export default function TerminalPanel({
               {dock === 'right' ? '移到底部' : '收至侧边'}
             </button>
           )}
+          <button
+            type="button"
+            onClick={() => handlePopoutCli()}
+            title="新开一个独立桌面终端窗口（支持多开对比运行模型）"
+          >
+            ↗ 多开窗
+          </button>
           {!hideCliButtons && (
             <>
               <button
@@ -639,6 +758,16 @@ export default function TerminalPanel({
           )}
           <button
             type="button"
+            onClick={() => {
+              setSearchOpen(true);
+              requestAnimationFrame(() => searchInputRef.current?.focus());
+            }}
+            title="搜索终端输出 (Ctrl+Shift+F)"
+          >
+            搜索
+          </button>
+          <button
+            type="button"
             onClick={() => terminalRef.current?.clear()}
             title="清屏"
           >
@@ -655,10 +784,59 @@ export default function TerminalPanel({
           </button>
         </div>
       </header>
+      {searchOpen && (
+        <div className="seamind-terminal-search-bar">
+          <input
+            ref={searchInputRef}
+            type="text"
+            placeholder="搜索终端历史输出…"
+            value={searchQuery}
+            onChange={(e) => {
+              const val = e.target.value;
+              setSearchQuery(val);
+              if (val) searchAddonRef.current?.findNext(val);
+              else searchAddonRef.current?.clearDecorations();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                setSearchOpen(false);
+                searchAddonRef.current?.clearDecorations();
+                terminalRef.current?.focus();
+              } else if (e.key === 'Enter') {
+                if (e.shiftKey)
+                  searchAddonRef.current?.findPrevious(searchQuery);
+                else searchAddonRef.current?.findNext(searchQuery);
+              }
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => searchAddonRef.current?.findPrevious(searchQuery)}
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            onClick={() => searchAddonRef.current?.findNext(searchQuery)}
+          >
+            ↓
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setSearchOpen(false);
+              searchAddonRef.current?.clearDecorations();
+              terminalRef.current?.focus();
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
       <div
         className="seamind-terminal-host"
         ref={terminalHostRef}
-        title="选中终端文字后按 Ctrl+C 复制；没有选区时 Ctrl+C 会中断当前命令"
+        title="选中终端文字后按 Ctrl+C 复制；Ctrl+Shift+F 搜索"
       />
       {noteText !== undefined ? (
         noteText ? (
