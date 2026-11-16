@@ -1,5 +1,15 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FeedChannelWithStats, FeedOverview } from './types';
+import {
+  RailAudioIcon,
+  RailInboxIcon,
+  RailPlusIcon,
+  RailRssIcon,
+  RailStarIcon,
+  SidebarCollapseButton,
+  useSidebarCollapseShortcut,
+  WorkspaceSidebarRail,
+} from '../components/WorkspaceSidebarRail';
 
 const COLLAPSED_CATEGORIES_KEY = 'seamind:feed-collapsed-categories:v1';
 
@@ -82,9 +92,11 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
     }
   }, [collapsedCategories]);
 
-  const toggleSidebar = () => {
+  const toggleSidebar = useCallback(() => {
     setSidebarCollapsed((current) => !current);
-  };
+  }, []);
+
+  useSidebarCollapseShortcut(toggleSidebar, true);
 
   const toggleCategoryCollapse = (categoryName: string) => {
     setCollapsedCategories((current) => {
@@ -121,62 +133,77 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
   if (sidebarCollapsed) {
     return (
       <aside className="feed-sidebar is-rail" aria-label="收起的订阅导航">
-        <button
-          type="button"
-          className="feed-rail-button"
-          onClick={toggleSidebar}
-          title={`展开订阅导航（${overview?.channels.length ?? 0} 个订阅源）`}
-          aria-label="展开订阅导航"
-        >
-          ›
-        </button>
-        <button
-          type="button"
-          className="feed-rail-button"
-          onClick={onSelectAll}
-          title="全部文章"
-          aria-label="全部文章"
-        >
-          ≡
-        </button>
-        <button
-          type="button"
-          className="feed-rail-button"
-          onClick={onSelectUnread}
-          title="未读文章"
-          aria-label="未读文章"
-        >
-          •
-        </button>
-        <button
-          type="button"
-          className="feed-rail-button"
-          onClick={onSelectStarred}
-          title="星标收藏"
-          aria-label="星标收藏"
-        >
-          ☆
-        </button>
-        {onSelectAudio && (
-          <button
-            type="button"
-            className="feed-rail-button"
-            onClick={onSelectAudio}
-            title="播客与音频"
-            aria-label="播客与音频"
-          >
-            ♫
-          </button>
-        )}
-        <button
-          type="button"
-          className="feed-rail-button"
-          onClick={onOpenAddDialog}
-          title="添加订阅源"
-          aria-label="添加订阅源"
-        >
-          ＋
-        </button>
+        <WorkspaceSidebarRail
+          ariaLabel="已收起的订阅导航"
+          expandTitle={`展开订阅导航 (${overview?.channels.length ?? 0} 个订阅源 · 快捷键 Ctrl+B)`}
+          expandAriaLabel="展开订阅导航"
+          headerHeight={48}
+          onExpand={toggleSidebar}
+          sections={[
+            {
+              key: 'filters',
+              items: [
+                {
+                  key: 'all',
+                  label: `全部文章 (${overview?.totalArticles ?? 0})`,
+                  active:
+                    currentFilterMode === 'all' &&
+                    !selectedChannelId &&
+                    !selectedCategory,
+                  icon: <RailRssIcon />,
+                  onClick: onSelectAll,
+                },
+                {
+                  key: 'unread',
+                  label: `未读文章 (${overview?.totalUnread ?? 0})`,
+                  active: currentFilterMode === 'unread',
+                  icon: <RailInboxIcon />,
+                  dot: (overview?.totalUnread ?? 0) > 0,
+                  onClick: onSelectUnread,
+                },
+                {
+                  key: 'starred',
+                  label: `星标收藏 (${overview?.totalStarred ?? 0})`,
+                  active: currentFilterMode === 'starred',
+                  icon: (
+                    <RailStarIcon filled={currentFilterMode === 'starred'} />
+                  ),
+                  onClick: onSelectStarred,
+                },
+                ...(onSelectAudio
+                  ? [
+                      {
+                        key: 'audio',
+                        label: `播客与音频 (${overview?.totalAudios ?? 0})`,
+                        active: currentFilterMode === 'audio',
+                        icon: <RailAudioIcon />,
+                        onClick: onSelectAudio,
+                      },
+                    ]
+                  : []),
+              ],
+            },
+            {
+              key: 'channels',
+              items: (overview?.channels ?? []).map((channel) => ({
+                key: `ch:${channel.id}`,
+                label: `${channel.title}${channel.unreadCount > 0 ? ` (${channel.unreadCount} 未读)` : ''}`,
+                active: selectedChannelId === channel.id,
+                thumb: { name: channel.title, shape: 'circle' },
+                dot: channel.unreadCount > 0,
+                onClick: () => onSelectChannel(channel.id),
+              })),
+            },
+          ]}
+          footerItems={[
+            {
+              key: 'add-feed',
+              label: '添加订阅源',
+              icon: <RailPlusIcon />,
+              onClick: onOpenAddDialog,
+            },
+          ]}
+        />
       </aside>
     );
   }
@@ -187,15 +214,6 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
       <div className="feed-sidebar-header">
         <span className="feed-sidebar-title">博客与 RSS</span>
         <div className="feed-sidebar-actions">
-          <button
-            type="button"
-            className="feed-header-btn feed-sidebar-collapse"
-            onClick={toggleSidebar}
-            title="收起订阅导航"
-            aria-label="收起订阅导航"
-          >
-            ‹
-          </button>
           <button
             type="button"
             className="feed-header-btn is-primary"
@@ -212,6 +230,12 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
           >
             刷新
           </button>
+          <SidebarCollapseButton
+            collapsed={false}
+            onClick={toggleSidebar}
+            title="收起订阅导航 (快捷键 Ctrl+B)"
+            ariaLabel="收起订阅导航"
+          />
         </div>
       </div>
 

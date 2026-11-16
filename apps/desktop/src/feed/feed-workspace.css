@@ -48,13 +48,13 @@
 
 /* 订阅导航收起后保留一条可操作的窄栏，文章列表获得剩余宽度。 */
 .feed-sidebar.is-rail {
-  width: 40px;
-  min-width: 40px;
-  max-width: 40px;
-  flex-basis: 40px;
+  width: 42px;
+  min-width: 42px;
+  max-width: 42px;
+  flex-basis: 42px;
   align-items: center;
-  gap: 4px;
-  padding: 5px 0;
+  padding: 0;
+  border-right: 0;
   box-sizing: border-box;
 }
 

@@ -12,8 +12,20 @@ import { parseYouTubeTarget } from '../player/video-links';
 import { dateStamp, downloadTextFile } from '../player/download';
 import HabitWorkspace from './HabitWorkspace';
 import TaskCalendar from './TaskCalendar';
+import { formatBadgeCount } from './habit-list-model';
 import { useConfirmDialog } from './ConfirmDialog';
-import { TaskSidebarToggleIcon } from './TaskSidebarToggleIcon';
+import {
+  RailArchiveIcon,
+  RailClockIcon,
+  RailEyeIcon,
+  RailFolderIcon,
+  RailInboxIcon,
+  RailListIcon,
+  RailPlusIcon,
+  SidebarCollapseButton,
+  useSidebarCollapseShortcut,
+  WorkspaceSidebarRail,
+} from '../components/WorkspaceSidebarRail';
 import { localToday } from './calendar-model';
 import {
   blankTask,
@@ -72,6 +84,8 @@ export interface TaskCreateRequest {
 
 interface Props {
   library: LibrarySnapshot | null;
+  active?: boolean;
+  pendingHabitCount?: number;
   createRequest: TaskCreateRequest | null;
   openTaskId: string | null;
   onOpenTaskHandled(): void;
@@ -94,6 +108,8 @@ const emptySnapshot: TaskSnapshot = { plans: [], tasks: [], sources: [] };
 
 export default function TaskWorkspace({
   library,
+  active = true,
+  pendingHabitCount = 0,
   createRequest,
   openTaskId,
   onOpenTaskHandled,
@@ -346,9 +362,9 @@ export default function TaskWorkspace({
             (planFilter === 'today'
               ? Boolean(
                   entry.dueDate &&
-                    entry.dueDate <= todayKey &&
-                    entry.status !== 'done' &&
-                    entry.status !== 'cancelled',
+                  entry.dueDate <= todayKey &&
+                  entry.status !== 'done' &&
+                  entry.status !== 'cancelled',
                 )
               : planFilter === 'unplanned'
                 ? !entry.planId
@@ -592,9 +608,9 @@ export default function TaskWorkspace({
     );
     return Boolean(
       book &&
-        (resource.rootPath !== library?.rootPath ||
-          (resource.progressKey &&
-            epubProgressKey(book) !== resource.progressKey)),
+      (resource.rootPath !== library?.rootPath ||
+        (resource.progressKey &&
+          epubProgressKey(book) !== resource.progressKey)),
     );
   }).length;
   const videoResources = allResources.filter(
@@ -620,9 +636,8 @@ export default function TaskWorkspace({
     );
     return Boolean(
       !book ||
-        resource.rootPath !== library?.rootPath ||
-        (resource.progressKey &&
-          epubProgressKey(book) !== resource.progressKey),
+      resource.rootPath !== library?.rootPath ||
+      (resource.progressKey && epubProgressKey(book) !== resource.progressKey),
     );
   };
   const retryVideoProgress = async (resourceId: string) => {
@@ -648,6 +663,12 @@ export default function TaskWorkspace({
       return next;
     });
   }, []);
+
+  const addPlanInputRef = useRef<HTMLInputElement>(null);
+  useSidebarCollapseShortcut(
+    toggleSidebarCollapsed,
+    active && workspaceMode === 'tasks',
+  );
 
   const changeView = (next: typeof view) => {
     setView(next);
@@ -1394,180 +1415,269 @@ export default function TaskWorkspace({
     </article>
   );
 
+  const allTaskCount = snapshot.tasks.filter((item) => !item.archivedAt).length;
+  const todayDueTaskCount = snapshot.tasks.filter(
+    (item) =>
+      !item.archivedAt &&
+      item.dueDate &&
+      item.dueDate <= todayKey &&
+      item.status !== 'done' &&
+      item.status !== 'cancelled',
+  ).length;
+  const unplannedTaskCount = snapshot.tasks.filter(
+    (item) => !item.archivedAt && !item.planId,
+  ).length;
+  const archivedTaskCount = snapshot.tasks.filter((item) =>
+    Boolean(item.archivedAt),
+  ).length;
+
   return (
     <div className="task-workspace-root">
       <div className="task-workspace" hidden={workspaceMode === 'habits'}>
-        <aside
-          className={`task-sidebar${sidebarCollapsed ? ' is-collapsed' : ''}`}
-          id="task-sidebar"
-        >
-          <header className="task-sidebar-heading">
-            <div className="task-sidebar-title">学习计划</div>
+        {sidebarCollapsed ? (
+          <aside
+            className="task-sidebar is-collapsed"
+            id="task-sidebar"
+            aria-label="学习计划导航"
+          >
+            <WorkspaceSidebarRail
+              ariaLabel="已收起的学习计划导航"
+              expandTitle="展开任务侧栏 (快捷键 Ctrl+B)"
+              expandAriaLabel="展开任务侧栏"
+              ariaControls="task-sidebar"
+              headerHeight={48}
+              onExpand={toggleSidebarCollapsed}
+              sections={[
+                {
+                  key: 'filters',
+                  items: [
+                    {
+                      key: 'all',
+                      label: `全部任务 (${allTaskCount})`,
+                      active: planFilter === 'all',
+                      icon: <RailListIcon />,
+                      onClick: () => setPlanFilter('all'),
+                    },
+                    {
+                      key: 'today',
+                      label: `今日及逾期 (${todayDueTaskCount})`,
+                      active: planFilter === 'today',
+                      icon: <RailClockIcon filled={planFilter === 'today'} />,
+                      dot: todayDueTaskCount > 0,
+                      onClick: () => setPlanFilter('today'),
+                    },
+                    {
+                      key: 'unplanned',
+                      label: `未归类 (${unplannedTaskCount})`,
+                      active: planFilter === 'unplanned',
+                      icon: <RailInboxIcon />,
+                      onClick: () => setPlanFilter('unplanned'),
+                    },
+                    {
+                      key: 'archived',
+                      label: `历史归档 (${archivedTaskCount})`,
+                      active: planFilter === 'archived',
+                      icon: <RailArchiveIcon />,
+                      onClick: () => setPlanFilter('archived'),
+                    },
+                  ],
+                },
+                {
+                  key: 'plans',
+                  items: snapshot.plans.map((plan) => ({
+                    key: `plan:${plan.id}`,
+                    label: `${plan.title} (${countPlanActiveTasks(snapshot.tasks, plan.id)})`,
+                    active: planFilter === plan.id,
+                    thumb: { name: plan.title, shape: 'circle' },
+                    onClick: () => setPlanFilter(plan.id),
+                  })),
+                },
+              ]}
+              footerItems={[
+                {
+                  key: 'new-task',
+                  label: '新建任务',
+                  icon: <RailPlusIcon />,
+                  onClick: () => {
+                    const activePlanId = ![
+                      'all',
+                      'today',
+                      'unplanned',
+                      'archived',
+                    ].includes(planFilter)
+                      ? planFilter
+                      : null;
+                    openDraft(blankTask(activePlanId));
+                  },
+                },
+                {
+                  key: 'add-plan',
+                  label: '添加新计划',
+                  icon: <RailFolderIcon />,
+                  onClick: () => {
+                    toggleSidebarCollapsed();
+                    window.requestAnimationFrame(() =>
+                      addPlanInputRef.current?.focus(),
+                    );
+                  },
+                },
+                {
+                  key: 'review-plans',
+                  label: '预览已有计划',
+                  icon: <RailEyeIcon />,
+                  disabled: Boolean(importBusy),
+                  onClick: () => void reviewExistingPlans(),
+                },
+              ]}
+            />
+          </aside>
+        ) : (
+          <aside className="task-sidebar" id="task-sidebar">
+            <header className="task-sidebar-heading">
+              <div className="task-sidebar-title">学习计划</div>
+              <SidebarCollapseButton
+                collapsed={false}
+                title="收起任务侧栏 (快捷键 Ctrl+B)"
+                ariaLabel="收起任务侧栏"
+                ariaControls="task-sidebar"
+                className="task-sidebar-toggle"
+                onClick={toggleSidebarCollapsed}
+              />
+            </header>
             <button
               type="button"
-              className="task-sidebar-toggle"
-              title={sidebarCollapsed ? '展开任务侧栏' : '收起任务侧栏'}
-              aria-label={sidebarCollapsed ? '展开任务侧栏' : '收起任务侧栏'}
-              aria-expanded={!sidebarCollapsed}
-              aria-controls="task-sidebar"
-              onClick={toggleSidebarCollapsed}
+              className={`task-filter${planFilter === 'all' ? ' is-active' : ''}`}
+              onClick={() => setPlanFilter('all')}
             >
-              <TaskSidebarToggleIcon collapsed={sidebarCollapsed} />
+              全部任务 <span>{allTaskCount}</span>
             </button>
-          </header>
-          <button
-            type="button"
-            className={`task-filter${planFilter === 'all' ? ' is-active' : ''}`}
-            onClick={() => setPlanFilter('all')}
-          >
-            全部任务{' '}
-            <span>
-              {snapshot.tasks.filter((item) => !item.archivedAt).length}
-            </span>
-          </button>
-          <button
-            type="button"
-            className={`task-filter${planFilter === 'today' ? ' is-active' : ''}`}
-            onClick={() => setPlanFilter('today')}
-          >
-            今日及逾期{' '}
-            <span>
-              {
-                snapshot.tasks.filter(
-                  (item) =>
-                    !item.archivedAt &&
-                    item.dueDate &&
-                    item.dueDate <= todayKey &&
-                    item.status !== 'done' &&
-                    item.status !== 'cancelled',
-                ).length
-              }
-            </span>
-          </button>
-          <button
-            type="button"
-            className={`task-filter${planFilter === 'unplanned' ? ' is-active' : ''}`}
-            onClick={() => setPlanFilter('unplanned')}
-          >
-            未归类{' '}
-            <span>
-              {
-                snapshot.tasks.filter(
-                  (item) => !item.archivedAt && !item.planId,
-                ).length
-              }
-            </span>
-          </button>
-          <button
-            type="button"
-            className={`task-filter${planFilter === 'archived' ? ' is-active' : ''}`}
-            onClick={() => setPlanFilter('archived')}
-          >
-            历史归档{' '}
-            <span>
-              {snapshot.tasks.filter((item) => Boolean(item.archivedAt)).length}
-            </span>
-          </button>
-          <div className="task-section-label">计划</div>
-          <div className="task-plan-list">
-            {snapshot.plans.map((plan) =>
-              renamingPlanId === plan.id ? (
-                <form
-                  key={plan.id}
-                  className="task-plan-rename"
-                  onSubmit={(event) => void savePlanRename(event)}
-                >
-                  <input
-                    value={renamePlanTitle}
-                    autoFocus
-                    maxLength={120}
-                    onChange={(event) => setRenamePlanTitle(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Escape') {
+            <button
+              type="button"
+              className={`task-filter${planFilter === 'today' ? ' is-active' : ''}`}
+              onClick={() => setPlanFilter('today')}
+            >
+              今日及逾期 <span>{todayDueTaskCount}</span>
+            </button>
+            <button
+              type="button"
+              className={`task-filter${planFilter === 'unplanned' ? ' is-active' : ''}`}
+              onClick={() => setPlanFilter('unplanned')}
+            >
+              未归类 <span>{unplannedTaskCount}</span>
+            </button>
+            <button
+              type="button"
+              className={`task-filter${planFilter === 'archived' ? ' is-active' : ''}`}
+              onClick={() => setPlanFilter('archived')}
+            >
+              历史归档 <span>{archivedTaskCount}</span>
+            </button>
+            <div className="task-section-label">计划</div>
+            <div className="task-plan-list">
+              {snapshot.plans.map((plan) =>
+                renamingPlanId === plan.id ? (
+                  <form
+                    key={plan.id}
+                    className="task-plan-rename"
+                    onSubmit={(event) => void savePlanRename(event)}
+                  >
+                    <input
+                      value={renamePlanTitle}
+                      autoFocus
+                      maxLength={120}
+                      onChange={(event) =>
+                        setRenamePlanTitle(event.target.value)
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key === 'Escape') {
+                          setRenamingPlanId(null);
+                          setRenamePlanTitle('');
+                        }
+                      }}
+                    />
+                    <button
+                      type="submit"
+                      className="task-primary"
+                      disabled={savingPlan || !renamePlanTitle.trim()}
+                    >
+                      保存
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
                         setRenamingPlanId(null);
                         setRenamePlanTitle('');
-                      }
-                    }}
-                  />
-                  <button
-                    type="submit"
-                    className="task-primary"
-                    disabled={savingPlan || !renamePlanTitle.trim()}
-                  >
-                    保存
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRenamingPlanId(null);
-                      setRenamePlanTitle('');
-                    }}
-                  >
-                    取消
-                  </button>
-                </form>
-              ) : (
-                <div
-                  key={plan.id}
-                  className={`task-plan-row${planFilter === plan.id ? ' is-active' : ''}`}
-                >
-                  <button
-                    type="button"
-                    className={`task-filter${planFilter === plan.id ? ' is-active' : ''}`}
-                    onClick={() => setPlanFilter(plan.id)}
-                  >
-                    <span>{plan.title}</span>
-                    <span>{countPlanActiveTasks(snapshot.tasks, plan.id)}</span>
-                  </button>
-                  <div className="task-plan-actions">
-                    <button
-                      type="button"
-                      aria-label={`重命名计划 ${plan.title}`}
-                      title="重命名计划"
-                      onClick={() => {
-                        setRenamingPlanId(plan.id);
-                        setRenamePlanTitle(plan.title);
                       }}
                     >
-                      ✎
+                      取消
                     </button>
+                  </form>
+                ) : (
+                  <div
+                    key={plan.id}
+                    className={`task-plan-row${planFilter === plan.id ? ' is-active' : ''}`}
+                  >
                     <button
                       type="button"
-                      className="task-plan-delete"
-                      aria-label={`删除计划 ${plan.title}`}
-                      title="删除计划"
-                      onClick={() => void deletePlan(plan)}
+                      className={`task-filter${planFilter === plan.id ? ' is-active' : ''}`}
+                      onClick={() => setPlanFilter(plan.id)}
                     >
-                      ×
+                      <span>{plan.title}</span>
+                      <span>
+                        {countPlanActiveTasks(snapshot.tasks, plan.id)}
+                      </span>
                     </button>
+                    <div className="task-plan-actions">
+                      <button
+                        type="button"
+                        aria-label={`重命名计划 ${plan.title}`}
+                        title="重命名计划"
+                        onClick={() => {
+                          setRenamingPlanId(plan.id);
+                          setRenamePlanTitle(plan.title);
+                        }}
+                      >
+                        ✎
+                      </button>
+                      <button
+                        type="button"
+                        className="task-plan-delete"
+                        aria-label={`删除计划 ${plan.title}`}
+                        title="删除计划"
+                        onClick={() => void deletePlan(plan)}
+                      >
+                        ×
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ),
-            )}
-            {snapshot.plans.length === 0 && (
-              <div className="task-muted">还没有计划</div>
-            )}
-          </div>
-          <form className="task-add-plan" onSubmit={addPlan}>
-            <input
-              aria-label="新计划名称"
-              placeholder="新计划名称"
-              value={newPlan}
-              onChange={(event) => setNewPlan(event.target.value)}
-            />
-            <button type="submit" disabled={!newPlan.trim()}>
-              添加
+                ),
+              )}
+              {snapshot.plans.length === 0 && (
+                <div className="task-muted">还没有计划</div>
+              )}
+            </div>
+            <form className="task-add-plan" onSubmit={addPlan}>
+              <input
+                ref={addPlanInputRef}
+                aria-label="新计划名称"
+                placeholder="新计划名称"
+                value={newPlan}
+                onChange={(event) => setNewPlan(event.target.value)}
+              />
+              <button type="submit" disabled={!newPlan.trim()}>
+                添加
+              </button>
+            </form>
+            <button
+              type="button"
+              className="task-plain-button"
+              onClick={() => void reviewExistingPlans()}
+              disabled={Boolean(importBusy)}
+            >
+              预览已有计划
             </button>
-          </form>
-          <button
-            type="button"
-            className="task-plain-button"
-            onClick={() => void reviewExistingPlans()}
-            disabled={Boolean(importBusy)}
-          >
-            预览已有计划
-          </button>
-        </aside>
+          </aside>
+        )}
 
         <main className="task-main">
           <header className="task-toolbar">
@@ -1584,8 +1694,21 @@ export default function TaskWorkspace({
                   type="button"
                   aria-pressed="false"
                   onClick={() => setWorkspaceMode('habits')}
+                  title={
+                    pendingHabitCount > 0
+                      ? `今日还有 ${pendingHabitCount} 个习惯未打卡`
+                      : undefined
+                  }
                 >
-                  习惯
+                  <span>习惯</span>
+                  {pendingHabitCount > 0 && (
+                    <span
+                      className="task-switch-badge"
+                      aria-label={`今日还有 ${pendingHabitCount} 个习惯未打卡`}
+                    >
+                      {formatBadgeCount(pendingHabitCount)}
+                    </span>
+                  )}
                 </button>
               </div>
               <span className="task-toolbar-count">
@@ -2012,9 +2135,7 @@ export default function TaskWorkspace({
                                     {columnEntries.map((treeEntry) => {
                                       const parentInSameCol = Boolean(
                                         treeEntry.task.parentId &&
-                                          columnIds.has(
-                                            treeEntry.task.parentId,
-                                          ),
+                                        columnIds.has(treeEntry.task.parentId),
                                       );
                                       const parentTitle = treeEntry.task
                                         .parentId
@@ -2929,7 +3050,10 @@ export default function TaskWorkspace({
           className="task-workspace-host"
           hidden={workspaceMode !== 'habits'}
         >
-          <HabitWorkspace onShowTasks={() => setWorkspaceMode('tasks')} />
+          <HabitWorkspace
+            active={active && workspaceMode === 'habits'}
+            onShowTasks={() => setWorkspaceMode('tasks')}
+          />
         </div>
       )}
     </div>

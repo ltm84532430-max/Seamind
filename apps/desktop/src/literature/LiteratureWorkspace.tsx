@@ -14,6 +14,20 @@ import type {
   LiteratureSearchResult,
   PaperPdfSource,
 } from './types';
+import {
+  RailBookIcon,
+  RailBookOpenIcon,
+  RailCheckCircleIcon,
+  RailFolderIcon,
+  RailInboxIcon,
+  RailPlusIcon,
+  RailSparklesIcon,
+  RailStarIcon,
+  RailTagIcon,
+  SidebarCollapseButton,
+  useSidebarCollapseShortcut,
+  WorkspaceSidebarRail,
+} from '../components/WorkspaceSidebarRail';
 import './literature-workspace.css';
 
 const PaperPdfReader = React.lazy(() => import('./PaperPdfReader'));
@@ -38,30 +52,6 @@ function writeLiteratureSidebarCollapsed(collapsed: boolean): void {
   } catch {
     // Keep the current state for this session when storage is unavailable.
   }
-}
-
-function LiteratureSidebarToggleIcon({ collapsed }: { collapsed: boolean }) {
-  return (
-    <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <rect
-        x="2"
-        y="2.5"
-        width="12"
-        height="11"
-        rx="1"
-        stroke="currentColor"
-        strokeWidth="1.25"
-      />
-      <path d="M6.2 2.5v11" stroke="currentColor" strokeWidth="1.25" />
-      <path
-        d={collapsed ? 'm8.8 6.2 1.8 1.8-1.8 1.8' : 'm10.6 6.2-1.8 1.8 1.8 1.8'}
-        stroke="currentColor"
-        strokeWidth="1.25"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
 }
 
 export interface LiteratureWorkspaceProps {
@@ -419,13 +409,16 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
     if (selectedPaper) void acquireAndRead(selectedPaper);
   };
 
-  const toggleSidebarCollapsed = () => {
+  const toggleSidebarCollapsed = useCallback(() => {
     setSidebarCollapsed((current) => {
       const next = !current;
       writeLiteratureSidebarCollapsed(next);
       return next;
     });
-  };
+  }, []);
+
+  const aiPromptInputRef = useRef<HTMLTextAreaElement>(null);
+  useSidebarCollapseShortcut(toggleSidebarCollapsed, !readerPaper);
 
   const handleReaderStarted = useCallback(
     (paperId: string) => {
@@ -744,386 +737,544 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
       {/* -------------------------------------------------------------------- */}
       {/* Left Sidebar                                                         */}
       {/* -------------------------------------------------------------------- */}
-      <aside
-        className={`lit-sidebar${sidebarCollapsed ? ' is-collapsed' : ''}`}
-        id="literature-sidebar"
-      >
-        <div className="lit-sidebar-head">
-          <span className="lit-sidebar-title">文献管理</span>
-          <button
-            type="button"
-            className="lit-sidebar-toggle"
-            title={sidebarCollapsed ? '展开文献侧栏' : '收起文献侧栏'}
-            aria-label={sidebarCollapsed ? '展开文献侧栏' : '收起文献侧栏'}
-            aria-expanded={!sidebarCollapsed}
-            aria-controls="literature-sidebar-scroll"
-            onClick={toggleSidebarCollapsed}
-          >
-            <LiteratureSidebarToggleIcon collapsed={sidebarCollapsed} />
-          </button>
-        </div>
-
-        <div className="lit-sidebar-scroll" id="literature-sidebar-scroll">
-          {/* Main categories */}
-          <div className="lit-nav-section">
-            <div className="lit-section-label">分类</div>
-            <button
-              type="button"
-              className={`lit-nav-item ${
-                statusFilter === 'all' && !activeCollectionId && !activeTag
-                  ? 'is-active'
-                  : ''
-              }`}
-              onClick={() => {
-                setStatusFilter('all');
-                setActiveCollectionId(null);
-                setActiveTag(null);
-              }}
-            >
-              <span className="lit-nav-name">全部文献</span>
-              <span className="lit-nav-count">
-                {overview?.totalPapers || 0}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              className={`lit-nav-item ${statusFilter === 'unread' ? 'is-active' : ''}`}
-              onClick={() => {
-                setStatusFilter('unread');
-                setActiveCollectionId(null);
-                setActiveTag(null);
-              }}
-            >
-              <span className="lit-nav-name">未读</span>
-              <span className="lit-nav-count">
-                {overview?.unreadCount || 0}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              className={`lit-nav-item ${statusFilter === 'reading' ? 'is-active' : ''}`}
-              onClick={() => {
-                setStatusFilter('reading');
-                setActiveCollectionId(null);
-                setActiveTag(null);
-              }}
-            >
-              <span className="lit-nav-name">在读</span>
-              <span className="lit-nav-count">
-                {overview?.readingCount || 0}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              className={`lit-nav-item ${statusFilter === 'completed' ? 'is-active' : ''}`}
-              onClick={() => {
-                setStatusFilter('completed');
-                setActiveCollectionId(null);
-                setActiveTag(null);
-              }}
-            >
-              <span className="lit-nav-name">已读</span>
-              <span className="lit-nav-count">
-                {overview?.completedCount || 0}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              className={`lit-nav-item ${statusFilter === 'starred' ? 'is-active' : ''}`}
-              onClick={() => {
-                setStatusFilter('starred');
-                setActiveCollectionId(null);
-                setActiveTag(null);
-              }}
-            >
-              <span className="lit-nav-name">星标文献</span>
-              <span className="lit-nav-count">
-                {overview?.starredCount || 0}
-              </span>
-            </button>
-          </div>
-
-          {/* Collections */}
-          <div className="lit-nav-section">
-            <div className="lit-section-label">
-              <span>文献集</span>
-              <button
-                type="button"
-                className="lit-section-btn"
-                title="新建文献集"
-                onClick={() => setShowNewCollectionModal(true)}
-              >
-                +
-              </button>
-            </div>
-            {overview?.collections && overview.collections.length > 0 ? (
-              overview.collections.map((col) => (
-                <button
-                  key={col.id}
-                  type="button"
-                  className={`lit-nav-item ${
-                    activeCollectionId === col.id ? 'is-active' : ''
-                  }`}
-                  onClick={() => {
+      {sidebarCollapsed ? (
+        <aside
+          className="lit-sidebar is-collapsed"
+          id="literature-sidebar"
+          aria-label="已收起的文献导航"
+        >
+          <WorkspaceSidebarRail
+            ariaLabel="已收起的文献导航"
+            expandTitle="展开文献侧栏 (快捷键 Ctrl+B)"
+            expandAriaLabel="展开文献侧栏"
+            ariaControls="literature-sidebar-scroll"
+            headerHeight={44}
+            onExpand={() => {
+              setSidebarCollapsed(false);
+              writeLiteratureSidebarCollapsed(false);
+            }}
+            sections={[
+              {
+                key: 'status',
+                items: [
+                  {
+                    key: 'all',
+                    label: `全部文献 (${overview?.totalPapers || 0})`,
+                    active:
+                      statusFilter === 'all' &&
+                      !activeCollectionId &&
+                      !activeTag,
+                    icon: <RailBookIcon />,
+                    onClick: () => {
+                      setStatusFilter('all');
+                      setActiveCollectionId(null);
+                      setActiveTag(null);
+                    },
+                  },
+                  {
+                    key: 'unread',
+                    label: `未读 (${overview?.unreadCount || 0})`,
+                    active: statusFilter === 'unread',
+                    icon: <RailInboxIcon />,
+                    dot: (overview?.unreadCount || 0) > 0,
+                    onClick: () => {
+                      setStatusFilter('unread');
+                      setActiveCollectionId(null);
+                      setActiveTag(null);
+                    },
+                  },
+                  {
+                    key: 'reading',
+                    label: `在读 (${overview?.readingCount || 0})`,
+                    active: statusFilter === 'reading',
+                    icon: <RailBookOpenIcon />,
+                    onClick: () => {
+                      setStatusFilter('reading');
+                      setActiveCollectionId(null);
+                      setActiveTag(null);
+                    },
+                  },
+                  {
+                    key: 'completed',
+                    label: `已读 (${overview?.completedCount || 0})`,
+                    active: statusFilter === 'completed',
+                    icon: (
+                      <RailCheckCircleIcon
+                        filled={statusFilter === 'completed'}
+                      />
+                    ),
+                    onClick: () => {
+                      setStatusFilter('completed');
+                      setActiveCollectionId(null);
+                      setActiveTag(null);
+                    },
+                  },
+                  {
+                    key: 'starred',
+                    label: `星标文献 (${overview?.starredCount || 0})`,
+                    active: statusFilter === 'starred',
+                    icon: <RailStarIcon filled={statusFilter === 'starred'} />,
+                    onClick: () => {
+                      setStatusFilter('starred');
+                      setActiveCollectionId(null);
+                      setActiveTag(null);
+                    },
+                  },
+                ],
+              },
+              {
+                key: 'collections',
+                items: (overview?.collections ?? []).map((col) => ({
+                  key: `col:${col.id}`,
+                  label: `${col.name} (${col.paperCount})`,
+                  active: activeCollectionId === col.id,
+                  thumb: {
+                    name: col.name,
+                    color: col.color,
+                    shape: 'circle',
+                  },
+                  onClick: () => {
                     setActiveCollectionId(col.id);
                     setActiveTag(null);
                     setStatusFilter('all');
-                  }}
-                >
-                  <span className="lit-nav-name">{col.name}</span>
-                  <span className="lit-nav-count">{col.paperCount}</span>
-                </button>
-              ))
-            ) : (
-              <div className="lit-empty-hint">无自定义分组</div>
-            )}
+                  },
+                })),
+              },
+              {
+                key: 'tags-and-ai',
+                items: [
+                  ...(overview?.allTags && overview.allTags.length > 0
+                    ? [
+                        {
+                          key: 'tags',
+                          label: `标签筛选 (${overview.allTags.length})`,
+                          active: Boolean(activeTag),
+                          icon: <RailTagIcon />,
+                          onClick: () => {
+                            setSidebarCollapsed(false);
+                            writeLiteratureSidebarCollapsed(false);
+                          },
+                        },
+                      ]
+                    : []),
+                  {
+                    key: 'ai-discover',
+                    label: 'AI 论文探索',
+                    active: aiResults.length > 0,
+                    icon: <RailSparklesIcon />,
+                    onClick: () => {
+                      setSidebarCollapsed(false);
+                      writeLiteratureSidebarCollapsed(false);
+                      window.requestAnimationFrame(() =>
+                        aiPromptInputRef.current?.focus(),
+                      );
+                    },
+                  },
+                ],
+              },
+            ]}
+            footerItems={[
+              {
+                key: 'new-col',
+                label: '新建文献集',
+                icon: <RailFolderIcon />,
+                onClick: () => setShowNewCollectionModal(true),
+              },
+              {
+                key: 'fetch-paper',
+                label: 'DOI / arXiv 检索添加',
+                icon: <RailPlusIcon />,
+                onClick: () => {
+                  setFetchMode('identifier');
+                  setShowFetchModal(true);
+                },
+              },
+            ]}
+          />
+        </aside>
+      ) : (
+        <aside className="lit-sidebar" id="literature-sidebar">
+          <div className="lit-sidebar-head">
+            <span className="lit-sidebar-title">文献管理</span>
+            <SidebarCollapseButton
+              collapsed={false}
+              title="收起文献侧栏 (快捷键 Ctrl+B)"
+              ariaLabel="收起文献侧栏"
+              ariaControls="literature-sidebar-scroll"
+              className="lit-sidebar-toggle"
+              onClick={toggleSidebarCollapsed}
+            />
           </div>
 
-          {/* Tags */}
-          {overview?.allTags && overview.allTags.length > 0 && (
+          <div className="lit-sidebar-scroll" id="literature-sidebar-scroll">
+            {/* Main categories */}
             <div className="lit-nav-section">
-              <div className="lit-section-label">标签</div>
-              <div className="lit-tag-list">
-                {overview.allTags.slice(0, 16).map((t) => (
-                  <span
-                    key={t.name}
-                    className={`lit-tag-pill ${activeTag === t.name ? 'is-active' : ''}`}
-                    onClick={() => {
-                      setActiveTag((prev) => (prev === t.name ? null : t.name));
-                    }}
-                  >
-                    {t.name} ({t.count})
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* AI Literature Discovery Section */}
-          <div className="lit-nav-section lit-ai-section">
-            <div className="lit-section-label lit-ai-section-label">
-              <span className="lit-ai-badge">✨ AI 论文探索</span>
-              {aiResults.length > 0 && (
-                <button
-                  type="button"
-                  className="lit-section-btn"
-                  title="清空搜索结果"
-                  onClick={() => {
-                    setAiResults([]);
-                    setSelectedAiIndices(new Set());
-                    setAiError(null);
-                  }}
-                >
-                  ×
-                </button>
-              )}
-            </div>
-
-            <div className="lit-ai-input-wrap">
-              <textarea
-                className="lit-ai-prompt-input"
-                placeholder="描述研究课题或需求，如：大模型长文本外推代表作..."
-                value={aiPrompt}
-                onChange={(e) => setAiPrompt(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    void handleAiDiscover();
-                  }
-                }}
-                rows={2}
-              />
+              <div className="lit-section-label">分类</div>
               <button
                 type="button"
-                className="lit-ai-submit-btn"
-                onClick={() => void handleAiDiscover()}
-                disabled={aiSearching || !aiPrompt.trim()}
+                className={`lit-nav-item ${
+                  statusFilter === 'all' && !activeCollectionId && !activeTag
+                    ? 'is-active'
+                    : ''
+                }`}
+                onClick={() => {
+                  setStatusFilter('all');
+                  setActiveCollectionId(null);
+                  setActiveTag(null);
+                }}
               >
-                {aiSearching ? '检索中…' : '🔍 检索'}
+                <span className="lit-nav-name">全部文献</span>
+                <span className="lit-nav-count">
+                  {overview?.totalPapers || 0}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                className={`lit-nav-item ${statusFilter === 'unread' ? 'is-active' : ''}`}
+                onClick={() => {
+                  setStatusFilter('unread');
+                  setActiveCollectionId(null);
+                  setActiveTag(null);
+                }}
+              >
+                <span className="lit-nav-name">未读</span>
+                <span className="lit-nav-count">
+                  {overview?.unreadCount || 0}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                className={`lit-nav-item ${statusFilter === 'reading' ? 'is-active' : ''}`}
+                onClick={() => {
+                  setStatusFilter('reading');
+                  setActiveCollectionId(null);
+                  setActiveTag(null);
+                }}
+              >
+                <span className="lit-nav-name">在读</span>
+                <span className="lit-nav-count">
+                  {overview?.readingCount || 0}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                className={`lit-nav-item ${statusFilter === 'completed' ? 'is-active' : ''}`}
+                onClick={() => {
+                  setStatusFilter('completed');
+                  setActiveCollectionId(null);
+                  setActiveTag(null);
+                }}
+              >
+                <span className="lit-nav-name">已读</span>
+                <span className="lit-nav-count">
+                  {overview?.completedCount || 0}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                className={`lit-nav-item ${statusFilter === 'starred' ? 'is-active' : ''}`}
+                onClick={() => {
+                  setStatusFilter('starred');
+                  setActiveCollectionId(null);
+                  setActiveTag(null);
+                }}
+              >
+                <span className="lit-nav-name">星标文献</span>
+                <span className="lit-nav-count">
+                  {overview?.starredCount || 0}
+                </span>
               </button>
             </div>
 
-            {/* Topic inspiration pills */}
-            {!aiResults.length && !aiSearching && (
-              <div className="lit-ai-pills">
-                {[
-                  '长文本LLM',
-                  '多模态扩散',
-                  '代码Agent',
-                  '时序Transformer',
-                ].map((topic) => (
+            {/* Collections */}
+            <div className="lit-nav-section">
+              <div className="lit-section-label">
+                <span>文献集</span>
+                <button
+                  type="button"
+                  className="lit-section-btn"
+                  title="新建文献集"
+                  onClick={() => setShowNewCollectionModal(true)}
+                >
+                  +
+                </button>
+              </div>
+              {overview?.collections && overview.collections.length > 0 ? (
+                overview.collections.map((col) => (
                   <button
-                    key={topic}
+                    key={col.id}
                     type="button"
-                    className="lit-ai-pill"
+                    className={`lit-nav-item ${
+                      activeCollectionId === col.id ? 'is-active' : ''
+                    }`}
                     onClick={() => {
-                      setAiPrompt(topic);
+                      setActiveCollectionId(col.id);
+                      setActiveTag(null);
+                      setStatusFilter('all');
                     }}
                   >
-                    {topic}
+                    <span className="lit-nav-name">{col.name}</span>
+                    <span className="lit-nav-count">{col.paperCount}</span>
                   </button>
-                ))}
-              </div>
-            )}
+                ))
+              ) : (
+                <div className="lit-empty-hint">无自定义分组</div>
+              )}
+            </div>
 
-            {/* Status / Loading */}
-            {aiSearching && (
-              <div className="lit-ai-loading">
-                <span className="lit-ai-spinner" aria-hidden="true" />
-                <span>AI 正在分析主题并检索学术库…</span>
-              </div>
-            )}
-
-            {/* Error notice */}
-            {aiError && (
-              <div className="lit-ai-error" role="alert">
-                {aiError}
-              </div>
-            )}
-
-            {/* Results count & batch toolbar */}
-            {aiResults.length > 0 && (
-              <div className="lit-ai-results-header">
-                <span className="lit-ai-count">
-                  找到 {aiResults.length} 篇相关论文
-                </span>
-                <div className="lit-ai-batch-actions">
-                  <button
-                    type="button"
-                    className="lit-ai-link-btn"
-                    onClick={handleToggleSelectAllAiResults}
-                  >
-                    {selectedAiIndices.size ===
-                    aiResults.filter((r) => !r.existingPaperId).length
-                      ? '取消'
-                      : '全选'}
-                  </button>
-                  <button
-                    type="button"
-                    className="lit-ai-import-btn"
-                    disabled={selectedAiIndices.size === 0 || aiBatchImporting}
-                    onClick={() => void handleBatchImportAiResults()}
-                  >
-                    {aiBatchImporting
-                      ? '导入中…'
-                      : `导入 (${selectedAiIndices.size})`}
-                  </button>
+            {/* Tags */}
+            {overview?.allTags && overview.allTags.length > 0 && (
+              <div className="lit-nav-section">
+                <div className="lit-section-label">标签</div>
+                <div className="lit-tag-list">
+                  {overview.allTags.slice(0, 16).map((t) => (
+                    <span
+                      key={t.name}
+                      className={`lit-tag-pill ${activeTag === t.name ? 'is-active' : ''}`}
+                      onClick={() => {
+                        setActiveTag((prev) =>
+                          prev === t.name ? null : t.name,
+                        );
+                      }}
+                    >
+                      {t.name} ({t.count})
+                    </span>
+                  ))}
                 </div>
               </div>
             )}
 
-            {/* Results list */}
-            {aiResults.length > 0 && (
-              <div className="lit-ai-cards-list">
-                {aiResults.map((result, idx) => (
-                  <div
-                    key={`${result.paper.arxivId || result.paper.doi || result.paper.title}-${idx}`}
-                    className={`lit-ai-card ${
-                      selectedAiIndices.has(idx) ? 'is-selected' : ''
-                    } ${result.existingPaperId ? 'is-existing-card' : ''}`}
+            {/* AI Literature Discovery Section */}
+            <div className="lit-nav-section lit-ai-section">
+              <div className="lit-section-label lit-ai-section-label">
+                <span className="lit-ai-badge">✨ AI 论文探索</span>
+                {aiResults.length > 0 && (
+                  <button
+                    type="button"
+                    className="lit-section-btn"
+                    title="清空搜索结果"
+                    onClick={() => {
+                      setAiResults([]);
+                      setSelectedAiIndices(new Set());
+                      setAiError(null);
+                    }}
                   >
-                    <div className="lit-ai-card-top">
-                      <input
-                        type="checkbox"
-                        checked={selectedAiIndices.has(idx)}
-                        onChange={() => handleToggleSelectAiResult(idx)}
-                        disabled={!!result.existingPaperId}
-                        aria-label={`选择论文 ${result.paper.title}`}
-                      />
-                      <div
-                        className="lit-ai-card-title"
-                        title={result.paper.title}
-                        onClick={() =>
-                          setExpandedAiAbstractIndex((prev) =>
-                            prev === idx ? null : idx,
-                          )
-                        }
-                      >
-                        {result.paper.title}
-                      </div>
-                    </div>
+                    ×
+                  </button>
+                )}
+              </div>
 
-                    <div className="lit-ai-card-meta">
-                      <span className="lit-ai-card-authors">
-                        {result.paper.authors.slice(0, 2).join(', ')}
-                        {result.paper.authors.length > 2 ? ' 等' : ''}
-                      </span>
-                      {result.paper.year && <span> · {result.paper.year}</span>}
-                      <span className="lit-ai-card-source">
-                        {result.source}
-                      </span>
-                      {result.pdfUrl && (
-                        <span
-                          className="lit-ai-pdf-tag"
-                          title="官方 PDF 可下载"
-                        >
-                          PDF
-                        </span>
-                      )}
-                    </div>
+              <div className="lit-ai-input-wrap">
+                <textarea
+                  ref={aiPromptInputRef}
+                  className="lit-ai-prompt-input"
+                  placeholder="描述研究课题或需求，如：大模型长文本外推代表作..."
+                  value={aiPrompt}
+                  onChange={(e) => setAiPrompt(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      void handleAiDiscover();
+                    }
+                  }}
+                  rows={2}
+                />
+                <button
+                  type="button"
+                  className="lit-ai-submit-btn"
+                  onClick={() => void handleAiDiscover()}
+                  disabled={aiSearching || !aiPrompt.trim()}
+                >
+                  {aiSearching ? '检索中…' : '🔍 检索'}
+                </button>
+              </div>
 
-                    {result.aiRecommendation && (
-                      <div className="lit-ai-card-reason">
-                        💡 {result.aiRecommendation}
-                      </div>
-                    )}
+              {/* Topic inspiration pills */}
+              {!aiResults.length && !aiSearching && (
+                <div className="lit-ai-pills">
+                  {[
+                    '长文本LLM',
+                    '多模态扩散',
+                    '代码Agent',
+                    '时序Transformer',
+                  ].map((topic) => (
+                    <button
+                      key={topic}
+                      type="button"
+                      className="lit-ai-pill"
+                      onClick={() => {
+                        setAiPrompt(topic);
+                      }}
+                    >
+                      {topic}
+                    </button>
+                  ))}
+                </div>
+              )}
 
-                    {expandedAiAbstractIndex === idx &&
-                      result.paper.abstractText && (
-                        <div className="lit-ai-card-abstract">
-                          {result.paper.abstractText}
-                        </div>
-                      )}
+              {/* Status / Loading */}
+              {aiSearching && (
+                <div className="lit-ai-loading">
+                  <span className="lit-ai-spinner" aria-hidden="true" />
+                  <span>AI 正在分析主题并检索学术库…</span>
+                </div>
+              )}
 
-                    <div className="lit-ai-card-actions">
-                      {result.existingPaperId ? (
-                        <button
-                          type="button"
-                          className="lit-ai-card-btn is-existing"
-                          onClick={() =>
-                            void handleJumpToExistingPaper(
-                              result.existingPaperId!,
-                            )
-                          }
-                        >
-                          已在库中（定位）
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          className="lit-ai-card-btn is-add"
-                          onClick={() =>
-                            void handleImportSingleAiResult(result, idx)
-                          }
-                        >
-                          + 添加至文献库
-                        </button>
-                      )}
-                      {result.paper.abstractText && (
-                        <button
-                          type="button"
-                          className="lit-ai-card-toggle-abs"
+              {/* Error notice */}
+              {aiError && (
+                <div className="lit-ai-error" role="alert">
+                  {aiError}
+                </div>
+              )}
+
+              {/* Results count & batch toolbar */}
+              {aiResults.length > 0 && (
+                <div className="lit-ai-results-header">
+                  <span className="lit-ai-count">
+                    找到 {aiResults.length} 篇相关论文
+                  </span>
+                  <div className="lit-ai-batch-actions">
+                    <button
+                      type="button"
+                      className="lit-ai-link-btn"
+                      onClick={handleToggleSelectAllAiResults}
+                    >
+                      {selectedAiIndices.size ===
+                      aiResults.filter((r) => !r.existingPaperId).length
+                        ? '取消'
+                        : '全选'}
+                    </button>
+                    <button
+                      type="button"
+                      className="lit-ai-import-btn"
+                      disabled={
+                        selectedAiIndices.size === 0 || aiBatchImporting
+                      }
+                      onClick={() => void handleBatchImportAiResults()}
+                    >
+                      {aiBatchImporting
+                        ? '导入中…'
+                        : `导入 (${selectedAiIndices.size})`}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Results list */}
+              {aiResults.length > 0 && (
+                <div className="lit-ai-cards-list">
+                  {aiResults.map((result, idx) => (
+                    <div
+                      key={`${result.paper.arxivId || result.paper.doi || result.paper.title}-${idx}`}
+                      className={`lit-ai-card ${
+                        selectedAiIndices.has(idx) ? 'is-selected' : ''
+                      } ${result.existingPaperId ? 'is-existing-card' : ''}`}
+                    >
+                      <div className="lit-ai-card-top">
+                        <input
+                          type="checkbox"
+                          checked={selectedAiIndices.has(idx)}
+                          onChange={() => handleToggleSelectAiResult(idx)}
+                          disabled={!!result.existingPaperId}
+                          aria-label={`选择论文 ${result.paper.title}`}
+                        />
+                        <div
+                          className="lit-ai-card-title"
+                          title={result.paper.title}
                           onClick={() =>
                             setExpandedAiAbstractIndex((prev) =>
                               prev === idx ? null : idx,
                             )
                           }
                         >
-                          {expandedAiAbstractIndex === idx ? '收起' : '摘要'}
-                        </button>
+                          {result.paper.title}
+                        </div>
+                      </div>
+
+                      <div className="lit-ai-card-meta">
+                        <span className="lit-ai-card-authors">
+                          {result.paper.authors.slice(0, 2).join(', ')}
+                          {result.paper.authors.length > 2 ? ' 等' : ''}
+                        </span>
+                        {result.paper.year && (
+                          <span> · {result.paper.year}</span>
+                        )}
+                        <span className="lit-ai-card-source">
+                          {result.source}
+                        </span>
+                        {result.pdfUrl && (
+                          <span
+                            className="lit-ai-pdf-tag"
+                            title="官方 PDF 可下载"
+                          >
+                            PDF
+                          </span>
+                        )}
+                      </div>
+
+                      {result.aiRecommendation && (
+                        <div className="lit-ai-card-reason">
+                          💡 {result.aiRecommendation}
+                        </div>
                       )}
+
+                      {expandedAiAbstractIndex === idx &&
+                        result.paper.abstractText && (
+                          <div className="lit-ai-card-abstract">
+                            {result.paper.abstractText}
+                          </div>
+                        )}
+
+                      <div className="lit-ai-card-actions">
+                        {result.existingPaperId ? (
+                          <button
+                            type="button"
+                            className="lit-ai-card-btn is-existing"
+                            onClick={() =>
+                              void handleJumpToExistingPaper(
+                                result.existingPaperId!,
+                              )
+                            }
+                          >
+                            已在库中（定位）
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="lit-ai-card-btn is-add"
+                            onClick={() =>
+                              void handleImportSingleAiResult(result, idx)
+                            }
+                          >
+                            + 添加至文献库
+                          </button>
+                        )}
+                        {result.paper.abstractText && (
+                          <button
+                            type="button"
+                            className="lit-ai-card-toggle-abs"
+                            onClick={() =>
+                              setExpandedAiAbstractIndex((prev) =>
+                                prev === idx ? null : idx,
+                              )
+                            }
+                          >
+                            {expandedAiAbstractIndex === idx ? '收起' : '摘要'}
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
-            )}
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      </aside>
+        </aside>
+      )}
 
       {/* -------------------------------------------------------------------- */}
       {/* Center Main List                                                     */}

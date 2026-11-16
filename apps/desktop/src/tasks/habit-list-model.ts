@@ -1,4 +1,5 @@
 import { dateKey, parseDateKey } from './calendar-model';
+import type { HabitSnapshot, HabitOccurrenceStatus } from './types';
 
 export type HabitListScope = 'today' | 'library';
 
@@ -108,4 +109,34 @@ export function compareHabitsByCategory<
       : Number.MAX_SAFE_INTEGER;
   if (leftRank !== rightRank) return leftRank - rightRank;
   return left.title.localeCompare(right.title, 'zh-CN');
+}
+
+/**
+ * 统计指定日期尚未处理（未完成且未跳过）的启用中到期习惯数量。
+ * 完成（done）或跳过（skipped）都会使计数减 1。
+ */
+export function countPendingDueHabits(
+  snapshot: Pick<HabitSnapshot, 'habits' | 'occurrences'>,
+  date: string,
+): number {
+  const statusByHabitId = new Map<string, HabitOccurrenceStatus>();
+  for (const occurrence of snapshot.occurrences) {
+    if (occurrence.dueDate === date) {
+      statusByHabitId.set(occurrence.habitId, occurrence.status);
+    }
+  }
+
+  let pending = 0;
+  for (const habit of snapshot.habits) {
+    if (!habit.active || !isHabitDueOn(habit, date)) continue;
+    const status = statusByHabitId.get(habit.id);
+    if (status !== 'done' && status !== 'skipped') {
+      pending += 1;
+    }
+  }
+  return pending;
+}
+
+export function formatBadgeCount(count: number): string {
+  return count > 99 ? '99+' : String(count);
 }

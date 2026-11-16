@@ -43,6 +43,7 @@
   border-right: 1px solid var(--line);
   background: color-mix(in srgb, var(--panel) 92%, #000);
   user-select: none;
+  transition: width 0.18s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .lit-sidebar.is-collapsed {
@@ -50,6 +51,7 @@
   min-width: 42px;
   max-width: 42px;
   flex: 0 0 42px;
+  border-right: 0;
   overflow: hidden;
 }
 

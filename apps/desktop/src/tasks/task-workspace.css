@@ -91,12 +91,17 @@
   min-height: 0;
   padding: 12px 0;
   border-right: 1px solid var(--line);
+  transition: flex-basis 0.18s cubic-bezier(0.2, 0, 0, 1);
 }
 
 .task-sidebar.is-collapsed {
-  flex-basis: 42px;
+  flex: 0 0 42px;
+  width: 42px;
+  min-width: 42px;
+  max-width: 42px;
   align-items: center;
-  padding: 7px 6px;
+  padding: 0;
+  border-right: 0;
   overflow: hidden;
 }
 
@@ -120,17 +125,6 @@
   justify-content: space-between;
   gap: 6px;
   padding: 0 8px 3px 0;
-}
-
-.task-sidebar.is-collapsed .task-sidebar-heading {
-  width: 100%;
-  justify-content: center;
-  padding: 0;
-}
-
-.task-sidebar.is-collapsed .task-sidebar-title,
-.task-sidebar.is-collapsed > :not(.task-sidebar-heading) {
-  display: none;
 }
 
 .task-sidebar-heading .task-sidebar-title {
@@ -249,11 +243,20 @@
   border: 1px solid var(--line);
 }
 .task-workspace .task-workspace-switch button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   min-width: 48px;
   min-height: 30px;
   padding: 4px 10px;
   border: 0;
   border-radius: 0;
+}
+.task-workspace .task-switch-badge {
+  color: var(--accent);
+  font: 600 10px var(--mono);
+  line-height: 1;
 }
 .task-workspace .task-workspace-switch button + button {
   border-left: 1px solid var(--line);

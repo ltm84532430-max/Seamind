@@ -1,0 +1,179 @@
+/* Shared collapsed 42px icon & thumbnail rail aligned with Player Sidebar. */
+/* Strictly flat CSS rules (no nested rules). */
+
+.seamind-rail-collapse-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  flex: none;
+  border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--panel) 94%, var(--ink));
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    color 0.14s ease,
+    border-color 0.14s ease,
+    background-color 0.14s ease;
+}
+
+.seamind-rail-collapse-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.seamind-rail-collapse-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.seamind-rail-collapse-btn.is-collapsed {
+  width: 28px;
+  height: 28px;
+  margin: 0 auto;
+}
+
+.seamind-rail {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  width: 42px;
+  min-width: 42px;
+  max-width: 42px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  user-select: none;
+}
+
+.seamind-rail-header {
+  display: flex;
+  width: 100%;
+  height: 52px;
+  flex: 0 0 52px;
+  align-items: center;
+  justify-content: center;
+  border-bottom: 1px solid var(--line);
+}
+
+.seamind-rail-scroll {
+  display: flex;
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+}
+
+.seamind-rail-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.seamind-rail-group {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.seamind-rail-divider {
+  width: 22px;
+  height: 1px;
+  flex: none;
+  margin: 5px 0 3px;
+  background: var(--line);
+}
+
+.seamind-rail-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 30px;
+  flex: none;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    color 0.14s ease,
+    background-color 0.14s ease,
+    border-color 0.14s ease;
+}
+
+.seamind-rail-button:hover:not(:disabled) {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+
+.seamind-rail-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.seamind-rail-button:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.seamind-rail-button.is-current {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.seamind-rail-thumb {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 50%;
+  color: #ffffff;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.seamind-rail-thumb.is-rounded {
+  border-radius: 6px;
+}
+
+.seamind-rail-button.is-thumb.is-current .seamind-rail-thumb {
+  box-shadow: 0 0 0 1.5px var(--accent);
+}
+
+.seamind-rail-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--panel);
+}
+
+.seamind-rail-footer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+  flex: none;
+}

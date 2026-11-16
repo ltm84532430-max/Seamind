@@ -11,14 +11,24 @@ import { habitApi, TASKS_CHANGED_EVENT } from './task-api';
 import HabitStatistics from './HabitStatistics';
 import {
   compareHabitsByCategory,
+  countPendingDueHabits,
+  formatBadgeCount,
   habitCategoryColor,
   isHabitDueOn,
   nextCheckStatus,
   nextHabitDueOnOrAfter,
   normalizeHabitScope,
 } from './habit-list-model';
-import { TaskSidebarToggleIcon } from './TaskSidebarToggleIcon';
 import { useConfirmDialog } from './ConfirmDialog';
+import {
+  RailFolderIcon,
+  RailListIcon,
+  RailPlusIcon,
+  RailSunIcon,
+  SidebarCollapseButton,
+  useSidebarCollapseShortcut,
+  WorkspaceSidebarRail,
+} from '../components/WorkspaceSidebarRail';
 import type {
   Habit,
   HabitCategory,
@@ -468,8 +478,10 @@ function HabitDefinitionRow({
 
 export default function HabitWorkspace({
   onShowTasks,
+  active = true,
 }: {
   onShowTasks(): void;
+  active?: boolean;
 }) {
   const [savedUi] = useState(readHabitUiState);
   const [today, setToday] = useState(() => localToday());
@@ -519,6 +531,8 @@ export default function HabitWorkspace({
       return next;
     });
   }, []);
+
+  useSidebarCollapseShortcut(toggleSidebarCollapsed, active);
 
   const cells = useMemo(
     () =>
@@ -705,6 +719,10 @@ export default function HabitWorkspace({
     (habit) =>
       occurrencesByKey.get(occurrenceKey(habit.id, today))?.status === 'done',
   ).length;
+  const todayPendingCount = useMemo(
+    () => countPendingDueHabits(snapshot, today),
+    [snapshot, today],
+  );
   const sortHabits = useCallback(
     (habits: Habit[]) =>
       [...habits].sort((left, right) =>
@@ -951,92 +969,176 @@ export default function HabitWorkspace({
 
   return (
     <div className="task-workspace habit-workspace">
-      <aside
-        className={`task-sidebar habit-sidebar${sidebarCollapsed ? ' is-collapsed' : ''}`}
-        id="habit-sidebar"
-        aria-label="习惯导航"
-      >
-        <header className="task-sidebar-heading">
-          <div className="task-sidebar-title">习惯</div>
+      {sidebarCollapsed ? (
+        <aside
+          className="task-sidebar habit-sidebar is-collapsed"
+          id="habit-sidebar"
+          aria-label="习惯导航"
+        >
+          <WorkspaceSidebarRail
+            ariaLabel="已收起的习惯导航"
+            expandTitle="展开习惯侧栏 (快捷键 Ctrl+B)"
+            expandAriaLabel="展开习惯侧栏"
+            ariaControls="habit-sidebar"
+            headerHeight={48}
+            onExpand={toggleSidebarCollapsed}
+            sections={[
+              {
+                key: 'scope',
+                items: [
+                  {
+                    key: 'today',
+                    label: `今天 (${todayDue.length})`,
+                    active: scope === 'today',
+                    icon: <RailSunIcon />,
+                    dot: todayPendingCount > 0,
+                    onClick: () => setScope('today'),
+                  },
+                  {
+                    key: 'library',
+                    label: `全部 (${searchedHabits.length})`,
+                    active: scope === 'library',
+                    icon: <RailListIcon />,
+                    onClick: () => setScope('library'),
+                  },
+                ],
+              },
+              {
+                key: 'categories',
+                items: [
+                  {
+                    key: 'cat-all',
+                    label: '全部分类',
+                    active: categoryFilter === 'all',
+                    icon: <RailFolderIcon />,
+                    onClick: () => setCategoryFilter('all'),
+                  },
+                  ...snapshot.categories.map((category) => {
+                    const categoryColor = habitCategoryColor(
+                      category.id,
+                      snapshot.categories,
+                    );
+                    const count = snapshot.habits.filter(
+                      (habit) =>
+                        habit.categoryId === category.id &&
+                        (scope === 'today'
+                          ? habit.active && isHabitDueOn(habit, today)
+                          : true) &&
+                        (!term ||
+                          `${habit.title} ${habit.note ?? ''}`
+                            .toLocaleLowerCase()
+                            .includes(term)),
+                    ).length;
+                    return {
+                      key: `cat:${category.id}`,
+                      label: `${category.name} (${count})`,
+                      active: categoryFilter === category.id,
+                      thumb: {
+                        name: category.name,
+                        color: categoryColor,
+                        shape: 'circle' as const,
+                      },
+                      onClick: () => setCategoryFilter(category.id),
+                    };
+                  }),
+                ],
+              },
+            ]}
+            footerItems={[
+              {
+                key: 'new-habit',
+                label: '新建习惯',
+                icon: <RailPlusIcon />,
+                onClick: () => openDraftModal(habitDraft()),
+              },
+            ]}
+          />
+        </aside>
+      ) : (
+        <aside
+          className="task-sidebar habit-sidebar"
+          id="habit-sidebar"
+          aria-label="习惯导航"
+        >
+          <header className="task-sidebar-heading">
+            <div className="task-sidebar-title">习惯</div>
+            <SidebarCollapseButton
+              collapsed={false}
+              title="收起习惯侧栏 (快捷键 Ctrl+B)"
+              ariaLabel="收起习惯侧栏"
+              ariaControls="habit-sidebar"
+              className="task-sidebar-toggle"
+              onClick={toggleSidebarCollapsed}
+            />
+          </header>
           <button
             type="button"
-            className="task-sidebar-toggle"
-            title={sidebarCollapsed ? '展开习惯侧栏' : '收起习惯侧栏'}
-            aria-label={sidebarCollapsed ? '展开习惯侧栏' : '收起习惯侧栏'}
-            aria-expanded={!sidebarCollapsed}
-            aria-controls="habit-sidebar"
-            onClick={toggleSidebarCollapsed}
+            className={`task-filter${scope === 'today' ? ' is-active' : ''}`}
+            onClick={() => setScope('today')}
           >
-            <TaskSidebarToggleIcon collapsed={sidebarCollapsed} />
+            今天 <span>{todayDue.length}</span>
           </button>
-        </header>
-        <button
-          type="button"
-          className={`task-filter${scope === 'today' ? ' is-active' : ''}`}
-          onClick={() => setScope('today')}
-        >
-          今天 <span>{todayDue.length}</span>
-        </button>
-        <button
-          type="button"
-          className={`task-filter${scope === 'library' ? ' is-active' : ''}`}
-          onClick={() => setScope('library')}
-        >
-          全部 <span>{searchedHabits.length}</span>
-        </button>
-        <div className="habit-category-heading">
-          <span className="task-section-label">分类</span>
           <button
             type="button"
-            className="habit-category-reset"
-            disabled={categoryFilter === 'all'}
-            onClick={() => setCategoryFilter('all')}
+            className={`task-filter${scope === 'library' ? ' is-active' : ''}`}
+            onClick={() => setScope('library')}
           >
-            全部分类
+            全部 <span>{searchedHabits.length}</span>
           </button>
-        </div>
-        <div className="task-plan-list habit-category-list">
-          {snapshot.categories.map((category) => {
-            const categoryColor = habitCategoryColor(
-              category.id,
-              snapshot.categories,
-            );
-            const count = snapshot.habits.filter(
-              (habit) =>
-                habit.categoryId === category.id &&
-                (scope === 'today'
-                  ? habit.active && isHabitDueOn(habit, today)
-                  : true) &&
-                (!term ||
-                  `${habit.title} ${habit.note ?? ''}`
-                    .toLocaleLowerCase()
-                    .includes(term)),
-            ).length;
-            return (
-              <div className="habit-category-row" key={category.id}>
-                <button
-                  type="button"
-                  className={`task-filter${categoryFilter === category.id ? ' is-active' : ''}`}
-                  onClick={() => setCategoryFilter(category.id)}
-                >
-                  <span className="habit-category-name">
-                    <span
-                      className="habit-category-mark"
-                      style={
-                        categoryColor
-                          ? { backgroundColor: categoryColor }
-                          : undefined
-                      }
-                    />
-                    {category.name}
-                  </span>
-                  <span>{count}</span>
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      </aside>
+          <div className="habit-category-heading">
+            <span className="task-section-label">分类</span>
+            <button
+              type="button"
+              className="habit-category-reset"
+              disabled={categoryFilter === 'all'}
+              onClick={() => setCategoryFilter('all')}
+            >
+              全部分类
+            </button>
+          </div>
+          <div className="task-plan-list habit-category-list">
+            {snapshot.categories.map((category) => {
+              const categoryColor = habitCategoryColor(
+                category.id,
+                snapshot.categories,
+              );
+              const count = snapshot.habits.filter(
+                (habit) =>
+                  habit.categoryId === category.id &&
+                  (scope === 'today'
+                    ? habit.active && isHabitDueOn(habit, today)
+                    : true) &&
+                  (!term ||
+                    `${habit.title} ${habit.note ?? ''}`
+                      .toLocaleLowerCase()
+                      .includes(term)),
+              ).length;
+              return (
+                <div className="habit-category-row" key={category.id}>
+                  <button
+                    type="button"
+                    className={`task-filter${categoryFilter === category.id ? ' is-active' : ''}`}
+                    onClick={() => setCategoryFilter(category.id)}
+                  >
+                    <span className="habit-category-name">
+                      <span
+                        className="habit-category-mark"
+                        style={
+                          categoryColor
+                            ? { backgroundColor: categoryColor }
+                            : undefined
+                        }
+                      />
+                      {category.name}
+                    </span>
+                    <span>{count}</span>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </aside>
+      )}
 
       <main className="task-main habit-main">
         <header className="task-toolbar">
@@ -1050,7 +1152,15 @@ export default function HabitWorkspace({
                 任务
               </button>
               <button type="button" className="is-active" aria-pressed="true">
-                习惯
+                <span>习惯</span>
+                {todayPendingCount > 0 && (
+                  <span
+                    className="task-switch-badge"
+                    aria-label={`今日还有 ${todayPendingCount} 个习惯未打卡`}
+                  >
+                    {formatBadgeCount(todayPendingCount)}
+                  </span>
+                )}
               </button>
             </div>
             <span className="task-toolbar-count">

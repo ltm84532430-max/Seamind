@@ -3,15 +3,8 @@
 }
 
 .habit-sidebar.is-collapsed {
-  flex-basis: 38px;
-}
-
-.habit-sidebar .task-sidebar-heading {
-  padding-right: 6px;
-}
-
-.habit-sidebar.is-collapsed .task-sidebar-heading {
-  padding-right: 4px;
+  flex-basis: 42px;
+  padding: 0;
 }
 
 .habit-category-heading {
