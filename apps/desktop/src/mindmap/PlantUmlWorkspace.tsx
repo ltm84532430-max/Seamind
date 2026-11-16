@@ -46,10 +46,7 @@ interface PlantUmlWorkspaceProps {
 
 const workspaceEventName = 'seamind:open-plantuml-editor';
 type PlantUmlDirection =
-  | 'left to right'
-  | 'right to left'
-  | 'top to bottom'
-  | 'bottom to top';
+  'left to right' | 'right to left' | 'top to bottom' | 'bottom to top';
 type PlantUmlPanel = 'elements' | 'relationships' | 'notes' | 'layout' | 'more';
 interface CanvasView {
   scale: number;

@@ -12,12 +12,7 @@ import type { ExamReviewSchedule } from './review-schedule';
 import './exam-center.css';
 
 type ViewFilter =
-  | 'all'
-  | 'overdue'
-  | 'today'
-  | 'mastered'
-  | 'upcoming'
-  | 'inProgress';
+  'all' | 'overdue' | 'today' | 'mastered' | 'upcoming' | 'inProgress';
 type ViewMode = 'graph' | 'list';
 
 interface Props {

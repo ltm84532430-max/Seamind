@@ -692,10 +692,9 @@ export class Markmap {
 
     // Circle to link to children of the node
     const mmCircle = mmGMerge
-      .selectAll<
-        SVGCircleElement,
-        INode
-      >(childSelector<SVGCircleElement>('circle'))
+      .selectAll<SVGCircleElement, INode>(
+        childSelector<SVGCircleElement>('circle'),
+      )
       .data(
         (d) => (d.children?.length ? [d] : []),
         (d) => d.state.key,
@@ -718,10 +717,9 @@ export class Markmap {
 
     const observer = this._observer;
     const mmFo = mmGMerge
-      .selectAll<
-        SVGForeignObjectElement,
-        INode
-      >(childSelector<SVGForeignObjectElement>('foreignObject'))
+      .selectAll<SVGForeignObjectElement, INode>(
+        childSelector<SVGForeignObjectElement>('foreignObject'),
+      )
       .data(
         (d) => [d],
         (d) => d.state.key,
@@ -756,10 +754,9 @@ export class Markmap {
     const mmFoMerge = mmFoEnter.merge(mmFo);
 
     const mmAddSibling = mmGMerge
-      .selectAll<
-        SVGGElement,
-        INode
-      >(childSelector<SVGGElement>('g.markmap-node-add-sibling'))
+      .selectAll<SVGGElement, INode>(
+        childSelector<SVGGElement>('g.markmap-node-add-sibling'),
+      )
       .data(
         (d) =>
           this.options.onNodeAddSibling &&
@@ -800,10 +797,9 @@ export class Markmap {
         : node.children.map((child) => ({ source: node, target: child })),
     );
     const mmPath = this.g
-      .selectAll<
-        SVGPathElement,
-        { source: INode; target: INode }
-      >(childSelector<SVGPathElement>(SELECTOR_LINK))
+      .selectAll<SVGPathElement, { source: INode; target: INode }>(
+        childSelector<SVGPathElement>(SELECTOR_LINK),
+      )
       .data(links, (d) => d.target.state.key);
     const mmPathExit = mmPath.exit<{ source: INode; target: INode }>();
     const mmPathEnter = mmPath

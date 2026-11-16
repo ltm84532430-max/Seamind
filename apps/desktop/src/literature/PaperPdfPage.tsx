@@ -6,10 +6,7 @@ import type { PaperAnnotation, PaperAnnotationRect } from './types';
 import type { PaperParagraphBlock } from './paper-pdf-layout';
 
 export type PaperTranslationDisplayMode =
-  | 'off'
-  | 'sidebar'
-  | 'overlay'
-  | 'bilingual';
+  'off' | 'sidebar' | 'overlay' | 'bilingual';
 
 interface PaperPdfPageProps {
   pdf: PDFDocumentProxy;

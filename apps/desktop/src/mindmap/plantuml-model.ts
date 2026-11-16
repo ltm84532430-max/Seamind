@@ -491,10 +491,7 @@ export function addPlantUmlElement(
 export function setPlantUmlDirection(
   document: PlantUmlDocument,
   direction:
-    | 'left to right'
-    | 'right to left'
-    | 'top to bottom'
-    | 'bottom to top',
+    'left to right' | 'right to left' | 'top to bottom' | 'bottom to top',
 ): string {
   const lines = [...document.lines];
   const directive = `${direction} direction`;

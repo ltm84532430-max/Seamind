@@ -19,11 +19,7 @@ export interface MarkdownNodeSource {
 }
 
 export type MindmapNodeOperation =
-  | 'rename'
-  | 'add_child'
-  | 'add_sibling'
-  | 'delete'
-  | 'set_note';
+  'rename' | 'add_child' | 'add_sibling' | 'delete' | 'set_note';
 
 export interface MarkdownCommandResult {
   markdown: string;

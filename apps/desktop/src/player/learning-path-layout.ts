@@ -4,18 +4,10 @@ import type { LearningPathDetail, LearningPathNode, VideoItem } from './types';
 import { videoWatchUrl } from './video-links';
 
 export type LearningPathLayoutMode =
-  | 'tree'
-  | 'metro'
-  | 'dag'
-  | 'lanes'
-  | 'radial';
+  'tree' | 'metro' | 'dag' | 'lanes' | 'radial';
 
 export type LearningPathTheme =
-  | 'terracotta'
-  | 'blueprint'
-  | 'cyber'
-  | 'botanical'
-  | 'minimal';
+  'terracotta' | 'blueprint' | 'cyber' | 'botanical' | 'minimal';
 
 export type LearningPathConnectorStyle = 'curve' | 'orthogonal' | 'metro';
 
@@ -1117,12 +1109,7 @@ export const STAGE_STAR_PALETTE = [
 ];
 
 export type PathStarNodeKind =
-  | 'core'
-  | 'stage'
-  | 'video'
-  | 'checkpoint'
-  | 'satellite'
-  | 'note';
+  'core' | 'stage' | 'video' | 'checkpoint' | 'satellite' | 'note';
 
 export interface PathStarNode {
   id: string;

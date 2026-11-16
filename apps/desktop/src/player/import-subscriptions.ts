@@ -2,10 +2,7 @@ import { channelIdFromUrl, channelUrl, isChannelId } from './video-links';
 import type { ChannelInput, PlayerChannel } from './types';
 
 export type SubscriptionFormat =
-  | 'newpipe'
-  | 'takeout-csv'
-  | 'takeout-json'
-  | 'opml';
+  'newpipe' | 'takeout-csv' | 'takeout-json' | 'opml';
 
 export interface ParsedSubscriptions {
   format: SubscriptionFormat;

@@ -244,10 +244,7 @@ function HabitHeatmap({
                   ArrowDown: 1,
                 }[
                   event.key as
-                    | 'ArrowLeft'
-                    | 'ArrowRight'
-                    | 'ArrowUp'
-                    | 'ArrowDown'
+                    'ArrowLeft' | 'ArrowRight' | 'ArrowUp' | 'ArrowDown'
                 ];
                 const targetIndex =
                   event.key === 'Home'

@@ -15,11 +15,7 @@ import {
 import { ShakaPlayerAdapter } from './youtube-sabr-shaka-adapter';
 
 export type NativeClient =
-  | 'WEB'
-  | 'VISIONOS'
-  | 'ANDROID_VR'
-  | 'ANDROID'
-  | 'WEB_EMBEDDED';
+  'WEB' | 'VISIONOS' | 'ANDROID_VR' | 'ANDROID' | 'WEB_EMBEDDED';
 
 /**
  * InnerTube clients to attempt for playback.
@@ -127,8 +123,7 @@ function rememberTranscriptInfo(
   recentTranscriptInfos.set(videoId, { createdAt: now, value });
   while (recentTranscriptInfos.size > 12) {
     const oldest = recentTranscriptInfos.keys().next().value as
-      | string
-      | undefined;
+      string | undefined;
     if (!oldest) break;
     recentTranscriptInfos.delete(oldest);
   }

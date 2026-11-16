@@ -568,11 +568,7 @@ export type ReaderMode = 'auto' | 'single' | 'spread' | 'scroll';
 export type ResolvedReaderMode = Exclude<ReaderMode, 'auto'>;
 export type ZoomMode = 'fitPage' | 'fitWidth' | 'manual';
 export type SidebarTab =
-  | 'outline'
-  | 'search'
-  | 'annotations'
-  | 'bookmarks'
-  | 'translation';
+  'outline' | 'search' | 'annotations' | 'bookmarks' | 'translation';
 
 export interface ReaderPreferences {
   mode: ReaderMode;

@@ -29,11 +29,7 @@ import {
 const VISIBILITY_KEY = 'seamind:feed:bilingual-visible';
 
 export type FeedArticleTranslationPhase =
-  | 'none'
-  | 'empty'
-  | 'ready'
-  | 'stale'
-  | 'unplaced';
+  'none' | 'empty' | 'ready' | 'stale' | 'unplaced';
 
 function readBilingualVisible(): boolean {
   try {

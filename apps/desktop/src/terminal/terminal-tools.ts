@@ -31,12 +31,7 @@ export type TerminalToolChrome = {
 };
 
 export type TerminalEscapeTarget =
-  | 'confirm'
-  | 'shell-menu'
-  | 'tools-menu'
-  | 'rename'
-  | 'panel'
-  | 'terminal';
+  'confirm' | 'shell-menu' | 'tools-menu' | 'rename' | 'panel' | 'terminal';
 
 export function parseLastTerminalTool(value: string | null): TerminalToolId {
   if (value === 'linux' || value === 'knowledge') return value;

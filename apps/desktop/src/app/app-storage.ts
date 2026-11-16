@@ -15,12 +15,7 @@ export type ActiveWorkspace =
   | 'feed'
   | 'terminal';
 export type MindmapStyle =
-  | 'gray'
-  | 'roots'
-  | 'cards'
-  | 'warm'
-  | 'emerald'
-  | 'cobalt';
+  'gray' | 'roots' | 'cards' | 'warm' | 'emerald' | 'cobalt';
 
 export const ACTIVE_WORKSPACE_KEY = 'seamind:active-workspace:v1';
 export const LAST_READER_BOOK_KEY = 'seamind:last-reader-book:v1';

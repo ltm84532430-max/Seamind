@@ -264,9 +264,9 @@ export function prepareHtmlCardNodes(
   const card = htmlCardDefinitionFromPayload(node);
   const isEmbedded = Boolean(
     embedding &&
-      !embeddingApplied.value &&
-      card?.assetId === embedding.assetId &&
-      card.entryPath === embedding.entryPath,
+    !embeddingApplied.value &&
+    card?.assetId === embedding.assetId &&
+    card.entryPath === embedding.entryPath,
   );
   if (isEmbedded) embeddingApplied.value = true;
   return {

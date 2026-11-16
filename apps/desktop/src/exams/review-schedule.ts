@@ -2,12 +2,7 @@ import type { EpubExamSummary } from './epub-exams';
 
 export const REVIEW_INTERVAL_DAYS = [1, 3, 7, 14, 30, 60] as const;
 export type ReviewUrgency =
-  | 'notStarted'
-  | 'inProgress'
-  | 'overdue'
-  | 'today'
-  | 'upcoming'
-  | 'later';
+  'notStarted' | 'inProgress' | 'overdue' | 'today' | 'upcoming' | 'later';
 
 export interface ExamReviewSchedule {
   urgency: ReviewUrgency;

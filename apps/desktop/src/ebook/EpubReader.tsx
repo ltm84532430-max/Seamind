@@ -131,9 +131,7 @@ export interface EpubReaderAgentBridge {
 type FoliateMetadata = {
   title?: string | Record<string, string>;
   creator?:
-    | string
-    | Record<string, string>
-    | Array<string | Record<string, string>>;
+    string | Record<string, string> | Array<string | Record<string, string>>;
 };
 
 type FoliateLocation = {
@@ -217,11 +215,7 @@ type ReaderSelection = {
 };
 
 export type EpubAiResponseFormat =
-  | 'structured'
-  | 'concise'
-  | 'example'
-  | 'pitfalls'
-  | 'qa';
+  'structured' | 'concise' | 'example' | 'pitfalls' | 'qa';
 
 const AI_RESPONSE_FORMATS: Array<{
   value: EpubAiResponseFormat;
@@ -4254,8 +4248,8 @@ function renderToc(
             ? item.id === options.activeId
             : Boolean(
                 options.activeHref &&
-                  normalizeTocHref(item.href) ===
-                    normalizeTocHref(options.activeHref),
+                normalizeTocHref(item.href) ===
+                  normalizeTocHref(options.activeHref),
               );
         const pageLabel = options.pageLabels.get(normalizeNavHref(item.href));
 

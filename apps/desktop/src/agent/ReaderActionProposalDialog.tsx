@@ -1,8 +1,7 @@
 import type { KnowledgeNoteProposal, ReaderChapterProposal } from './types';
 
 export type ReaderActionProposal =
-  | KnowledgeNoteProposal
-  | ReaderChapterProposal;
+  KnowledgeNoteProposal | ReaderChapterProposal;
 
 function previewText(value: string): string {
   const limit = 4_000;

@@ -22,12 +22,7 @@ export interface ActiveMindmapSnapshot {
 }
 
 export type NodeEditOperation =
-  | 'rename'
-  | 'add_child'
-  | 'add_sibling'
-  | 'add_branch'
-  | 'delete'
-  | 'set_note';
+  'rename' | 'add_child' | 'add_sibling' | 'add_branch' | 'delete' | 'set_note';
 
 export type AgentAnalysisMode = 'drilldown' | 'visualization';
 
@@ -104,8 +99,7 @@ export interface KnowledgeExcerptProposal {
 }
 
 export type KnowledgeNoteProposal =
-  | KnowledgeNoteUpdateProposal
-  | KnowledgeExcerptProposal;
+  KnowledgeNoteUpdateProposal | KnowledgeExcerptProposal;
 
 export interface ReaderChapterProposal {
   kind: 'chapter';

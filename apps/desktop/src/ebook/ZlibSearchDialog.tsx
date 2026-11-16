@@ -17,9 +17,7 @@ import './zlib-search.css';
 const LAST_EMAIL_STORAGE_KEY = 'seamind.zlib.lastEmail';
 
 type PendingZlibAction =
-  | { kind: 'search' }
-  | { kind: 'download'; book: ZlibBook }
-  | null;
+  { kind: 'search' } | { kind: 'download'; book: ZlibBook } | null;
 
 function readRememberedEmail(): string {
   try {

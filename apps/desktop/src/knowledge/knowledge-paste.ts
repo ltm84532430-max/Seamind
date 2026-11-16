@@ -567,17 +567,17 @@ export function analyzeKnowledgePaste(
 
   const hasStructuralHtml = Boolean(
     html &&
-      (html.querySelector(
-        'pre, table, .katex, math, h1, h2, h3, h4, h5, h6, ul, ol, blockquote',
-      ) ||
-        (htmlMedia?.htmlImages.length ?? 0) > 0 ||
-        (htmlMedia?.dataCandidates.length ?? 0) > 0 ||
-        (htmlMedia?.contentSvgs.size ?? 0) > 0),
+    (html.querySelector(
+      'pre, table, .katex, math, h1, h2, h3, h4, h5, h6, ul, ol, blockquote',
+    ) ||
+      (htmlMedia?.htmlImages.length ?? 0) > 0 ||
+      (htmlMedia?.dataCandidates.length ?? 0) > 0 ||
+      (htmlMedia?.contentSvgs.size ?? 0) > 0),
   );
   const useHtmlMarkdown = Boolean(
     htmlMarkdown &&
-      (!plainClipboardText.trim() ||
-        (hasStructuralHtml && !looksLikeRawMarkdownSource(plainClipboardText))),
+    (!plainClipboardText.trim() ||
+      (hasStructuralHtml && !looksLikeRawMarkdownSource(plainClipboardText))),
   );
   const text = useHtmlMarkdown ? htmlMarkdown : plainClipboardText;
 

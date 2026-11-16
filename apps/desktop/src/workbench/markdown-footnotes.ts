@@ -46,8 +46,8 @@ function isSeparatorFenceClose(
   const closing = line.match(/^ {0,3}(`{3,}|~{3,})[ \t]*$/);
   return Boolean(
     closing &&
-      closing[1][0] === fence.marker &&
-      closing[1].length >= fence.length,
+    closing[1][0] === fence.marker &&
+    closing[1].length >= fence.length,
   );
 }
 

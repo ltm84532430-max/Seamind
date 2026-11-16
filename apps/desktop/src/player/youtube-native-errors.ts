@@ -143,10 +143,7 @@ export function pickFailure(
 }
 
 export type NativePlayerErrorKind =
-  | 'expired'
-  | 'network'
-  | 'unsupported'
-  | 'unknown';
+  'expired' | 'network' | 'unsupported' | 'unknown';
 
 /**
  * Shaka reports HTTP failures as BAD_HTTP_STATUS (1001) with the status in `data[1]`; a 403/404/410

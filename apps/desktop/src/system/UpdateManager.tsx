@@ -5,12 +5,7 @@ import { check } from '@tauri-apps/plugin-updater';
 
 type Update = Awaited<ReturnType<typeof check>>;
 type UpdateState =
-  | 'idle'
-  | 'checking'
-  | 'current'
-  | 'available'
-  | 'installing'
-  | 'error';
+  'idle' | 'checking' | 'current' | 'available' | 'installing' | 'error';
 
 function describeError(error: unknown): string {
   if (typeof error === 'string') return error;

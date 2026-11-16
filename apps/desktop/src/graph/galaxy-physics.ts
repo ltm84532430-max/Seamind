@@ -2,11 +2,7 @@
  * 为电子书和 RSS 星图共享的图形结构与布局物理计算。
  */
 export type GalaxyNodeKind =
-  | 'sun'
-  | 'cluster'
-  | 'planet'
-  | 'satellite'
-  | 'footnote';
+  'sun' | 'cluster' | 'planet' | 'satellite' | 'footnote';
 export type GalaxyLinkKind = 'orbit' | 'sequence' | 'cross_link';
 
 export interface GalaxyLink {

@@ -35,8 +35,7 @@ export interface PeleFailure {
 }
 
 export type PeleOutcome =
-  | { ok: true; diagram: PeleDiagram }
-  | { ok: false; failure: PeleFailure };
+  { ok: true; diagram: PeleDiagram } | { ok: false; failure: PeleFailure };
 
 const peleCodes = new Set<PeleFailureCode>([
   'syntax',

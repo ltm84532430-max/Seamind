@@ -115,8 +115,7 @@ interface BackendFailure {
 }
 
 type BackendReply<T> =
-  | { state: 'ok'; data: T }
-  | { state: 'error'; data: BackendFailure };
+  { state: 'ok'; data: T } | { state: 'error'; data: BackendFailure };
 
 interface TranscriptCacheEntry {
   schema: 3;
@@ -1221,7 +1220,7 @@ async function fetchTranscriptUncached(
       !trackCatalogs.has(videoId) &&
       Boolean(
         cachedNative &&
-          Date.now() - cachedNative.createdAt <= TRACK_CATALOG_TTL_MS,
+        Date.now() - cachedNative.createdAt <= TRACK_CATALOG_TTL_MS,
       ));
   if (useNativeDirectly) {
     return fetchViaNativeWithFallbacks(

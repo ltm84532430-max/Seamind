@@ -159,8 +159,7 @@ async function favorites_propose_categorization(
     'slate',
   ]);
   let newCategories:
-    | Array<{ name: string; color?: FavoriteCategoryColor }>
-    | undefined;
+    Array<{ name: string; color?: FavoriteCategoryColor }> | undefined;
   if (input.newCategories !== undefined) {
     if (
       !Array.isArray(input.newCategories) ||

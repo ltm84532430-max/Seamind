@@ -24,9 +24,7 @@ export type {
 } from '../graph/galaxy-physics';
 
 export type BookGalaxyFootnoteSource =
-  | 'epub-note'
-  | 'epub-ai'
-  | 'markdown-footnote';
+  'epub-note' | 'epub-ai' | 'markdown-footnote';
 
 export interface BookGalaxyFootnoteData {
   source: BookGalaxyFootnoteSource;
