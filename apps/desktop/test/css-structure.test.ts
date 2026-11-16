@@ -73,6 +73,12 @@ describe('stylesheet structure', () => {
     ...readdirSync(new URL('exams/', sourceDirectory))
       .filter((name) => name.endsWith('.css'))
       .map((name) => `exams/${name}`),
+    ...readdirSync(new URL('media/', sourceDirectory))
+      .filter((name) => name.endsWith('.css'))
+      .map((name) => `media/${name}`),
+    ...readdirSync(new URL('app/', sourceDirectory))
+      .filter((name) => name.endsWith('.css'))
+      .map((name) => `app/${name}`),
   ];
 
   it('finds the stylesheets', () => {
