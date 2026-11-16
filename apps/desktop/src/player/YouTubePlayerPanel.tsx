@@ -64,11 +64,19 @@ export interface YouTubePlayerPanelProps {
    * its own heading and starts the video by itself.
    */
   variant?: 'dialog' | 'page';
+  active?: boolean;
+  pauseWhenHidden?: boolean;
+  stopToken?: number;
   onClose?: () => void;
   /** About once a second while playing, and once more when playback pauses or ends. */
   onProgress?: (progress: PlayerProgress) => void;
   onStatusChange?: (status: YouTubePlaybackState) => void;
   onEnded?: () => void;
+  onModeChange?: (info: {
+    mode: 'embed' | 'native' | 'local';
+    mpvLaunched: boolean;
+  }) => void;
+  onMutedChange?: (muted: boolean) => void;
   /** The controls, once there is a player to control; null when it goes away. */
   onHandle?: (handle: YouTubePlayerHandle | null) => void;
   /** Optional page sidebar target for playback actions and diagnostics. */
@@ -104,10 +112,15 @@ function newRequestId(): string {
 export default function YouTubePlayerPanel({
   selection,
   variant = 'dialog',
+  active = true,
+  pauseWhenHidden = false,
+  stopToken = 0,
   onClose,
   onProgress,
   onStatusChange,
   onEnded,
+  onModeChange,
+  onMutedChange,
   onHandle,
   controlsTarget,
   children,
@@ -158,6 +171,8 @@ export default function YouTubePlayerPanel({
   const hadPlaybackRef = useRef(preloaded !== null);
   const lastReloadRef = useRef(0);
   const latest = useRef({ mode, status });
+  const suppressAutoPlayRef = useRef(false);
+  const lastStopTokenRef = useRef(stopToken);
   const startNativeRef = useRef<(auto: boolean) => Promise<void>>(
     async () => undefined,
   );
@@ -165,6 +180,18 @@ export default function YouTubePlayerPanel({
   useEffect(() => {
     latest.current = { mode, status };
   });
+
+  useEffect(() => {
+    if (active) {
+      suppressAutoPlayRef.current = false;
+    } else if (pauseWhenHidden) {
+      suppressAutoPlayRef.current = true;
+    }
+  }, [active, pauseWhenHidden]);
+
+  useEffect(() => {
+    onModeChange?.({ mode, mpvLaunched });
+  }, [mode, mpvLaunched, onModeChange]);
 
   /** Remembers where the playing video was and pauses it before another player takes over. */
   const captureResume = () => {
@@ -200,6 +227,7 @@ export default function YouTubePlayerPanel({
 
   /** The latest call wins: starting again aborts a resolution that is still running. */
   const startNative = async (auto: boolean) => {
+    if (!auto) suppressAutoPlayRef.current = false;
     captureResume();
     nativeAbortRef.current?.abort();
     const controller = new AbortController();
@@ -285,6 +313,7 @@ export default function YouTubePlayerPanel({
 
   const resolveLocally = async (browser?: 'firefox' | 'edge' | 'chrome') => {
     if (localBusy) return;
+    suppressAutoPlayRef.current = false;
     captureResume();
     setLocalBusy(true);
     setNotice('');
@@ -329,6 +358,7 @@ export default function YouTubePlayerPanel({
   };
 
   const returnToEmbed = () => {
+    suppressAutoPlayRef.current = false;
     nativeAbortRef.current?.abort();
     setLocalSource('');
     setNotice('');
@@ -408,7 +438,17 @@ export default function YouTubePlayerPanel({
         player = new api.Player(iframe, {
           events: {
             onReady: () => {
-              if (!cancelled) setStatus('ready');
+              if (cancelled) return;
+              if (suppressAutoPlayRef.current) {
+                try {
+                  player?.pauseVideo();
+                } catch {
+                  // ignore
+                }
+                setStatus('paused');
+                return;
+              }
+              setStatus('ready');
             },
             onStateChange: (event) => {
               if (cancelled) return;
@@ -503,13 +543,19 @@ export default function YouTubePlayerPanel({
     const timer = window.setTimeout(() => {
       if (embedPlayedRef.current) return;
       setAutoplayStalled(true);
-      if (!isDialog && status === 'ready' && !autoFallbackTriedRef.current) {
+      if (
+        !isDialog &&
+        active &&
+        !suppressAutoPlayRef.current &&
+        status === 'ready' &&
+        !autoFallbackTriedRef.current
+      ) {
         autoFallbackTriedRef.current = true;
         void startNativeRef.current(true);
       }
     }, AUTOPLAY_HINT_MS);
     return () => window.clearTimeout(timer);
-  }, [isDialog, mode, status]);
+  }, [isDialog, active, mode, status]);
 
   useEffect(() => {
     if (!isDialog) return undefined;
@@ -538,10 +584,20 @@ export default function YouTubePlayerPanel({
     return () => document.removeEventListener('keydown', closeOnEscape);
   }, []);
 
-  const callbacks = useRef({ onProgress, onStatusChange, onEnded });
+  const callbacks = useRef({
+    onProgress,
+    onStatusChange,
+    onEnded,
+    onMutedChange,
+  });
   const onHandleRef = useRef(onHandle);
   useEffect(() => {
-    callbacks.current = { onProgress, onStatusChange, onEnded };
+    callbacks.current = {
+      onProgress,
+      onStatusChange,
+      onEnded,
+      onMutedChange,
+    };
     onHandleRef.current = onHandle;
   });
 
@@ -618,6 +674,7 @@ export default function YouTubePlayerPanel({
         if (element) {
           element.volume = next / 100;
           element.muted = next === 0;
+          callbacks.current.onMutedChange?.(next === 0);
           return;
         }
         try {
@@ -626,6 +683,7 @@ export default function YouTubePlayerPanel({
           player.setVolume(next);
           if (next === 0) player.mute();
           else player.unMute();
+          callbacks.current.onMutedChange?.(next === 0);
         } catch {
           // The player may not be ready yet.
         }
@@ -643,6 +701,7 @@ export default function YouTubePlayerPanel({
         const element = video();
         if (element) {
           element.muted = !element.muted;
+          callbacks.current.onMutedChange?.(element.muted);
           return element.muted;
         }
         try {
@@ -650,23 +709,33 @@ export default function YouTubePlayerPanel({
           if (!player) return false;
           if (player.isMuted()) {
             player.unMute();
+            callbacks.current.onMutedChange?.(false);
             return false;
           }
           player.mute();
+          callbacks.current.onMutedChange?.(true);
           return true;
         } catch {
           return false;
         }
       },
       play() {
+        suppressAutoPlayRef.current = false;
         const element = video();
-        if (element) void element.play().catch(() => undefined);
-        else
-          try {
-            embedPlayerRef.current?.playVideo();
-          } catch {
-            // The player may not be ready yet.
-          }
+        if (element) {
+          void element.play().catch(() => {
+            setStatus('paused');
+          });
+          return;
+        }
+        if (latest.current.mode === 'native') {
+          setStatus('loading');
+        }
+        try {
+          embedPlayerRef.current?.playVideo();
+        } catch {
+          // The player may not be ready yet.
+        }
       },
       pause() {
         const element = video();
@@ -701,6 +770,22 @@ export default function YouTubePlayerPanel({
   }, []);
 
   useEffect(() => {
+    if (stopToken === lastStopTokenRef.current) return;
+    lastStopTokenRef.current = stopToken;
+    suppressAutoPlayRef.current = true;
+    cancelBackgroundWork();
+    handle.pause();
+    setStatus((current) =>
+      current === 'loading' ||
+      current === 'resolving' ||
+      current === 'playing' ||
+      current === 'buffering'
+        ? 'paused'
+        : current,
+    );
+  }, [stopToken, handle]);
+
+  useEffect(() => {
     setVolumePercent(handle.getVolume());
     setMuted(handle.isMuted());
   }, [handle, mode, status]);
@@ -731,6 +816,7 @@ export default function YouTubePlayerPanel({
       handle.setVolume(next);
       setVolumePercent(next);
       setMuted(next === 0);
+      callbacks.current.onMutedChange?.(next === 0);
       showVolumeHud();
     };
 
@@ -949,9 +1035,14 @@ export default function YouTubePlayerPanel({
               <YouTubeNativePlayer
                 playback={playback}
                 startSeconds={resumeRef.current}
+                autoPlay={!suppressAutoPlayRef.current}
                 onState={setStatus}
                 onFailure={handleNativeFailure}
                 onPlaybackFallback={handleNativePlaybackFallback}
+                onVolumeChange={(isNowMuted) => {
+                  setMuted(isNowMuted);
+                  callbacks.current.onMutedChange?.(isNowMuted);
+                }}
                 onTime={(seconds) => {
                   resumeRef.current = Math.floor(seconds);
                 }}
@@ -964,7 +1055,7 @@ export default function YouTubePlayerPanel({
               src={localSource}
               controls
               playsInline
-              autoPlay={!isDialog}
+              autoPlay={!isDialog && !suppressAutoPlayRef.current}
               preload="metadata"
               onLoadedMetadata={(event) => {
                 const video = event.currentTarget;
@@ -974,12 +1065,23 @@ export default function YouTubePlayerPanel({
                   resumeRef.current < video.duration
                 )
                   video.currentTime = resumeRef.current;
-                setStatus('ready');
+                if (suppressAutoPlayRef.current) {
+                  video.pause();
+                  setStatus('paused');
+                } else {
+                  setStatus('ready');
+                }
               }}
               onPlay={() => setStatus('playing')}
               onPause={() => setStatus('paused')}
               onWaiting={() => setStatus('buffering')}
               onEnded={() => setStatus('ended')}
+              onVolumeChange={(event) => {
+                const isNowMuted =
+                  event.currentTarget.muted || event.currentTarget.volume === 0;
+                setMuted(isNowMuted);
+                callbacks.current.onMutedChange?.(isNowMuted);
+              }}
               onError={() => {
                 setNotice('浏览器无法播放该媒体流，或者播放地址已过期。');
                 setStatus('error');

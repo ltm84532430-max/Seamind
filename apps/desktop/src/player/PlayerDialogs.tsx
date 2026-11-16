@@ -309,10 +309,10 @@ export function SettingsDialog({
               onChange({ ...settings, pauseWhenHidden: event.target.checked })
             }
           />
-          切换到导图或电子书时暂停播放
+          切换到其他页面时自动暂停播放
         </label>
         <p className="player-field-hint">
-          关闭后，视频会在后台继续播放，适合边听边整理导图。
+          默认关闭：未暂停的视频切出后会缩放到顶栏继续播放；开启则切页立即暂停。
         </p>
         <label className="player-check">
           <input

@@ -9,6 +9,7 @@ import {
 } from './feed-translation-api';
 import { FeedAddDialog } from './FeedAddDialog';
 import { FeedArticleList } from './FeedArticleList';
+import { useFeedAudio } from './FeedAudioEngine';
 import { FeedAudioPlayerBar } from './FeedAudioPlayerBar';
 import { FeedCategoryDialog } from './FeedCategoryDialog';
 import { FeedGalaxyGraphView } from './FeedGalaxyGraphView';
@@ -50,26 +51,34 @@ async function seedDefaultSourcesOnce(force = false): Promise<{
 }
 
 export interface FeedWorkspaceProps {
+  active?: boolean;
   provider: FeedProviderSettings;
   onOpenMindmap?: (markdown: string, title: string) => void;
   onSelectedArticleChange?: (articleId: string | null, title: string) => void;
   onAnalyzeArticle?: (articleId: string) => void;
   externalRevision?: number;
+  focusArticleRequest?: { id: number; article: FeedArticle } | null;
+  onFocusArticleRequestHandled?: (id: number) => void;
 }
 
 const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
+  active = true,
   provider,
   onOpenMindmap,
   onSelectedArticleChange,
   onAnalyzeArticle,
   externalRevision,
+  focusArticleRequest = null,
+  onFocusArticleRequestHandled,
 }) => {
+  const { article: playingArticle, playArticle } = useFeedAudio();
   const [overview, setOverview] = useState<FeedOverview | null>(null);
   const [articles, setArticles] = useState<FeedArticle[]>([]);
   const [selectedArticle, setSelectedArticle] = useState<FeedArticle | null>(
     null,
   );
   const handledExternalRevision = useRef(externalRevision ?? 0);
+  const handledFocusRequestRef = useRef<number | null>(null);
 
   // 终端通过 MCP 读取当前文章时，始终使用阅读区实际选中的文章 ID。
   useEffect(() => {
@@ -83,9 +92,6 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
   const [filterMode, setFilterMode] = useState<
     'all' | 'unread' | 'starred' | 'audio'
   >('all');
-  const [playingArticle, setPlayingArticle] = useState<FeedArticle | null>(
-    null,
-  );
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(
     null,
   );
@@ -264,10 +270,21 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
     [reloadOverview],
   );
 
-  const handlePlayAudio = useCallback((article: FeedArticle) => {
-    setSelectedArticle(article);
-    setPlayingArticle(article);
-  }, []);
+  const handlePlayAudio = useCallback(
+    (article: FeedArticle) => {
+      setSelectedArticle(article);
+      playArticle(article);
+    },
+    [playArticle],
+  );
+
+  useEffect(() => {
+    const request = focusArticleRequest;
+    if (!request || handledFocusRequestRef.current === request.id) return;
+    handledFocusRequestRef.current = request.id;
+    setSelectedArticle(request.article);
+    onFocusArticleRequestHandled?.(request.id);
+  }, [focusArticleRequest, onFocusArticleRequestHandled]);
 
   const handleToggleRead = useCallback(
     async (articleId: string, currentStatus: 'read' | 'unread') => {
@@ -461,6 +478,7 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
   // Keyboard Shortcuts (J/K navigation, S star, M read)
   // ---------------------------------------------------------------------------
   useEffect(() => {
+    if (!active) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       const activeEl = document.activeElement;
       if (
@@ -504,6 +522,7 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
+    active,
     articles,
     selectedArticle,
     handleSelectArticle,
@@ -706,11 +725,7 @@ const FeedWorkspaceInner: React.FC<FeedWorkspaceProps> = ({
         />
 
         {playingArticle && (
-          <FeedAudioPlayerBar
-            article={playingArticle}
-            onClose={() => setPlayingArticle(null)}
-            onGenerateMindmap={handleGenerateMindmap}
-          />
+          <FeedAudioPlayerBar onGenerateMindmap={handleGenerateMindmap} />
         )}
       </div>
 

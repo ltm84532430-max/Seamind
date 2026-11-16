@@ -36,10 +36,12 @@ export interface NativePlayerFailure {
 interface YouTubeNativePlayerProps {
   playback: NativePlayback;
   startSeconds: number;
+  autoPlay?: boolean;
   onState: (state: YouTubePlaybackState) => void;
   onFailure: (failure: NativePlayerFailure) => void;
   onPlaybackFallback: (playback: NativePlayback, resumeAt: number) => void;
   onTime?: (seconds: number) => void;
+  onVolumeChange?: (muted: boolean) => void;
 }
 
 interface TrackChoices {
@@ -123,21 +125,37 @@ function readChoices(player: ShakaPlayer): TrackChoices {
 export default function YouTubeNativePlayer({
   playback,
   startSeconds,
+  autoPlay = true,
   onState,
   onFailure,
   onPlaybackFallback,
   onTime,
+  onVolumeChange,
 }: YouTubeNativePlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const playerRef = useRef<ShakaPlayer | null>(null);
-  const callbacks = useRef({ onState, onFailure, onPlaybackFallback, onTime });
+  const callbacks = useRef({
+    onState,
+    onFailure,
+    onPlaybackFallback,
+    onTime,
+    onVolumeChange,
+  });
   const initialStart = useRef(startSeconds);
+  const autoPlayRef = useRef(autoPlay);
   const [choices, setChoices] = useState<TrackChoices>(emptyChoices);
   const [manualHeight, setManualHeight] = useState<number | null>(null);
 
   useEffect(() => {
-    callbacks.current = { onState, onFailure, onPlaybackFallback, onTime };
+    callbacks.current = {
+      onState,
+      onFailure,
+      onPlaybackFallback,
+      onTime,
+      onVolumeChange,
+    };
     initialStart.current = startSeconds;
+    autoPlayRef.current = autoPlay;
   });
 
   useEffect(() => {
@@ -178,6 +196,11 @@ export default function YouTubeNativePlayer({
       ['waiting', () => callbacks.current.onState('buffering')],
       ['ended', () => callbacks.current.onState('ended')],
       ['timeupdate', () => callbacks.current.onTime?.(video.currentTime)],
+      [
+        'volumechange',
+        () =>
+          callbacks.current.onVolumeChange?.(video.muted || video.volume === 0),
+      ],
     ];
     for (const [name, listener] of videoEvents)
       video.addEventListener(name, listener);
@@ -411,9 +434,14 @@ export default function YouTubeNativePlayer({
       if (cancelled) return;
       callbacks.current.onState('ready');
       refreshChoices();
-      void video.play().catch(() => {
-        // Autoplay may be refused; the user can press play.
-      });
+      if (autoPlayRef.current) {
+        void video.play().catch(() => {
+          // Autoplay may be refused; report paused so background docking knows playback didn't start.
+          if (!cancelled) callbacks.current.onState('paused');
+        });
+      } else {
+        callbacks.current.onState('paused');
+      }
     })().catch((error: unknown) => {
       const shakaError = error as { code?: number; data?: unknown[] };
       if (typeof shakaError.code === 'number')

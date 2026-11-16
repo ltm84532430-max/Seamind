@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AgentProviderSettings } from '../agent/runtime';
+import {
+  useGlobalMediaOptional,
+  type ActiveVideoMeta,
+  type MediaPlayStatus,
+} from '../media/global-media-store';
 import YouTubePlayerPanel from './YouTubePlayerPanel';
 import type { PlayerProgress, YouTubePlayerHandle } from './YouTubePlayerPanel';
 import type { YouTubePlaybackState } from './youtube-player';
 import { formatAgo, formatDuration } from './format';
 import { usePlayerHost } from './host';
 import { BackIcon, CheckIcon, ClockIcon, StarIcon } from './icons';
+import {
+  computeWatchedContentDelta,
+  type WatchProgressTick,
+} from './player-heatmap-model';
 import { playerApi } from './player-api';
 import { applyOverlay, nextVideo } from './queue';
 import { thumbnailUrl } from './video-links';
@@ -69,6 +78,29 @@ function rememberRate(rate: number) {
   }
 }
 
+function mapYouTubeStatus(state: YouTubePlaybackState): MediaPlayStatus {
+  switch (state) {
+    case 'loading':
+    case 'resolving':
+    case 'ready':
+      return 'loading';
+    case 'buffering':
+    case 'stalled':
+      return 'buffering';
+    case 'playing':
+      return 'playing';
+    case 'paused':
+      return 'paused';
+    case 'ended':
+      return 'ended';
+    case 'error':
+    case 'timeout':
+      return 'error';
+    default:
+      return 'idle';
+  }
+}
+
 /** The player with the video's details, and the rest of its list beside it. */
 export default function WatchView({
   watching,
@@ -106,6 +138,7 @@ export default function WatchView({
   ): Promise<PlayerExportedDocument | null> | PlayerExportedDocument | null;
 }) {
   const host = usePlayerHost();
+  const media = useGlobalMediaOptional();
   const { queue } = watching;
   const hasQueue = queue.items.length > 1;
   const videoId = watching.item.videoId;
@@ -115,6 +148,12 @@ export default function WatchView({
     useState<HTMLDivElement | null>(null);
   const [status, setStatus] = useState<YouTubePlaybackState>('loading');
   const [rate, setRate] = useState(readRate);
+  const [stopToken, setStopToken] = useState(0);
+  const [playerModeInfo, setPlayerModeInfo] = useState<{
+    mode: 'embed' | 'native' | 'local';
+    mpvLaunched: boolean;
+  }>({ mode: 'native', mpvLaunched: false });
+  const [videoMuted, setVideoMuted] = useState(false);
   const [recentHistory, setRecentHistory] = useState<VideoItem[]>([]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [assignedCategoryId, setAssignedCategoryId] = useState<string | null>(
@@ -230,10 +269,30 @@ export default function WatchView({
   }, []);
   const progressRef = useRef<PlayerProgress | null>(null);
   const savedAtRef = useRef(0);
+  const lastProgressTickRef = useRef<WatchProgressTick | null>(null);
+  const pendingContentSecondsRef = useRef(0);
   const onSavedRef = useRef(onSaved);
   const queueListRef = useRef<HTMLDivElement | null>(null);
+  const activeRef = useRef(active);
+  const pauseWhenHiddenRef = useRef(host.settings.pauseWhenHidden);
+  const handleRef = useRef<YouTubePlayerHandle | null>(null);
+  const rateRef = useRef(rate);
+  const videoMutedRef = useRef(videoMuted);
+  const playerModeInfoRef = useRef(playerModeInfo);
+  const suppressedByDismissRef = useRef(false);
+  const backgroundResumeAllowedRef = useRef(false);
+  const mediaRef = useRef(media);
+  const videoIdRef = useRef(videoId);
   useEffect(() => {
     onSavedRef.current = onSaved;
+    activeRef.current = active;
+    pauseWhenHiddenRef.current = host.settings.pauseWhenHidden;
+    handleRef.current = handle;
+    rateRef.current = rate;
+    videoMutedRef.current = videoMuted;
+    playerModeInfoRef.current = playerModeInfo;
+    mediaRef.current = media;
+    videoIdRef.current = videoId;
   });
 
   const selection = useMemo(
@@ -248,11 +307,21 @@ export default function WatchView({
 
   const save = useCallback(() => {
     const progress = progressRef.current;
-    if (!progress) return;
+    const watchedDelta = pendingContentSecondsRef.current;
+    if (!progress && watchedDelta <= 0) return;
+    pendingContentSecondsRef.current = 0;
+    lastProgressTickRef.current = null;
     savedAtRef.current = Date.now();
-    if (!isWorthSaving(progress.seconds, progress.duration)) return;
+    const secs = progress?.seconds ?? 0;
+    const duration = progress?.duration ?? null;
+    if (!isWorthSaving(secs, duration) && watchedDelta < 1) return;
     playerApi
-      .saveProgress(videoId, progress.seconds, progress.duration)
+      .saveProgress(
+        videoId,
+        secs,
+        duration,
+        watchedDelta >= 0.5 ? watchedDelta : null,
+      )
       .then((state) => {
         if (state) {
           onSavedRef.current(videoId, state);
@@ -279,18 +348,157 @@ export default function WatchView({
     };
   }, [videoId, item.favorite]);
 
+  const saveRef = useRef(save);
+  saveRef.current = save;
+
+  const buildVideoMeta = useCallback(
+    (metaStatus: MediaPlayStatus): ActiveVideoMeta => ({
+      kind: 'video',
+      id: videoId,
+      title: item.title,
+      subtitle: item.channelName ?? null,
+      artworkUrl: item.thumbnailUrl || thumbnailUrl(videoId),
+      status: metaStatus,
+      duration: progressRef.current?.duration || item.durationSeconds || 0,
+      playbackRate: rateRef.current,
+      muted: videoMutedRef.current,
+      canSeek: true,
+      isEmbedMode: playerModeInfoRef.current.mode === 'embed',
+      externalOnly: playerModeInfoRef.current.mpvLaunched,
+    }),
+    [
+      videoId,
+      item.title,
+      item.channelName,
+      item.thumbnailUrl,
+      item.durationSeconds,
+    ],
+  );
+  const buildVideoMetaRef = useRef(buildVideoMeta);
+  buildVideoMetaRef.current = buildVideoMeta;
+
+  useEffect(() => {
+    if (!media) return;
+    suppressedByDismissRef.current = false;
+    backgroundResumeAllowedRef.current = false;
+    if (activeRef.current || media.getActiveSource() === 'video') {
+      media.claimFocus(buildVideoMetaRef.current('loading'));
+    }
+  }, [media, watching.token]);
+
+  useEffect(() => {
+    if (!media) return;
+    media.registerAdapter('video', {
+      play: () => {
+        suppressedByDismissRef.current = false;
+        backgroundResumeAllowedRef.current = true;
+        if (media.getActiveSource() !== 'video') {
+          media.claimFocus(buildVideoMetaRef.current('loading'));
+        } else {
+          media.updateMeta('video', { status: 'loading' });
+        }
+        handleRef.current?.play();
+      },
+      pause: () => {
+        backgroundResumeAllowedRef.current = false;
+        saveRef.current();
+        handleRef.current?.pause();
+      },
+      seekTo: (seconds) => {
+        handleRef.current?.seekTo(seconds);
+        setCurrentTime(seconds);
+      },
+      skipBy: (deltaSeconds) => {
+        const cur =
+          handleRef.current?.getCurrentTime() ??
+          progressRef.current?.seconds ??
+          0;
+        const dur =
+          handleRef.current?.getDuration() ??
+          progressRef.current?.duration ??
+          item.durationSeconds ??
+          0;
+        const target = Math.max(
+          0,
+          dur > 0 ? Math.min(dur, cur + deltaSeconds) : cur + deltaSeconds,
+        );
+        handleRef.current?.seekTo(target);
+        setCurrentTime(target);
+        media.setProgress('video', {
+          currentTime: target,
+          duration: dur,
+          bufferedPercent: 0,
+        });
+      },
+      toggleMute: () => {
+        if (!handleRef.current) return;
+        const nextMuted = handleRef.current.toggleMute();
+        setVideoMuted(nextMuted);
+        media.updateMeta('video', { muted: nextMuted });
+      },
+      cycleSpeed: () => {
+        const idx = RATES.indexOf(rateRef.current);
+        const nextRate = RATES[(idx + 1) % RATES.length];
+        setRate(nextRate);
+        rememberRate(nextRate);
+        handleRef.current?.setPlaybackRate(nextRate);
+      },
+      stopAndClose: () => {
+        suppressedByDismissRef.current = true;
+        backgroundResumeAllowedRef.current = false;
+        saveRef.current();
+        handleRef.current?.pause();
+        setStopToken((token) => token + 1);
+      },
+    });
+    return () => {
+      media.registerAdapter('video', null);
+    };
+  }, [media, item.durationSeconds]);
+
+  useEffect(() => {
+    media?.updateMeta('video', {
+      title: item.title,
+      subtitle: item.channelName ?? null,
+      artworkUrl: item.thumbnailUrl || thumbnailUrl(videoId),
+      playbackRate: rate,
+      muted: videoMuted,
+      isEmbedMode: playerModeInfo.mode === 'embed',
+      externalOnly: playerModeInfo.mpvLaunched,
+    });
+  }, [
+    media,
+    videoId,
+    item.title,
+    item.channelName,
+    item.thumbnailUrl,
+    rate,
+    videoMuted,
+    playerModeInfo,
+  ]);
+
   useEffect(() => () => save(), [save]);
   useEffect(() => {
     window.addEventListener('pagehide', save);
     return () => window.removeEventListener('pagehide', save);
   }, [save]);
 
-  // Leaving the page stops the video, unless the user wants to listen on while working elsewhere.
+  // Leaving the page saves progress, and only pauses if pauseWhenHidden is enabled.
   useEffect(() => {
-    if (active) return;
-    save();
-    if (host.settings.pauseWhenHidden) handle?.pause();
-  }, [active]);
+    if (active) {
+      suppressedByDismissRef.current = false;
+      backgroundResumeAllowedRef.current = false;
+      return;
+    }
+    backgroundResumeAllowedRef.current = false;
+    saveRef.current();
+    if (host.settings.pauseWhenHidden) {
+      handleRef.current?.pause();
+      if (mediaRef.current?.getMetaOf('video')?.id === videoIdRef.current) {
+        mediaRef.current.updateMeta('video', { status: 'paused' });
+      }
+    }
+  }, [active, host.settings.pauseWhenHidden]);
 
   useEffect(() => {
     if (!handle) return;
@@ -418,8 +626,38 @@ export default function WatchView({
   );
 
   const handleProgress = (progress: PlayerProgress) => {
+    const nowMs = Date.now();
+    const contentDelta = computeWatchedContentDelta(
+      lastProgressTickRef.current,
+      videoId,
+      progress.seconds,
+      nowMs,
+      progress.playing,
+    );
+    if (contentDelta > 0) {
+      pendingContentSecondsRef.current += contentDelta;
+    }
+    lastProgressTickRef.current = progress.playing
+      ? { videoId, seconds: progress.seconds, wallMs: nowMs }
+      : null;
+
     progressRef.current = progress;
     setCurrentTime(progress.seconds);
+
+    if (media?.getMetaOf('video')?.id === videoId) {
+      const effectiveDuration =
+        progress.duration && Number.isFinite(progress.duration)
+          ? progress.duration
+          : item.durationSeconds || 0;
+      media.setProgress('video', {
+        currentTime: progress.seconds,
+        duration: effectiveDuration,
+        bufferedPercent: 0,
+      });
+      if (effectiveDuration > 0) {
+        media.updateMeta('video', { duration: effectiveDuration });
+      }
+    }
 
     // Sentence repeat loop check
     if (loopingCue && progress.playing) {
@@ -448,6 +686,7 @@ export default function WatchView({
   };
 
   useEffect(() => {
+    if (!active) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName?.toLowerCase();
@@ -476,7 +715,7 @@ export default function WatchView({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [jumpToRelativeCue, toggleSentenceLoop, toggleSubtitles]);
+  }, [active, jumpToRelativeCue, toggleSentenceLoop, toggleSubtitles]);
 
   const handleEnded = () => {
     save();
@@ -486,6 +725,36 @@ export default function WatchView({
     host.notify(`接下来播放：${next.title}`);
     host.openVideo(next, queue);
   };
+
+  const handlePlayerStatusChange = useCallback(
+    (nextStatus: YouTubePlaybackState) => {
+      setStatus(nextStatus);
+      if (nextStatus === 'playing') {
+        const suppressedByHiddenAutoPause =
+          !activeRef.current &&
+          pauseWhenHiddenRef.current &&
+          !backgroundResumeAllowedRef.current;
+        const suppressedByOtherActiveSource =
+          !activeRef.current &&
+          !backgroundResumeAllowedRef.current &&
+          Boolean(media && media.getActiveSource() !== 'video');
+        if (
+          suppressedByDismissRef.current ||
+          suppressedByHiddenAutoPause ||
+          suppressedByOtherActiveSource
+        ) {
+          handleRef.current?.pause();
+          return;
+        }
+        media?.claimFocus(buildVideoMetaRef.current('playing'));
+        return;
+      }
+      if (media?.getMetaOf('video')?.id === videoId) {
+        media.updateMeta('video', { status: mapYouTubeStatus(nextStatus) });
+      }
+    },
+    [media, videoId],
+  );
 
   const position = queue.items.findIndex((entry) => entry.videoId === videoId);
 
@@ -498,10 +767,15 @@ export default function WatchView({
         <YouTubePlayerPanel
           selection={selection}
           variant="page"
+          active={active}
+          pauseWhenHidden={host.settings.pauseWhenHidden}
+          stopToken={stopToken}
           controlsTarget={playbackOptionsHost}
           onProgress={handleProgress}
-          onStatusChange={setStatus}
+          onStatusChange={handlePlayerStatusChange}
           onEnded={handleEnded}
+          onModeChange={setPlayerModeInfo}
+          onMutedChange={setVideoMuted}
           onHandle={setHandle}
         >
           <SubtitleOverlay

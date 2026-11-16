@@ -1,3 +1,4 @@
+import { useGlobalMediaOptional } from '../media/global-media-store';
 import YouTubePlayerPanel from './YouTubePlayerPanel';
 import type { YouTubePreviewSelection } from './YouTubePlayerPanel';
 
@@ -14,10 +15,16 @@ export default function YouTubePlayerDialog({
   selection: YouTubePreviewSelection;
   onClose: () => void;
 }) {
+  const media = useGlobalMediaOptional();
   return (
     <YouTubePlayerPanel
       selection={selection}
       variant="dialog"
+      onStatusChange={(status) => {
+        if (status === 'playing') {
+          media?.pauseActiveMedia();
+        }
+      }}
       onClose={onClose}
     />
   );

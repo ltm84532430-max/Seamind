@@ -10,6 +10,7 @@ import type { ReactNode } from 'react';
 import type { AgentCapabilities } from '../agent/capabilities';
 import type { AgentProviderSettings } from '../agent/runtime';
 import type { LearningPathProposal } from '../agent/types';
+import { useGlobalMediaOptional } from '../media/global-media-store';
 import ChannelView from './ChannelView';
 import CollectionView from './CollectionView';
 import FeedView from './FeedView';
@@ -25,6 +26,7 @@ import {
 } from './learning-path-presets';
 import { ImportDialog, SettingsDialog } from './PlayerDialogs';
 import type { PlayerExportedDocument } from './PlayerNotePanel';
+import PlayerStatsView from './PlayerStatsView';
 import { errorText, playerApi } from './player-api';
 import { inputFromItem, patchOverlay } from './queue';
 import type { Overlay, QueueSource, VideoPatch } from './queue';
@@ -67,6 +69,8 @@ function viewLabel(view: PlayerView, overview: PlayerOverview | null): string {
       return '稍后看';
     case 'history':
       return '历史';
+    case 'stats':
+      return '统计';
     case 'course':
       return (
         overview?.playlists.find(
@@ -145,6 +149,7 @@ export default function PlayerWorkspace({
     videoId: string,
   ) => Promise<PlayerExportedDocument | null> | PlayerExportedDocument | null;
 }) {
+  const media = useGlobalMediaOptional();
   const [overview, setOverview] = useState<PlayerOverview | null>(null);
   const handledTaskVideoRef = useRef<number | null>(null);
   const [loadError, setLoadError] = useState('');
@@ -206,6 +211,7 @@ export default function PlayerWorkspace({
   }, []);
 
   useEffect(() => {
+    if (!active) return;
     const handleKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
         const target = e.target as HTMLElement | null;
@@ -223,7 +229,13 @@ export default function PlayerWorkspace({
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [toggleSidebar]);
+  }, [active, toggleSidebar]);
+
+  useEffect(() => {
+    if (!watching) {
+      media?.clearSource('video');
+    }
+  }, [watching, media]);
 
   const mainRef = useRef<HTMLElement | null>(null);
   const savedScrollRef = useRef(0);
@@ -715,6 +727,9 @@ export default function PlayerWorkspace({
         );
         break;
       }
+      case 'stats':
+        listView = <PlayerStatsView key="stats" />;
+        break;
       default:
         listView = <CollectionView key={viewKey(view)} collection={view} />;
     }

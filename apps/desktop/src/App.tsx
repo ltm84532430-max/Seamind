@@ -75,6 +75,7 @@ import LibraryPanel from './library/LibraryPanel';
 import { libraryApi } from './library/library-api';
 import { epubApi } from './ebook/epub-api';
 import { terminalApi } from './terminal/terminal-api';
+import { openStandaloneTerminalWindow } from './terminal/terminal-window';
 import ExamCenterWorkspace from './exams/ExamCenterWorkspace';
 import MindmapMiniTree from './mindmap/MindmapMiniTree';
 import type { MindmapMiniTreeNode } from './mindmap/MindmapMiniTree';
@@ -154,10 +155,20 @@ const PlayerWorkspace = lazy(() => import('./player/PlayerWorkspace'));
 const TaskWorkspace = lazy(() => import('./tasks/TaskWorkspace'));
 import type { TaskCreateRequest } from './tasks/TaskWorkspace';
 import type { TaskResource } from './tasks/types';
+import { formatBadgeCount } from './tasks/habit-list-model';
+import { usePendingHabitCount } from './tasks/usePendingHabitCount';
 const LiteratureWorkspace = lazy(
   () => import('./literature/LiteratureWorkspace'),
 );
 const FeedWorkspace = lazy(() => import('./feed/FeedWorkspace'));
+import { FeedAudioProvider, useFeedAudio } from './feed/FeedAudioEngine';
+import type { FeedArticle } from './feed/types';
+import {
+  GlobalMediaProvider,
+  useGlobalMedia,
+  useIsVideoStageOffscreen,
+} from './media/global-media-store';
+import { TopbarMiniPlayer } from './media/TopbarMiniPlayer';
 const TerminalWorkspace = lazy(() => import('./terminal/TerminalWorkspace'));
 import type {
   DocumentVersion,
@@ -347,6 +358,19 @@ const promptSuggestions = [
 ];
 
 export default function App() {
+  return (
+    <GlobalMediaProvider initialWorkspace={readActiveWorkspace()}>
+      <FeedAudioProvider>
+        <AppContent />
+      </FeedAudioProvider>
+    </GlobalMediaProvider>
+  );
+}
+
+function AppContent() {
+  const media = useGlobalMedia();
+  const isVideoStageOffscreen = useIsVideoStageOffscreen();
+  const { article: activePodcastArticle } = useFeedAudio();
   const [editorDraft, setEditorDraft] = useState<EditorDraft>(() =>
     createDraft(),
   );
@@ -357,11 +381,20 @@ export default function App() {
   );
   const [examBookFilter, setExamBookFilter] = useState('');
   const [dueExamCount, setDueExamCount] = useState(0);
+  const pendingHabitCount = usePendingHabitCount();
   // The player page is built the first time it is opened and then kept, so a video can go on
   // playing in the background and the lists keep their place.
   const [playerOpened, setPlayerOpened] = useState(
     () => activeWorkspace === 'player',
   );
+  const [feedOpened, setFeedOpened] = useState(
+    () => activeWorkspace === 'feed',
+  );
+  const [feedFocusArticleRequest, setFeedFocusArticleRequest] = useState<{
+    id: number;
+    article: FeedArticle;
+  } | null>(null);
+  const feedFocusRequestIdRef = useRef(0);
   const [readerOpened, setReaderOpened] = useState(
     () => activeWorkspace === 'reader',
   );
@@ -780,6 +813,7 @@ export default function App() {
   ]);
 
   useEffect(() => {
+    media.setWorkspace(activeWorkspace);
     if (activeWorkspace === 'knowledge' || activeWorkspace === 'mindmap')
       lastKnowledgePageRef.current = activeWorkspace;
     try {
@@ -788,9 +822,10 @@ export default function App() {
       // The active workspace remains available for this session.
     }
     if (activeWorkspace === 'player') setPlayerOpened(true);
+    if (activeWorkspace === 'feed') setFeedOpened(true);
     if (activeWorkspace === 'reader') setReaderOpened(true);
     if (activeWorkspace === 'terminal') setTerminalWorkspaceOpened(true);
-  }, [activeWorkspace]);
+  }, [media, activeWorkspace]);
 
   useEffect(() => {
     if (!epubReader?.progressKey) {
@@ -5193,8 +5228,8 @@ export default function App() {
     markdownNodeSourcesMarkdownRef.current === editorDraft.markdown;
   const canAddSelectedNode = Boolean(
     sourceMapIsCurrent &&
-      selectedNodeSource &&
-      selectedNodeSource.kind !== 'block',
+    selectedNodeSource &&
+    selectedNodeSource.kind !== 'block',
   );
   const canDeleteSelectedNode = Boolean(
     sourceMapIsCurrent && selectedNodeSource,
@@ -5447,8 +5482,21 @@ export default function App() {
             className={activeWorkspace === 'tasks' ? 'is-active' : ''}
             aria-pressed={activeWorkspace === 'tasks'}
             onClick={() => setActiveWorkspace('tasks')}
+            title={
+              pendingHabitCount > 0
+                ? `今日还有 ${pendingHabitCount} 个习惯未打卡`
+                : undefined
+            }
           >
             任务
+            {pendingHabitCount > 0 && (
+              <span
+                className="workspace-due-count"
+                aria-label={`今日还有 ${pendingHabitCount} 个习惯未打卡`}
+              >
+                {formatBadgeCount(pendingHabitCount)}
+              </span>
+            )}
           </button>
           <button
             type="button"
@@ -5467,6 +5515,26 @@ export default function App() {
             订阅
           </button>
         </nav>
+        <div className="topbar-media-slot">
+          <TopbarMiniPlayer
+            onJumpToSource={(kind) => {
+              if (kind === 'video') {
+                setPlayerOpened(true);
+                setActiveWorkspace('player');
+                return;
+              }
+              setFeedOpened(true);
+              if (activePodcastArticle) {
+                feedFocusRequestIdRef.current += 1;
+                setFeedFocusArticleRequest({
+                  id: feedFocusRequestIdRef.current,
+                  article: activePodcastArticle,
+                });
+              }
+              setActiveWorkspace('feed');
+            }}
+          />
+        </div>
         <div className="topbar-actions">
           <button
             type="button"
@@ -5494,24 +5562,66 @@ export default function App() {
               保存
             </button>
           )}
-          <button
-            type="button"
-            className={`terminal-toggle-button${terminalOpen ? ' is-active' : ''}`}
-            aria-expanded={terminalOpen}
-            aria-controls="seamind-terminal-panel"
-            onClick={() => {
-              if (
-                !terminalOpen &&
-                activeWorkspace === 'player' &&
-                viewportWidth >= 1400
-              ) {
-                setTerminalDockAndStore('right');
-              }
-              setTerminalOpen((open) => !open);
-            }}
-          >
-            终端
-          </button>
+          <div className="terminal-topbar-group">
+            <button
+              type="button"
+              className={`terminal-toggle-button${terminalOpen ? ' is-active' : ''}`}
+              aria-expanded={terminalOpen}
+              aria-controls="seamind-terminal-panel"
+              title="打开或收起侧边/底部 CLI 终端抽屉"
+              onClick={() => {
+                if (
+                  !terminalOpen &&
+                  activeWorkspace === 'player' &&
+                  viewportWidth >= 1400
+                ) {
+                  setTerminalDockAndStore('right');
+                }
+                setTerminalOpen((open) => !open);
+              }}
+            >
+              <svg
+                viewBox="0 0 16 16"
+                width="13"
+                height="13"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.3"
+                aria-hidden="true"
+              >
+                <rect x="1.5" y="2.5" width="13" height="11" />
+                <line x1="10.2" y1="2.5" x2="10.2" y2="13.5" />
+              </svg>
+              <span>终端</span>
+            </button>
+            <button
+              type="button"
+              className="terminal-popout-topbar-button"
+              aria-label="多开独立终端窗口"
+              title="新开一个独立桌面终端窗口（可多开用于运行 CLI 模型与对照学习）"
+              onClick={() => {
+                void openStandaloneTerminalWindow({
+                  cwd: librarySnapshot?.rootPath ?? '',
+                  shell: 'powershell',
+                  theme,
+                });
+              }}
+            >
+              <svg
+                viewBox="0 0 16 16"
+                width="12"
+                height="12"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.35"
+                aria-hidden="true"
+              >
+                <rect x="2" y="5" width="8.5" height="8.5" />
+                <polyline points="8.5 2 14 2 14 7.5" />
+                <line x1="7" y1="9" x2="13.8" y2="2.2" />
+              </svg>
+            </button>
+          </div>
           <button
             type="button"
             className="settings-button"
@@ -5523,8 +5633,28 @@ export default function App() {
       </header>
 
       {(activeWorkspace === 'knowledge' || activeWorkspace === 'mindmap') && (
-        <nav className="knowledge-workspace-tabs" aria-label="知识库页面">
-          <span className="knowledge-workspace-tabs-label">知识库</span>
+        <nav
+          className={`knowledge-workspace-tabs${(activeWorkspace === 'mindmap' ? libraryCollapsed : knowledgeSidebarCollapsed) ? ' is-sidebar-collapsed' : ''}`}
+          aria-label="知识库页面"
+        >
+          <span className="knowledge-workspace-tabs-label" title="知识库">
+            <svg
+              className="knowledge-workspace-tabs-icon"
+              viewBox="0 0 16 16"
+              width="14"
+              height="14"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.35"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M3 3.2a1.5 1.5 0 0 1 1.5-1.4h7.8v10.8H4.5A1.5 1.5 0 0 0 3 14.1V3.2Z" />
+              <path d="M3 12.6A1.5 1.5 0 0 1 4.5 11.2h7.8M5.6 5.2h4.2" />
+            </svg>
+            <span className="knowledge-workspace-tabs-label-text">知识库</span>
+          </span>
           <div
             className="knowledge-page-tabs"
             role="group"
@@ -5580,6 +5710,12 @@ export default function App() {
               : null
           }
           collapsed={libraryCollapsed}
+          shortcutActive={
+            activeWorkspace === 'mindmap' &&
+            !readerSplitActive &&
+            !htmlPreview &&
+            !plantUmlSession
+          }
           categoryFilter={categoryFilter}
           query={libraryQuery}
           busy={libraryBusy}
@@ -6654,7 +6790,13 @@ export default function App() {
       </section>
 
       <section
-        className={`player-workspace-stage${activeWorkspace !== 'player' ? ' is-workspace-hidden' : ''}`}
+        className={`player-workspace-stage${
+          activeWorkspace !== 'player'
+            ? isVideoStageOffscreen
+              ? ' is-workspace-hidden-offscreen'
+              : ' is-workspace-hidden'
+            : ''
+        }`}
         aria-label="播放器工作区"
         aria-hidden={activeWorkspace !== 'player'}
       >
@@ -6820,6 +6962,8 @@ export default function App() {
           >
             <TaskWorkspace
               library={librarySnapshot}
+              active={activeWorkspace === 'tasks'}
+              pendingHabitCount={pendingHabitCount}
               createRequest={taskCreateRequest}
               openTaskId={taskOpenId}
               onOpenTaskHandled={() => setTaskOpenId(null)}
@@ -6889,11 +7033,12 @@ export default function App() {
         </section>
       )}
 
-      {activeWorkspace === 'feed' && (
-        <section
-          className="feed-workspace-stage"
-          aria-label="博客与 RSS 订阅工作区"
-        >
+      <section
+        className={`feed-workspace-stage${activeWorkspace !== 'feed' ? ' is-workspace-hidden' : ''}`}
+        aria-label="博客与 RSS 订阅工作区"
+        aria-hidden={activeWorkspace !== 'feed'}
+      >
+        {feedOpened && (
           <Suspense
             fallback={
               <div
@@ -6911,8 +7056,15 @@ export default function App() {
             }
           >
             <FeedWorkspace
+              active={activeWorkspace === 'feed'}
               provider={providerSettings}
               externalRevision={feedExternalRevision}
+              focusArticleRequest={feedFocusArticleRequest}
+              onFocusArticleRequestHandled={(id) =>
+                setFeedFocusArticleRequest((current) =>
+                  current?.id === id ? null : current,
+                )
+              }
               onSelectedArticleChange={(id, title) => {
                 feedSelectedArticleIdRef.current = id;
                 setTerminalFeedArticleTitle(title);
@@ -6946,8 +7098,8 @@ export default function App() {
               }}
             />
           </Suspense>
-        </section>
-      )}
+        )}
+      </section>
 
       {isTerminalDrawerOpen && (
         <section

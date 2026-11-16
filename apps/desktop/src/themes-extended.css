@@ -103,6 +103,7 @@
 .app-shell[data-theme='navy'] .pane-collapse-button,
 .app-shell[data-theme='navy'] .theme-toggle-button,
 .app-shell[data-theme='navy'] .terminal-toggle-button,
+.app-shell[data-theme='navy'] .terminal-popout-topbar-button,
 .app-shell[data-theme='navy'] .settings-button,
 .app-shell[data-theme='navy'] .quiet-button,
 .app-shell[data-theme='navy'] .library-import-action,
@@ -132,7 +133,8 @@
 }
 
 .app-shell[data-theme='navy'] .terminal-toggle-button:hover,
-.app-shell[data-theme='navy'] .terminal-toggle-button.is-active {
+.app-shell[data-theme='navy'] .terminal-toggle-button.is-active,
+.app-shell[data-theme='navy'] .terminal-popout-topbar-button:hover {
   border-color: #38bdf8;
   color: #38bdf8;
   background: #102644;
@@ -546,6 +548,7 @@
 .app-shell[data-theme='purple'] .pane-collapse-button,
 .app-shell[data-theme='purple'] .theme-toggle-button,
 .app-shell[data-theme='purple'] .terminal-toggle-button,
+.app-shell[data-theme='purple'] .terminal-popout-topbar-button,
 .app-shell[data-theme='purple'] .settings-button,
 .app-shell[data-theme='purple'] .quiet-button,
 .app-shell[data-theme='purple'] .library-import-action,
@@ -575,7 +578,8 @@
 }
 
 .app-shell[data-theme='purple'] .terminal-toggle-button:hover,
-.app-shell[data-theme='purple'] .terminal-toggle-button.is-active {
+.app-shell[data-theme='purple'] .terminal-toggle-button.is-active,
+.app-shell[data-theme='purple'] .terminal-popout-topbar-button:hover {
   border-color: #c084fc;
   color: #c084fc;
   background: #281845;
@@ -1114,43 +1118,110 @@
    6. Topbar Workspace Switcher (Navy, Purple, Dark, Light)
    ========================================================================== */
 .app-shell[data-theme='navy'] .workspace-switcher {
-  border: 1px solid #1a3658;
-  background: #081324;
+  border: 0;
+  background: transparent;
 }
 .app-shell[data-theme='navy'] .workspace-switcher button {
   color: #7293b8;
   background: transparent;
-  border-color: transparent;
+  border-right-color: #162a47;
 }
 .app-shell[data-theme='navy'] .workspace-switcher button:hover {
   color: #38bdf8;
   background: rgba(56, 189, 248, 0.08);
 }
 .app-shell[data-theme='navy'] .workspace-switcher button.is-active {
-  border-color: #1e4a7d;
   color: #38bdf8;
-  background: #0e223d;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  background: #102442;
+  box-shadow: inset 0 -2px 0 #38bdf8;
 }
 
 .app-shell[data-theme='purple'] .workspace-switcher {
-  border: 1px solid #331e50;
-  background: #0d0818;
+  border: 0;
+  background: transparent;
 }
 .app-shell[data-theme='purple'] .workspace-switcher button {
   color: #a48fbe;
   background: transparent;
-  border-color: transparent;
+  border-right-color: #2b1b42;
 }
 .app-shell[data-theme='purple'] .workspace-switcher button:hover {
   color: #c084fc;
   background: rgba(192, 132, 252, 0.08);
 }
 .app-shell[data-theme='purple'] .workspace-switcher button.is-active {
-  border-color: #5c2a96;
   color: #c084fc;
+  background: #21133b;
+  box-shadow: inset 0 -2px 0 #c084fc;
+}
+
+/* Topbar Docked Mini Media Player (Navy & Purple) */
+.app-shell[data-theme='navy'] .topbar-mini-player {
+  border-color: #1a3658;
+  background: #081324;
+  color: #e0f0fe;
+}
+.app-shell[data-theme='navy'] .topbar-mini-cover {
+  border-color: #1e4a7d;
+  background: #0e223d;
+}
+.app-shell[data-theme='navy'] .topbar-mini-time {
+  color: #7293b8;
+}
+.app-shell[data-theme='navy'] .topbar-mini-btn {
+  color: #7293b8;
+}
+.app-shell[data-theme='navy'] .topbar-mini-btn:hover {
+  color: #e0f0fe;
+  background: rgba(56, 189, 248, 0.1);
+  border-color: #1e4a7d;
+}
+.app-shell[data-theme='navy'] .topbar-mini-btn.is-play {
+  border-color: rgba(56, 189, 248, 0.45);
+  background: rgba(56, 189, 248, 0.14);
+  color: #38bdf8;
+}
+.app-shell[data-theme='navy'] .topbar-mini-btn.is-play:hover {
+  border-color: #38bdf8;
+  background: #0ea5e9;
+  color: #fff;
+}
+.app-shell[data-theme='navy'] .topbar-mini-progress {
+  background: rgba(56, 189, 248, 0.12);
+}
+
+.app-shell[data-theme='purple'] .topbar-mini-player {
+  border-color: #331e50;
+  background: #0d0818;
+  color: #f6effe;
+}
+.app-shell[data-theme='purple'] .topbar-mini-cover {
+  border-color: #5c2a96;
   background: #23143e;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+.app-shell[data-theme='purple'] .topbar-mini-time {
+  color: #a48fbe;
+}
+.app-shell[data-theme='purple'] .topbar-mini-btn {
+  color: #a48fbe;
+}
+.app-shell[data-theme='purple'] .topbar-mini-btn:hover {
+  color: #f6effe;
+  background: rgba(192, 132, 252, 0.1);
+  border-color: #5c2a96;
+}
+.app-shell[data-theme='purple'] .topbar-mini-btn.is-play {
+  border-color: rgba(192, 132, 252, 0.45);
+  background: rgba(192, 132, 252, 0.14);
+  color: #c084fc;
+}
+.app-shell[data-theme='purple'] .topbar-mini-btn.is-play:hover {
+  border-color: #c084fc;
+  background: #a855f7;
+  color: #fff;
+}
+.app-shell[data-theme='purple'] .topbar-mini-progress {
+  background: rgba(192, 132, 252, 0.12);
 }
 
 /* ==========================================================================
