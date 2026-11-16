@@ -20,9 +20,12 @@ import type {
   PlayerOverview,
   PlayerPlaylist,
   PlayerSettings,
+  SubscriptionGroupRule,
   VideoBasics,
   VideoInput,
   VideoItem,
+  WatchDayVideoEntry,
+  WatchHeatmapSummary,
   WatchState,
 } from './types';
 
@@ -58,16 +61,29 @@ export const playerApi = {
     videoId: string,
     progressSeconds: number,
     durationSeconds: number | null,
+    watchedDeltaSeconds?: number | null,
   ) =>
     invoke<WatchState | null>('player_save_progress', {
       videoId,
       progressSeconds,
       durationSeconds,
+      watchedDeltaSeconds: watchedDeltaSeconds ?? null,
     }),
   watchState: (videoId: string) =>
     invoke<WatchState | null>('player_watch_state', { videoId }),
   setWatched: (videoId: string, watched: boolean) =>
     invoke<void>('player_set_watched', { videoId, watched }),
+  watchHeatmap: (args: {
+    fromDate?: string;
+    toDate?: string;
+    subscriptionGroups?: SubscriptionGroupRule[];
+    categoryFilter?: string;
+  }) => invoke<WatchHeatmapSummary>('player_watch_heatmap', args),
+  watchDayDetail: (args: {
+    date: string;
+    subscriptionGroups?: SubscriptionGroupRule[];
+    categoryFilter?: string;
+  }) => invoke<WatchDayVideoEntry[]>('player_watch_day_detail', args),
 
   createPlaylist: (name: string) =>
     invoke<PlayerPlaylist>('player_playlist_create', { name }),

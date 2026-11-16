@@ -290,5 +290,70 @@ export const defaultPlayerSettings: PlayerSettings = {
   feedUpdateThresholdSeconds: 3600,
   hideFinishedInFeed: false,
   autoplayNext: true,
-  pauseWhenHidden: true,
+  pauseWhenHidden: false,
 };
+
+export type WatchCategoryKind =
+  | 'learning-path'
+  | 'course'
+  | 'favorite-category'
+  | 'subscription-group'
+  | 'channel'
+  | 'other';
+
+export interface SubscriptionGroupRule {
+  id: string;
+  name: string;
+  color?: string | null;
+  channelIds: string[];
+}
+
+export interface WatchCategoryStat {
+  categoryId: string;
+  categoryKind: WatchCategoryKind | string;
+  label: string;
+  color: string | null;
+  totalSeconds: number;
+  videoCount: number;
+}
+
+export interface WatchDayCategoryBreakdown {
+  categoryId: string;
+  categoryKind: WatchCategoryKind | string;
+  label: string;
+  color: string | null;
+  seconds: number;
+  videoCount: number;
+}
+
+export interface WatchHeatmapDay {
+  date: string;
+  totalSeconds: number;
+  videoCount: number;
+  dominantCategoryId: string | null;
+  breakdown: WatchDayCategoryBreakdown[];
+}
+
+export interface WatchHeatmapSummary {
+  fromDate: string;
+  toDate: string;
+  categories: WatchCategoryStat[];
+  days: WatchHeatmapDay[];
+  hourlySeconds?: number[];
+}
+
+export interface WatchDayVideoEntry {
+  date: string;
+  videoId: string;
+  title: string;
+  channelName: string | null;
+  thumbnailUrl: string | null;
+  watchedSeconds: number;
+  durationSeconds: number | null;
+  finished: boolean;
+  lastWatchedAt: number;
+  categoryId: string;
+  categoryKind: WatchCategoryKind | string;
+  categoryLabel: string;
+  categoryColor: string | null;
+}

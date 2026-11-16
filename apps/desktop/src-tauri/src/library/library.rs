@@ -1,4 +1,5 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use chrono::{Local, NaiveDate, TimeZone};
 use notify::Watcher;
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
@@ -229,6 +230,41 @@ pub struct DocumentVersionSnapshot {
     #[serde(flatten)]
     pub version: DocumentVersion,
     pub markdown: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeHeatmapDay {
+    pub date: String,
+    pub total_count: i64,
+    pub created_count: i64,
+    pub updated_count: i64,
+    pub doc_count: i64,
+    pub mindmap_count: i64,
+    pub char_delta: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeHeatmapSummary {
+    pub from_date: String,
+    pub to_date: String,
+    pub days: Vec<KnowledgeHeatmapDay>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeHeatmapDayEntry {
+    pub date: String,
+    pub document_id: String,
+    pub title: String,
+    pub relative_path: String,
+    pub action: String,
+    pub kind: String,
+    pub origin: String,
+    pub char_delta: i64,
+    pub last_write_at: u64,
+    pub exists_in_library: bool,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -1069,6 +1105,20 @@ pub fn save_document(app: AppHandle, input: SaveDocumentInput) -> Result<MapDocu
             remove_empty_parent_directories(&root, old_relative.as_deref());
         }
     }
+    let previous_body = previous_content
+        .as_deref()
+        .map(strip_metadata)
+        .map(str::trim);
+    let previous_title = previous_meta.as_ref().map(|meta| meta.title.as_str());
+    let is_new_file = previous_content.is_none();
+    let substantive_change = is_new_file
+        || previous_body != Some(markdown.as_str())
+        || previous_title != Some(document.title.as_str());
+    let char_delta = if let Some(prev) = previous_body {
+        markdown.chars().count() as i64 - prev.chars().count() as i64
+    } else {
+        markdown.chars().count() as i64
+    };
     let history_source = match input.history_source.as_deref() {
         Some("manual") => "manual",
         Some("restore") => "restore",
@@ -1076,7 +1126,13 @@ pub fn save_document(app: AppHandle, input: SaveDocumentInput) -> Result<MapDocu
     };
     record_document_version(&app, &document, &markdown, history_source)
         .map_err(|error| format!("文件已保存，但版本历史写入失败：{error}"))?;
-    upsert_document(&app, &document, &markdown)?;
+    let connection = open_database(&app)?;
+    upsert_with_connection(&connection, &document, &markdown)?;
+    if substantive_change {
+        let action = if is_new_file { "create" } else { "edit" };
+        let date_key = local_date_key_from_timestamp(now);
+        record_daily_write_with_connection(&connection, &document, action, char_delta, now, &date_key)?;
+    }
     Ok(document)
 }
 
@@ -2456,12 +2512,12 @@ fn prepare_database(connection: &Connection) -> Result<(), String> {
     let version: i64 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(db_error)?;
-    if version > 1 {
+    if version > 2 {
         return Err(format!(
             "Unsupported library index database version: {version}"
         ));
     }
-    if version == 1 {
+    if version == 2 {
         return Ok(());
     }
     let transaction =
@@ -2469,7 +2525,7 @@ fn prepare_database(connection: &Connection) -> Result<(), String> {
     let current_version: i64 = transaction
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(db_error)?;
-    if current_version > 1 {
+    if current_version > 2 {
         return Err(format!("Unsupported library index database version: {current_version}"));
     }
     if current_version == 0 {
@@ -2499,11 +2555,36 @@ fn prepare_database(connection: &Connection) -> Result<(), String> {
                 [],
             )
             .map_err(db_error)?;
+    }
+    if current_version < 2 {
+        ensure_daily_writes_table(&transaction)?;
         transaction
-            .pragma_update(None, "user_version", 1)
+            .pragma_update(None, "user_version", 2)
             .map_err(db_error)?;
     }
     transaction.commit().map_err(db_error)
+}
+
+fn ensure_daily_writes_table(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS knowledge_daily_doc_writes (
+                date_key TEXT NOT NULL,
+                document_id TEXT NOT NULL,
+                action TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                origin TEXT NOT NULL,
+                char_delta INTEGER NOT NULL DEFAULT 0,
+                first_write_at INTEGER NOT NULL,
+                last_write_at INTEGER NOT NULL,
+                last_title TEXT NOT NULL,
+                last_relative_path TEXT NOT NULL,
+                PRIMARY KEY (date_key, document_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_knowledge_daily_writes_date
+                ON knowledge_daily_doc_writes(date_key);",
+        )
+        .map_err(db_error)
 }
 
 fn ensure_maps_origin_columns(connection: &Connection) -> Result<(), String> {
@@ -2568,11 +2649,6 @@ fn replace_index(app: &AppHandle, documents: &[MapDocument], root: &Path) -> Res
         upsert_with_connection(&transaction, document, strip_metadata(&raw))?;
     }
     transaction.commit().map_err(db_error)
-}
-
-fn upsert_document(app: &AppHandle, document: &MapDocument, markdown: &str) -> Result<(), String> {
-    let connection = open_database(app)?;
-    upsert_with_connection(&connection, document, markdown)
 }
 
 fn upsert_with_connection(
@@ -3415,6 +3491,345 @@ fn remove_empty_parent_directories(root: &Path, relative: Option<&Path>) {
     }
 }
 
+#[tauri::command]
+pub fn knowledge_writing_heatmap(
+    app: AppHandle,
+    from_date: Option<String>,
+    to_date: Option<String>,
+    kind_filter: Option<String>,
+    origin_filter: Option<String>,
+) -> Result<KnowledgeHeatmapSummary, String> {
+    let connection = open_database(&app)?;
+    let history_conn = open_history_database(&app).ok();
+    backfill_daily_writes_with_connections(&connection, history_conn.as_ref())?;
+    query_heatmap_with_connection(
+        &connection,
+        from_date.as_deref(),
+        to_date.as_deref(),
+        kind_filter.as_deref(),
+        origin_filter.as_deref(),
+    )
+}
+
+#[tauri::command]
+pub fn knowledge_writing_day_detail(
+    app: AppHandle,
+    date: String,
+    kind_filter: Option<String>,
+    origin_filter: Option<String>,
+) -> Result<Vec<KnowledgeHeatmapDayEntry>, String> {
+    let connection = open_database(&app)?;
+    let history_conn = open_history_database(&app).ok();
+    backfill_daily_writes_with_connections(&connection, history_conn.as_ref())?;
+    query_day_detail_with_connection(
+        &connection,
+        &date,
+        kind_filter.as_deref(),
+        origin_filter.as_deref(),
+    )
+}
+
+fn local_date_key_from_timestamp(timestamp_secs: u64) -> String {
+    let secs = i64::try_from(timestamp_secs).unwrap_or(0);
+    Local
+        .timestamp_opt(secs, 0)
+        .single()
+        .unwrap_or_else(Local::now)
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+fn record_daily_write_with_connection(
+    connection: &Connection,
+    document: &MapDocument,
+    action: &str,
+    char_delta: i64,
+    timestamp_secs: u64,
+    date_key: &str,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT INTO knowledge_daily_doc_writes (
+                date_key, document_id, action, kind, origin, char_delta,
+                first_write_at, last_write_at, last_title, last_relative_path
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8, ?9)
+            ON CONFLICT(date_key, document_id) DO UPDATE SET
+                action = CASE WHEN knowledge_daily_doc_writes.action = 'create' THEN 'create' ELSE excluded.action END,
+                kind = excluded.kind,
+                origin = excluded.origin,
+                char_delta = knowledge_daily_doc_writes.char_delta + excluded.char_delta,
+                last_write_at = MAX(knowledge_daily_doc_writes.last_write_at, excluded.last_write_at),
+                last_title = excluded.last_title,
+                last_relative_path = excluded.last_relative_path",
+            params![
+                date_key,
+                document.id,
+                action,
+                document.kind,
+                document.origin,
+                char_delta,
+                timestamp_secs,
+                document.title,
+                document.relative_path,
+            ],
+        )
+        .map_err(db_error)?;
+    Ok(())
+}
+
+fn backfill_daily_writes_with_connections(
+    connection: &Connection,
+    history_connection: Option<&Connection>,
+) -> Result<(), String> {
+    let already_populated: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM knowledge_daily_doc_writes)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(db_error)?;
+    if already_populated {
+        return Ok(());
+    }
+
+    let mut meta_by_doc = std::collections::HashMap::<String, (String, String)>::new();
+    let mut map_rows = Vec::new();
+    {
+        let mut stmt = connection
+            .prepare(
+                "SELECT id, title, relative_path, kind, origin, content, created_at, updated_at FROM maps",
+            )
+            .map_err(db_error)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, u64>(6)?,
+                    row.get::<_, u64>(7)?,
+                ))
+            })
+            .map_err(db_error)?;
+        for row in rows {
+            let item = row.map_err(db_error)?;
+            meta_by_doc.insert(item.0.clone(), (item.3.clone(), item.4.clone()));
+            map_rows.push(item);
+        }
+    }
+
+    for (id, title, relative_path, kind, origin, content, created_at, updated_at) in map_rows {
+        let create_date = local_date_key_from_timestamp(created_at);
+        let chars = content.chars().count() as i64;
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO knowledge_daily_doc_writes (
+                    date_key, document_id, action, kind, origin, char_delta,
+                    first_write_at, last_write_at, last_title, last_relative_path
+                ) VALUES (?1, ?2, 'create', ?3, ?4, ?5, ?6, ?6, ?7, ?8)",
+                params![create_date, id, kind, origin, chars, created_at, title, relative_path],
+            )
+            .map_err(db_error)?;
+        let update_date = local_date_key_from_timestamp(updated_at);
+        if update_date != create_date {
+            connection
+                .execute(
+                    "INSERT OR IGNORE INTO knowledge_daily_doc_writes (
+                        date_key, document_id, action, kind, origin, char_delta,
+                        first_write_at, last_write_at, last_title, last_relative_path
+                    ) VALUES (?1, ?2, 'edit', ?3, ?4, 0, ?5, ?5, ?6, ?7)",
+                    params![update_date, id, kind, origin, updated_at, title, relative_path],
+                )
+                .map_err(db_error)?;
+        }
+    }
+
+    if let Some(history) = history_connection {
+        let has_versions_table: bool = history
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='document_versions')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if has_versions_table {
+            let mut stmt = history
+                .prepare(
+                    "SELECT document_id, relative_path, title, created_at
+                     FROM document_versions
+                     ORDER BY created_at ASC",
+                )
+                .map_err(history_db_error)?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, u64>(3)?,
+                    ))
+                })
+                .map_err(history_db_error)?;
+            for row in rows {
+                let (doc_id, relative_path, title, created_at) = row.map_err(history_db_error)?;
+                let date_key = local_date_key_from_timestamp(created_at);
+                let (kind, origin) = meta_by_doc
+                    .get(&doc_id)
+                    .cloned()
+                    .unwrap_or_else(|| (KIND_DOC.to_string(), ORIGIN_UNKNOWN.to_string()));
+                connection
+                    .execute(
+                        "INSERT OR IGNORE INTO knowledge_daily_doc_writes (
+                            date_key, document_id, action, kind, origin, char_delta,
+                            first_write_at, last_write_at, last_title, last_relative_path
+                        ) VALUES (?1, ?2, 'edit', ?3, ?4, 0, ?5, ?5, ?6, ?7)",
+                        params![date_key, doc_id, kind, origin, created_at, title, relative_path],
+                    )
+                    .map_err(db_error)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn normalize_heatmap_filter<'a>(value: Option<&'a str>) -> Option<&'a str> {
+    value
+        .map(str::trim)
+        .filter(|item| !item.is_empty() && *item != "all")
+}
+
+fn validate_date_key(value: &str) -> Result<NaiveDate, String> {
+    NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d")
+        .map_err(|_| format!("无效日期格式：{value}，需要 YYYY-MM-DD。"))
+}
+
+fn query_heatmap_with_connection(
+    connection: &Connection,
+    from_date: Option<&str>,
+    to_date: Option<&str>,
+    kind_filter: Option<&str>,
+    origin_filter: Option<&str>,
+) -> Result<KnowledgeHeatmapSummary, String> {
+    let today = Local::now().date_naive();
+    let end = match to_date.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(value) => validate_date_key(value)?,
+        None => today,
+    };
+    let start = match from_date.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(value) => validate_date_key(value)?,
+        None => end - chrono::Duration::days(364),
+    };
+    let (start, end) = if start <= end { (start, end) } else { (end, start) };
+    let from_str = start.format("%Y-%m-%d").to_string();
+    let to_str = end.format("%Y-%m-%d").to_string();
+    let kind = normalize_heatmap_filter(kind_filter);
+    let origin = normalize_heatmap_filter(origin_filter);
+
+    let mut stmt = connection
+        .prepare(
+            "SELECT
+                date_key,
+                COUNT(*) AS total_count,
+                SUM(CASE WHEN action = 'create' THEN 1 ELSE 0 END) AS created_count,
+                SUM(CASE WHEN action != 'create' THEN 1 ELSE 0 END) AS updated_count,
+                SUM(CASE WHEN kind = 'doc' THEN 1 ELSE 0 END) AS doc_count,
+                SUM(CASE WHEN kind = 'mindmap' THEN 1 ELSE 0 END) AS mindmap_count,
+                COALESCE(SUM(char_delta), 0) AS char_delta
+             FROM knowledge_daily_doc_writes
+             WHERE date_key >= ?1 AND date_key <= ?2
+               AND (?3 IS NULL OR kind = ?3)
+               AND (?4 IS NULL OR origin = ?4)
+             GROUP BY date_key
+             ORDER BY date_key ASC",
+        )
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map(params![from_str, to_str, kind, origin], |row| {
+            Ok(KnowledgeHeatmapDay {
+                date: row.get(0)?,
+                total_count: row.get(1)?,
+                created_count: row.get(2)?,
+                updated_count: row.get(3)?,
+                doc_count: row.get(4)?,
+                mindmap_count: row.get(5)?,
+                char_delta: row.get(6)?,
+            })
+        })
+        .map_err(db_error)?;
+
+    let mut days = Vec::new();
+    for row in rows {
+        days.push(row.map_err(db_error)?);
+    }
+
+    Ok(KnowledgeHeatmapSummary {
+        from_date: from_str,
+        to_date: to_str,
+        days,
+    })
+}
+
+fn query_day_detail_with_connection(
+    connection: &Connection,
+    date: &str,
+    kind_filter: Option<&str>,
+    origin_filter: Option<&str>,
+) -> Result<Vec<KnowledgeHeatmapDayEntry>, String> {
+    let parsed = validate_date_key(date)?;
+    let date_key = parsed.format("%Y-%m-%d").to_string();
+    let kind = normalize_heatmap_filter(kind_filter);
+    let origin = normalize_heatmap_filter(origin_filter);
+
+    let mut stmt = connection
+        .prepare(
+            "SELECT
+                w.date_key,
+                w.document_id,
+                COALESCE(m.title, w.last_title) AS title,
+                COALESCE(m.relative_path, w.last_relative_path) AS relative_path,
+                w.action,
+                w.kind,
+                w.origin,
+                w.char_delta,
+                w.last_write_at,
+                CASE WHEN m.id IS NOT NULL THEN 1 ELSE 0 END AS exists_in_library
+             FROM knowledge_daily_doc_writes w
+             LEFT JOIN maps m ON m.id = w.document_id
+             WHERE w.date_key = ?1
+               AND (?2 IS NULL OR w.kind = ?2)
+               AND (?3 IS NULL OR w.origin = ?3)
+             ORDER BY w.last_write_at DESC, w.action ASC",
+        )
+        .map_err(db_error)?;
+
+    let rows = stmt
+        .query_map(params![date_key, kind, origin], |row| {
+            Ok(KnowledgeHeatmapDayEntry {
+                date: row.get(0)?,
+                document_id: row.get(1)?,
+                title: row.get(2)?,
+                relative_path: row.get(3)?,
+                action: row.get(4)?,
+                kind: row.get(5)?,
+                origin: row.get(6)?,
+                char_delta: row.get(7)?,
+                last_write_at: row.get(8)?,
+                exists_in_library: row.get::<_, i64>(9)? != 0,
+            })
+        })
+        .map_err(db_error)?;
+
+    let mut entries = Vec::new();
+    for row in rows {
+        entries.push(row.map_err(db_error)?);
+    }
+    Ok(entries)
+}
+
 fn db_error(error: rusqlite::Error) -> String {
     format!("SQLite 文件库错误：{error}")
 }
@@ -3884,7 +4299,7 @@ mod tests {
         let version: i64 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
         let kind: String = connection
             .query_row("SELECT kind FROM maps WHERE id = 'a'", [], |row| row.get(0))
             .unwrap();
@@ -4001,7 +4416,7 @@ mod tests {
             let kind: String = connection
                 .query_row("SELECT kind FROM maps WHERE id = 'a'", [], |row| row.get(0))
                 .unwrap();
-            assert_eq!(version, 1);
+            assert_eq!(version, 2);
             assert_eq!(content, "kept");
             assert_eq!(kind, "mindmap");
         }
@@ -4230,5 +4645,142 @@ mod tests {
             media_type_from_bytes(b"\x00\x00\x00\x20ftypavif\x00\x00\x00\x00"),
             Some(("image/avif", "avif"))
         );
+    }
+
+    #[test]
+    fn records_daily_writes_idempotently_across_edits_and_filters() {
+        let connection = Connection::open_in_memory().unwrap();
+        prepare_database(&connection).unwrap();
+
+        let doc_a = MapDocument {
+            id: "doc-a".into(),
+            relative_path: "笔记/a.md".into(),
+            title: "学习笔记 A".into(),
+            category: "笔记".into(),
+            map_type: "文档".into(),
+            tags: vec![],
+            created_at: 1700000000,
+            updated_at: 1700000000,
+            kind: "doc".into(),
+            origin: "manual".into(),
+            source_ref: None,
+        };
+        let doc_b = MapDocument {
+            id: "doc-b".into(),
+            relative_path: "导图/b.md".into(),
+            title: "导图 B".into(),
+            category: "导图".into(),
+            map_type: "导图".into(),
+            tags: vec![],
+            created_at: 1700000100,
+            updated_at: 1700000100,
+            kind: "mindmap".into(),
+            origin: "ebook".into(),
+            source_ref: None,
+        };
+        upsert_with_connection(&connection, &doc_a, "初稿").unwrap();
+        upsert_with_connection(&connection, &doc_b, "# 中心").unwrap();
+
+        // Day 1: create doc-a twice -> deduplicated as 1 create
+        record_daily_write_with_connection(&connection, &doc_a, "create", 20, 1700000000, "2026-11-10").unwrap();
+        record_daily_write_with_connection(&connection, &doc_a, "edit", 30, 1700000600, "2026-11-10").unwrap();
+        // Day 1: create doc-b -> 2 total on 2026-11-10
+        record_daily_write_with_connection(&connection, &doc_b, "create", 12, 1700000100, "2026-11-10").unwrap();
+        // Day 2: edit doc-a -> separate row on 2026-11-12 without overwriting 2026-11-10
+        record_daily_write_with_connection(&connection, &doc_a, "edit", 15, 1700172800, "2026-11-12").unwrap();
+
+        let all = query_heatmap_with_connection(
+            &connection,
+            Some("2026-11-01"),
+            Some("2026-11-16"),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(all.days.len(), 2);
+        assert_eq!(all.days[0].date, "2026-11-10");
+        assert_eq!(all.days[0].total_count, 2);
+        assert_eq!(all.days[0].created_count, 2);
+        assert_eq!(all.days[0].updated_count, 0);
+        assert_eq!(all.days[0].char_delta, 62);
+        assert_eq!(all.days[1].date, "2026-11-12");
+        assert_eq!(all.days[1].total_count, 1);
+        assert_eq!(all.days[1].created_count, 0);
+        assert_eq!(all.days[1].updated_count, 1);
+
+        let only_docs = query_heatmap_with_connection(
+            &connection,
+            Some("2026-11-01"),
+            Some("2026-11-16"),
+            Some("doc"),
+            Some("manual"),
+        )
+        .unwrap();
+        assert_eq!(only_docs.days[0].total_count, 1);
+
+        let detail = query_day_detail_with_connection(&connection, "2026-11-10", None, None).unwrap();
+        assert_eq!(detail.len(), 2);
+        assert!(detail.iter().all(|entry| entry.exists_in_library));
+    }
+
+    #[test]
+    fn backfills_daily_writes_from_maps_and_history_versions() {
+        let connection = Connection::open_in_memory().unwrap();
+        prepare_database(&connection).unwrap();
+        let history = Connection::open_in_memory().unwrap();
+        prepare_history_database(&history).unwrap();
+
+        let created_ts = 1_762_905_600u64; // UTC 2025-11-12 00:00:00
+        let updated_ts = created_ts + 2 * 86_400;
+        let doc = MapDocument {
+            id: "hist-1".into(),
+            relative_path: "笔记/legacy.md".into(),
+            title: "历史笔记".into(),
+            category: "笔记".into(),
+            map_type: "文档".into(),
+            tags: vec![],
+            created_at: created_ts,
+            updated_at: updated_ts,
+            kind: "doc".into(),
+            origin: "manual".into(),
+            source_ref: None,
+        };
+        upsert_with_connection(&connection, &doc, "内容一二三").unwrap();
+
+        let mid_ts = created_ts + 86_400;
+        history
+            .execute(
+                "INSERT INTO document_versions
+                 (version_id, document_id, relative_path, title, category, map_type, tags, source, created_at, markdown)
+                 VALUES ('v1', 'hist-1', '笔记/legacy.md', '历史笔记', '笔记', '文档', '[]', 'manual', ?1, '中间修订')",
+                params![mid_ts],
+            )
+            .unwrap();
+
+        backfill_daily_writes_with_connections(&connection, Some(&history)).unwrap();
+        let create_day = local_date_key_from_timestamp(created_ts);
+        let mid_day = local_date_key_from_timestamp(mid_ts);
+        let update_day = local_date_key_from_timestamp(updated_ts);
+        let summary = query_heatmap_with_connection(
+            &connection,
+            Some(&create_day),
+            Some(&update_day),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let dates: Vec<String> = summary.days.iter().map(|day| day.date.clone()).collect();
+        assert_eq!(dates, vec![create_day.clone(), mid_day, update_day]);
+        assert_eq!(summary.days[0].created_count, 1);
+        assert_eq!(summary.days[1].updated_count, 1);
+        assert_eq!(summary.days[2].updated_count, 1);
+
+        // Deleted document stays in daily write log with exists_in_library = false
+        connection.execute("DELETE FROM maps WHERE id = 'hist-1'", []).unwrap();
+        let detail = query_day_detail_with_connection(&connection, &create_day, None, None).unwrap();
+        assert_eq!(detail.len(), 1);
+        assert_eq!(detail[0].title, "历史笔记");
+        assert!(!detail[0].exists_in_library);
     }
 }

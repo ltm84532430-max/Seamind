@@ -7,6 +7,7 @@
 //! it can be tested against an in-memory database. The Tauri commands and the network access live
 //! in `player.rs`.
 
+use chrono::{Local, NaiveDate, TimeZone, Timelike};
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -127,6 +128,23 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY NOT NULL,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS watch_time_daily (
+    date_key TEXT NOT NULL,
+    video_id TEXT NOT NULL,
+    watched_seconds REAL NOT NULL DEFAULT 0,
+    first_watched_at INTEGER NOT NULL,
+    last_watched_at INTEGER NOT NULL,
+    PRIMARY KEY (date_key, video_id)
+);
+CREATE INDEX IF NOT EXISTS idx_watch_time_daily_date ON watch_time_daily(date_key);
+CREATE TABLE IF NOT EXISTS watch_time_hourly (
+    date_key TEXT NOT NULL,
+    hour INTEGER NOT NULL,
+    video_id TEXT NOT NULL,
+    watched_seconds REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (date_key, hour, video_id)
+);
+CREATE INDEX IF NOT EXISTS idx_watch_time_hourly_date ON watch_time_hourly(date_key);
 ";
 
 // ---- types shared with the front end ------------------------------------------------------------
@@ -194,6 +212,75 @@ pub struct WatchState {
     pub resume_seconds: f64,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SubscriptionGroupRule {
+    pub id: String,
+    pub name: String,
+    pub color: Option<String>,
+    pub channel_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchCategoryStat {
+    pub category_id: String,
+    pub category_kind: String,
+    pub label: String,
+    pub color: Option<String>,
+    pub total_seconds: f64,
+    pub video_count: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchDayCategoryBreakdown {
+    pub category_id: String,
+    pub category_kind: String,
+    pub label: String,
+    pub color: Option<String>,
+    pub seconds: f64,
+    pub video_count: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchHeatmapDay {
+    pub date: String,
+    pub total_seconds: f64,
+    pub video_count: i64,
+    pub dominant_category_id: Option<String>,
+    pub breakdown: Vec<WatchDayCategoryBreakdown>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchHeatmapSummary {
+    pub from_date: String,
+    pub to_date: String,
+    pub categories: Vec<WatchCategoryStat>,
+    pub days: Vec<WatchHeatmapDay>,
+    pub hourly_seconds: Vec<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchDayVideoEntry {
+    pub date: String,
+    pub video_id: String,
+    pub title: String,
+    pub channel_name: Option<String>,
+    pub thumbnail_url: Option<String>,
+    pub watched_seconds: f64,
+    pub duration_seconds: Option<f64>,
+    pub finished: bool,
+    pub last_watched_at: i64,
+    pub category_id: String,
+    pub category_kind: String,
+    pub category_label: String,
+    pub category_color: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Playlist {
@@ -228,7 +315,7 @@ impl Default for PlayerSettings {
             feed_update_threshold_seconds: 3600,
             hide_finished_in_feed: false,
             autoplay_next: true,
-            pause_when_hidden: true,
+            pause_when_hidden: false,
         }
     }
 }
@@ -374,6 +461,68 @@ pub fn open(path: &Path) -> Result<Connection, String> {
     Ok(connection)
 }
 
+const PAUSE_WHEN_HIDDEN_DEFAULT_MIGRATION_KEY: &str = "migration:player_pause_when_hidden_v2";
+
+/// Migrates legacy persisted `pauseWhenHidden: true` defaults once so existing databases
+/// adopt background topbar playback without overriding future user toggles.
+fn ensure_background_playback_default_migrated(connection: &Connection) -> Result<(), String> {
+    let done: Option<i64> = connection
+        .query_row(
+            "SELECT 1 FROM settings WHERE key = ?1",
+            params![PAUSE_WHEN_HIDDEN_DEFAULT_MIGRATION_KEY],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_error)?;
+    if done.is_some() {
+        return Ok(());
+    }
+    let transaction =
+        Transaction::new_unchecked(connection, TransactionBehavior::Immediate).map_err(db_error)?;
+    let still_needed = transaction
+        .query_row(
+            "SELECT 1 FROM settings WHERE key = ?1",
+            params![PAUSE_WHEN_HIDDEN_DEFAULT_MIGRATION_KEY],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(db_error)?
+        .is_none();
+    if still_needed {
+        let stored: Option<String> = transaction
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'player'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        if let Some(text) = stored {
+            if let Ok(mut parsed) = serde_json::from_str::<PlayerSettings>(&text) {
+                if parsed.pause_when_hidden {
+                    parsed.pause_when_hidden = false;
+                    let updated =
+                        serde_json::to_string(&parsed).map_err(|error| error.to_string())?;
+                    transaction
+                        .execute(
+                            "INSERT INTO settings(key, value) VALUES ('player', ?1)
+                             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                            params![updated],
+                        )
+                        .map_err(db_error)?;
+                }
+            }
+        }
+        transaction
+            .execute(
+                "INSERT OR IGNORE INTO settings(key, value) VALUES (?1, '1')",
+                params![PAUSE_WHEN_HIDDEN_DEFAULT_MIGRATION_KEY],
+            )
+            .map_err(db_error)?;
+    }
+    transaction.commit().map_err(db_error)
+}
+
 /// Creates the tables when they are missing and the two lists every library starts with.
 pub fn prepare(connection: &Connection) -> Result<(), String> {
     connection
@@ -386,18 +535,18 @@ pub fn prepare(connection: &Connection) -> Result<(), String> {
     let version: i64 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(db_error)?;
-    if version > 1 {
+    if version > 3 {
         return Err(format!("Unsupported player database version: {version}"));
     }
-    if version == 1 {
-        return Ok(());
+    if version == 3 {
+        return ensure_background_playback_default_migrated(connection);
     }
     let transaction =
         Transaction::new_unchecked(connection, TransactionBehavior::Immediate).map_err(db_error)?;
     let current_version: i64 = transaction
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(db_error)?;
-    if current_version > 1 {
+    if current_version > 3 {
         return Err(format!("Unsupported player database version: {current_version}"));
     }
     if current_version == 0 {
@@ -410,11 +559,41 @@ pub fn prepare(connection: &Connection) -> Result<(), String> {
                  VALUES ('{WATCH_LATER_ID}', '稍后看', 'local', 0, 0, 1);"
         ))
             .map_err(db_error)?;
+    }
+    if current_version < 2 {
         transaction
-            .pragma_update(None, "user_version", 1)
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS watch_time_daily (
+                    date_key TEXT NOT NULL,
+                    video_id TEXT NOT NULL,
+                    watched_seconds REAL NOT NULL DEFAULT 0,
+                    first_watched_at INTEGER NOT NULL,
+                    last_watched_at INTEGER NOT NULL,
+                    PRIMARY KEY (date_key, video_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_watch_time_daily_date ON watch_time_daily(date_key);",
+            )
             .map_err(db_error)?;
     }
-    transaction.commit().map_err(db_error)
+    if current_version < 3 {
+        transaction
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS watch_time_hourly (
+                    date_key TEXT NOT NULL,
+                    hour INTEGER NOT NULL,
+                    video_id TEXT NOT NULL,
+                    watched_seconds REAL NOT NULL DEFAULT 0,
+                    PRIMARY KEY (date_key, hour, video_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_watch_time_hourly_date ON watch_time_hourly(date_key);",
+            )
+            .map_err(db_error)?;
+        transaction
+            .pragma_update(None, "user_version", 3)
+            .map_err(db_error)?;
+    }
+    transaction.commit().map_err(db_error)?;
+    ensure_background_playback_default_migrated(connection)
 }
 
 // ---- validation helpers -------------------------------------------------------------------------
@@ -844,6 +1023,8 @@ pub fn prune(connection: &Connection, now: i64) -> Result<(), String> {
              WHERE video_id NOT IN (SELECT video_id FROM playlist_items)
                AND video_id NOT IN (SELECT video_id FROM history)
                AND video_id NOT IN (SELECT video_id FROM watch_state)
+               AND video_id NOT IN (SELECT video_id FROM watch_time_daily)
+               AND video_id NOT IN (SELECT video_id FROM watch_time_hourly)
                AND video_id NOT IN (SELECT video_id FROM learning_path_nodes WHERE video_id IS NOT NULL)
                AND (channel_id IS NULL
                     OR channel_id NOT IN (SELECT channel_id FROM channels)
@@ -918,6 +1099,684 @@ pub fn save_progress(
         }
     }
     watch_state(connection, video_id)
+}
+
+fn local_date_and_hour(timestamp_secs: i64) -> (String, i64) {
+    let dt = Local
+        .timestamp_opt(timestamp_secs, 0)
+        .single()
+        .unwrap_or_else(Local::now);
+    (dt.format("%Y-%m-%d").to_string(), i64::from(dt.hour()))
+}
+
+pub fn record_watch_time_for_date_hour(
+    connection: &Connection,
+    video_id: &str,
+    watched_delta_seconds: f64,
+    now: i64,
+    date_key: &str,
+    hour: i64,
+) -> Result<(), String> {
+    if !is_video_id(video_id) {
+        return Err("视频编号无效。".to_string());
+    }
+    if !watched_delta_seconds.is_finite() || watched_delta_seconds <= 0.0 {
+        return Ok(());
+    }
+    // 防御单次异常超大跳变上报（上限 1 小时），正常每几秒上报一次。
+    let bounded_delta = watched_delta_seconds.min(3600.0);
+    let clamped_hour = hour.clamp(0, 23);
+    connection
+        .execute(
+            "INSERT INTO watch_time_daily(date_key, video_id, watched_seconds, first_watched_at, last_watched_at)
+             VALUES (?1, ?2, ?3, ?4, ?4)
+             ON CONFLICT(date_key, video_id) DO UPDATE SET
+                 watched_seconds = watch_time_daily.watched_seconds + excluded.watched_seconds,
+                 last_watched_at = MAX(watch_time_daily.last_watched_at, excluded.last_watched_at)",
+            params![date_key, video_id, bounded_delta, now],
+        )
+        .map_err(db_error)?;
+    connection
+        .execute(
+            "INSERT INTO watch_time_hourly(date_key, hour, video_id, watched_seconds)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(date_key, hour, video_id) DO UPDATE SET
+                 watched_seconds = watch_time_hourly.watched_seconds + excluded.watched_seconds",
+            params![date_key, clamped_hour, video_id, bounded_delta],
+        )
+        .map_err(db_error)?;
+    Ok(())
+}
+
+pub fn record_watch_time(
+    connection: &Connection,
+    video_id: &str,
+    watched_delta_seconds: f64,
+    now: i64,
+) -> Result<(), String> {
+    let (date_key, hour) = local_date_and_hour(now);
+    record_watch_time_for_date_hour(
+        connection,
+        video_id,
+        watched_delta_seconds,
+        now,
+        &date_key,
+        hour,
+    )
+}
+
+pub fn backfill_watch_time_if_empty(connection: &Connection) -> Result<(), String> {
+    let has_daily: bool = connection
+        .query_row("SELECT EXISTS(SELECT 1 FROM watch_time_daily)", [], |row| row.get(0))
+        .map_err(db_error)?;
+    if !has_daily {
+        let mut stmt = connection
+            .prepare(
+                "SELECT
+                    ws.video_id,
+                    CASE
+                        WHEN ws.finished_override = 1 AND COALESCE(v.duration_seconds, 0) > ws.progress_seconds
+                            THEN CAST(v.duration_seconds AS REAL)
+                        ELSE ws.progress_seconds
+                    END AS watched,
+                    COALESCE(h.last_played_at, ws.updated_at) AS ts
+                 FROM watch_state ws
+                 LEFT JOIN history h ON h.video_id = ws.video_id
+                 LEFT JOIN videos v ON v.video_id = ws.video_id
+                 WHERE ws.progress_seconds > 0 OR ws.finished_override = 1",
+            )
+            .map_err(db_error)?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(db_error)?;
+
+        let mut pending = Vec::new();
+        for row in rows {
+            pending.push(row.map_err(db_error)?);
+        }
+        drop(stmt);
+
+        for (video_id, watched, ts) in pending {
+            if watched.is_finite() && watched > 0.0 && ts > 0 {
+                let (date_key, hour) = local_date_and_hour(ts);
+                connection
+                    .execute(
+                        "INSERT OR IGNORE INTO watch_time_daily(date_key, video_id, watched_seconds, first_watched_at, last_watched_at)
+                         VALUES (?1, ?2, ?3, ?4, ?4)",
+                        params![date_key, video_id, watched, ts],
+                    )
+                    .map_err(db_error)?;
+                connection
+                    .execute(
+                        "INSERT OR IGNORE INTO watch_time_hourly(date_key, hour, video_id, watched_seconds)
+                         VALUES (?1, ?2, ?3, ?4)",
+                        params![date_key, hour, video_id, watched],
+                    )
+                    .map_err(db_error)?;
+            }
+        }
+        return Ok(());
+    }
+
+    let has_hourly: bool = connection
+        .query_row("SELECT EXISTS(SELECT 1 FROM watch_time_hourly)", [], |row| row.get(0))
+        .map_err(db_error)?;
+    if !has_hourly {
+        let mut stmt = connection
+            .prepare(
+                "SELECT date_key, video_id, watched_seconds, last_watched_at
+                 FROM watch_time_daily
+                 WHERE watched_seconds > 0",
+            )
+            .map_err(db_error)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, f64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(db_error)?;
+        let mut pending = Vec::new();
+        for row in rows {
+            pending.push(row.map_err(db_error)?);
+        }
+        drop(stmt);
+        for (date_key, video_id, watched, ts) in pending {
+            let (_, hour) = local_date_and_hour(ts);
+            connection
+                .execute(
+                    "INSERT OR IGNORE INTO watch_time_hourly(date_key, hour, video_id, watched_seconds)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![date_key, hour, video_id, watched],
+                )
+                .map_err(db_error)?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone)]
+struct ResolvedVideoCategory {
+    category_id: String,
+    category_kind: String,
+    label: String,
+    color: Option<String>,
+}
+
+struct CategoryLookup {
+    learning_path_by_video: HashMap<String, ResolvedVideoCategory>,
+    course_by_video: HashMap<String, ResolvedVideoCategory>,
+    favorite_by_video: HashMap<String, ResolvedVideoCategory>,
+    favorite_by_channel: HashMap<String, ResolvedVideoCategory>,
+    group_by_channel: HashMap<String, ResolvedVideoCategory>,
+}
+
+fn build_category_lookup(
+    connection: &Connection,
+    subscription_groups: &[SubscriptionGroupRule],
+) -> Result<CategoryLookup, String> {
+    let mut learning_path_by_video = HashMap::new();
+    {
+        let mut stmt = connection
+            .prepare(
+                "SELECT n.video_id, lp.path_id, lp.title
+                 FROM learning_path_nodes n
+                 JOIN learning_paths lp ON lp.path_id = n.path_id
+                 WHERE n.video_id IS NOT NULL
+                 ORDER BY lp.updated_at DESC, lp.path_id ASC",
+            )
+            .map_err(db_error)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(db_error)?;
+        for row in rows {
+            let (video_id, path_id, title) = row.map_err(db_error)?;
+            learning_path_by_video
+                .entry(video_id)
+                .or_insert_with(|| ResolvedVideoCategory {
+                    category_id: format!("path:{path_id}"),
+                    category_kind: "learning-path".to_string(),
+                    label: title,
+                    color: None,
+                });
+        }
+    }
+
+    let mut course_by_video = HashMap::new();
+    {
+        let mut stmt = connection
+            .prepare(
+                "SELECT pi.video_id, p.playlist_id, p.name
+                 FROM playlist_items pi
+                 JOIN playlists p ON p.playlist_id = pi.playlist_id
+                 WHERE p.kind = 'course'
+                 ORDER BY p.updated_at DESC, p.playlist_id ASC",
+            )
+            .map_err(db_error)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(db_error)?;
+        for row in rows {
+            let (video_id, playlist_id, name) = row.map_err(db_error)?;
+            course_by_video
+                .entry(video_id)
+                .or_insert_with(|| ResolvedVideoCategory {
+                    category_id: format!("course:{playlist_id}"),
+                    category_kind: "course".to_string(),
+                    label: name,
+                    color: None,
+                });
+        }
+    }
+
+    let mut favorite_by_video = HashMap::new();
+    let mut favorite_by_channel = HashMap::new();
+    {
+        let mut fav_cats = HashMap::<String, ResolvedVideoCategory>::new();
+        let mut stmt = connection
+            .prepare(
+                "SELECT category_id, name, color, channel_ids_json
+                 FROM favorite_categories
+                 ORDER BY sort_order ASC, category_id ASC",
+            )
+            .map_err(db_error)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(db_error)?;
+        for row in rows {
+            let (cat_id, name, color, channels_json) = row.map_err(db_error)?;
+            let cat = ResolvedVideoCategory {
+                category_id: format!("fav:{cat_id}"),
+                category_kind: "favorite-category".to_string(),
+                label: name,
+                color: Some(color),
+            };
+            if let Ok(channel_ids) = serde_json::from_str::<Vec<String>>(&channels_json) {
+                for ch_id in channel_ids {
+                    favorite_by_channel
+                        .entry(ch_id)
+                        .or_insert_with(|| cat.clone());
+                }
+            }
+            fav_cats.insert(cat_id, cat);
+        }
+
+        let mut meta_stmt = connection
+            .prepare(
+                "SELECT video_id, category_id
+                 FROM favorite_item_meta
+                 WHERE category_id IS NOT NULL",
+            )
+            .map_err(db_error)?;
+        let meta_rows = meta_stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .map_err(db_error)?;
+        for row in meta_rows {
+            let (video_id, cat_id) = row.map_err(db_error)?;
+            if let Some(cat) = fav_cats.get(&cat_id) {
+                favorite_by_video.insert(video_id, cat.clone());
+            }
+        }
+    }
+
+    let mut group_by_channel = HashMap::new();
+    for group in subscription_groups {
+        let cat = ResolvedVideoCategory {
+            category_id: format!("group:{}", group.id),
+            category_kind: "subscription-group".to_string(),
+            label: group.name.clone(),
+            color: group.color.clone(),
+        };
+        for channel_id in &group.channel_ids {
+            group_by_channel
+                .entry(channel_id.clone())
+                .or_insert_with(|| cat.clone());
+        }
+    }
+
+    Ok(CategoryLookup {
+        learning_path_by_video,
+        course_by_video,
+        favorite_by_video,
+        favorite_by_channel,
+        group_by_channel,
+    })
+}
+
+fn resolve_video_category(
+    lookup: &CategoryLookup,
+    video_id: &str,
+    channel_id: Option<&str>,
+    channel_name: Option<&str>,
+) -> ResolvedVideoCategory {
+    if let Some(found) = lookup.learning_path_by_video.get(video_id) {
+        return found.clone();
+    }
+    if let Some(found) = lookup.course_by_video.get(video_id) {
+        return found.clone();
+    }
+    if let Some(found) = lookup.favorite_by_video.get(video_id) {
+        return found.clone();
+    }
+    if let Some(ch_id) = channel_id {
+        if let Some(found) = lookup.favorite_by_channel.get(ch_id) {
+            return found.clone();
+        }
+        if let Some(found) = lookup.group_by_channel.get(ch_id) {
+            return found.clone();
+        }
+    }
+    if let Some(name) = channel_name.map(str::trim).filter(|s| !s.is_empty()) {
+        let key = channel_id
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or(name);
+        return ResolvedVideoCategory {
+            category_id: format!("ch:{key}"),
+            category_kind: "channel".to_string(),
+            label: name.to_string(),
+            color: None,
+        };
+    }
+    ResolvedVideoCategory {
+        category_id: "other".to_string(),
+        category_kind: "other".to_string(),
+        label: "其他随机视频".to_string(),
+        color: None,
+    }
+}
+
+fn validate_player_date_key(value: &str) -> Result<NaiveDate, String> {
+    NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d")
+        .map_err(|_| format!("无效日期格式：{value}，需要 YYYY-MM-DD。"))
+}
+
+pub fn watch_heatmap(
+    connection: &Connection,
+    from_date: Option<&str>,
+    to_date: Option<&str>,
+    subscription_groups: &[SubscriptionGroupRule],
+    category_filter: Option<&str>,
+) -> Result<WatchHeatmapSummary, String> {
+    backfill_watch_time_if_empty(connection)?;
+
+    let today = Local::now().date_naive();
+    let end = match to_date.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(value) => validate_player_date_key(value)?,
+        None => today,
+    };
+    let start = match from_date.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(value) => validate_player_date_key(value)?,
+        None => end - chrono::Duration::days(364),
+    };
+    let (start, end) = if start <= end { (start, end) } else { (end, start) };
+    let from_str = start.format("%Y-%m-%d").to_string();
+    let to_str = end.format("%Y-%m-%d").to_string();
+    let filter_cat = category_filter
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "all");
+
+    let lookup = build_category_lookup(connection, subscription_groups)?;
+
+    let mut stmt = connection
+        .prepare(
+            "SELECT
+                w.date_key,
+                w.video_id,
+                w.watched_seconds,
+                v.channel_id,
+                COALESCE(c.name, v.channel_name) AS channel_name
+             FROM watch_time_daily w
+             LEFT JOIN videos v ON v.video_id = w.video_id
+             LEFT JOIN channels c ON c.channel_id = v.channel_id
+             WHERE w.date_key >= ?1 AND w.date_key <= ?2 AND w.watched_seconds > 0
+             ORDER BY w.date_key ASC",
+        )
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map(params![from_str, to_str], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })
+        .map_err(db_error)?;
+
+    // Global category totals within the date window (always unfiltered so category pills remain visible).
+    let mut cat_totals: HashMap<String, (ResolvedVideoCategory, f64, HashSet<String>)> =
+        HashMap::new();
+    // Filtered per-day category breakdown.
+    let mut day_buckets: std::collections::BTreeMap<
+        String,
+        HashMap<String, (ResolvedVideoCategory, f64, i64)>,
+    > = std::collections::BTreeMap::new();
+
+    for row in rows {
+        let (date_key, video_id, seconds, channel_id, channel_name) = row.map_err(db_error)?;
+        let cat = resolve_video_category(
+            &lookup,
+            &video_id,
+            channel_id.as_deref(),
+            channel_name.as_deref(),
+        );
+
+        let global_entry = cat_totals
+            .entry(cat.category_id.clone())
+            .or_insert_with(|| (cat.clone(), 0.0, HashSet::new()));
+        global_entry.1 += seconds;
+        global_entry.2.insert(video_id);
+
+        if let Some(target_cat) = filter_cat {
+            if cat.category_id != target_cat {
+                continue;
+            }
+        }
+
+        let per_day = day_buckets.entry(date_key).or_default();
+        let entry = per_day
+            .entry(cat.category_id.clone())
+            .or_insert_with(|| (cat, 0.0, 0));
+        entry.1 += seconds;
+        entry.2 += 1;
+    }
+
+    let mut categories: Vec<WatchCategoryStat> = cat_totals
+        .into_values()
+        .map(|(cat, total_seconds, vids)| WatchCategoryStat {
+            category_id: cat.category_id,
+            category_kind: cat.category_kind,
+            label: cat.label,
+            color: cat.color,
+            total_seconds,
+            video_count: vids.len() as i64,
+        })
+        .collect();
+    categories.sort_by(|a, b| {
+        b.total_seconds
+            .partial_cmp(&a.total_seconds)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.label.cmp(&b.label))
+    });
+
+    let mut days = Vec::with_capacity(day_buckets.len());
+    for (date, per_day) in day_buckets {
+        let mut breakdown: Vec<WatchDayCategoryBreakdown> = per_day
+            .into_values()
+            .map(|(cat, seconds, video_count)| WatchDayCategoryBreakdown {
+                category_id: cat.category_id,
+                category_kind: cat.category_kind,
+                label: cat.label,
+                color: cat.color,
+                seconds,
+                video_count,
+            })
+            .collect();
+        breakdown.sort_by(|a, b| {
+            b.seconds
+                .partial_cmp(&a.seconds)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.label.cmp(&b.label))
+        });
+        let total_seconds: f64 = breakdown.iter().map(|b| b.seconds).sum();
+        let video_count: i64 = breakdown.iter().map(|b| b.video_count).sum();
+        let dominant_category_id = breakdown.first().map(|b| b.category_id.clone());
+        days.push(WatchHeatmapDay {
+            date,
+            total_seconds,
+            video_count,
+            dominant_category_id,
+            breakdown,
+        });
+    }
+
+    let mut hourly_seconds = vec![0.0_f64; 24];
+    {
+        let mut h_stmt = connection
+            .prepare(
+                "SELECT
+                    h.hour,
+                    h.video_id,
+                    h.watched_seconds,
+                    v.channel_id,
+                    COALESCE(c.name, v.channel_name) AS channel_name
+                 FROM watch_time_hourly h
+                 LEFT JOIN videos v ON v.video_id = h.video_id
+                 LEFT JOIN channels c ON c.channel_id = v.channel_id
+                 WHERE h.date_key >= ?1 AND h.date_key <= ?2 AND h.watched_seconds > 0",
+            )
+            .map_err(db_error)?;
+        let h_rows = h_stmt
+            .query_map(params![from_str, to_str], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, f64>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            })
+            .map_err(db_error)?;
+        for row in h_rows {
+            let (hour, video_id, seconds, channel_id, channel_name) = row.map_err(db_error)?;
+            if !(0..24).contains(&hour) {
+                continue;
+            }
+            if let Some(target_cat) = filter_cat {
+                let cat = resolve_video_category(
+                    &lookup,
+                    &video_id,
+                    channel_id.as_deref(),
+                    channel_name.as_deref(),
+                );
+                if cat.category_id != target_cat {
+                    continue;
+                }
+            }
+            hourly_seconds[hour as usize] += seconds;
+        }
+    }
+
+    Ok(WatchHeatmapSummary {
+        from_date: from_str,
+        to_date: to_str,
+        categories,
+        days,
+        hourly_seconds,
+    })
+}
+
+pub fn watch_day_detail(
+    connection: &Connection,
+    date: &str,
+    subscription_groups: &[SubscriptionGroupRule],
+    category_filter: Option<&str>,
+) -> Result<Vec<WatchDayVideoEntry>, String> {
+    backfill_watch_time_if_empty(connection)?;
+    let parsed = validate_player_date_key(date)?;
+    let date_key = parsed.format("%Y-%m-%d").to_string();
+    let filter_cat = category_filter
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "all");
+    let lookup = build_category_lookup(connection, subscription_groups)?;
+
+    let mut stmt = connection
+        .prepare(
+            "SELECT
+                w.video_id,
+                COALESCE(v.title, w.video_id) AS title,
+                COALESCE(c.name, v.channel_name) AS channel_name,
+                v.channel_id,
+                v.thumbnail_url,
+                w.watched_seconds,
+                COALESCE(ws.duration_seconds, CAST(v.duration_seconds AS REAL)) AS duration_seconds,
+                ws.progress_seconds,
+                ws.finished_override,
+                w.last_watched_at
+             FROM watch_time_daily w
+             LEFT JOIN videos v ON v.video_id = w.video_id
+             LEFT JOIN channels c ON c.channel_id = v.channel_id
+             LEFT JOIN watch_state ws ON ws.video_id = w.video_id
+             WHERE w.date_key = ?1 AND w.watched_seconds > 0
+             ORDER BY w.watched_seconds DESC, w.last_watched_at DESC",
+        )
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map(params![date_key], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, f64>(5)?,
+                row.get::<_, Option<f64>>(6)?,
+                row.get::<_, Option<f64>>(7)?,
+                row.get::<_, Option<i64>>(8)?,
+                row.get::<_, i64>(9)?,
+            ))
+        })
+        .map_err(db_error)?;
+
+    let mut entries = Vec::new();
+    for row in rows {
+        let (
+            video_id,
+            title,
+            channel_name,
+            channel_id,
+            thumbnail_url,
+            watched_seconds,
+            duration_seconds,
+            progress_seconds,
+            finished_override,
+            last_watched_at,
+        ) = row.map_err(db_error)?;
+        let cat = resolve_video_category(
+            &lookup,
+            &video_id,
+            channel_id.as_deref(),
+            channel_name.as_deref(),
+        );
+        if let Some(target_cat) = filter_cat {
+            if cat.category_id != target_cat {
+                continue;
+            }
+        }
+        let finished = match finished_override {
+            Some(flag) => flag != 0,
+            None => matches!(
+                (progress_seconds, duration_seconds),
+                (Some(p), Some(d)) if d > 0.0 && p / d >= 0.9
+            ),
+        };
+        entries.push(WatchDayVideoEntry {
+            date: date_key.clone(),
+            video_id,
+            title,
+            channel_name,
+            thumbnail_url,
+            watched_seconds,
+            duration_seconds,
+            finished,
+            last_watched_at,
+            category_id: cat.category_id,
+            category_kind: cat.category_kind,
+            category_label: cat.label,
+            category_color: cat.color,
+        });
+    }
+    Ok(entries)
 }
 
 /// Marks a video watched or not by hand.
@@ -3281,7 +4140,7 @@ mod tests {
         let version: i64 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 3);
         assert_eq!(
             playlist(&connection, "custom").unwrap().unwrap().name,
             "Kept"
@@ -3291,8 +4150,8 @@ mod tests {
     #[test]
     fn refuses_newer_player_schema_without_changing_data() {
         let connection = database();
-        connection.pragma_update(None, "user_version", 2).unwrap();
-        assert!(prepare(&connection).unwrap_err().contains("version: 2"));
+        connection.pragma_update(None, "user_version", 4).unwrap();
+        assert!(prepare(&connection).unwrap_err().contains("version: 4"));
         assert!(playlist(&connection, FAVORITES_ID).unwrap().is_some());
     }
 
@@ -3324,7 +4183,7 @@ mod tests {
             let version: i64 = connection
                 .pragma_query_value(None, "user_version", |row| row.get(0))
                 .unwrap();
-            assert_eq!(version, 1);
+            assert_eq!(version, 3);
             assert_eq!(
                 playlist(&connection, "custom").unwrap().unwrap().name,
                 "Kept"
@@ -4078,6 +4937,35 @@ mod tests {
     }
 
     #[test]
+    fn migrates_legacy_pause_when_hidden_default_once_while_preserving_future_edits() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        connection.pragma_update(None, "user_version", 3).unwrap();
+        connection
+            .execute(
+                "INSERT INTO settings(key, value) VALUES ('player', ?1)",
+                params![r#"{"feedUpdateThresholdSeconds":3600,"hideFinishedInFeed":true,"autoplayNext":true,"pauseWhenHidden":true}"#],
+            )
+            .unwrap();
+
+        prepare(&connection).unwrap();
+        let migrated = settings(&connection).unwrap();
+        assert!(!migrated.pause_when_hidden);
+        assert!(migrated.hide_finished_in_feed);
+
+        save_settings(
+            &connection,
+            &PlayerSettings {
+                pause_when_hidden: true,
+                ..migrated
+            },
+        )
+        .unwrap();
+        prepare(&connection).unwrap();
+        assert!(settings(&connection).unwrap().pause_when_hidden);
+    }
+
+    #[test]
     fn a_backup_round_trips_into_an_empty_database() {
         let source = database();
         follow_with_videos(&source);
@@ -4797,5 +5685,159 @@ mod tests {
             .unwrap();
         assert_eq!(restored_v4.category_id, None);
         assert_eq!(restored_v4.note.as_deref(), Some("通勤听"));
+    }
+
+    #[test]
+    fn watch_heatmap_classifies_paths_courses_groups_and_aggregates_content_time() {
+        let connection = database();
+        subscribe(
+            &connection,
+            &ChannelInput {
+                channel_id: CHANNEL_B.into(),
+                name: "Bloomberg".into(),
+                handle: None,
+                avatar_url: None,
+                description: None,
+            },
+            NOW,
+        )
+        .unwrap();
+        store_videos(
+            &connection,
+            &[
+                VideoInput {
+                    video_id: V1.into(),
+                    channel_id: Some(CHANNEL_A.into()),
+                    channel_name: Some("Quant Channel".into()),
+                    title: "Backtesting 101".into(),
+                    duration_seconds: Some(1800),
+                    ..Default::default()
+                },
+                VideoInput {
+                    video_id: V2.into(),
+                    channel_id: Some(CHANNEL_A.into()),
+                    channel_name: Some("MIT OCW".into()),
+                    title: "Lecture 1".into(),
+                    duration_seconds: Some(2400),
+                    ..Default::default()
+                },
+                VideoInput {
+                    video_id: V3.into(),
+                    channel_id: Some(CHANNEL_B.into()),
+                    channel_name: Some("Bloomberg".into()),
+                    title: "Macro Brief".into(),
+                    duration_seconds: Some(900),
+                    ..Default::default()
+                },
+            ],
+            NOW,
+        )
+        .unwrap();
+
+        // V1 belongs to a learning path -> must roll up into that learning path category.
+        learning_path_save(
+            &connection,
+            &LearningPathInput {
+                path_id: Some("path-quant".into()),
+                title: "量化交易与算法金融".into(),
+                description: None,
+                nodes: vec![LearningPathNodeInput {
+                    node_id: "n1".into(),
+                    parent_id: None,
+                    position: 0,
+                    kind: "video".into(),
+                    title: "Backtesting 101".into(),
+                    note: None,
+                    video_id: Some(V1.into()),
+                    start_seconds: 0,
+                    optional: false,
+                    prerequisite_ids: vec![],
+                }],
+                videos: vec![],
+            },
+            NOW + 10,
+        )
+        .unwrap();
+
+        // V2 belongs to a course playlist.
+        course_save(
+            &connection,
+            "PL_MIT_6004",
+            "MIT 6.004",
+            Some("MIT OCW"),
+            &[VideoInput {
+                video_id: V2.into(),
+                channel_id: Some(CHANNEL_A.into()),
+                channel_name: Some("MIT OCW".into()),
+                title: "Lecture 1".into(),
+                ..Default::default()
+            }],
+            NOW + 20,
+        )
+        .unwrap();
+
+        // Record genuine content seconds across two dates & explicit hours.
+        record_watch_time_for_date_hour(&connection, V1, 1200.0, NOW + 100, "2026-11-15", 22).unwrap();
+        record_watch_time_for_date_hour(&connection, V1, 600.0, NOW + 200, "2026-11-15", 22).unwrap();
+        record_watch_time_for_date_hour(&connection, V2, 900.0, NOW + 300, "2026-11-15", 10).unwrap();
+        record_watch_time_for_date_hour(&connection, V3, 500.0, NOW + 400, "2026-11-16", 23).unwrap();
+
+        let groups = vec![SubscriptionGroupRule {
+            id: "grp-fin".into(),
+            name: "财经订阅".into(),
+            color: Some("#4a90e2".into()),
+            channel_ids: vec![CHANNEL_B.into()],
+        }];
+
+        let summary = watch_heatmap(
+            &connection,
+            Some("2026-11-01"),
+            Some("2026-11-16"),
+            &groups,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(summary.categories.len(), 3);
+        assert_eq!(summary.categories[0].label, "量化交易与算法金融");
+        assert_eq!(summary.categories[0].category_kind, "learning-path");
+        assert_eq!(summary.categories[0].total_seconds, 1800.0);
+        assert_eq!(summary.categories[1].label, "MIT 6.004");
+        assert_eq!(summary.categories[1].category_kind, "course");
+        assert_eq!(summary.categories[1].total_seconds, 900.0);
+        assert_eq!(summary.categories[2].label, "财经订阅");
+        assert_eq!(summary.categories[2].category_kind, "subscription-group");
+        assert_eq!(summary.categories[2].total_seconds, 500.0);
+
+        assert_eq!(summary.days.len(), 2);
+        assert_eq!(summary.days[0].date, "2026-11-15");
+        assert_eq!(summary.days[0].total_seconds, 2700.0);
+        assert_eq!(
+            summary.days[0].dominant_category_id.as_deref(),
+            Some("path:path-quant")
+        );
+
+        let detail = watch_day_detail(&connection, "2026-11-15", &groups, None).unwrap();
+        assert_eq!(detail.len(), 2);
+        assert_eq!(detail[0].video_id, V1);
+        assert_eq!(detail[0].category_label, "量化交易与算法金融");
+
+        let filtered = watch_heatmap(
+            &connection,
+            Some("2026-11-01"),
+            Some("2026-11-16"),
+            &groups,
+            Some("group:grp-fin"),
+        )
+        .unwrap();
+        assert_eq!(filtered.days.len(), 1);
+        assert_eq!(filtered.days[0].date, "2026-11-16");
+        assert_eq!(filtered.categories.len(), 3);
+        assert_eq!(summary.hourly_seconds.len(), 24);
+        assert_eq!(summary.hourly_seconds[10], 900.0);
+        assert_eq!(summary.hourly_seconds[22], 1800.0);
+        assert_eq!(summary.hourly_seconds[23], 500.0);
+        assert_eq!(filtered.hourly_seconds[22], 0.0);
+        assert_eq!(filtered.hourly_seconds[23], 500.0);
     }
 }

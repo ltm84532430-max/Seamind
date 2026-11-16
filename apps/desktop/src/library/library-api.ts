@@ -5,6 +5,8 @@ import type {
   DocumentVersion,
   DocumentVersionSnapshot,
   EpubBookDocument,
+  KnowledgeHeatmapDayEntry,
+  KnowledgeHeatmapSummary,
   LibrarySnapshot,
   MapDocument,
   OpenedDocument,
@@ -100,6 +102,18 @@ export const libraryApi = {
     title: string;
     source: string;
   }) => invoke<OpenedTextDocument>('create_text_document', args),
+  writingHeatmap: (args: {
+    fromDate?: string;
+    toDate?: string;
+    kindFilter?: string;
+    originFilter?: string;
+  }) => invoke<KnowledgeHeatmapSummary>('knowledge_writing_heatmap', args),
+  writingDayDetail: (args: {
+    date: string;
+    kindFilter?: string;
+    originFilter?: string;
+  }) =>
+    invoke<KnowledgeHeatmapDayEntry[]>('knowledge_writing_day_detail', args),
 };
 
 /** Document session port. The workbench names the command; this object owns the transport. */

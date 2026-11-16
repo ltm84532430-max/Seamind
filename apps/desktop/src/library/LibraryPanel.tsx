@@ -12,6 +12,16 @@ import {
   buildLibraryFolderTree,
   type LibraryFolderNode,
 } from './library-folder-tree';
+import {
+  RailFolderIcon,
+  RailListIcon,
+  RailOutlineIcon,
+  RailPlusIcon,
+  RailSparklesIcon,
+  SidebarCollapseButton,
+  useSidebarCollapseShortcut,
+  WorkspaceSidebarRail,
+} from '../components/WorkspaceSidebarRail';
 import type { NewFileKind } from '../workbench/templates';
 
 export interface LibraryPanelProps {
@@ -23,6 +33,7 @@ export interface LibraryPanelProps {
   /** The .mmd diagram open in the diagram workbench, if any. */
   selectedTextPath?: string | null;
   collapsed: boolean;
+  shortcutActive?: boolean;
   categoryFilter: string;
   query: string;
   busy: boolean;
@@ -168,6 +179,7 @@ export default function LibraryPanel({
   selectedPlantUmlPath = null,
   selectedTextPath = null,
   collapsed,
+  shortcutActive = false,
   categoryFilter,
   query,
   busy,
@@ -197,6 +209,7 @@ export default function LibraryPanel({
   onNavigateToLine,
 }: LibraryPanelProps) {
   const [activeTab, setActiveTab] = useState<'files' | 'outline'>('files');
+  useSidebarCollapseShortcut(onToggleCollapse, shortcutActive);
   const [sortMode, setSortMode] = useState<SortMode>('updated');
   const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(
     () => new Set(),
@@ -559,62 +572,138 @@ export default function LibraryPanel({
     );
   };
 
+  if (collapsed) {
+    return (
+      <aside
+        ref={sidebarRef}
+        className="library-sidebar is-collapsed"
+        aria-label="思维导图导航与目录"
+      >
+        <WorkspaceSidebarRail
+          ariaLabel="已收起的思维导图导航"
+          expandTitle="展开侧边栏 (快捷键 Ctrl+B)"
+          expandAriaLabel="展开侧边栏"
+          ariaControls="library-content-body"
+          headerHeight={52}
+          onExpand={onToggleCollapse}
+          sections={[
+            {
+              key: 'tabs',
+              items: [
+                {
+                  key: 'tab-files',
+                  label: `导图文件 (${documents.length})`,
+                  active: activeTab === 'files',
+                  icon: <RailListIcon />,
+                  onClick: () => setActiveTab('files'),
+                },
+                {
+                  key: 'tab-outline',
+                  label: `大纲 (${outlineItems.length})`,
+                  active: activeTab === 'outline',
+                  icon: <RailOutlineIcon />,
+                  onClick: () => {
+                    setActiveTab('outline');
+                    onToggleCollapse();
+                  },
+                },
+              ],
+            },
+            {
+              key: 'folders',
+              items: [
+                ...(folderTree.length > 0
+                  ? [
+                      {
+                        key: 'cat-all',
+                        label: '全部分类',
+                        active: categoryFilter === '',
+                        icon: <RailFolderIcon />,
+                        onClick: () => onSelectCategory(''),
+                      },
+                    ]
+                  : []),
+                ...folderTree.map((folder) => ({
+                  key: `folder:${folder.path}`,
+                  label: `${folder.name} (${folder.documentCount})`,
+                  active: categoryFilter === folder.path,
+                  thumb: { name: folder.name, shape: 'circle' as const },
+                  onClick: () =>
+                    onSelectCategory(
+                      categoryFilter === folder.path ? '' : folder.path,
+                    ),
+                })),
+              ],
+            },
+          ]}
+          footerItems={[
+            {
+              key: 'new-doc',
+              label: '新建空白思维导图',
+              icon: <RailPlusIcon />,
+              onClick: onCreateDocument,
+            },
+            {
+              key: 'ai-doc',
+              label: 'AI 智能构图…',
+              icon: <RailSparklesIcon />,
+              onClick: onCreateWithAi,
+            },
+          ]}
+        />
+      </aside>
+    );
+  }
+
   return (
     <aside
       ref={sidebarRef}
-      className={`library-sidebar${collapsed ? ' is-collapsed' : ''}`}
+      className="library-sidebar"
       aria-label="思维导图导航与目录"
     >
       {/* 顶栏：Tab 标签页与折叠控制 */}
       <div className="library-header">
-        {!collapsed && (
-          <div className="library-tabs" role="tablist">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === 'files'}
-              className={`library-tab${activeTab === 'files' ? ' is-active' : ''}`}
-              onClick={() => setActiveTab('files')}
-            >
-              <svg viewBox="0 0 16 16" className="tab-icon" aria-hidden="true">
-                <path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.879a1.5 1.5 0 0 1 1.06.44l1.122 1.12A1.5 1.5 0 0 0 9.62 5H12.5A1.5 1.5 0 0 1 14 6.5v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12.5v-8z" />
-              </svg>
-              <span>导图文件</span>
-              <span className="library-tab-badge">{documents.length}</span>
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === 'outline'}
-              className={`library-tab${activeTab === 'outline' ? ' is-active' : ''}`}
-              onClick={() => setActiveTab('outline')}
-            >
-              <svg viewBox="0 0 16 16" className="tab-icon" aria-hidden="true">
-                <line x1="3" y1="4" x2="6" y2="4" />
-                <line x1="8" y1="4" x2="13" y2="4" />
-                <line x1="3" y1="8" x2="6" y2="8" />
-                <line x1="8" y1="8" x2="13" y2="8" />
-                <line x1="3" y1="12" x2="6" y2="12" />
-                <line x1="8" y1="12" x2="13" y2="12" />
-              </svg>
-              <span>大纲</span>
-              <span className="library-tab-badge">{outlineItems.length}</span>
-            </button>
-          </div>
-        )}
-        <button
-          type="button"
-          className="pane-collapse-button library-collapse-button"
-          title={collapsed ? '展开侧边栏' : '收起侧边栏'}
-          aria-label={collapsed ? '展开侧边栏' : '收起侧边栏'}
-          aria-expanded={!collapsed}
-          aria-controls="library-content-body"
+        <div className="library-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'files'}
+            className={`library-tab${activeTab === 'files' ? ' is-active' : ''}`}
+            onClick={() => setActiveTab('files')}
+          >
+            <svg viewBox="0 0 16 16" className="tab-icon" aria-hidden="true">
+              <path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.879a1.5 1.5 0 0 1 1.06.44l1.122 1.12A1.5 1.5 0 0 0 9.62 5H12.5A1.5 1.5 0 0 1 14 6.5v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12.5v-8z" />
+            </svg>
+            <span>导图文件</span>
+            <span className="library-tab-badge">{documents.length}</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'outline'}
+            className={`library-tab${activeTab === 'outline' ? ' is-active' : ''}`}
+            onClick={() => setActiveTab('outline')}
+          >
+            <svg viewBox="0 0 16 16" className="tab-icon" aria-hidden="true">
+              <line x1="3" y1="4" x2="6" y2="4" />
+              <line x1="8" y1="4" x2="13" y2="4" />
+              <line x1="3" y1="8" x2="6" y2="8" />
+              <line x1="8" y1="8" x2="13" y2="8" />
+              <line x1="3" y1="12" x2="6" y2="12" />
+              <line x1="8" y1="12" x2="13" y2="12" />
+            </svg>
+            <span>大纲</span>
+            <span className="library-tab-badge">{outlineItems.length}</span>
+          </button>
+        </div>
+        <SidebarCollapseButton
+          collapsed={false}
           onClick={onToggleCollapse}
-        >
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <path d={collapsed ? 'M6 3l5 5-5 5' : 'M10 3 5 8l5 5'} />
-          </svg>
-        </button>
+          title="收起侧边栏 (快捷键 Ctrl+B)"
+          ariaLabel="收起侧边栏"
+          ariaControls="library-content-body"
+          className="library-collapse-button"
+        />
       </div>
 
       <div className="library-content-body" id="library-content-body">

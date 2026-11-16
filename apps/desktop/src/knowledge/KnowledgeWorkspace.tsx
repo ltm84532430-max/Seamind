@@ -24,6 +24,19 @@ import {
   KNOWLEDGE_NOTE_TEMPLATES,
   type KnowledgeNoteTemplate,
 } from './knowledge-markdown';
+import {
+  RailBookIcon,
+  RailFolderIcon,
+  RailHomeIcon,
+  RailInboxIcon,
+  RailNoteIcon,
+  RailPlayIcon,
+  RailPlusIcon,
+  SidebarCollapseButton,
+  useSidebarCollapseShortcut,
+  WorkspaceSidebarRail,
+} from '../components/WorkspaceSidebarRail';
+import KnowledgeHeatmap from './KnowledgeHeatmap';
 import './knowledge-workspace.css';
 
 export interface KnowledgeWorkspaceProps {
@@ -268,35 +281,6 @@ function SearchIcon() {
         stroke="currentColor"
         strokeWidth="1.35"
         strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function SidebarToggleIcon({ collapsed }: { collapsed: boolean }) {
-  return (
-    <svg
-      className="kb-svg-icon"
-      viewBox="0 0 16 16"
-      fill="none"
-      aria-hidden="true"
-    >
-      <rect
-        x="2"
-        y="2.5"
-        width="12"
-        height="11"
-        rx="1.6"
-        stroke="currentColor"
-        strokeWidth="1.35"
-      />
-      <path d="M6.2 2.5v11" stroke="currentColor" strokeWidth="1.35" />
-      <path
-        d={collapsed ? 'm8.8 6.2 1.8 1.8-1.8 1.8' : 'M10.6 6.2 8.8 8l1.8 1.8'}
-        stroke="currentColor"
-        strokeWidth="1.35"
-        strokeLinecap="round"
-        strokeLinejoin="round"
       />
     </svg>
   );
@@ -711,6 +695,8 @@ export default function KnowledgeWorkspace({
     });
   }, []);
 
+  useSidebarCollapseShortcut(toggleSidebarCollapsed, true);
+
   const toggleFolder = useCallback((folderName: string) => {
     setActiveFolder(folderName);
     setCollapsedFolders((prev) => {
@@ -825,50 +811,100 @@ export default function KnowledgeWorkspace({
     >
       {sidebarCollapsed ? (
         <aside className="knowledge-rail" aria-label="已收起的知识库侧栏">
-          <div className="knowledge-rail-top">
-            <button
-              type="button"
-              className="kb-icon-btn"
-              title="展开知识库目录"
-              aria-label="展开知识库目录"
-              onClick={toggleSidebarCollapsed}
-            >
-              <SidebarToggleIcon collapsed />
-            </button>
-          </div>
-          <div className="knowledge-rail-actions">
-            <button
-              type="button"
-              className="kb-icon-btn"
-              title={
-                rootPath
-                  ? `在「${effectiveFolder}」中新建笔记`
-                  : '请先选择文件库目录'
-              }
-              aria-label="新建笔记"
-              disabled={!rootPath || activeSource !== 'manual'}
-              onClick={() => onCreateNote(effectiveFolder)}
-            >
-              <PlusIcon />
-            </button>
-            {isDocOpen && onCloseNote && (
-              <button
-                type="button"
-                className="kb-icon-btn"
-                title="返回知识库概览"
-                aria-label="返回知识库概览"
-                onClick={onCloseNote}
-              >
-                <HomeOverviewIcon />
-              </button>
-            )}
-          </div>
-          <span
-            className="knowledge-rail-count"
-            title={`本分区 ${sourceNotes.length} 篇笔记`}
-          >
-            {sourceNotes.length}
-          </span>
+          <WorkspaceSidebarRail
+            ariaLabel="已收起的知识库侧栏"
+            expandTitle="展开知识库目录 (快捷键 Ctrl+B)"
+            expandAriaLabel="展开知识库目录"
+            headerHeight={52}
+            onExpand={toggleSidebarCollapsed}
+            sections={[
+              {
+                key: 'sources',
+                items: KNOWLEDGE_SOURCE_PAGES.filter(
+                  ({ id }) => id !== 'unknown' || sourceCounts.unknown > 0,
+                ).map(({ id, label }) => ({
+                  key: `source:${id}`,
+                  label: `${label} (${sourceCounts[id]})`,
+                  active: activeSource === id,
+                  icon:
+                    id === 'manual' ? (
+                      <RailNoteIcon />
+                    ) : id === 'ebook' ? (
+                      <RailBookIcon />
+                    ) : id === 'player' ? (
+                      <RailPlayIcon />
+                    ) : (
+                      <RailInboxIcon />
+                    ),
+                  onClick: () => void selectSource(id),
+                })),
+              },
+              {
+                key: 'groups',
+                items: groups.map((group) => ({
+                  key: `group:${group.name}`,
+                  label: `${group.name} (${group.notes.length} 篇)`,
+                  active: effectiveFolder === group.name,
+                  thumb: {
+                    name: group.name,
+                    shape: 'circle',
+                  },
+                  onClick: () => {
+                    setActiveFolder(group.name);
+                    setCollapsedFolders((prev) => {
+                      if (!prev.has(group.name)) return prev;
+                      const next = new Set(prev);
+                      next.delete(group.name);
+                      writeCollapsedFolders(next);
+                      return next;
+                    });
+                    if (
+                      group.notes.length > 0 &&
+                      (!activeDocument ||
+                        !group.notes.some(
+                          (note) =>
+                            note.relativePath === activeDocument.relativePath,
+                        ))
+                    ) {
+                      onOpenNote(group.notes[0]);
+                    }
+                  },
+                })),
+              },
+            ]}
+            footerItems={[
+              ...(activeSource === 'manual'
+                ? [
+                    {
+                      key: 'new-note',
+                      label: rootPath
+                        ? `在「${effectiveFolder}」中新建笔记`
+                        : '请先选择文件库目录',
+                      icon: <RailPlusIcon />,
+                      disabled: !rootPath,
+                      onClick: () => onCreateNote(effectiveFolder),
+                    },
+                    {
+                      key: 'new-category',
+                      label: '新建分类文件夹',
+                      icon: <RailFolderIcon />,
+                      disabled: !rootPath,
+                      onClick: openCategoryCreator,
+                    },
+                  ]
+                : []),
+              ...(isDocOpen && onCloseNote
+                ? [
+                    {
+                      key: 'home',
+                      label: '返回知识库概览',
+                      icon: <RailHomeIcon />,
+                      onClick: () => void onCloseNote(),
+                    },
+                  ]
+                : []),
+            ]}
+          />
         </aside>
       ) : (
         <aside className="knowledge-sidebar" aria-label="知识库文档导航">
@@ -904,15 +940,12 @@ export default function KnowledgeWorkspace({
               >
                 <CollapseTreeIcon allCollapsed={collapsedFolders.size > 0} />
               </button>
-              <button
-                type="button"
-                className="kb-icon-btn"
-                title="收起侧边栏"
-                aria-label="收起侧边栏"
+              <SidebarCollapseButton
+                collapsed={false}
                 onClick={toggleSidebarCollapsed}
-              >
-                <SidebarToggleIcon collapsed={false} />
-              </button>
+                title="收起侧边栏 (快捷键 Ctrl+B)"
+                ariaLabel="收起侧边栏"
+              />
             </div>
           </header>
 
@@ -1533,6 +1566,12 @@ export default function KnowledgeWorkspace({
                   </button>
                 </div>
               </header>
+
+              <KnowledgeHeatmap
+                rootPath={rootPath}
+                documents={documents}
+                onOpenNote={onOpenNote}
+              />
 
               <div className="knowledge-home-grid">
                 <section

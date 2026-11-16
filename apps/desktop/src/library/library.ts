@@ -94,11 +94,7 @@ export interface SaveDocumentInput {
 }
 
 export type DocumentVersionSource =
-  | 'baseline'
-  | 'autosave'
-  | 'manual'
-  | 'ai'
-  | 'restore';
+  'baseline' | 'autosave' | 'manual' | 'ai' | 'restore';
 
 export interface DocumentVersion {
   versionId: string;
@@ -115,4 +111,33 @@ export interface DocumentVersion {
 
 export interface DocumentVersionSnapshot extends DocumentVersion {
   markdown: string;
+}
+
+export interface KnowledgeHeatmapDay {
+  date: string;
+  totalCount: number;
+  createdCount: number;
+  updatedCount: number;
+  docCount: number;
+  mindmapCount: number;
+  charDelta: number;
+}
+
+export interface KnowledgeHeatmapSummary {
+  fromDate: string;
+  toDate: string;
+  days: KnowledgeHeatmapDay[];
+}
+
+export interface KnowledgeHeatmapDayEntry {
+  date: string;
+  documentId: string;
+  title: string;
+  relativePath: string;
+  action: 'create' | 'edit' | string;
+  kind: DocumentKind | string;
+  origin: DocumentOrigin | string;
+  charDelta: number;
+  lastWriteAt: number;
+  existsInLibrary: boolean;
 }

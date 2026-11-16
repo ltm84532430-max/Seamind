@@ -18,8 +18,10 @@ import {
   PlusIcon,
   SettingsIcon,
   StarIcon,
+  StatsIcon,
   WarningIcon,
 } from './icons';
+import MarqueeText from './MarqueeText';
 import { playerApi } from './player-api';
 import { sortChannels } from './queue';
 import {
@@ -75,12 +77,12 @@ function NavItem({
   return (
     <button
       type="button"
-      className={`player-nav-item${current ? ' is-current' : ''}`}
+      className={`player-nav-item player-marquee-trigger${current ? ' is-current' : ''}`}
       aria-current={current ? 'page' : undefined}
       onClick={() => onGo(target)}
     >
       <span className="player-nav-icon">{icon}</span>
-      <span className="player-nav-label">{label}</span>
+      <MarqueeText text={label} className="player-nav-label" />
       {badge && <span className="player-nav-badge">{badge}</span>}
     </button>
   );
@@ -231,6 +233,7 @@ export default function Sidebar({
       badge: watchLaterCount ? String(watchLaterCount) : undefined,
     },
     { target: { kind: 'history' }, icon: <HistoryIcon />, label: '历史' },
+    { target: { kind: 'stats' }, icon: <StatsIcon />, label: '统计' },
   ];
 
   // Filter channels if filter query is present

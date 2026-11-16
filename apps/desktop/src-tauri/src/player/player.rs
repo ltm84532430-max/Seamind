@@ -145,13 +145,51 @@ pub fn player_save_progress(
     video_id: String,
     progress_seconds: f64,
     duration_seconds: Option<f64>,
+    watched_delta_seconds: Option<f64>,
 ) -> Result<Option<store::WatchState>, String> {
+    let connection = open(&app)?;
+    let timestamp = now();
+    if let Some(delta) = watched_delta_seconds.filter(|value| value.is_finite() && *value > 0.0) {
+        store::record_watch_time(&connection, &video_id, delta, timestamp)?;
+    }
     store::save_progress(
-        &open(&app)?,
+        &connection,
         &video_id,
         progress_seconds,
         duration_seconds,
-        now(),
+        timestamp,
+    )
+}
+
+#[tauri::command(async)]
+pub fn player_watch_heatmap(
+    app: AppHandle,
+    from_date: Option<String>,
+    to_date: Option<String>,
+    subscription_groups: Option<Vec<store::SubscriptionGroupRule>>,
+    category_filter: Option<String>,
+) -> Result<store::WatchHeatmapSummary, String> {
+    store::watch_heatmap(
+        &open(&app)?,
+        from_date.as_deref(),
+        to_date.as_deref(),
+        subscription_groups.as_deref().unwrap_or(&[]),
+        category_filter.as_deref(),
+    )
+}
+
+#[tauri::command(async)]
+pub fn player_watch_day_detail(
+    app: AppHandle,
+    date: String,
+    subscription_groups: Option<Vec<store::SubscriptionGroupRule>>,
+    category_filter: Option<String>,
+) -> Result<Vec<store::WatchDayVideoEntry>, String> {
+    store::watch_day_detail(
+        &open(&app)?,
+        &date,
+        subscription_groups.as_deref().unwrap_or(&[]),
+        category_filter.as_deref(),
     )
 }
 

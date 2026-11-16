@@ -15,6 +15,7 @@ export type PlayerView =
   | { kind: 'favorites' }
   | { kind: 'watch-later' }
   | { kind: 'history' }
+  | { kind: 'stats' }
   | { kind: 'course'; playlistId: string }
   | { kind: 'channel'; channelId: string }
   | { kind: 'remote-playlist'; listId: string }

@@ -128,6 +128,14 @@ export function HistoryIcon() {
   );
 }
 
+export function StatsIcon() {
+  return (
+    <Svg>
+      <path d="M3 13V8.5M8 13V4M13 13V6.5" />
+    </Svg>
+  );
+}
+
 export function ListIcon() {
   return (
     <Svg>
