@@ -1000,33 +1000,48 @@ Function un.SkipIfPassive
 FunctionEnd
 
 Function CreateOrUpdateStartMenuShortcut
-  ; We used to use product name as MAINBINARYNAME
-  ; migrate old shortcuts to target the new MAINBINARYNAME
+  ; Migrate shortcuts that still point at a previous executable name.
+  ; A shortcut that already points at the current executable must continue,
+  ; so an update can rewrite it and pick up a new icon.
   StrCpy $R0 0
 
-  !insertmacro IsShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
-  Pop $0
-  ${If} $0 = 1
-    !insertmacro SetShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
-    StrCpy $R0 1
+  ${If} $OldMainBinaryName != ""
+  ${AndIf} $OldMainBinaryName != "${MAINBINARYNAME}.exe"
+    !insertmacro IsShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
+    Pop $0
+    ${If} $0 = 1
+      !insertmacro SetShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+      StrCpy $R0 1
+    ${EndIf}
+
+    !insertmacro IsShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
+    Pop $0
+    ${If} $0 = 1
+      !insertmacro SetShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+      StrCpy $R0 1
+    ${EndIf}
+
+    ${If} $R0 = 1
+      Return
+    ${EndIf}
   ${EndIf}
 
-  !insertmacro IsShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
-  Pop $0
-  ${If} $0 = 1
-    !insertmacro SetShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
-    StrCpy $R0 1
-  ${EndIf}
-
-  ${If} $R0 = 1
-    Return
-  ${EndIf}
-
-  ; Skip creating shortcut if in update mode or no shortcut mode
-  ; but always create if migrating from wix
+  ; Do not recreate a shortcut the user removed. An update still rewrites one
+  ; that exists, so Explorer re-reads the current executable icon.
   ${If} $WixMode = 0
+    ${If} $NoShortcutMode = 1
+      Return
+    ${EndIf}
     ${If} $UpdateMode = 1
-    ${OrIf} $NoShortcutMode = 1
+      !if "${STARTMENUFOLDER}" != ""
+        Call RefreshStartMenuShortcut
+      !else
+        ${If} ${FileExists} "$SMPROGRAMS\${PRODUCTNAME}.lnk"
+          Delete "$SMPROGRAMS\${PRODUCTNAME}.lnk"
+          CreateShortcut "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe" "" "$INSTDIR\${MAINBINARYNAME}.exe" 0
+          !insertmacro SetLnkAppUserModelId "$SMPROGRAMS\${PRODUCTNAME}.lnk"
+        ${EndIf}
+      !endif
       Return
     ${EndIf}
   ${EndIf}
@@ -1041,21 +1056,38 @@ Function CreateOrUpdateStartMenuShortcut
   !endif
 FunctionEnd
 
+Function RefreshStartMenuShortcut
+  ${If} ${FileExists} "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk"
+    Delete "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk"
+    CreateShortcut "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe" "" "$INSTDIR\${MAINBINARYNAME}.exe" 0
+    !insertmacro SetLnkAppUserModelId "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk"
+  ${EndIf}
+FunctionEnd
+
 Function CreateOrUpdateDesktopShortcut
-  ; We used to use product name as MAINBINARYNAME
-  ; migrate old shortcuts to target the new MAINBINARYNAME
-  !insertmacro IsShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
-  Pop $0
-  ${If} $0 = 1
-    !insertmacro SetShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
-    Return
+  ; Migrate a desktop shortcut that still points at a previous executable name.
+  ${If} $OldMainBinaryName != ""
+  ${AndIf} $OldMainBinaryName != "${MAINBINARYNAME}.exe"
+    !insertmacro IsShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
+    Pop $0
+    ${If} $0 = 1
+      !insertmacro SetShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+      Return
+    ${EndIf}
   ${EndIf}
 
-  ; Skip creating shortcut if in update mode or no shortcut mode
-  ; but always create if migrating from wix
+  ; Do not recreate a desktop shortcut the user removed. Rewrite one that
+  ; exists so a shortcut-to-shortcut or a cached old icon points at this exe.
   ${If} $WixMode = 0
+    ${If} $NoShortcutMode = 1
+      Return
+    ${EndIf}
     ${If} $UpdateMode = 1
-    ${OrIf} $NoShortcutMode = 1
+      ${If} ${FileExists} "$DESKTOP\${PRODUCTNAME}.lnk"
+        Delete "$DESKTOP\${PRODUCTNAME}.lnk"
+        CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe" "" "$INSTDIR\${MAINBINARYNAME}.exe" 0
+        !insertmacro SetLnkAppUserModelId "$DESKTOP\${PRODUCTNAME}.lnk"
+      ${EndIf}
       Return
     ${EndIf}
   ${EndIf}

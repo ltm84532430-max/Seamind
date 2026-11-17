@@ -20,6 +20,8 @@
       FileClose $R7
     ${EndIf}
   ${EndIf}
+  ; Ask Explorer to drop cached shortcut icons after the executable is replaced.
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0x2000, i 0, i 0)'
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
