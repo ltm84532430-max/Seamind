@@ -795,9 +795,11 @@ export default function TaskWorkspace({
         }
         const nextProgressKey = epubProgressKey(book);
         const rootChanged = resource.rootPath !== library.rootPath;
-        const fileChanged =
-          Boolean(resource.progressKey) &&
-          !sameEpubProgressFile(resource.progressKey, nextProgressKey);
+        const storedProgressKey = resource.progressKey;
+        const fileChanged = Boolean(
+          storedProgressKey &&
+          !sameEpubProgressFile(storedProgressKey, nextProgressKey),
+        );
         if (rootChanged || fileChanged) {
           const message = rootChanged
             ? '这本书已在另一个书库中找到。重新关联后会使用当前书库路径，是否继续？'
