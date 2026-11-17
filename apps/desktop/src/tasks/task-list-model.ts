@@ -1,11 +1,12 @@
 import type { LibrarySnapshot } from '../library/library';
 import {
-  epubBookIdentity,
   epubProgressKey,
+  findLibraryEpubForTask,
   getEpubReadingPlanCompleted,
   loadEpubBookMetadata,
   loadEpubReadingActivity,
   loadEpubReadingPlan,
+  sameEpubProgressFile,
 } from '../ebook/ebook-storage';
 import type { WatchState } from '../player/types';
 import type {
@@ -385,14 +386,14 @@ export function resourceTargetProgress(
     return Math.max(state.progressSeconds, resource.manualValue ?? 0);
   }
   if (!library?.rootPath || library.rootPath !== resource.rootPath) return null;
-  const book = library.books.find(
-    (item) =>
-      (resource.bookId &&
-        epubBookIdentity(item.relativePath) === resource.bookId) ||
-      item.relativePath === resource.relativePath,
-  );
+  const book = findLibraryEpubForTask(library.books, resource);
   if (!book) return null;
-  const key = resource.progressKey || epubProgressKey(book);
+  const currentKey = epubProgressKey(book);
+  const key =
+    resource.progressKey &&
+    !sameEpubProgressFile(currentKey, resource.progressKey)
+      ? resource.progressKey
+      : currentKey;
   const metadata = loadEpubBookMetadata(key);
   const activity = loadEpubReadingActivity(key);
   if (resource.targetUnit === 'words') {
@@ -462,15 +463,13 @@ export function resourceProgress(
   }
   if (!library?.rootPath || library.rootPath !== resource.rootPath)
     return '书库未打开或已切换';
-  const book = library.books.find(
-    (item) =>
-      (resource.bookId &&
-        epubBookIdentity(item.relativePath) === resource.bookId) ||
-      item.relativePath === resource.relativePath,
-  );
+  const book = findLibraryEpubForTask(library.books, resource);
   if (!book) return '书籍未找到，可编辑任务重新关联';
   const currentKey = epubProgressKey(book);
-  if (resource.progressKey && currentKey !== resource.progressKey)
+  if (
+    resource.progressKey &&
+    !sameEpubProgressFile(currentKey, resource.progressKey)
+  )
     return '书籍文件已变化，请确认并重新关联';
   const key = resource.progressKey || currentKey;
   const metadata = loadEpubBookMetadata(key);

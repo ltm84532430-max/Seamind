@@ -92,9 +92,11 @@ import type {
 import {
   epubBookIdentity,
   epubProgressKey,
+  findLibraryEpubForTask,
   findStoredCoverByBookKey,
   loadEpubAnnotations,
   loadEpubBookMetadata,
+  sameEpubProgressFile,
   type EpubAnnotation,
 } from './ebook/ebook-storage';
 import AgentPanel from './agent/AgentPanel';
@@ -2767,16 +2769,11 @@ function AppContent() {
       ) {
         throw new Error('请先切换到这项任务对应的电子书文件库。');
       }
-      const book = librarySnapshot.books.find(
-        (item) =>
-          (resource.bookId &&
-            epubBookIdentity(item.relativePath) === resource.bookId) ||
-          item.relativePath === resource.relativePath,
-      );
+      const book = findLibraryEpubForTask(librarySnapshot.books, resource);
       if (!book) throw new Error('找不到关联电子书，请编辑任务并重新选择。');
       if (
         resource.progressKey &&
-        epubProgressKey(book) !== resource.progressKey
+        !sameEpubProgressFile(epubProgressKey(book), resource.progressKey)
       ) {
         throw new Error('电子书文件已变化，请编辑任务并确认重新关联。');
       }

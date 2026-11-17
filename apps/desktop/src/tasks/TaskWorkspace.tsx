@@ -4,7 +4,9 @@ import type { LibrarySnapshot } from '../library/library';
 import {
   epubBookIdentity,
   epubProgressKey,
+  findLibraryEpubForTask,
   loadEpubBookMetadata,
+  sameEpubProgressFile,
 } from '../ebook/ebook-storage';
 import { playerApi } from '../player/player-api';
 import type { WatchState } from '../player/types';
@@ -590,27 +592,18 @@ export default function TaskWorkspace({
   const ebookResources = allResources.filter(
     (resource) => resource.kind === 'ebook',
   );
+  const linkedEbook = (resource: TaskResource) =>
+    library ? findLibraryEpubForTask(library.books, resource) : undefined;
   const unlinkedEbookCount = ebookResources.filter(
-    (resource) =>
-      !library?.books.some(
-        (book) =>
-          (resource.bookId &&
-            epubBookIdentity(book.relativePath) === resource.bookId) ||
-          book.relativePath === resource.relativePath,
-      ),
+    (resource) => !linkedEbook(resource),
   ).length;
   const ebookRebindCount = ebookResources.filter((resource) => {
-    const book = library?.books.find(
-      (item) =>
-        (resource.bookId &&
-          epubBookIdentity(item.relativePath) === resource.bookId) ||
-        item.relativePath === resource.relativePath,
-    );
+    const book = linkedEbook(resource);
     return Boolean(
       book &&
       (resource.rootPath !== library?.rootPath ||
         (resource.progressKey &&
-          epubProgressKey(book) !== resource.progressKey)),
+          !sameEpubProgressFile(epubProgressKey(book), resource.progressKey))),
     );
   }).length;
   const videoResources = allResources.filter(
@@ -628,16 +621,14 @@ export default function TaskWorkspace({
   );
   const ebookLinkNeedsRepair = (resource: TaskResource) => {
     if (resource.kind !== 'ebook') return false;
-    const book = library?.books.find(
-      (item) =>
-        (resource.bookId &&
-          epubBookIdentity(item.relativePath) === resource.bookId) ||
-        item.relativePath === resource.relativePath,
-    );
+    const book = library
+      ? findLibraryEpubForTask(library.books, resource)
+      : undefined;
     return Boolean(
       !book ||
       resource.rootPath !== library?.rootPath ||
-      (resource.progressKey && epubProgressKey(book) !== resource.progressKey),
+      (resource.progressKey &&
+        !sameEpubProgressFile(epubProgressKey(book), resource.progressKey)),
     );
   };
   const retryVideoProgress = async (resourceId: string) => {
@@ -798,17 +789,7 @@ export default function TaskWorkspace({
         if (!library?.rootPath) {
           throw new Error('先打开电子书库，再重试此关联。');
         }
-        const identity =
-          resource.bookId ||
-          (resource.relativePath
-            ? epubBookIdentity(resource.relativePath)
-            : '');
-        const book = library.books.find(
-          (candidate) =>
-            (identity &&
-              epubBookIdentity(candidate.relativePath) === identity) ||
-            candidate.relativePath === resource.relativePath,
-        );
+        const book = findLibraryEpubForTask(library.books, resource);
         if (!book) {
           throw new Error('找不到这本书。请编辑任务并从当前书库重新关联。');
         }
@@ -816,7 +797,7 @@ export default function TaskWorkspace({
         const rootChanged = resource.rootPath !== library.rootPath;
         const fileChanged =
           Boolean(resource.progressKey) &&
-          resource.progressKey !== nextProgressKey;
+          !sameEpubProgressFile(resource.progressKey, nextProgressKey);
         if (rootChanged || fileChanged) {
           const message = rootChanged
             ? '这本书已在另一个书库中找到。重新关联后会使用当前书库路径，是否继续？'

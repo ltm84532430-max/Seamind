@@ -66,9 +66,162 @@ const BOOKMARK_PREFIX = 'seamind:epub-bookmarks:v1:';
 const ANNOTATION_PREFIX = 'seamind:epub-annotations:v1:';
 const READING_ACTIVITY_PREFIX = 'seamind:epub-reading-activity:v1:';
 const READING_PLAN_PREFIX = 'seamind:epub-reading-plan:v1:';
+const REBIND_MARKER_PREFIX = 'seamind:epub-rebind:v1:';
+
+/** Records copied when the current filename has no saved value of its own. */
+const REBIND_EMPTY_PREFIXES = [
+  PROGRESS_PREFIX,
+  SETTINGS_PREFIX,
+  METADATA_PREFIX,
+  BOOKMARK_PREFIX,
+  ANNOTATION_PREFIX,
+  READING_ACTIVITY_PREFIX,
+  READING_PLAN_PREFIX,
+];
 
 function suffix(progressKey: string) {
   return encodeURIComponent(progressKey);
+}
+
+function parseLibraryProgressIdentity(
+  progressKey: string,
+): { fileSize: string; updatedAt: string } | null {
+  const match = /^library:.+:(\d+):(\d+)$/.exec(progressKey);
+  if (!match) return null;
+  return { fileSize: match[1], updatedAt: match[2] };
+}
+
+/** Same EPUB bytes. A rename keeps the size and modification time. */
+export function sameEpubProgressFile(left: string, right: string): boolean {
+  if (left === right) return true;
+  const leftIdentity = parseLibraryProgressIdentity(left);
+  const rightIdentity = parseLibraryProgressIdentity(right);
+  return Boolean(
+    leftIdentity &&
+    rightIdentity &&
+    leftIdentity.fileSize === rightIdentity.fileSize &&
+    leftIdentity.updatedAt === rightIdentity.updatedAt,
+  );
+}
+
+function progressKeyFromStorageKey(storageKey: string): string | null {
+  for (const prefix of REBIND_EMPTY_PREFIXES) {
+    if (!storageKey.startsWith(prefix)) continue;
+    try {
+      return decodeURIComponent(storageKey.slice(prefix.length));
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function storedIsEmpty(prefix: string, progressKey: string): boolean {
+  const raw = localStorage.getItem(`${prefix}${suffix(progressKey)}`);
+  return raw == null || raw === '' || raw === '[]';
+}
+
+function metadataProgress(raw: string | null): number {
+  if (!raw) return 0;
+  try {
+    const parsed = JSON.parse(raw) as { progress?: unknown };
+    return typeof parsed.progress === 'number' &&
+      Number.isFinite(parsed.progress)
+      ? parsed.progress
+      : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * A renamed EPUB keeps its size and modification time, so notes saved under
+ * the old filename still belong to it. Copy those notes onto the current
+ * filename once. An empty list written after the rename does not count as
+ * saved notes. Existing notes on the current filename stay in place.
+ */
+export function rebindRenamedEpubProgress(progressKey: string): void {
+  if (typeof localStorage === 'undefined') return;
+  if (!parseLibraryProgressIdentity(progressKey)) return;
+  const marker = `${REBIND_MARKER_PREFIX}${suffix(progressKey)}`;
+  try {
+    if (localStorage.getItem(marker) === '1') return;
+  } catch {
+    return;
+  }
+  const current = parseLibraryProgressIdentity(progressKey);
+  if (!current) return;
+  const legacyKeys = new Set<string>();
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const storageKey = localStorage.key(index);
+      if (!storageKey) continue;
+      const storedProgress = progressKeyFromStorageKey(storageKey);
+      if (!storedProgress || storedProgress === progressKey) continue;
+      if (sameEpubProgressFile(progressKey, storedProgress)) {
+        legacyKeys.add(storedProgress);
+      }
+    }
+    const copied = new Map<string, Set<string>>();
+    for (const prefix of REBIND_EMPTY_PREFIXES) {
+      if (!storedIsEmpty(prefix, progressKey)) continue;
+      let best: { key: string; value: string } | null = null;
+      for (const legacy of legacyKeys) {
+        const value = localStorage.getItem(`${prefix}${suffix(legacy)}`);
+        if (value == null || value === '' || value === '[]') continue;
+        if (!best || value.length > best.value.length) {
+          best = { key: legacy, value };
+        }
+      }
+      if (!best) continue;
+      localStorage.setItem(`${prefix}${suffix(progressKey)}`, best.value);
+      const prefixes = copied.get(best.key) ?? new Set<string>();
+      prefixes.add(prefix);
+      copied.set(best.key, prefixes);
+    }
+    const currentMeta = localStorage.getItem(
+      `${METADATA_PREFIX}${suffix(progressKey)}`,
+    );
+    const currentProgress = metadataProgress(currentMeta);
+    let richer: { key: string; progress: number; meta: string } | null = null;
+    for (const legacy of legacyKeys) {
+      const meta = localStorage.getItem(`${METADATA_PREFIX}${suffix(legacy)}`);
+      const progress = metadataProgress(meta);
+      if (!meta || progress <= currentProgress + 0.01) continue;
+      if (!richer || progress > richer.progress) {
+        richer = { key: legacy, progress, meta };
+      }
+    }
+    if (richer) {
+      localStorage.setItem(
+        `${METADATA_PREFIX}${suffix(progressKey)}`,
+        richer.meta,
+      );
+      const legacyLocation = localStorage.getItem(
+        `${PROGRESS_PREFIX}${suffix(richer.key)}`,
+      );
+      if (legacyLocation) {
+        localStorage.setItem(
+          `${PROGRESS_PREFIX}${suffix(progressKey)}`,
+          legacyLocation,
+        );
+        const prefixes = copied.get(richer.key) ?? new Set<string>();
+        prefixes.add(PROGRESS_PREFIX);
+        copied.set(richer.key, prefixes);
+      }
+      const prefixes = copied.get(richer.key) ?? new Set<string>();
+      prefixes.add(METADATA_PREFIX);
+      copied.set(richer.key, prefixes);
+    }
+    for (const [legacy, prefixes] of copied) {
+      for (const prefix of prefixes) {
+        localStorage.removeItem(`${prefix}${suffix(legacy)}`);
+      }
+    }
+    localStorage.setItem(marker, '1');
+  } catch {
+    // Leave the marker unset so the next open can retry a partial copy.
+  }
 }
 
 export function epubProgressKey(book: EpubBookDocument) {
@@ -84,9 +237,46 @@ export function epubBookIdentity(relativePath: string) {
     .toLocaleLowerCase('en-US');
 }
 
+/**
+ * The task may still name the file from before a rename. Match the path
+ * first, then the one book that still has the same size and modification time.
+ */
+export function findLibraryEpubForTask<
+  T extends Pick<EpubBookDocument, 'relativePath' | 'fileSize' | 'updatedAt'>,
+>(
+  books: readonly T[],
+  resource: {
+    bookId?: string | null;
+    relativePath?: string | null;
+    progressKey?: string | null;
+  },
+): T | undefined {
+  const pathIdentity = resource.relativePath
+    ? epubBookIdentity(resource.relativePath)
+    : '';
+  const byIdentity = books.find(
+    (item) =>
+      (resource.bookId &&
+        epubBookIdentity(item.relativePath) === resource.bookId) ||
+      (pathIdentity && epubBookIdentity(item.relativePath) === pathIdentity) ||
+      (resource.relativePath != null &&
+        item.relativePath === resource.relativePath),
+  );
+  if (byIdentity) return byIdentity;
+  if (!resource.progressKey) return undefined;
+  const matches = books.filter((item) =>
+    sameEpubProgressFile(
+      `library:${item.relativePath}:${item.fileSize}:${item.updatedAt}`,
+      resource.progressKey ?? '',
+    ),
+  );
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 export function loadEpubBookMetadata(
   progressKey: string,
 ): EpubBookMetadata | null {
+  rebindRenamedEpubProgress(progressKey);
   try {
     const parsed: unknown = JSON.parse(
       localStorage.getItem(`${METADATA_PREFIX}${suffix(progressKey)}`) ??
@@ -248,6 +438,7 @@ export function saveEpubBookMetadata(
 }
 
 export function loadEpubBookmarks(progressKey: string): EpubBookmark[] {
+  rebindRenamedEpubProgress(progressKey);
   try {
     const parsed: unknown = JSON.parse(
       localStorage.getItem(`${BOOKMARK_PREFIX}${suffix(progressKey)}`) ?? '[]',
@@ -284,6 +475,7 @@ export function saveEpubBookmarks(
 }
 
 export function loadEpubAnnotations(progressKey: string): EpubAnnotation[] {
+  rebindRenamedEpubProgress(progressKey);
   try {
     const parsed: unknown = JSON.parse(
       localStorage.getItem(`${ANNOTATION_PREFIX}${suffix(progressKey)}`) ??
@@ -355,6 +547,7 @@ export function clearEpubReaderData(progressKey: string) {
     localStorage.removeItem(`${ANNOTATION_PREFIX}${key}`);
     localStorage.removeItem(`${READING_ACTIVITY_PREFIX}${key}`);
     localStorage.removeItem(`${READING_PLAN_PREFIX}${key}`);
+    localStorage.removeItem(`${REBIND_MARKER_PREFIX}${key}`);
   } catch {
     // The EPUB file deletion remains successful if browser storage is unavailable.
   }
@@ -439,6 +632,7 @@ function saveActivity(progressKey: string, activity: EpubReadingActivity) {
 export function loadEpubReadingActivity(
   progressKey: string,
 ): EpubReadingActivity | null {
+  rebindRenamedEpubProgress(progressKey);
   return readActivity(progressKey);
 }
 
@@ -592,6 +786,7 @@ export function clearAllReadingActivity(progressKeys?: string[]): number {
 export function loadEpubReadingPlan(
   progressKey: string,
 ): EpubReadingPlan | null {
+  rebindRenamedEpubProgress(progressKey);
   try {
     const parsed: unknown = JSON.parse(
       localStorage.getItem(`${READING_PLAN_PREFIX}${suffix(progressKey)}`) ??
