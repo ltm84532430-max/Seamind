@@ -52,6 +52,18 @@ interface TerminalBellEvent {
   sessionId: string;
 }
 
+export interface TerminalSessionRuntimeMeta {
+  cols: number;
+  rows: number;
+  webgl: boolean;
+  viActive: boolean;
+  viMode: 'normal' | 'line' | 'char';
+  hintsActive: boolean;
+  searchOpen: boolean;
+  internalStatus: string;
+  flashNotice: string;
+}
+
 export interface TerminalSessionViewHandle {
   sendCommand: (command: string, execute?: boolean) => void;
   clear: () => void;
@@ -60,6 +72,7 @@ export interface TerminalSessionViewHandle {
   toggleViMode: () => void;
   triggerHints: () => void;
   getCwd: () => string;
+  getScreenText: (maxLines?: number) => string;
 }
 
 interface TerminalSessionViewProps {
@@ -72,6 +85,7 @@ interface TerminalSessionViewProps {
   onStatusChange?: (status: TerminalTab['status'], message?: string) => void;
   onCwdChange?: (cwd: string) => void;
   onBell?: () => void;
+  onMetaChange?: (meta: TerminalSessionRuntimeMeta) => void;
 }
 
 function resolveTerminalTheme(theme: Theme) {
@@ -127,27 +141,27 @@ function resolveTerminalTheme(theme: Theme) {
   }
   if (theme === 'dark') {
     return {
-      background: '#141a1f',
-      foreground: '#d7e0e4',
-      cursor: '#e06d55',
-      cursorAccent: '#141a1f',
-      selectionBackground: '#34434b',
-      black: '#141a1f',
-      red: '#db7868',
-      green: '#9ab6a2',
-      yellow: '#d5b375',
-      blue: '#8eaeca',
-      magenta: '#be9ec6',
-      cyan: '#8ebcb9',
-      white: '#d7e0e4',
-      brightBlack: '#5b6b75',
-      brightRed: '#e58c7e',
-      brightGreen: '#abc4b2',
-      brightYellow: '#dfc28e',
-      brightBlue: '#a3bece',
-      brightMagenta: '#ceb2d4',
-      brightCyan: '#a2ccc9',
-      brightWhite: '#ffffff',
+      background: '#101315',
+      foreground: '#d9dedc',
+      cursor: '#93b7a1',
+      cursorAccent: '#101315',
+      selectionBackground: '#252b2f',
+      black: '#101315',
+      red: '#c9807d',
+      green: '#93b7a1',
+      yellow: '#d4a56e',
+      blue: '#84a3af',
+      magenta: '#b398b8',
+      cyan: '#82aca8',
+      white: '#d9dedc',
+      brightBlack: '#5c6668',
+      brightRed: '#d69491',
+      brightGreen: '#a8c6b4',
+      brightYellow: '#dfb685',
+      brightBlue: '#9cb6c0',
+      brightMagenta: '#c4adc8',
+      brightCyan: '#98beb9',
+      brightWhite: '#edf1ef',
     };
   }
   return {
@@ -237,6 +251,7 @@ export const TerminalSessionView = forwardRef<
     onStatusChange,
     onCwdChange,
     onBell,
+    onMetaChange,
   },
   ref,
 ) {
@@ -299,6 +314,32 @@ export const TerminalSessionView = forwardRef<
   onBellRef.current = onBell;
   const onStatusChangeRef = useRef(onStatusChange);
   onStatusChangeRef.current = onStatusChange;
+  const onMetaChangeRef = useRef(onMetaChange);
+  onMetaChangeRef.current = onMetaChange;
+
+  useEffect(() => {
+    onMetaChangeRef.current?.({
+      cols: dimensions.cols,
+      rows: dimensions.rows,
+      webgl: webglActive,
+      viActive: Boolean(viState?.active),
+      viMode: viState?.selectionMode ?? 'normal',
+      hintsActive: hints.length > 0,
+      searchOpen,
+      internalStatus,
+      flashNotice,
+    });
+  }, [
+    dimensions.cols,
+    dimensions.rows,
+    webglActive,
+    viState?.active,
+    viState?.selectionMode,
+    hints.length,
+    searchOpen,
+    internalStatus,
+    flashNotice,
+  ]);
 
   activeRef.current = active;
 
@@ -455,6 +496,22 @@ export const TerminalSessionView = forwardRef<
       toggleViMode,
       triggerHints,
       getCwd: () => liveCwdRef.current,
+      getScreenText: (maxLines = 80) => {
+        const term = terminalRef.current;
+        if (!term) return '';
+        const buf = term.buffer.active;
+        const total = buf.length;
+        const start = Math.max(0, total - Math.max(1, maxLines));
+        const lines: string[] = [];
+        for (let i = start; i < total; i += 1) {
+          const row = buf.getLine(i)?.translateToString(true) ?? '';
+          lines.push(row);
+        }
+        while (lines.length > 0 && lines[lines.length - 1].trim() === '') {
+          lines.pop();
+        }
+        return lines.join('\n');
+      },
     }),
     [openSearch, sendCommand, toggleViMode, triggerHints],
   );
@@ -1289,117 +1346,6 @@ export const TerminalSessionView = forwardRef<
           </button>
         </div>
       )}
-
-      {/* Clean Crisp Pixel Statusbar */}
-      <footer className="terminal-session-statusbar">
-        <span className="terminal-status-badge">{tab.shell.toUpperCase()}</span>
-        <span className="terminal-status-cwd" title={liveCwd || '工作目录'}>
-          {liveCwd || '.'}
-        </span>
-
-        {viState?.active && (
-          <span className="terminal-status-pill is-vi">
-            VI{' '}
-            {viState.selectionMode === 'line'
-              ? 'LINE'
-              : viState.selectionMode === 'char'
-                ? 'VISUAL'
-                : 'NORMAL'}
-          </span>
-        )}
-        {hints.length > 0 && (
-          <span className="terminal-status-pill is-hints">HINTS</span>
-        )}
-        {flashNotice && (
-          <span className="terminal-status-pill is-toast">{flashNotice}</span>
-        )}
-        {internalStatus !== '就绪' && (
-          <span className="terminal-status-pill is-state">
-            {internalStatus}
-          </span>
-        )}
-
-        <div className="terminal-status-right">
-          <span className="terminal-status-meta" title="当前渲染引擎与尺寸">
-            {webglActive ? 'GL' : 'DOM'} · {dimensions.cols}×{dimensions.rows}
-          </span>
-
-          <div
-            className="terminal-status-zoom"
-            role="group"
-            aria-label="字体缩放"
-          >
-            <button
-              type="button"
-              className="terminal-status-btn"
-              onClick={() =>
-                saveTerminalPreferences({ fontSize: prefs.fontSize - 1 })
-              }
-              title="缩小字号 (Ctrl+-)"
-            >
-              -
-            </button>
-            <span className="terminal-status-zoom-val">{prefs.fontSize}px</span>
-            <button
-              type="button"
-              className="terminal-status-btn"
-              onClick={() =>
-                saveTerminalPreferences({ fontSize: prefs.fontSize + 1 })
-              }
-              title="放大字号 (Ctrl+=)"
-            >
-              +
-            </button>
-          </div>
-
-          <button
-            type="button"
-            className={`terminal-status-btn${prefs.saveOnSelect ? ' is-active' : ''}`}
-            onClick={() =>
-              saveTerminalPreferences({ saveOnSelect: !prefs.saveOnSelect })
-            }
-            title="Alacritty save_to_clipboard：鼠标拖选后自动复制到剪贴板"
-          >
-            选即复制
-          </button>
-
-          <button
-            type="button"
-            className={`terminal-status-btn${searchOpen ? ' is-active' : ''}`}
-            onClick={openSearch}
-            title="缓冲区搜索 (Ctrl+Shift+F)"
-          >
-            搜索
-          </button>
-
-          <button
-            type="button"
-            className={`terminal-status-btn${viState?.active ? ' is-active' : ''}`}
-            onClick={toggleViMode}
-            title="Vi 键盘光标与选择模式 (Ctrl+Shift+Space)"
-          >
-            VI
-          </button>
-
-          <button
-            type="button"
-            className={`terminal-status-btn${hints.length > 0 ? ' is-active' : ''}`}
-            onClick={triggerHints}
-            title="屏幕 URL 与文件路径快捷标号跳转 (Ctrl+Shift+O)"
-          >
-            Hints
-          </button>
-
-          <button
-            type="button"
-            className="terminal-status-btn"
-            onClick={() => terminalRef.current?.clear()}
-            title="清空当前终端屏幕"
-          >
-            清屏
-          </button>
-        </div>
-      </footer>
     </div>
   );
 });

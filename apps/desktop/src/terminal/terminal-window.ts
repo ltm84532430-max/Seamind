@@ -3,13 +3,17 @@ import type { Theme } from '../app/app-storage';
 import type {
   SplitLayoutMode,
   TerminalCliPreset,
+  TerminalCodeLabLanguage,
   TerminalShellType,
+  TerminalTabKind,
 } from './terminal-types';
 
 export interface StandaloneTerminalOptions {
   cwd?: string;
   shell?: TerminalShellType;
   cli?: TerminalCliPreset;
+  kind?: TerminalTabKind;
+  labLanguage?: TerminalCodeLabLanguage;
   theme?: Theme;
   title?: string;
 }
@@ -71,6 +75,8 @@ export function buildStandaloneTerminalUrl(
   if (options.cwd) params.set('cwd', options.cwd);
   if (options.shell) params.set('shell', options.shell);
   if (options.cli) params.set('cli', options.cli);
+  if (options.kind) params.set('kind', options.kind);
+  if (options.labLanguage) params.set('lab', options.labLanguage);
   if (options.theme) params.set('theme', options.theme);
   return `${base}?${params.toString()}`;
 }

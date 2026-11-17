@@ -8,9 +8,9 @@ const PREFERENCES_EVENT = 'seamind:terminal-preferences-changed';
 
 export const DEFAULT_TERMINAL_PREFERENCES: TerminalPreferences = {
   fontSize: 13,
-  lineHeight: 1.24,
+  lineHeight: 1.28,
   fontFamily:
-    '"Cascadia Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace',
+    '"JetBrains Mono", "Cascadia Mono", "Cascadia Code", Consolas, monospace',
   cursorStyle: 'block',
   cursorBlink: true,
   saveOnSelect: false,

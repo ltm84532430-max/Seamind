@@ -11,6 +11,10 @@ import { learningPathHandlers, learningPathToolCatalog } from './learning-path';
 import { mindmapHandlers, mindmapToolCatalog } from './mindmap';
 import { parseObject } from './parse';
 import { readerHandlers, readerToolCatalog } from './reader';
+import {
+  terminalBridgeHandlers,
+  terminalBridgeToolCatalog,
+} from './terminal-bridge';
 
 export const agentToolCatalog: AgentToolDescriptor[] = [
   ...feedToolCatalog,
@@ -18,6 +22,7 @@ export const agentToolCatalog: AgentToolDescriptor[] = [
   ...mindmapToolCatalog,
   ...learningPathToolCatalog,
   ...favoritesToolCatalog,
+  ...terminalBridgeToolCatalog,
 ];
 
 export const agentTools: AgentToolDefinition[] = agentToolCatalog.map(
@@ -33,6 +38,7 @@ export const agentToolSurfaces = [
   'favorites',
   'reader',
   'feed',
+  'terminal-agent',
 ] as const;
 
 export type AgentToolSurface = (typeof agentToolSurfaces)[number];
@@ -43,6 +49,7 @@ const SURFACE_TOOL_NAMES: Record<AgentToolSurface, readonly string[]> = {
   favorites: favoritesToolCatalog.map((tool) => tool.name),
   reader: readerToolCatalog.map((tool) => tool.name),
   feed: feedToolCatalog.map((tool) => tool.name),
+  'terminal-agent': terminalBridgeToolCatalog.map((tool) => tool.name),
 };
 
 function catalogEntriesNamed(names: readonly string[]): AgentToolDescriptor[] {
@@ -111,6 +118,7 @@ for (const group of [
   mindmapHandlers,
   learningPathHandlers,
   favoritesHandlers,
+  terminalBridgeHandlers,
 ]) {
   for (const [name, handler] of Object.entries(group) as Array<
     [string, ToolHandler]

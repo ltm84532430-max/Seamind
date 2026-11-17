@@ -7,6 +7,7 @@ import type {
   AgentCallEvent,
   AgentToolAction,
   AgentToolCall,
+  AgentToolDefinition,
   AgentTurnUsage,
   CompletionUsage,
   FavoritesCategorizationProposal,
@@ -15,7 +16,7 @@ import type {
   NodeEditProposal,
   ReaderChapterProposal,
 } from './types';
-import type { AgentToolResult } from './tool-api';
+import type { AgentToolResult, TerminalCommandProposal } from './tool-api';
 
 const MAX_CONTEXT_BYTES = 250_000;
 const MAX_HISTORY_MESSAGES = 40;
@@ -25,6 +26,7 @@ const SHRINK_TOOL_RESULT_AT = 800;
 export interface AgentProviderSettings {
   baseUrl: string;
   model: string;
+  providerId?: string | null;
 }
 
 export interface AgentSessionPause {
@@ -33,6 +35,7 @@ export interface AgentSessionPause {
   favoritesCategorizationProposal: FavoritesCategorizationProposal | null;
   knowledgeNoteProposal: KnowledgeNoteProposal | null;
   readerChapterProposal: ReaderChapterProposal | null;
+  terminalCommandProposal?: TerminalCommandProposal | null;
 }
 
 export interface AgentSessionResult {
@@ -230,7 +233,8 @@ function pauseFrom(execution: AgentToolResult): AgentSessionPause | null {
     !execution.learningPathProposal &&
     !execution.favoritesCategorizationProposal &&
     !execution.knowledgeNoteProposal &&
-    !execution.readerChapterProposal
+    !execution.readerChapterProposal &&
+    !execution.terminalCommandProposal
   ) {
     return null;
   }
@@ -241,6 +245,7 @@ function pauseFrom(execution: AgentToolResult): AgentSessionPause | null {
       execution.favoritesCategorizationProposal ?? null,
     knowledgeNoteProposal: execution.knowledgeNoteProposal ?? null,
     readerChapterProposal: execution.readerChapterProposal ?? null,
+    terminalCommandProposal: execution.terminalCommandProposal ?? null,
   };
 }
 
@@ -266,6 +271,12 @@ function pauseReply(
   if (execution.readerChapterProposal) {
     return '章节跳转预览已准备好。请确认或放弃后再继续。';
   }
+  if (execution.terminalCommandProposal) {
+    return (
+      assistantContent?.trim() ||
+      `已准备好待确认命令（目标窗格 #${execution.terminalCommandProposal.paneIndex}）：\`${execution.terminalCommandProposal.command}\``
+    );
+  }
   return assistantContent?.trim() || '已暂停，等待确认。';
 }
 
@@ -290,9 +301,11 @@ export async function runAgentSession(args: {
   provider: AgentProviderSettings;
   capabilities: AgentCapabilities;
   contextMessages?: AgentChatMessage[];
+  customTools?: AgentToolDefinition[];
+  systemPromptOverride?: string;
   onEvent?(event: AgentCallEvent): void;
 }): Promise<AgentSessionResult> {
-  if (!args.profile.surface) {
+  if (!args.profile.surface && !args.customTools) {
     throw new Error(
       '终端里的 Agent 使用当前工作区的 MCP 工具，不走应用内会话。',
     );
@@ -303,13 +316,18 @@ export async function runAgentSession(args: {
   const prior = compactHistory(args.history ?? []);
   const userMessage: AgentChatMessage = { role: 'user', content: prompt };
   const workingMessages: AgentChatMessage[] = [
-    { role: 'system', content: args.profile.systemPrompt },
+    {
+      role: 'system',
+      content: args.systemPromptOverride?.trim() || args.profile.systemPrompt,
+    },
     ...(args.contextMessages ?? []),
     ...prior,
     userMessage,
   ];
   const prefixCount = workingMessages.length;
-  const tools = agentToolDefinitionsFor(args.profile.surface);
+  const tools =
+    args.customTools ??
+    (args.profile.surface ? agentToolDefinitionsFor(args.profile.surface) : []);
   const usage = emptyUsage();
   let totalToolCalls = 0;
 
@@ -363,6 +381,9 @@ export async function runAgentSession(args: {
         model: args.provider.model,
         messages: workingMessages,
         tools,
+        ...(args.provider.providerId
+          ? { providerId: args.provider.providerId }
+          : {}),
       });
     } catch (error) {
       const endedAt = Date.now();

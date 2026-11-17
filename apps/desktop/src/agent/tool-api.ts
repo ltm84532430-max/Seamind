@@ -165,6 +165,37 @@ export interface AgentCapabilities {
   proposeFavoritesCategorization?(
     input: ProposeFavoritesCategorizationInput,
   ): Promise<FavoritesCategorizationProposal>;
+  runPythonSnippet?(input: { code: string }): Promise<Record<string, unknown>>;
+  runCSnippet?(input: {
+    source: string;
+    stdin?: string;
+    isCpp?: boolean;
+  }): Promise<Record<string, unknown>>;
+  listExams?(input?: { bookKey?: string }): Promise<Record<string, unknown>>;
+  getExamDetail?(input: { examId: string }): Promise<Record<string, unknown>>;
+  listLiteraturePapers?(input?: {
+    query?: string;
+  }): Promise<Record<string, unknown>>;
+  readTerminalPane?(input?: {
+    paneIndex?: number;
+    maxLines?: number;
+  }): Promise<Record<string, unknown>>;
+  proposeTerminalCommand?(input: {
+    command: string;
+    paneIndex: number;
+    reason?: string;
+  }): Promise<{ queued: boolean; command: string; paneIndex: number }>;
+  delegateCliAgent?(input: {
+    engine: 'claude' | 'codex' | 'agy';
+    prompt: string;
+    attachMcp?: boolean;
+  }): Promise<Record<string, unknown>>;
+}
+
+export interface TerminalCommandProposal {
+  command: string;
+  paneIndex: number;
+  reason: string;
 }
 
 export interface AgentToolResult {
@@ -179,6 +210,7 @@ export interface AgentToolResult {
   favoritesCategorizationProposal?: FavoritesCategorizationProposal;
   knowledgeNoteProposal?: KnowledgeNoteProposal;
   readerChapterProposal?: ReaderChapterProposal;
+  terminalCommandProposal?: TerminalCommandProposal;
 }
 
 export type ToolHandler = (

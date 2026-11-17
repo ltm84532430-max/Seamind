@@ -1,6 +1,8 @@
 // 按业务目录存放实现，同时保持 crate 根模块名与 Tauri 命令接口稳定。
 #[path = "agent/agent_bridge.rs"]
 mod agent_bridge;
+#[path = "agent/cli_agent.rs"]
+mod cli_agent;
 #[path = "agent/prompts.rs"]
 mod prompts;
 
@@ -77,6 +79,8 @@ mod learning_tasks;
 mod c_runner;
 #[path = "system/installer_components.rs"]
 mod installer_components;
+#[path = "system/python_lab.rs"]
+mod python_lab;
 #[path = "system/terminal.rs"]
 mod terminal;
 
@@ -91,7 +95,9 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(library::WatcherState::default())
         .manage(terminal::TerminalState::default())
+        .manage(python_lab::PythonKernelState::default())
         .manage(agent_bridge::AgentBridgeState::default())
+        .manage(cli_agent::CliAgentState::default())
         .manage(youtube::YouTubeJobs::default())
         .manage(youtube_botguard::YouTubeBotGuardState::default())
         .manage(youtube_embed_transcript::YouTubeEmbedTranscriptState::default())
@@ -109,6 +115,8 @@ pub fn run() {
             has_api_key,
             save_api_key,
             delete_api_key,
+            has_provider_api_key,
+            save_provider_api_key,
             list_provider_models,
             generate_mindmap,
             plantuml::render_plantuml,
@@ -179,6 +187,15 @@ pub fn run() {
             c_runner::c_check_environment,
             c_runner::c_run_code,
             c_runner::c_stage_source_file,
+            python_lab::python_kernel_detect_envs,
+            python_lab::python_kernel_start,
+            python_lab::python_kernel_eval,
+            python_lab::python_kernel_reset,
+            python_lab::python_kernel_vars,
+            python_lab::python_kernel_close,
+            cli_agent::cli_agent_detect,
+            cli_agent::cli_agent_run,
+            cli_agent::cli_agent_cancel,
             youtube::youtube_playback_capabilities,
             youtube::youtube_resolve_playback,
             youtube::youtube_resolve_playback_with_browser,
@@ -341,6 +358,10 @@ pub fn run() {
         .run(|app_handle, event| {
             if let tauri::RunEvent::Exit = event {
                 app_handle.state::<terminal::TerminalState>().close_all();
+                app_handle
+                    .state::<python_lab::PythonKernelState>()
+                    .close_all();
+                app_handle.state::<cli_agent::CliAgentState>().cancel_all();
             }
         });
 }
@@ -479,6 +500,52 @@ fn save_api_key(api_key: String) -> Result<(), String> {
     #[cfg(windows)]
     {
         return api_key_entry()?
+            .set_password(api_key)
+            .map_err(|_| "无法将 API 密钥保存到 Windows 凭据管理器。".to_string());
+    }
+
+    #[cfg(not(windows))]
+    Err("API 密钥安全存储目前仅支持 Windows。".to_string())
+}
+
+#[cfg(windows)]
+fn provider_api_key_entry(provider_id: &str) -> Result<keyring::Entry, String> {
+    let trimmed = provider_id.trim();
+    if trimmed.is_empty() || trimmed == "default" {
+        return api_key_entry();
+    }
+    let user = format!("provider-api-key-{trimmed}");
+    keyring::Entry::new(KEYRING_SERVICE, &user)
+        .map_err(|_| "无法访问 Windows 凭据管理器。".to_string())
+}
+
+#[tauri::command]
+fn has_provider_api_key(provider_id: String) -> Result<bool, String> {
+    #[cfg(windows)]
+    {
+        return match provider_api_key_entry(&provider_id)?.get_password() {
+            Ok(_) => Ok(true),
+            Err(keyring::Error::NoEntry) => Ok(false),
+            Err(_) => Err("读取 Windows 凭据失败。".to_string()),
+        };
+    }
+
+    #[cfg(not(windows))]
+    Err("API 密钥安全存储目前仅支持 Windows。".to_string())
+}
+
+#[tauri::command]
+fn save_provider_api_key(provider_id: String, api_key: String) -> Result<(), String> {
+    let api_key = api_key.trim();
+    if api_key.is_empty() {
+        return Err("API 密钥不能为空。".to_string());
+    }
+    if api_key.len() > 4_096 {
+        return Err("API 密钥长度超出限制。".to_string());
+    }
+    #[cfg(windows)]
+    {
+        return provider_api_key_entry(&provider_id)?
             .set_password(api_key)
             .map_err(|_| "无法将 API 密钥保存到 Windows 凭据管理器。".to_string());
     }
@@ -723,6 +790,48 @@ pub(crate) async fn request_chat_completion(
     .await
 }
 
+pub(crate) fn load_provider_api_key_or_loopback(
+    endpoint: &url::Url,
+    provider_id: Option<&str>,
+) -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        let entry_res = match provider_id.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(id) => match provider_api_key_entry(id)?.get_password() {
+                Ok(k) => return Ok(k),
+                Err(keyring::Error::NoEntry) => api_key_entry()?.get_password(),
+                Err(_) => return Err("读取 Windows 凭据失败。".to_string()),
+            },
+            None => api_key_entry()?.get_password(),
+        };
+        match entry_res {
+            Ok(key) => Ok(key),
+            Err(keyring::Error::NoEntry) => {
+                let is_loopback = endpoint
+                    .host_str()
+                    .map(|h| {
+                        h.eq_ignore_ascii_case("localhost")
+                            || h.parse::<std::net::IpAddr>()
+                                .map(|ip| ip.is_loopback())
+                                .unwrap_or(false)
+                    })
+                    .unwrap_or(false);
+                if is_loopback {
+                    Ok("local-no-key".to_string())
+                } else {
+                    Err("请先在模型设置中保存 API 密钥。".to_string())
+                }
+            }
+            Err(_) => Err("读取 Windows 凭据失败。".to_string()),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (endpoint, provider_id);
+        Err("API 密钥安全存储目前仅支持 Windows。".to_string())
+    }
+}
+
 pub(crate) fn load_stored_api_key() -> Result<String, String> {
     #[cfg(windows)]
     {
@@ -823,8 +932,29 @@ async fn post_chat_completion(
     response_format: Option<serde_json::Value>,
     faults: CompletionFaults,
 ) -> Result<serde_json::Value, String> {
-    let api_key = load_stored_api_key()?;
+    post_chat_completion_for_provider(
+        base_url,
+        model,
+        messages,
+        tools,
+        response_format,
+        faults,
+        None,
+    )
+    .await
+}
+
+async fn post_chat_completion_for_provider(
+    base_url: &str,
+    model: &str,
+    messages: serde_json::Value,
+    tools: Option<serde_json::Value>,
+    response_format: Option<serde_json::Value>,
+    faults: CompletionFaults,
+    provider_id: Option<&str>,
+) -> Result<serde_json::Value, String> {
     let url = completion_url(base_url)?;
+    let api_key = load_provider_api_key_or_loopback(&url, provider_id)?;
     let client = chat_completion_client()?;
     let mut request_body = serde_json::json!({
         "model": model,
@@ -906,6 +1036,7 @@ async fn agent_completion(
     model: String,
     messages: Vec<serde_json::Value>,
     tools: Vec<serde_json::Value>,
+    provider_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let model = model.trim();
     if model.is_empty() || model.len() > 200 {
@@ -928,7 +1059,7 @@ async fn agent_completion(
             return Err("AI 对话包含不支持的消息类型。".to_string());
         }
     }
-    if tools.is_empty() || tools.len() > MAX_AGENT_TOOLS {
+    if tools.len() > MAX_AGENT_TOOLS {
         return Err("AI 工具清单无效。".to_string());
     }
     let tool_bytes =
@@ -959,6 +1090,14 @@ async fn agent_completion(
         "learning_path_propose",
         "favorites_get_board",
         "favorites_propose_categorization",
+        "code_run_python",
+        "code_run_c",
+        "exam_list_papers",
+        "exam_get_paper",
+        "literature_list_papers",
+        "terminal_read_pane",
+        "terminal_send_command",
+        "cli_delegate",
     ];
     let mut tool_names = Vec::with_capacity(tools.len());
     for tool in &tools {
@@ -972,13 +1111,18 @@ async fn agent_completion(
         tool_names.push(name);
     }
 
-    let body = post_chat_completion(
+    let body = post_chat_completion_for_provider(
         &base_url,
         model,
         serde_json::Value::Array(messages),
-        Some(serde_json::Value::Array(tools)),
+        if tools.is_empty() {
+            None
+        } else {
+            Some(serde_json::Value::Array(tools))
+        },
         None,
         AGENT_FAULTS,
+        provider_id.as_deref(),
     )
     .await?;
     let message = body

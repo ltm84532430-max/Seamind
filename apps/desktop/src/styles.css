@@ -15407,3 +15407,82 @@ select option {
   cursor: pointer;
   text-decoration: underline;
 }
+
+/* ==========================================================================
+   Terminal Workspace App-Shell Chrome Harmonization (Zed + Ghostty Flat)
+   ========================================================================== */
+.app-shell.is-terminal-workspace {
+  grid-template-rows: 44px minmax(0, 1fr);
+}
+
+.app-shell.is-terminal-workspace .topbar {
+  height: 44px;
+  min-height: 44px;
+  max-height: 44px;
+}
+
+.app-shell.is-terminal-workspace .statusbar {
+  display: none;
+}
+
+.app-shell.is-terminal-workspace .workspace-switcher button {
+  border-right: 0;
+  padding: 0 14px;
+  font-size: 13px;
+}
+
+.app-shell.is-terminal-workspace[data-theme='dark'] {
+  background: #101315;
+  color: #d9dedc;
+  --line: #252b2f;
+  --muted: #889390;
+  --ink: #d9dedc;
+  --accent: #93b7a1;
+  --panel: #171b1e;
+}
+
+.app-shell.is-terminal-workspace[data-theme='dark'] .topbar {
+  background: #171b1e;
+  border-color: #252b2f;
+}
+
+.app-shell.is-terminal-workspace[data-theme='dark'] .workspace-switcher button {
+  color: #889390;
+  border-right-color: transparent;
+}
+
+.app-shell.is-terminal-workspace[data-theme='dark']
+  .workspace-switcher
+  button:hover {
+  color: #d9dedc;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.app-shell.is-terminal-workspace[data-theme='dark']
+  .workspace-switcher
+  button.is-active {
+  color: #d9dedc;
+  background: #101315;
+  box-shadow: inset 0 -2px 0 #93b7a1;
+}
+
+.app-shell.is-terminal-workspace[data-theme='dark'] .topbar-actions button {
+  border-color: transparent;
+  background: transparent;
+  color: #889390;
+  font-size: 12.5px;
+}
+
+.app-shell.is-terminal-workspace[data-theme='dark']
+  .topbar-actions
+  button:hover {
+  border-color: transparent;
+  background: rgba(255, 255, 255, 0.05);
+  color: #d9dedc;
+}
+
+.app-shell.is-terminal-workspace[data-theme='dark']
+  .terminal-toggle-button.is-active {
+  background: rgba(147, 183, 161, 0.14);
+  color: #93b7a1;
+}

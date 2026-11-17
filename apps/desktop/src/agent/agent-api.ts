@@ -19,11 +19,16 @@ export const agentApi = {
   hasApiKey: () => invoke<boolean>('has_api_key'),
   saveApiKey: (args: { apiKey: string }) => invoke<void>('save_api_key', args),
   deleteApiKey: () => invoke<void>('delete_api_key'),
+  hasProviderApiKey: (args: { providerId: string }) =>
+    invoke<boolean>('has_provider_api_key', args),
+  saveProviderApiKey: (args: { providerId: string; apiKey: string }) =>
+    invoke<void>('save_provider_api_key', args),
   complete: (args: {
     baseUrl: string;
     model: string;
     messages: AgentChatMessage[];
     tools: unknown;
+    providerId?: string | null;
   }) =>
     invoke<AgentChatMessage & { usage?: CompletionUsage }>(
       'agent_completion',

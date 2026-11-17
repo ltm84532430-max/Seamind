@@ -5399,7 +5399,7 @@ function AppContent() {
   return (
     <main
       ref={appShellRef}
-      className={`app-shell${readerSplitActive ? ' is-reader-split' : ''}${readerKnowledgeActive ? ' is-reader-knowledge' : ''}${readerKnowledgeActive && galaxyViewActive ? ' is-reader-knowledge-wide' : ''}${isTerminalDrawerOpen ? ' is-terminal-open' : ''}${terminalRightActive ? ' is-terminal-right' : ''}${activeWorkspace === 'knowledge' || activeWorkspace === 'mindmap' ? ' is-knowledge-surface' : ''}`}
+      className={`app-shell${activeWorkspace === 'terminal' ? ' is-terminal-workspace' : ''}${readerSplitActive ? ' is-reader-split' : ''}${readerKnowledgeActive ? ' is-reader-knowledge' : ''}${readerKnowledgeActive && galaxyViewActive ? ' is-reader-knowledge-wide' : ''}${isTerminalDrawerOpen ? ' is-terminal-open' : ''}${terminalRightActive ? ' is-terminal-right' : ''}${activeWorkspace === 'knowledge' || activeWorkspace === 'mindmap' ? ' is-knowledge-surface' : ''}`}
       data-theme={theme}
       data-map-style={mindmapStyle}
       style={
@@ -6939,6 +6939,39 @@ function AppContent() {
               theme={theme}
               books={librarySnapshot?.books ?? []}
               onOpenBook={(book) => void openLibraryEpub(book)}
+              bridge={{
+                provider: providerSettings,
+                capabilities: agentCapabilities,
+                books: librarySnapshot?.books ?? [],
+                documents: librarySnapshot?.documents ?? [],
+                activeDocument: activeDocument
+                  ? {
+                      title: activeDocument.title,
+                      relativePath: activeDocument.relativePath ?? null,
+                      kind: activeDocument.kind,
+                    }
+                  : null,
+                activeMindmapTitle: editorDraft.title,
+                onNavigateWorkspace: (ws) => setActiveWorkspace(ws),
+                onOpenBook: (book) => void openLibraryEpub(book),
+                onOpenYouTubeVideo: (videoId, startSeconds, title) =>
+                  openYouTubeVideoInPlayer(videoId, startSeconds ?? 0, title),
+                onSaveMarkdownNote: async ({ title, category, source }) => {
+                  try {
+                    await libraryApi.createTextDocument({
+                      kind: 'doc',
+                      category: category || '代码实验',
+                      title,
+                      source,
+                    });
+                    await loadLibrary(false);
+                    setSaveMessage(`已将「${title}」保存到知识库`);
+                    return true;
+                  } catch {
+                    return false;
+                  }
+                },
+              }}
             />
           </Suspense>
         )}

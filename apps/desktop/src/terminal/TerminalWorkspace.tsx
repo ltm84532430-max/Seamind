@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createFallbackTerminalCapabilities } from '../agent/tools/terminal-bridge';
+import {
+  buildSmartFooterHints,
+  WORKSPACE_LAYOUT_PRESETS,
+  type WorkspacePresetSpec,
+} from './terminal-agent-protocol';
 import { terminalApi } from './terminal-api';
 import type { Theme } from '../app/app-storage';
 import type { EpubBookDocument } from '../library/library';
@@ -29,16 +35,28 @@ import {
 } from './terminal-preferences';
 import { normalizeDisplayPath } from './terminal-alacritty';
 import {
+  TerminalAgentView,
+  type TerminalAgentViewHandle,
+} from './TerminalAgentView';
+import {
+  TerminalCodeLabView,
+  type TerminalCodeLabViewHandle,
+} from './TerminalCodeLabView';
+import {
   TerminalSessionView,
+  type TerminalSessionRuntimeMeta,
   type TerminalSessionViewHandle,
 } from './TerminalSessionView';
 import type {
   SplitLayoutMode,
   TerminalCliPreset,
+  TerminalCodeLabLanguage,
   TerminalPreferences,
   TerminalShellOption,
   TerminalShellType,
   TerminalTab,
+  TerminalTabKind,
+  TerminalWorkspaceBridge,
 } from './terminal-types';
 import {
   COMMAND_LIBRARY_SHORTCUT_LABEL,
@@ -64,9 +82,12 @@ interface TerminalWorkspaceProps {
   theme: Theme;
   books?: EpubBookDocument[];
   onOpenBook?: (book: EpubBookDocument) => void;
+  bridge?: TerminalWorkspaceBridge;
   standalone?: boolean;
   initialShell?: TerminalShellType;
   initialCli?: TerminalCliPreset;
+  initialKind?: TerminalTabKind;
+  initialLabLanguage?: TerminalCodeLabLanguage;
 }
 
 const DEFAULT_SHELLS: TerminalShellOption[] = [
@@ -176,6 +197,36 @@ function DrawerSplitIcon() {
   );
 }
 
+function ZoomPaneIcon({ zoomed }: { zoomed: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="13"
+      height="13"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      aria-hidden="true"
+    >
+      {zoomed ? (
+        <>
+          <polyline points="6 2 6 6 2 6" />
+          <polyline points="10 14 10 10 14 10" />
+          <line x1="2" y1="2" x2="6" y2="6" />
+          <line x1="14" y1="14" x2="10" y2="10" />
+        </>
+      ) : (
+        <>
+          <polyline points="10 2 14 2 14 6" />
+          <polyline points="6 14 2 14 2 10" />
+          <line x1="14" y1="2" x2="9.5" y2="6.5" />
+          <line x1="2" y1="14" x2="6.5" y2="9.5" />
+        </>
+      )}
+    </svg>
+  );
+}
+
 function PopoutWindowIcon() {
   return (
     <svg
@@ -200,20 +251,34 @@ export default function TerminalWorkspace({
   theme,
   books = [],
   onOpenBook,
+  bridge,
   standalone = false,
   initialShell = 'powershell',
   initialCli,
+  initialKind = 'shell',
+  initialLabLanguage = 'python',
 }: TerminalWorkspaceProps) {
   const initialCleanCwd = normalizeDisplayPath(cwd);
   const initialTabRef = useRef<TerminalTab>({
     id: 'tab-1',
-    title: initialCli
-      ? `${initialCli.toUpperCase()} · ${initialShell.toUpperCase()}`
-      : `${initialShell === 'powershell' ? 'PowerShell' : initialShell.toUpperCase()} 1`,
+    title:
+      initialKind === 'agent'
+        ? 'Seamind Agent'
+        : initialKind === 'lab'
+          ? initialLabLanguage === 'python'
+            ? 'Python 实验本'
+            : initialLabLanguage === 'cpp'
+              ? 'C++ 实验本'
+              : 'C 实验本'
+          : initialCli
+            ? `${initialCli.toUpperCase()} · ${initialShell.toUpperCase()}`
+            : `${initialShell === 'powershell' ? 'PowerShell' : initialShell.toUpperCase()} 1`,
+    kind: initialKind,
     shell: initialShell,
+    labLanguage: initialKind === 'lab' ? initialLabLanguage : undefined,
     cwd: initialCleanCwd,
     initialCli,
-    status: 'starting',
+    status: initialKind === 'shell' ? 'starting' : 'ready',
     createdAt: Date.now(),
   });
 
@@ -223,6 +288,14 @@ export default function TerminalWorkspace({
   const [focusedPaneIndex, setFocusedPaneIndex] = useState<number>(0);
   const [splitMode, setSplitMode] = useState<SplitLayoutMode>('single');
   const [splitRatio, setSplitRatio] = useState<number>(0.5);
+  const [zoomedPaneIndex, setZoomedPaneIndex] = useState<number | null>(null);
+  const [showPresetMenu, setShowPresetMenu] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState('');
+  const [paletteIndex, setPaletteIndex] = useState(0);
+  const [sessionMetaById, setSessionMetaById] = useState<
+    Record<string, TerminalSessionRuntimeMeta>
+  >({});
 
   const [prefs, setPrefs] = useState<TerminalPreferences>(() =>
     loadTerminalPreferences(),
@@ -269,8 +342,12 @@ export default function TerminalWorkspace({
   const terminalRefs = useRef<Map<string, TerminalSessionViewHandle>>(
     new Map(),
   );
+  const agentRefs = useRef<Map<string, TerminalAgentViewHandle>>(new Map());
+  const labRefs = useRef<Map<string, TerminalCodeLabViewHandle>>(new Map());
   const toolsMenuRef = useRef<HTMLDivElement>(null);
   const shellMenuRef = useRef<HTMLDivElement>(null);
+  const presetMenuRef = useRef<HTMLDivElement>(null);
+  const paletteSearchRef = useRef<HTMLInputElement>(null);
   const prefsMenuRef = useRef<HTMLDivElement>(null);
   const popoutMenuRef = useRef<HTMLDivElement>(null);
   const commandSearchRef = useRef<HTMLInputElement>(null);
@@ -305,8 +382,14 @@ export default function TerminalWorkspace({
     return onTerminalPreferencesChanged(setPrefs);
   }, []);
 
+  const focusTabHandle = useCallback((tabId: string) => {
+    terminalRefs.current.get(tabId)?.focus();
+    agentRefs.current.get(tabId)?.focus();
+    labRefs.current.get(tabId)?.focus();
+  }, []);
+
   const focusActiveTerminal = () => {
-    terminalRefs.current.get(activeTabId)?.focus();
+    focusTabHandle(activeTabId);
   };
 
   const applyTool = (next: TerminalToolId) => {
@@ -343,7 +426,13 @@ export default function TerminalWorkspace({
   }, [drawerTab]);
 
   useEffect(() => {
-    if (!showShellMenu && !toolsMenuOpen && !showPrefsMenu && !showPopoutMenu) {
+    if (
+      !showShellMenu &&
+      !showPresetMenu &&
+      !toolsMenuOpen &&
+      !showPrefsMenu &&
+      !showPopoutMenu
+    ) {
       return;
     }
     const onPointerDown = (event: MouseEvent) => {
@@ -355,6 +444,13 @@ export default function TerminalWorkspace({
         !shellMenuRef.current.contains(target)
       ) {
         setShowShellMenu(false);
+      }
+      if (
+        showPresetMenu &&
+        presetMenuRef.current &&
+        !presetMenuRef.current.contains(target)
+      ) {
+        setShowPresetMenu(false);
       }
       if (
         toolsMenuOpen &&
@@ -380,7 +476,13 @@ export default function TerminalWorkspace({
     };
     document.addEventListener('mousedown', onPointerDown);
     return () => document.removeEventListener('mousedown', onPointerDown);
-  }, [showShellMenu, toolsMenuOpen, showPrefsMenu, showPopoutMenu]);
+  }, [
+    showShellMenu,
+    showPresetMenu,
+    toolsMenuOpen,
+    showPrefsMenu,
+    showPopoutMenu,
+  ]);
 
   useEffect(() => {
     if (!active) return;
@@ -411,7 +513,7 @@ export default function TerminalWorkspace({
         }
         setShowShellMenu(false);
         setToolsMenuOpen(false);
-        requestAnimationFrame(() => terminalRefs.current.get(tab.id)?.focus());
+        requestAnimationFrame(() => focusTabHandle(tab.id));
         return;
       }
       if (isCommandLibraryShortcut(keyEvent)) {
@@ -422,10 +524,78 @@ export default function TerminalWorkspace({
         setDrawerOpen(true);
         setToolsMenuOpen(false);
         setShowShellMenu(false);
+        setShowPresetMenu(false);
         requestAnimationFrame(() => commandSearchRef.current?.focus());
         return;
       }
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey &&
+        !event.shiftKey &&
+        event.key.toLowerCase() === 'k'
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        setPaletteOpen((open) => !open);
+        setPaletteQuery('');
+        setPaletteIndex(0);
+        setShowShellMenu(false);
+        setShowPresetMenu(false);
+        setShowPrefsMenu(false);
+        setShowPopoutMenu(false);
+        requestAnimationFrame(() => paletteSearchRef.current?.focus());
+        return;
+      }
+      if (
+        event.ctrlKey &&
+        event.shiftKey &&
+        !event.altKey &&
+        event.key.toLowerCase() === 'm'
+      ) {
+        if (visibleCount > 1) {
+          event.preventDefault();
+          event.stopPropagation();
+          setZoomedPaneIndex((z) => (z === null ? safeFocusedPane : null));
+        }
+        return;
+      }
+      if (event.ctrlKey && event.altKey && !event.shiftKey) {
+        if (event.key === 'ArrowRight' || event.key.toLowerCase() === 'l') {
+          if (visibleCount > 1) {
+            event.preventDefault();
+            const nextPane = (safeFocusedPane + 1) % visibleCount;
+            setFocusedPaneIndex(nextPane);
+            requestAnimationFrame(() =>
+              focusTabHandle(activePaneIds[nextPane] ?? ''),
+            );
+          }
+          return;
+        }
+        if (event.key === 'ArrowLeft' || event.key.toLowerCase() === 'h') {
+          if (visibleCount > 1) {
+            event.preventDefault();
+            const prevPane =
+              (safeFocusedPane - 1 + visibleCount) % visibleCount;
+            setFocusedPaneIndex(prevPane);
+            requestAnimationFrame(() =>
+              focusTabHandle(activePaneIds[prevPane] ?? ''),
+            );
+          }
+          return;
+        }
+      }
       if (event.key !== 'Escape') return;
+      if (paletteOpen) {
+        event.preventDefault();
+        setPaletteOpen(false);
+        focusActiveTerminal();
+        return;
+      }
+      if (showPresetMenu) {
+        event.preventDefault();
+        setShowPresetMenu(false);
+        return;
+      }
       if (showPrefsMenu) {
         event.preventDefault();
         setShowPrefsMenu(false);
@@ -468,12 +638,15 @@ export default function TerminalWorkspace({
     drawerTab,
     editingTabId,
     pendingCommand,
+    paletteOpen,
     safeFocusedPane,
     showPopoutMenu,
     showPrefsMenu,
+    showPresetMenu,
     showShellMenu,
     tabs,
     toolsMenuOpen,
+    visibleCount,
   ]);
 
   useEffect(() => {
@@ -538,6 +711,7 @@ export default function TerminalWorkspace({
    * 自动新建并填入干净会话（继承当前真实工作目录），无需手动再配对标签。
    */
   const switchLayoutMode = (nextMode: SplitLayoutMode) => {
+    setZoomedPaneIndex(null);
     const needed = visiblePaneCountForMode(nextMode);
     if (tabs.length < needed && tabs.length < MAX_WORKSPACE_TABS) {
       const missingCount = Math.min(
@@ -566,6 +740,72 @@ export default function TerminalWorkspace({
     }
     setSplitMode(nextMode);
     setFocusedPaneIndex((idx) => Math.min(idx, needed - 1));
+  };
+
+  const applyWorkspacePreset = (preset: WorkspacePresetSpec) => {
+    setShowPresetMenu(false);
+    setZoomedPaneIndex(null);
+    const inheritCwd = normalizeDisplayPath(focusedLiveCwd);
+    const usedIds = new Set<string>();
+    const nextTabs = [...tabs];
+    const resolvedSlotIds: string[] = [];
+
+    for (const slot of preset.slots) {
+      const existing = nextTabs.find((candidate) => {
+        if (usedIds.has(candidate.id)) return false;
+        const cKind = candidate.kind ?? 'shell';
+        if (slot.kind !== cKind) return false;
+        if (slot.kind === 'lab' && slot.labLanguage) {
+          return (candidate.labLanguage ?? 'python') === slot.labLanguage;
+        }
+        if (slot.kind === 'shell' && slot.cliPreset) {
+          return candidate.initialCli === slot.cliPreset;
+        }
+        if (slot.kind === 'shell' && !slot.cliPreset) {
+          return !candidate.initialCli;
+        }
+        return true;
+      });
+
+      if (existing) {
+        usedIds.add(existing.id);
+        resolvedSlotIds.push(existing.id);
+        continue;
+      }
+
+      if (nextTabs.length < MAX_WORKSPACE_TABS) {
+        const created: TerminalTab = {
+          id: makeTabId(),
+          title: slot.title,
+          kind: slot.kind,
+          shell: activeTab?.shell ?? 'powershell',
+          labLanguage:
+            slot.kind === 'lab' ? (slot.labLanguage ?? 'python') : undefined,
+          initialCli: slot.cliPreset,
+          cwd: inheritCwd,
+          status: slot.kind === 'shell' ? 'starting' : 'ready',
+          createdAt: Date.now(),
+        };
+        nextTabs.push(created);
+        usedIds.add(created.id);
+        resolvedSlotIds.push(created.id);
+      } else {
+        const fallback =
+          nextTabs.find((c) => !usedIds.has(c.id)) ?? nextTabs[0];
+        if (fallback) {
+          usedIds.add(fallback.id);
+          resolvedSlotIds.push(fallback.id);
+        }
+      }
+    }
+
+    setTabs(nextTabs);
+    setPaneTabIds(resolvedSlotIds);
+    setSplitMode(preset.splitMode);
+    setFocusedPaneIndex(0);
+    showTempNotice(`已切换场景预设：${preset.title}`);
+    const firstId = resolvedSlotIds[0];
+    if (firstId) requestAnimationFrame(() => focusTabHandle(firstId));
   };
 
   /** 在当前窗格快速向右/网格拆出并新增一个独立会话窗格（图二核心交互）。 */
@@ -606,6 +846,10 @@ export default function TerminalWorkspace({
   const handlePopoutWindow = async (
     cliPreset?: TerminalCliPreset,
     sourceTabId?: string,
+    specialKind?: {
+      kind: TerminalTabKind;
+      labLanguage?: TerminalCodeLabLanguage;
+    },
   ) => {
     setShowPopoutMenu(false);
     const srcTab =
@@ -614,20 +858,345 @@ export default function TerminalWorkspace({
       terminalRefs.current.get(srcTab?.id ?? '')?.getCwd() ||
       srcTab?.cwd ||
       initialCleanCwd;
+    const targetKind = specialKind?.kind ?? srcTab?.kind ?? 'shell';
+    const targetLabLang =
+      specialKind?.labLanguage ?? srcTab?.labLanguage ?? 'python';
     const result = await openStandaloneTerminalWindow({
       cwd: normalizeDisplayPath(targetCwd),
       shell: srcTab?.shell ?? 'powershell',
       cli: cliPreset,
+      kind: targetKind,
+      labLanguage: targetKind === 'lab' ? targetLabLang : undefined,
       theme,
     });
     if (result.ok) {
       showTempNotice(
-        cliPreset ? `已在独立窗口启动 ${cliPreset}` : '已打开独立终端窗口',
+        targetKind === 'agent'
+          ? '已在独立窗口打开 Seamind Agent'
+          : targetKind === 'lab'
+            ? '已在独立窗口打开 Euporie 实验本'
+            : cliPreset
+              ? `已在独立窗口启动 ${cliPreset}`
+              : '已打开独立终端窗口',
       );
     } else {
       showTempNotice(result.error || '独立窗口创建失败');
     }
   };
+
+  const createSpecialTab = useCallback(
+    (
+      kind: 'agent' | 'lab',
+      labLanguage: TerminalCodeLabLanguage = 'python',
+      targetPaneIdx?: number,
+    ): TerminalTab | null => {
+      if (tabs.length >= MAX_WORKSPACE_TABS) return null;
+      const nextIndex = tabs.length + 1;
+      const title =
+        kind === 'agent'
+          ? `Agent ${nextIndex}`
+          : labLanguage === 'python'
+            ? `Python Lab ${nextIndex}`
+            : labLanguage === 'cpp'
+              ? `C++ Lab ${nextIndex}`
+              : `C Lab ${nextIndex}`;
+      const newTab: TerminalTab = {
+        id: makeTabId(),
+        title,
+        kind,
+        shell: activeTab?.shell ?? 'powershell',
+        labLanguage: kind === 'lab' ? labLanguage : undefined,
+        cwd: normalizeDisplayPath(focusedLiveCwd),
+        status: 'ready',
+        createdAt: Date.now(),
+      };
+      setTabs((prev) => [...prev, newTab]);
+      const slot = targetPaneIdx ?? safeFocusedPane;
+      setPaneTabIds((prev) => {
+        const next = [...prev];
+        next[slot] = newTab.id;
+        return next;
+      });
+      setFocusedPaneIndex(slot);
+      setShowShellMenu(false);
+      requestAnimationFrame(() => focusTabHandle(newTab.id));
+      return newTab;
+    },
+    [
+      activeTab?.shell,
+      focusTabHandle,
+      focusedLiveCwd,
+      safeFocusedPane,
+      tabs.length,
+    ],
+  );
+
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+  const activePaneIdsRef = useRef(activePaneIds);
+  activePaneIdsRef.current = activePaneIds;
+  const splitModeRef = useRef(splitMode);
+  splitModeRef.current = splitMode;
+
+  const ensurePaneForTab = useCallback(
+    (targetTabId: string) => {
+      const visibleIdx = activePaneIdsRef.current.indexOf(targetTabId);
+      if (visibleIdx >= 0) {
+        setFocusedPaneIndex(visibleIdx);
+        return visibleIdx;
+      }
+      if (splitModeRef.current === 'single' && tabsRef.current.length >= 2) {
+        setSplitMode('vertical');
+        const nextSlot = 1;
+        setPaneTabIds((prev) => {
+          const next = [...prev];
+          next[nextSlot] = targetTabId;
+          return next;
+        });
+        setFocusedPaneIndex(nextSlot);
+        return nextSlot;
+      }
+      const nextSlot =
+        activePaneIdsRef.current.length > 1
+          ? (safeFocusedPane + 1) % activePaneIdsRef.current.length
+          : 0;
+      setPaneTabIds((prev) => {
+        const next = [...prev];
+        next[nextSlot] = targetTabId;
+        return next;
+      });
+      setFocusedPaneIndex(nextSlot);
+      return nextSlot;
+    },
+    [safeFocusedPane],
+  );
+
+  const sendToShellPane = useCallback(
+    (command: string, execute = true, paneNumber?: number) => {
+      const currentTabs = tabsRef.current;
+      const paneTabId = paneNumber
+        ? activePaneIdsRef.current[paneNumber - 1]
+        : undefined;
+      const explicitTab = paneTabId
+        ? currentTabs.find(
+            (t) => t.id === paneTabId && (!t.kind || t.kind === 'shell'),
+          )
+        : undefined;
+      const visibleShell = activePaneIdsRef.current
+        .map((id) => currentTabs.find((t) => t.id === id))
+        .find((t): t is TerminalTab =>
+          Boolean(t && (!t.kind || t.kind === 'shell')),
+        );
+      const anyShell =
+        explicitTab ??
+        visibleShell ??
+        currentTabs.find((t) => !t.kind || t.kind === 'shell');
+
+      if (anyShell) {
+        ensurePaneForTab(anyShell.id);
+        window.setTimeout(() => {
+          const h = terminalRefs.current.get(anyShell.id);
+          h?.sendCommand(command, execute);
+          h?.focus();
+        }, 80);
+        return;
+      }
+
+      const targetSlot =
+        splitModeRef.current === 'single' ? 1 : safeFocusedPane;
+      if (splitModeRef.current === 'single') setSplitMode('vertical');
+      const created = createNewTab('powershell', undefined, targetSlot);
+      if (created) {
+        window.setTimeout(() => {
+          const h = terminalRefs.current.get(created.id);
+          h?.sendCommand(command, execute);
+          h?.focus();
+        }, 550);
+      }
+    },
+    [createNewTab, ensurePaneForTab, safeFocusedPane],
+  );
+
+  const pushToCodeLab = useCallback(
+    (lang: TerminalCodeLabLanguage, code: string, autoRun = true) => {
+      const existing =
+        activePaneIdsRef.current
+          .map((id) => tabsRef.current.find((t) => t.id === id))
+          .find((t): t is TerminalTab => t?.kind === 'lab') ??
+        tabsRef.current.find((t) => t.kind === 'lab');
+
+      if (existing) {
+        ensurePaneForTab(existing.id);
+        window.setTimeout(() => {
+          labRefs.current
+            .get(existing.id)
+            ?.insertAndRunCell(lang, code, autoRun);
+          labRefs.current.get(existing.id)?.focus();
+        }, 80);
+        return;
+      }
+
+      const targetSlot =
+        splitModeRef.current === 'single' ? 1 : safeFocusedPane;
+      if (splitModeRef.current === 'single') setSplitMode('vertical');
+      const created = createSpecialTab('lab', lang, targetSlot);
+      if (created) {
+        window.setTimeout(() => {
+          labRefs.current
+            .get(created.id)
+            ?.insertAndRunCell(lang, code, autoRun);
+          labRefs.current.get(created.id)?.focus();
+        }, 120);
+      }
+    },
+    [createSpecialTab, ensurePaneForTab, safeFocusedPane],
+  );
+
+  const sendToAgentPane = useCallback(
+    (prompt: string) => {
+      const existing =
+        activePaneIdsRef.current
+          .map((id) => tabsRef.current.find((t) => t.id === id))
+          .find((t): t is TerminalTab => t?.kind === 'agent') ??
+        tabsRef.current.find((t) => t.kind === 'agent');
+
+      if (existing) {
+        ensurePaneForTab(existing.id);
+        window.setTimeout(() => {
+          agentRefs.current.get(existing.id)?.submitPrompt(prompt);
+          agentRefs.current.get(existing.id)?.focus();
+        }, 80);
+        return;
+      }
+
+      const targetSlot =
+        splitModeRef.current === 'single' ? 1 : safeFocusedPane;
+      if (splitModeRef.current === 'single') setSplitMode('vertical');
+      const created = createSpecialTab('agent', 'python', targetSlot);
+      if (created) {
+        window.setTimeout(() => {
+          agentRefs.current.get(created.id)?.submitPrompt(prompt);
+          agentRefs.current.get(created.id)?.focus();
+        }, 150);
+      }
+    },
+    [createSpecialTab, ensurePaneForTab, safeFocusedPane],
+  );
+
+  const paneAccessor = useMemo(
+    () => ({
+      readPaneText: (paneNumber: number, maxLines = 80) => {
+        const tabId = activePaneIdsRef.current[paneNumber - 1];
+        if (!tabId) return null;
+        const tabItem = tabsRef.current.find((t) => t.id === tabId);
+        if (!tabItem) return null;
+        const shellText = terminalRefs.current
+          .get(tabId)
+          ?.getScreenText(maxLines);
+        const labText = labRefs.current.get(tabId)?.getScreenText(maxLines);
+        const agentText = agentRefs.current.get(tabId)?.getScreenText(maxLines);
+        const cwdText =
+          terminalRefs.current.get(tabId)?.getCwd() || tabItem.cwd || '';
+        return {
+          title: tabItem.title,
+          cwd: cwdText,
+          text: shellText || labText || agentText || '(窗格当前无文本内容)',
+        };
+      },
+      readLastError: () => {
+        for (const id of activePaneIdsRef.current) {
+          const labErr = labRefs.current.get(id)?.getLastErrorText();
+          if (labErr) return labErr;
+        }
+        for (const id of activePaneIdsRef.current) {
+          const text = terminalRefs.current.get(id)?.getScreenText(60);
+          if (text) {
+            const lines = text.split('\n');
+            const errStart = lines.findIndex((l) =>
+              /error|traceback|exception|fatal|failed|无法/i.test(l),
+            );
+            if (errStart >= 0) {
+              return lines.slice(Math.max(0, errStart - 2)).join('\n');
+            }
+          }
+        }
+        for (const id of activePaneIdsRef.current) {
+          const fallback = terminalRefs.current.get(id)?.getScreenText(30);
+          if (fallback?.trim()) return fallback;
+        }
+        return '';
+      },
+      sendToShellPane,
+      pushToCodeLab,
+    }),
+    [pushToCodeLab, sendToShellPane],
+  );
+
+  const mergedBridge = useMemo<TerminalWorkspaceBridge>(() => {
+    const runPythonQuick = async ({ code }: { code: string }) => {
+      return await new Promise<Record<string, unknown>>((resolve, reject) => {
+        const w = new Worker(
+          new URL('../workbench/python.worker.ts', import.meta.url),
+          { type: 'module' },
+        );
+        const timer = window.setTimeout(() => {
+          w.terminate();
+          reject(new Error('Python 工具执行超时（20s）'));
+        }, 20_000);
+        w.onmessage = (
+          event: MessageEvent<{
+            type: string;
+            output?: string;
+            resultText?: string;
+            error?: string;
+            stderr?: string;
+          }>,
+        ) => {
+          window.clearTimeout(timer);
+          w.terminate();
+          resolve({
+            ok: event.data.type !== 'error',
+            output: event.data.output ?? '',
+            stderr: event.data.stderr ?? '',
+            resultText: event.data.resultText ?? '',
+            error: event.data.error ?? null,
+          });
+        };
+        w.onerror = (event) => {
+          window.clearTimeout(timer);
+          w.terminate();
+          reject(new Error(event.message || 'Pyodide Worker 执行失败'));
+        };
+        const indexURL = new URL('pyodide/', document.baseURI).href;
+        const moduleURL = new URL('pyodide/pyodide.mjs', document.baseURI).href;
+        w.postMessage({
+          requestId: `tool-${Date.now()}`,
+          action: 'exec',
+          source: code,
+          indexURL,
+          moduleURL,
+        });
+      });
+    };
+
+    const baseCaps = bridge?.capabilities
+      ? {
+          ...bridge.capabilities,
+          runPythonSnippet:
+            bridge.capabilities.runPythonSnippet ?? runPythonQuick,
+        }
+      : {
+          ...createFallbackTerminalCapabilities(bridge?.activeMindmapTitle),
+          runPythonSnippet: runPythonQuick,
+        };
+
+    return {
+      ...bridge,
+      books: bridge?.books ?? books,
+      onOpenBook: bridge?.onOpenBook ?? onOpenBook,
+      capabilities: baseCaps,
+    };
+  }, [books, bridge, onOpenBook]);
 
   const closeTab = (tabId: string, event?: React.MouseEvent) => {
     event?.stopPropagation();
@@ -638,6 +1207,8 @@ export default function TerminalWorkspace({
       prev.map((id) => (id === tabId ? (nextTabs[0]?.id ?? '') : id)),
     );
     terminalRefs.current.delete(tabId);
+    agentRefs.current.delete(tabId);
+    labRefs.current.delete(tabId);
   };
 
   const startRenameTab = (tab: TerminalTab) => {
@@ -909,6 +1480,116 @@ export default function TerminalWorkspace({
     return map;
   }, [activePaneIds]);
 
+  const isStageZoomed =
+    zoomedPaneIndex !== null && zoomedPaneIndex < visibleCount;
+  const showPaneHeaders = visibleCount > 1 && !isStageZoomed;
+  const focusedSessionMeta = activeTab
+    ? sessionMetaById[activeTab.id]
+    : undefined;
+  const activeFooterHints = useMemo(
+    () => buildSmartFooterHints(activeTab?.kind ?? 'shell', isStageZoomed),
+    [activeTab?.kind, isStageZoomed],
+  );
+
+  interface PaletteActionItem {
+    id: string;
+    badge: string;
+    title: string;
+    subtitle: string;
+    run: () => void;
+  }
+
+  const paletteActions: PaletteActionItem[] = [
+    ...WORKSPACE_LAYOUT_PRESETS.map((preset) => ({
+      id: `preset-${preset.id}`,
+      badge: `模板 ${preset.badge}`,
+      title: preset.title,
+      subtitle: preset.description,
+      run: () => applyWorkspacePreset(preset),
+    })),
+    {
+      id: 'new-agent',
+      badge: '新建',
+      title: '打开 >_ Seamind Agent 书卷智能体',
+      subtitle: '支持 /## 能力调度与 API×CLI 套娃协同',
+      run: () => createSpecialTab('agent'),
+    },
+    {
+      id: 'new-py-lab',
+      badge: '新建',
+      title: '打开 Euporie Python 交互实验本',
+      subtitle: '支持 Pyodide / Conda 双内核、matplotlib 绘图与 .ipynb',
+      run: () => createSpecialTab('lab', 'python'),
+    },
+    {
+      id: 'new-c-lab',
+      badge: '新建',
+      title: '打开 Euporie C/C++ 编译实验本',
+      subtitle: '支持公共头文件前置格、stdin 测试与 GDB 终端直达',
+      run: () => createSpecialTab('lab', 'c'),
+    },
+    {
+      id: 'new-shell',
+      badge: '新建',
+      title: '新建 PowerShell 会话',
+      subtitle: `在工作目录 ${focusedLiveCwd || '.'} 启动`,
+      run: () => createNewTab('powershell'),
+    },
+    {
+      id: 'toggle-zoom',
+      badge: '视图',
+      title: isStageZoomed
+        ? '还原多窗格分屏 (Ctrl+Shift+M)'
+        : '全屏放大当前聚焦窗格 (Ctrl+Shift+M)',
+      subtitle: '保持其他后台终端与实验状态运行',
+      run: () => {
+        if (visibleCount > 1) {
+          setZoomedPaneIndex((z) => (z === null ? safeFocusedPane : null));
+        }
+      },
+    },
+    {
+      id: 'toggle-drawer',
+      badge: '工具',
+      title: '打开 / 收起命令库与知识动作侧栏 (Ctrl+Shift+L)',
+      subtitle: '常用 Linux/Windows 命令模板速查',
+      run: () => setDrawerOpen((o) => !o),
+    },
+    ...(mergedBridge.onNavigateWorkspace
+      ? (
+          [
+            ['reader', '电子书阅读器', '切换到 EPUB 伴读与星图'],
+            ['knowledge', '知识库笔记', '查看并编辑 Markdown 文档'],
+            ['mindmap', '思维导图工作台', '回到当前思维导图画布'],
+            ['exams', '试卷中心', '查看测验与错题复盘'],
+            ['player', '双螺旋播放器', '继续视频课程学习路径'],
+            ['literature', '论文文献库', '查阅 PDF 与 BibTeX 批注'],
+            ['feed', 'RSS 订阅阅读', '浏览最新关注博客订阅'],
+          ] as const
+        ).map(([ws, title, subtitle]) => ({
+          id: `nav-${ws}`,
+          badge: '工作区',
+          title: `前往「${title}」`,
+          subtitle,
+          run: () => mergedBridge.onNavigateWorkspace?.(ws),
+        }))
+      : []),
+  ];
+
+  const filteredPaletteActions = paletteActions.filter((item) => {
+    const q = paletteQuery.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      item.title.toLowerCase().includes(q) ||
+      item.subtitle.toLowerCase().includes(q) ||
+      item.badge.toLowerCase().includes(q)
+    );
+  });
+  const safePaletteIndex = Math.min(
+    paletteIndex,
+    Math.max(0, filteredPaletteActions.length - 1),
+  );
+
   return (
     <main
       className={`terminal-workspace${standalone ? ' is-standalone' : ''}`}
@@ -944,15 +1625,16 @@ export default function TerminalWorkspace({
                       ),
                     );
                   }
-                  requestAnimationFrame(() =>
-                    terminalRefs.current.get(tab.id)?.focus(),
-                  );
+                  requestAnimationFrame(() => focusTabHandle(tab.id));
                 }}
                 onDoubleClick={() => startRenameTab(tab)}
                 role="tab"
                 aria-selected={isActive}
               >
-                <span className="tab-shell-tag">{tab.shell.toUpperCase()}</span>
+                <span
+                  className={`tab-status-dot is-${tab.status}`}
+                  aria-hidden="true"
+                />
                 {tab.bellCount ? (
                   <span className="tab-bell-dot" title="该会话刚完成响铃提醒" />
                 ) : null}
@@ -971,12 +1653,14 @@ export default function TerminalWorkspace({
                     onClick={(e) => e.stopPropagation()}
                   />
                 ) : (
-                  <span className="tab-title" title={tab.title}>
+                  <span
+                    className="tab-title"
+                    title={
+                      index < 9 ? `${tab.title} (Alt+${index + 1})` : tab.title
+                    }
+                  >
                     {tab.title}
                   </span>
-                )}
-                {index < 9 && (
-                  <span className="tab-index-hint">{`Alt+${index + 1}`}</span>
                 )}
                 {tabs.length > 1 && (
                   <button
@@ -1005,13 +1689,91 @@ export default function TerminalWorkspace({
               }}
               disabled={tabs.length >= MAX_WORKSPACE_TABS}
               aria-expanded={showShellMenu}
-              title="新建终端或一键开启 AI CLI 会话"
+              title="新建终端、交互 Agent 或 Euporie 代码实验本"
             >
               + 新建
             </button>
 
+            <button
+              type="button"
+              className="terminal-new-special-btn"
+              onClick={() => createSpecialTab('agent')}
+              disabled={tabs.length >= MAX_WORKSPACE_TABS}
+              title="打开自研 Seamind Agent（支持 /## 命令及 API×CLI 套娃协同）"
+            >
+              Agent
+            </button>
+
+            <div className="terminal-preset-container" ref={presetMenuRef}>
+              <button
+                type="button"
+                className={`terminal-new-special-btn${showPresetMenu ? ' is-active' : ''}`}
+                onClick={() => {
+                  setShowPresetMenu((prev) => !prev);
+                  setShowShellMenu(false);
+                  setToolsMenuOpen(false);
+                  setShowPrefsMenu(false);
+                  setShowPopoutMenu(false);
+                }}
+                aria-expanded={showPresetMenu}
+                title="一键套用多窗格协同预设模板"
+              >
+                场景模板 ▾
+              </button>
+
+              {showPresetMenu && (
+                <div className="terminal-preset-menu" role="menu">
+                  <div className="shell-menu-header">多窗协同场景预设模板</div>
+                  {WORKSPACE_LAYOUT_PRESETS.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      className="terminal-preset-option"
+                      onClick={() => applyWorkspacePreset(preset)}
+                    >
+                      <div className="terminal-preset-opt-top">
+                        <span className="option-badge">{preset.badge}</span>
+                        <strong>{preset.title}</strong>
+                      </div>
+                      <span className="option-desc">{preset.description}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
             {showShellMenu && (
               <div className="terminal-shell-menu">
+                <div className="shell-menu-header">
+                  Seamind Agent &amp; Euporie 实验
+                </div>
+                <div className="shell-cli-quick-row">
+                  <button
+                    type="button"
+                    className="shell-cli-quick-btn is-primary"
+                    disabled={tabs.length >= MAX_WORKSPACE_TABS}
+                    onClick={() => createSpecialTab('agent')}
+                  >
+                    &gt;_ Seamind Agent
+                  </button>
+                  <button
+                    type="button"
+                    className="shell-cli-quick-btn"
+                    disabled={tabs.length >= MAX_WORKSPACE_TABS}
+                    onClick={() => createSpecialTab('lab', 'python')}
+                  >
+                    Python 实验本
+                  </button>
+                  <button
+                    type="button"
+                    className="shell-cli-quick-btn"
+                    disabled={tabs.length >= MAX_WORKSPACE_TABS}
+                    onClick={() => createSpecialTab('lab', 'c')}
+                  >
+                    C/C++ 实验本
+                  </button>
+                </div>
+
                 <div className="shell-menu-header">一键启动 CLI 模型会话</div>
                 <div className="shell-cli-quick-row">
                   {CLI_PRESETS.map((cli) => (
@@ -1082,7 +1844,7 @@ export default function TerminalWorkspace({
               <button
                 key={mode}
                 type="button"
-                className={`terminal-icon-btn${splitMode === mode ? ' is-active' : ''}`}
+                className={`terminal-icon-btn${!isStageZoomed && splitMode === mode ? ' is-active' : ''}`}
                 onClick={() => switchLayoutMode(mode)}
                 title={title}
                 aria-label={title}
@@ -1091,6 +1853,37 @@ export default function TerminalWorkspace({
               </button>
             ))}
           </div>
+
+          {visibleCount > 1 && (
+            <button
+              type="button"
+              className={`terminal-icon-btn${isStageZoomed ? ' is-active' : ''}`}
+              onClick={() =>
+                setZoomedPaneIndex((z) => (z === null ? safeFocusedPane : null))
+              }
+              title={
+                isStageZoomed
+                  ? '还原分屏画布 (Ctrl+Shift+M)'
+                  : '放大当前聚焦窗格至全屏 (Ctrl+Shift+M)'
+              }
+            >
+              <ZoomPaneIcon zoomed={isStageZoomed} />
+            </button>
+          )}
+
+          <button
+            type="button"
+            className={`terminal-icon-btn${paletteOpen ? ' is-active' : ''}`}
+            onClick={() => {
+              setPaletteOpen(true);
+              setPaletteQuery('');
+              setPaletteIndex(0);
+              requestAnimationFrame(() => paletteSearchRef.current?.focus());
+            }}
+            title="全局终端命令面板 (Ctrl+K)"
+          >
+            <span>⌘K</span>
+          </button>
 
           <div className="terminal-popout-container" ref={popoutMenuRef}>
             <button
@@ -1112,6 +1905,29 @@ export default function TerminalWorkspace({
             {showPopoutMenu && (
               <div className="terminal-popout-menu" role="menu">
                 <div className="shell-menu-header">多开独立桌面窗口</div>
+                <button
+                  type="button"
+                  className="terminal-tools-option"
+                  onClick={() =>
+                    void handlePopoutWindow(undefined, undefined, {
+                      kind: 'agent',
+                    })
+                  }
+                >
+                  独立窗口打开 &gt;_ Seamind Agent
+                </button>
+                <button
+                  type="button"
+                  className="terminal-tools-option"
+                  onClick={() =>
+                    void handlePopoutWindow(undefined, undefined, {
+                      kind: 'lab',
+                      labLanguage: 'python',
+                    })
+                  }
+                >
+                  独立窗口打开 Euporie Python 实验本
+                </button>
                 <button
                   type="button"
                   className="terminal-tools-option"
@@ -1296,7 +2112,7 @@ export default function TerminalWorkspace({
       {/* Center Multi-Pane Stage + Optional Right Drawer */}
       <div className="terminal-workspace-body">
         <section
-          className={`terminal-stage-panes is-${splitMode}`}
+          className={`terminal-stage-panes is-${isStageZoomed ? 'single' : splitMode}${isStageZoomed ? ' is-zoomed' : ''}${showPaneHeaders ? '' : ' is-headerless'}`}
           aria-label="终端多窗格画布"
           style={
             {
@@ -1305,153 +2121,265 @@ export default function TerminalWorkspace({
             } as React.CSSProperties
           }
         >
-          {/* Compact Pane Chrome Headers (one per visible pane slot) */}
-          {activePaneIds.map((paneTabId, paneIdx) => {
-            const paneTab = tabs.find((t) => t.id === paneTabId) ?? tabs[0];
-            if (!paneTab) return null;
-            const isPaneFocused = paneIdx === safeFocusedPane;
-            return (
-              <div
-                key={`header-${paneIdx}`}
-                className={`pane-header pane-header-${paneIdx}${isPaneFocused ? ' is-focused' : ''}`}
-                style={{ gridArea: `header${paneIdx}` }}
-                onMouseDown={() => {
-                  setFocusedPaneIndex(paneIdx);
-                  requestAnimationFrame(() =>
-                    terminalRefs.current.get(paneTab.id)?.focus(),
-                  );
-                }}
-              >
-                <div className="pane-header-left">
-                  <span
-                    className={`pane-status-dot is-${paneTab.status}`}
-                    aria-hidden="true"
-                  />
-                  <select
-                    className="pane-tab-select"
-                    value={paneTab.id}
-                    onChange={(event) => {
-                      const nextId = event.target.value;
-                      setPaneTabIds((prev) => {
-                        const next = [...prev];
-                        next[paneIdx] = nextId;
-                        return next;
-                      });
-                      setFocusedPaneIndex(paneIdx);
-                    }}
-                    aria-label={`窗格 ${paneIdx + 1} 会话`}
-                  >
-                    {tabs.map((tab) => (
-                      <option key={tab.id} value={tab.id}>
-                        [{tab.shell.toUpperCase()}] {tab.title}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="pane-header-actions">
-                  {CLI_PRESETS.map((cli) => (
-                    <button
-                      key={cli.id}
-                      type="button"
-                      className="pane-mini-cli-btn"
-                      onClick={(e) => {
-                        e.stopPropagation();
+          {/* Compact Pane Chrome Headers (only rendered in multi-pane split when unzoomed) */}
+          {showPaneHeaders &&
+            activePaneIds.map((paneTabId, paneIdx) => {
+              if (isStageZoomed && paneIdx !== zoomedPaneIndex) return null;
+              const paneTab = tabs.find((t) => t.id === paneTabId) ?? tabs[0];
+              if (!paneTab) return null;
+              const isPaneFocused = paneIdx === safeFocusedPane;
+              return (
+                <div
+                  key={`header-${paneIdx}`}
+                  className={`pane-header pane-header-${paneIdx}${isPaneFocused ? ' is-focused' : ''}`}
+                  style={{
+                    gridArea: isStageZoomed ? 'header0' : `header${paneIdx}`,
+                  }}
+                  onMouseDown={() => {
+                    setFocusedPaneIndex(paneIdx);
+                    requestAnimationFrame(() => focusTabHandle(paneTab.id));
+                  }}
+                >
+                  <div className="pane-header-left">
+                    <span
+                      className={`pane-status-dot is-${paneTab.status}`}
+                      aria-hidden="true"
+                    />
+                    <select
+                      className="pane-tab-select"
+                      value={paneTab.id}
+                      onChange={(event) => {
+                        const nextId = event.target.value;
+                        setPaneTabIds((prev) => {
+                          const next = [...prev];
+                          next[paneIdx] = nextId;
+                          return next;
+                        });
                         setFocusedPaneIndex(paneIdx);
-                        terminalRefs.current
-                          .get(paneTab.id)
-                          ?.sendCommand(cli.id, true);
                       }}
-                      title={`在当前窗格运行 ${cli.desc}`}
+                      aria-label={`窗格 ${paneIdx + 1} 会话`}
                     >
-                      {cli.label}
-                    </button>
-                  ))}
+                      {tabs.map((tab) => {
+                        const badge =
+                          tab.kind === 'agent'
+                            ? 'AGENT'
+                            : tab.kind === 'lab'
+                              ? `LAB:${(tab.labLanguage ?? 'py').toUpperCase()}`
+                              : tab.shell.toUpperCase();
+                        return (
+                          <option key={tab.id} value={tab.id}>
+                            [{badge}] {tab.title}
+                          </option>
+                        );
+                      })}
+                    </select>
+                    {paneTab.statusMessage && (
+                      <span
+                        className="pane-header-meta"
+                        title={paneTab.statusMessage}
+                      >
+                        {paneTab.statusMessage}
+                      </span>
+                    )}
+                  </div>
 
-                  <button
-                    type="button"
-                    className="pane-mini-icon-btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      splitOutPane(paneIdx);
-                    }}
-                    title="向侧边新增分屏窗格"
-                  >
-                    <DrawerSplitIcon />
-                  </button>
+                  <div className="pane-header-actions">
+                    {(!paneTab.kind || paneTab.kind === 'shell') &&
+                      CLI_PRESETS.map((cli) => (
+                        <button
+                          key={cli.id}
+                          type="button"
+                          className="pane-mini-cli-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setFocusedPaneIndex(paneIdx);
+                            terminalRefs.current
+                              .get(paneTab.id)
+                              ?.sendCommand(cli.id, true);
+                          }}
+                          title={`在当前窗格运行 ${cli.desc}`}
+                        >
+                          {cli.label}
+                        </button>
+                      ))}
 
-                  <button
-                    type="button"
-                    className="pane-mini-icon-btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void handlePopoutWindow(undefined, paneTab.id);
-                    }}
-                    title="将此目录弹出到新独立窗口"
-                  >
-                    <PopoutWindowIcon />
-                  </button>
+                    {visibleCount > 1 && (
+                      <button
+                        type="button"
+                        className={`pane-mini-icon-btn${isStageZoomed ? ' is-active' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setZoomedPaneIndex((z) =>
+                            z === null ? paneIdx : null,
+                          );
+                        }}
+                        title={
+                          isStageZoomed
+                            ? '还原多窗分屏 (Ctrl+Shift+M)'
+                            : '全屏放大此窗格 (Ctrl+Shift+M)'
+                        }
+                      >
+                        <ZoomPaneIcon zoomed={isStageZoomed} />
+                      </button>
+                    )}
 
-                  {visibleCount > 1 && (
                     <button
                       type="button"
-                      className="pane-mini-icon-btn is-close"
+                      className="pane-mini-icon-btn"
                       onClick={(e) => {
                         e.stopPropagation();
-                        closePaneSlot(paneIdx);
+                        splitOutPane(paneIdx);
                       }}
-                      title="关闭此分屏窗格（后台会话仍保留在标签栏）"
+                      title="向侧边新增分屏窗格"
                     >
-                      ×
+                      <DrawerSplitIcon />
                     </button>
-                  )}
+
+                    <button
+                      type="button"
+                      className="pane-mini-icon-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void handlePopoutWindow(undefined, paneTab.id);
+                      }}
+                      title="将此目录弹出到新独立窗口"
+                    >
+                      <PopoutWindowIcon />
+                    </button>
+
+                    {visibleCount > 1 && !isStageZoomed && (
+                      <button
+                        type="button"
+                        className="pane-mini-icon-btn is-close"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          closePaneSlot(paneIdx);
+                        }}
+                        title="关闭此分屏窗格（后台会话仍保留在标签栏）"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
 
           {/* Drag divider for 2-pane splits and tri vertical split */}
-          {(splitMode === 'vertical' ||
-            splitMode === 'horizontal' ||
-            splitMode === 'tri') && (
-            <div
-              className="terminal-pane-divider"
-              role="separator"
-              aria-orientation={
-                splitMode === 'horizontal' ? 'horizontal' : 'vertical'
-              }
-              onPointerDown={(event) => {
-                const container = event.currentTarget.parentElement;
-                if (!container) return;
-                const rect = container.getBoundingClientRect();
-                const isHorizontal = splitMode === 'horizontal';
-                const onPointerMove = (moveEvent: PointerEvent) => {
-                  const ratio = isHorizontal
-                    ? (moveEvent.clientY - rect.top - 28) /
-                      Math.max(1, rect.height - 56)
-                    : (moveEvent.clientX - rect.left) / Math.max(1, rect.width);
-                  setSplitRatio(Math.max(0.22, Math.min(0.78, ratio)));
-                };
-                const onPointerUp = () => {
-                  window.removeEventListener('pointermove', onPointerMove);
-                  window.removeEventListener('pointerup', onPointerUp);
-                };
-                window.addEventListener('pointermove', onPointerMove);
-                window.addEventListener('pointerup', onPointerUp, {
-                  once: true,
-                });
-              }}
-              title="拖动调整窗格比例"
-            >
-              <div className="divider-handle" />
-            </div>
-          )}
+          {!isStageZoomed &&
+            (splitMode === 'vertical' ||
+              splitMode === 'horizontal' ||
+              splitMode === 'tri') && (
+              <div
+                className="terminal-pane-divider"
+                role="separator"
+                aria-orientation={
+                  splitMode === 'horizontal' ? 'horizontal' : 'vertical'
+                }
+                onPointerDown={(event) => {
+                  const container = event.currentTarget.parentElement;
+                  if (!container) return;
+                  const rect = container.getBoundingClientRect();
+                  const isHorizontal = splitMode === 'horizontal';
+                  const onPointerMove = (moveEvent: PointerEvent) => {
+                    const ratio = isHorizontal
+                      ? (moveEvent.clientY - rect.top - 28) /
+                        Math.max(1, rect.height - 56)
+                      : (moveEvent.clientX - rect.left) /
+                        Math.max(1, rect.width);
+                    setSplitRatio(Math.max(0.22, Math.min(0.78, ratio)));
+                  };
+                  const onPointerUp = () => {
+                    window.removeEventListener('pointermove', onPointerMove);
+                    window.removeEventListener('pointerup', onPointerUp);
+                  };
+                  window.addEventListener('pointermove', onPointerMove);
+                  window.addEventListener('pointerup', onPointerUp, {
+                    once: true,
+                  });
+                }}
+                title="拖动调整窗格比例"
+              >
+                <div className="divider-handle" />
+              </div>
+            )}
 
-          {/* Stably mounted PTY instances mapped cleanly onto pane0..pane3 */}
+          {/* Stably mounted PTY, Agent & Code Lab instances mapped cleanly onto pane0..pane3 */}
           {tabs.map((tab) => {
             const assignedPane = tabToPaneIndex.get(tab.id);
-            const isVisibleInStage = assignedPane !== undefined;
+            const isVisibleInStage =
+              assignedPane !== undefined &&
+              (!isStageZoomed || assignedPane === zoomedPaneIndex);
             const isFocused = assignedPane === safeFocusedPane;
+            const paneStyle = {
+              gridArea:
+                isStageZoomed && isVisibleInStage
+                  ? 'pane0'
+                  : isVisibleInStage
+                    ? `pane${assignedPane}`
+                    : 'pane0',
+            };
+            const onTabStatus = (
+              status: TerminalTab['status'],
+              message?: string,
+            ) => {
+              setTabs((previous) =>
+                previous.map((item) =>
+                  item.id === tab.id
+                    ? { ...item, status, statusMessage: message }
+                    : item,
+                ),
+              );
+            };
+            const onFocusTabPane = () => {
+              if (assignedPane !== undefined) {
+                setFocusedPaneIndex(assignedPane);
+              }
+            };
+
+            if (tab.kind === 'agent') {
+              return (
+                <TerminalAgentView
+                  key={tab.id}
+                  ref={(instance) => {
+                    if (instance) agentRefs.current.set(tab.id, instance);
+                    else agentRefs.current.delete(tab.id);
+                  }}
+                  tab={tab}
+                  theme={theme}
+                  isFocused={isFocused}
+                  style={paneStyle}
+                  active={active && isVisibleInStage}
+                  bridge={mergedBridge}
+                  paneAccessor={paneAccessor}
+                  onFocusPane={onFocusTabPane}
+                  onStatusChange={onTabStatus}
+                />
+              );
+            }
+
+            if (tab.kind === 'lab') {
+              return (
+                <TerminalCodeLabView
+                  key={tab.id}
+                  ref={(instance) => {
+                    if (instance) labRefs.current.set(tab.id, instance);
+                    else labRefs.current.delete(tab.id);
+                  }}
+                  tab={tab}
+                  theme={theme}
+                  isFocused={isFocused}
+                  style={paneStyle}
+                  active={active && isVisibleInStage}
+                  bridge={mergedBridge}
+                  onFocusPane={onFocusTabPane}
+                  onStatusChange={onTabStatus}
+                  onSendToShellPane={sendToShellPane}
+                  onSendToAgentPane={sendToAgentPane}
+                />
+              );
+            }
+
             return (
               <TerminalSessionView
                 key={tab.id}
@@ -1462,23 +2390,15 @@ export default function TerminalWorkspace({
                 tab={tab}
                 theme={theme}
                 isFocused={isFocused}
-                style={{
-                  gridArea: isVisibleInStage ? `pane${assignedPane}` : 'pane0',
-                }}
+                style={paneStyle}
                 active={active && isVisibleInStage}
-                onFocusPane={() => {
-                  if (assignedPane !== undefined) {
-                    setFocusedPaneIndex(assignedPane);
-                  }
-                }}
-                onStatusChange={(status, message) => {
-                  setTabs((previous) =>
-                    previous.map((item) =>
-                      item.id === tab.id
-                        ? { ...item, status, statusMessage: message }
-                        : item,
-                    ),
-                  );
+                onFocusPane={onFocusTabPane}
+                onStatusChange={onTabStatus}
+                onMetaChange={(meta) => {
+                  setSessionMetaById((prev) => ({
+                    ...prev,
+                    [tab.id]: meta,
+                  }));
                 }}
                 onCwdChange={(nextCwd) => {
                   setTabs((previous) =>
@@ -2029,6 +2949,224 @@ export default function TerminalWorkspace({
               >
                 确认并执行
               </button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      <footer
+        className="terminal-unified-footer"
+        aria-label="终端状态与快捷动作"
+      >
+        <div className="terminal-footer-left">
+          <span
+            className={`tab-status-dot is-${activeTab?.status ?? 'ready'}`}
+            aria-hidden="true"
+          />
+          <span className="terminal-footer-session">
+            {activeTab?.title ?? 'PowerShell'}
+          </span>
+          <span className="terminal-footer-sep" aria-hidden="true">
+            ·
+          </span>
+          <span className="terminal-footer-path" title={focusedLiveCwd || '.'}>
+            {focusedLiveCwd || '.'}
+          </span>
+          {isStageZoomed && (
+            <button
+              type="button"
+              className="terminal-footer-zoom-pill"
+              onClick={() => setZoomedPaneIndex(null)}
+              title="点击还原分屏布局 (Ctrl+Shift+M)"
+            >
+              已放大 · 还原
+            </button>
+          )}
+          {focusedSessionMeta?.viActive && (
+            <span className="terminal-footer-state">
+              Vi {focusedSessionMeta.viMode}
+            </span>
+          )}
+          {focusedSessionMeta?.flashNotice && (
+            <span className="terminal-footer-state">
+              {focusedSessionMeta.flashNotice}
+            </span>
+          )}
+          {focusedSessionMeta &&
+            focusedSessionMeta.internalStatus !== '就绪' && (
+              <span className="terminal-footer-warn">
+                {focusedSessionMeta.internalStatus}
+              </span>
+            )}
+        </div>
+
+        <div className="terminal-footer-hints">
+          {(!activeTab?.kind || activeTab.kind === 'shell') &&
+            focusedSessionMeta && (
+              <>
+                <span className="terminal-footer-meta">
+                  {focusedSessionMeta.webgl ? 'GL' : 'DOM'}{' '}
+                  {focusedSessionMeta.cols}×{focusedSessionMeta.rows}
+                </span>
+                <button
+                  type="button"
+                  className={`terminal-footer-cmd${focusedSessionMeta.searchOpen ? ' is-active' : ''}`}
+                  onClick={() =>
+                    terminalRefs.current.get(activeTabId)?.openSearch()
+                  }
+                  title="搜索缓冲区 (Ctrl+Shift+F)"
+                >
+                  搜索
+                </button>
+                <button
+                  type="button"
+                  className={`terminal-footer-cmd${focusedSessionMeta.viActive ? ' is-active' : ''}`}
+                  onClick={() =>
+                    terminalRefs.current.get(activeTabId)?.toggleViMode()
+                  }
+                  title="Vi 光标选择模式 (Ctrl+Shift+Space)"
+                >
+                  Vi
+                </button>
+                <button
+                  type="button"
+                  className={`terminal-footer-cmd${focusedSessionMeta.hintsActive ? ' is-active' : ''}`}
+                  onClick={() =>
+                    terminalRefs.current.get(activeTabId)?.triggerHints()
+                  }
+                  title="快捷路径/链接标号跳转 (Ctrl+Shift+O)"
+                >
+                  Hints
+                </button>
+                <button
+                  type="button"
+                  className="terminal-footer-cmd"
+                  onClick={() => terminalRefs.current.get(activeTabId)?.clear()}
+                  title="清屏"
+                >
+                  清屏
+                </button>
+              </>
+            )}
+
+          {activeTab?.kind &&
+            activeTab.kind !== 'shell' &&
+            activeFooterHints.map((hint) => (
+              <span
+                key={`${hint.keys}-${hint.label}`}
+                className="terminal-footer-hint"
+              >
+                <kbd>{hint.keys}</kbd>
+                {hint.label}
+              </span>
+            ))}
+
+          <span className="terminal-footer-meta">UTF-8</span>
+          <button
+            type="button"
+            className="terminal-footer-palette-btn"
+            onClick={() => {
+              setPaletteOpen(true);
+              setPaletteQuery('');
+              setPaletteIndex(0);
+              requestAnimationFrame(() => paletteSearchRef.current?.focus());
+            }}
+            title="全局终端命令面板 (Ctrl+K)"
+          >
+            Ctrl+K
+          </button>
+        </div>
+      </footer>
+
+      {paletteOpen && (
+        <div
+          className="terminal-palette-backdrop"
+          role="presentation"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setPaletteOpen(false);
+              focusActiveTerminal();
+            }
+          }}
+        >
+          <section
+            className="terminal-palette-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="全局终端命令面板"
+          >
+            <div className="terminal-palette-input-row">
+              <span className="terminal-palette-prompt">&gt;_</span>
+              <input
+                ref={paletteSearchRef}
+                type="text"
+                className="terminal-palette-input"
+                value={paletteQuery}
+                onChange={(e) => {
+                  setPaletteQuery(e.target.value);
+                  setPaletteIndex(0);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setPaletteOpen(false);
+                    focusActiveTerminal();
+                    return;
+                  }
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    setPaletteIndex((i) =>
+                      Math.min(
+                        Math.max(0, filteredPaletteActions.length - 1),
+                        i + 1,
+                      ),
+                    );
+                    return;
+                  }
+                  if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    setPaletteIndex((i) => Math.max(0, i - 1));
+                    return;
+                  }
+                  if (
+                    e.key === 'Enter' &&
+                    filteredPaletteActions[safePaletteIndex]
+                  ) {
+                    e.preventDefault();
+                    const chosen = filteredPaletteActions[safePaletteIndex];
+                    setPaletteOpen(false);
+                    chosen.run();
+                  }
+                }}
+                placeholder="搜索场景模板、新建 Agent / Code Lab、切换分屏或工作区跳转…"
+              />
+            </div>
+
+            <div className="terminal-palette-list" role="listbox">
+              {filteredPaletteActions.length === 0 ? (
+                <div className="terminal-palette-empty">无匹配操作</div>
+              ) : (
+                filteredPaletteActions.map((item, idx) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    role="option"
+                    aria-selected={idx === safePaletteIndex}
+                    className={`terminal-palette-item${idx === safePaletteIndex ? ' is-selected' : ''}`}
+                    onMouseEnter={() => setPaletteIndex(idx)}
+                    onClick={() => {
+                      setPaletteOpen(false);
+                      item.run();
+                    }}
+                  >
+                    <span className="terminal-palette-badge">{item.badge}</span>
+                    <div className="terminal-palette-item-text">
+                      <strong>{item.title}</strong>
+                      <span>{item.subtitle}</span>
+                    </div>
+                  </button>
+                ))
+              )}
             </div>
           </section>
         </div>

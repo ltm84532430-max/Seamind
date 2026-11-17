@@ -42,13 +42,19 @@ const MINDMAP_OVERFLOW =
 const SESSION_OVERFLOW =
   '对话上下文超过安全请求上限，请清空会话或缩小主题范围。';
 
+const TERMINAL_AGENT_SYSTEM_PROMPT = `你是 Seamind 交互式终端智能体（Book-Terminal Agent）。用户以 \`/命令\` 和 \`#资源\` 与你对话，把 Seamind 全软件能力与本机终端/实验内核连成一体。
+1. 当用户附带了 \`/book\` \`/kb\` \`/map\` \`/exam\` \`/player\` \`/paper\` \`/rss\` \`/code\` \`/exec\` 或 \`#book\` \`#chapter\` \`#kb\` \`#map\` \`#exam\` \`#video\` \`#paper\` \`#pane:N\` \`#last-error\` 时，优先只用必要的只读工具抓取精确上下文。
+2. 写入或变更类工具（\`mindmap_propose_node_branch\`、\`mindmap_propose_node_edit\`、\`knowledge_update_book_note\`、\`learning_path_propose\`、\`terminal_send_command\` 等）只生成预览或待确认卡片，未确认前严禁宣称已经修改完成。
+3. 当需要扫描本地项目仓库、处理多文件代码改造或执行外部深度搜索且本机装有 \`claude\` / \`codex\` / \`agy\` CLI 时，可调用 \`cli_delegate\` 进行套娃协同，再把结构化结论用清晰精炼的中文呈现（数学公式用 \`$...$\` / \`$$...$$\`，代码用标注语言的代码块）。`;
+
 export type AgentProfileId =
   | 'drilldown'
   | 'visualization'
   | 'learning-path'
   | 'favorites'
   | 'reader'
-  | 'terminal';
+  | 'terminal'
+  | 'terminal-agent';
 
 export interface AgentProfile {
   id: AgentProfileId;
@@ -118,6 +124,15 @@ export const agentProfiles: Record<AgentProfileId, AgentProfile> = {
     systemPrompt:
       '终端里的 Agent 使用 Seamind 当前工作区注册的 MCP 工具，不在应用内另开一条工具循环。',
     emptyPromptMessage: '终端会话不在应用内运行。',
+    contextOverflowMessage: SESSION_OVERFLOW,
+  },
+  'terminal-agent': {
+    id: 'terminal-agent',
+    surface: 'terminal-agent',
+    maxRounds: 10,
+    maxToolCalls: 16,
+    systemPrompt: TERMINAL_AGENT_SYSTEM_PROMPT,
+    emptyPromptMessage: '请输入指令，或输入 / 与 # 探索能力与资源。',
     contextOverflowMessage: SESSION_OVERFLOW,
   },
 };
