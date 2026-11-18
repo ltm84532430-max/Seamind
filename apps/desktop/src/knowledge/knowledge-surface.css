@@ -42,6 +42,15 @@
   --col-source: minmax(300px, 29%);
   grid-template-rows: 36px minmax(0, 1fr);
 }
+.app-shell.is-knowledge-surface
+  .workspace.is-knowledge-map.is-source-collapsed {
+  --col-source: 42px;
+}
+.app-shell.is-knowledge-surface
+  .workspace.is-knowledge-map.is-markdown-fullscreen {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
 .workspace.is-knowledge-map > .library-sidebar {
   grid-column: 1;
   grid-row: 1 / 3;
@@ -53,6 +62,10 @@
 .workspace.is-knowledge-map > .editor-pane {
   grid-column: 2;
   grid-row: 2;
+}
+.workspace.is-knowledge-map.is-markdown-fullscreen > .editor-pane {
+  grid-column: 1;
+  grid-row: 1;
 }
 .workspace.is-knowledge-map > .preview-pane {
   grid-column: 3;
@@ -121,15 +134,28 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.workspace.is-knowledge-map .pane-heading {
+.workspace.is-knowledge-map > .editor-pane:not(.is-collapsed) > .pane-heading,
+.workspace.is-knowledge-map > .preview-pane > .pane-heading,
+.workspace.is-knowledge-map > .ai-sidebar:not(.is-collapsed) > .pane-heading {
   height: 40px;
   padding-right: 8px;
   padding-left: 12px;
 }
+.workspace.is-knowledge-map > .editor-pane.is-collapsed > .pane-heading {
+  padding-top: 7px;
+}
 .workspace.is-knowledge-map .pane-kicker {
   display: none;
 }
-.workspace.is-knowledge-map .pane-heading h1 {
+.workspace.is-knowledge-map
+  > .editor-pane:not(.is-collapsed)
+  > .pane-heading
+  h1,
+.workspace.is-knowledge-map > .preview-pane > .pane-heading h1,
+.workspace.is-knowledge-map
+  > .ai-sidebar:not(.is-collapsed)
+  > .pane-heading
+  h1 {
   font-size: 12px;
 }
 .workspace.is-knowledge-map .document-metadata .metadata-title-field {
@@ -157,6 +183,70 @@
 }
 .workspace.is-knowledge-map .markdown-mode-switch button {
   padding: 0 9px;
+}
+@container source-pane (max-width: 395px) {
+  .workspace.is-knowledge-map > .editor-pane:not(.is-collapsed) .format-badge {
+    display: none;
+  }
+  .workspace.is-knowledge-map .markdown-mode-switch button {
+    padding: 0 7px;
+  }
+  .workspace.is-knowledge-map .source-history-button,
+  .workspace.is-knowledge-map .source-insert-tools button,
+  .workspace.is-knowledge-map .markdown-fullscreen-button {
+    padding: 0 6px;
+  }
+}
+@container source-pane (max-width: 345px) {
+  .workspace.is-knowledge-map
+    > .editor-pane:not(.is-collapsed)
+    > .pane-heading {
+    height: auto;
+    min-height: 40px;
+    flex-wrap: wrap;
+    gap: 4px 6px;
+    padding: 5px 8px 6px 10px;
+  }
+  .workspace.is-knowledge-map
+    > .editor-pane:not(.is-collapsed)
+    > .pane-heading
+    > div:first-child {
+    height: auto;
+  }
+  .workspace.is-knowledge-map
+    > .editor-pane:not(.is-collapsed)
+    > .pane-heading
+    > .pane-collapse-button {
+    margin-left: auto;
+  }
+  .workspace.is-knowledge-map .source-header-actions {
+    order: 3;
+    flex: 1 0 100%;
+    height: auto;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    margin: 0;
+    padding-top: 5px;
+    border-top: 1px solid var(--line);
+  }
+  .workspace.is-knowledge-map .markdown-mode-switch {
+    height: 26px;
+  }
+  .workspace.is-knowledge-map .markdown-mode-switch button {
+    height: 26px;
+    min-height: 26px;
+  }
+}
+@container canvas-pane (max-width: 1040px) {
+  .workspace.is-knowledge-map > .preview-pane > .pane-heading {
+    height: auto;
+    min-height: 70px;
+  }
+}
+@container canvas-pane (max-width: 560px) {
+  .workspace.is-knowledge-map > .preview-pane > .pane-heading {
+    min-height: 0;
+  }
 }
 .app-shell.is-knowledge-surface .library-header {
   height: 36px;
@@ -189,7 +279,8 @@
   box-shadow: none;
 }
 @media (max-width: 1100px) {
-  .app-shell.is-knowledge-surface .workspace.is-knowledge-map {
+  .app-shell.is-knowledge-surface
+    .workspace.is-knowledge-map:not(.is-source-collapsed) {
     --col-source: minmax(260px, 35%);
   }
   .knowledge-file-path {
@@ -197,7 +288,8 @@
   }
 }
 @media (max-width: 820px) {
-  .app-shell.is-knowledge-surface .workspace.is-knowledge-map {
+  .app-shell.is-knowledge-surface
+    .workspace.is-knowledge-map:not(.is-source-collapsed) {
     --col-source: minmax(230px, 40%);
   }
   .knowledge-file-save-state {

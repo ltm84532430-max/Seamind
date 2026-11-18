@@ -129,4 +129,36 @@ describe('stylesheet structure', () => {
       findCssStructureProblem('@media print {\n  .a { color: red; }\n'),
     ).toMatch(/opened on line 1 is never closed/);
   });
+
+  it('keeps knowledge mindmap markdown pane collapse and canvas toolbar layout intact', () => {
+    const surfaceCss = readFileSync(
+      new URL('knowledge/knowledge-surface.css', sourceDirectory),
+      'utf8',
+    );
+    const baseCss = readFileSync(
+      new URL('styles.css', sourceDirectory),
+      'utf8',
+    );
+
+    expect(surfaceCss).toMatch(
+      /\.workspace\.is-knowledge-map\.is-source-collapsed\s*\{[^}]*--col-source:\s*42px;/,
+    );
+    expect(surfaceCss).toMatch(
+      /\.workspace\.is-knowledge-map:not\(\.is-source-collapsed\)\s*\{[^}]*--col-source:\s*minmax\(260px,\s*35%\);/,
+    );
+    expect(surfaceCss).not.toMatch(
+      /\.workspace\.is-knowledge-map\s+\.pane-heading\s*\{/,
+    );
+    expect(surfaceCss).toMatch(
+      /@container canvas-pane \(max-width:\s*1040px\)\s*\{[^}]*\.workspace\.is-knowledge-map\s*>\s*\.preview-pane\s*>\s*\.pane-heading\s*\{[^}]*height:\s*auto;/s,
+    );
+
+    expect(baseCss).toMatch(
+      /\.editor-pane\.is-collapsed\s*>\s*\.markdown-pane-content\b/,
+    );
+    expect(baseCss).toMatch(
+      /\.editor-pane\s*\{[^}]*container-name:\s*source-pane;[^}]*container-type:\s*inline-size;[^}]*overflow:\s*hidden;/s,
+    );
+    expect(baseCss).toMatch(/@container canvas-pane \(max-width:\s*1040px\)/);
+  });
 });

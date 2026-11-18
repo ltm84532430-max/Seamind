@@ -1053,10 +1053,13 @@ select option {
 }
 .ai-sidebar.is-collapsed .pane-heading {
   height: 100%;
+  flex: 1 1 0;
   flex-direction: column;
   justify-content: flex-start;
+  align-items: center;
   gap: 13px;
   padding: 12px 4px;
+  border-bottom: 0;
 }
 .ai-sidebar.is-collapsed .pane-heading > div {
   display: flex;
@@ -1068,6 +1071,7 @@ select option {
   display: none;
 }
 .ai-sidebar.is-collapsed .pane-heading h1 {
+  margin: 0;
   writing-mode: vertical-rl;
   font-size: 11px;
 }
@@ -1190,9 +1194,12 @@ select option {
 
 .editor-pane {
   display: flex;
+  container-name: source-pane;
+  container-type: inline-size;
   min-width: 0;
   min-height: 0;
   flex-direction: column;
+  overflow: hidden;
   border: 0;
   border-right: 1px solid var(--line);
   border-radius: 0;
@@ -3801,16 +3808,21 @@ select option {
 }
 .editor-pane.is-collapsed > .document-metadata,
 .editor-pane.is-collapsed > .editor-label,
+.editor-pane.is-collapsed > .markdown-pane-content,
 .editor-pane.is-collapsed > .markdown-editor,
+.editor-pane.is-collapsed > .plantuml-source-editor-pane,
 .editor-pane.is-collapsed > .editor-footer {
   display: none;
 }
 .editor-pane.is-collapsed .pane-heading {
   height: 100%;
+  flex: 1 1 0;
   flex-direction: column;
   justify-content: flex-start;
+  align-items: center;
   gap: 13px;
   padding: 12px 4px;
+  border-bottom: 0;
 }
 .editor-pane.is-collapsed .pane-heading > div {
   display: flex;
@@ -3818,14 +3830,19 @@ select option {
   align-items: center;
   gap: 9px;
 }
-.editor-pane.is-collapsed .pane-kicker {
+.editor-pane.is-collapsed .pane-kicker,
+.editor-pane.is-collapsed .plantuml-source-format {
   display: none;
 }
 .editor-pane.is-collapsed .pane-heading h1 {
+  margin: 0;
   writing-mode: vertical-rl;
   font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
 }
 .editor-pane.is-collapsed .pane-collapse-button {
+  order: -1;
   transform: rotate(180deg);
 }
 .save-document-button {
@@ -9781,10 +9798,12 @@ select option {
 .preview-heading {
   position: relative;
   z-index: 5;
+  gap: 10px;
   min-width: 0;
 }
 .preview-title {
   flex: 0 0 auto;
+  white-space: nowrap;
 }
 .canvas-tools {
   width: auto;
@@ -9931,7 +9950,7 @@ select option {
   color: #aeb9c0;
 }
 
-@container canvas-pane (max-width: 760px) {
+@container canvas-pane (max-width: 1040px) {
   .preview-heading {
     height: auto;
     min-height: 78px;
@@ -9976,7 +9995,7 @@ select option {
   }
 }
 
-@container canvas-pane (max-width: 480px) {
+@container canvas-pane (max-width: 560px) {
   .preview-heading {
     min-height: 0;
     grid-template-columns: minmax(0, 1fr);
@@ -10002,6 +10021,38 @@ select option {
   .canvas-tool-actions,
   .canvas-tool-view {
     flex-wrap: wrap;
+  }
+}
+
+@container source-pane (max-width: 395px) {
+  .editor-pane:not(.is-collapsed) .format-badge {
+    display: none;
+  }
+}
+
+@container source-pane (max-width: 345px) {
+  .editor-pane:not(.is-collapsed) > .pane-heading {
+    height: auto;
+    min-height: 40px;
+    flex-wrap: wrap;
+    gap: 4px 6px;
+    padding: 5px 8px 6px 10px;
+  }
+  .editor-pane:not(.is-collapsed) > .pane-heading > div:first-child {
+    height: auto;
+  }
+  .editor-pane:not(.is-collapsed) > .pane-heading > .pane-collapse-button {
+    margin-left: auto;
+  }
+  .editor-pane:not(.is-collapsed) .source-header-actions {
+    order: 3;
+    flex: 1 0 100%;
+    height: auto;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    margin: 0;
+    padding-top: 5px;
+    border-top: 1px solid var(--line);
   }
 }
 
@@ -12205,10 +12256,14 @@ select option {
     border-bottom: 1px solid var(--muted);
     transform: translateX(-50%);
   }
-  .app-shell.is-reader-split > .workspace {
+  .app-shell.is-reader-split > .workspace:not(.is-source-collapsed) {
     grid-column: 1;
     grid-row: 4;
     grid-template-columns: minmax(210px, 0.78fr) minmax(0, 1fr) !important;
+  }
+  .app-shell.is-reader-split > .workspace.is-source-collapsed {
+    grid-column: 1;
+    grid-row: 4;
   }
   .app-shell.is-reader-split > .statusbar {
     grid-row: 5;
