@@ -30,6 +30,7 @@
   display: flex;
   color: var(--player-ink);
   background: var(--player-bg);
+  font-family: var(--ui-font);
 }
 .app-shell[data-theme='dark'] .player-workspace-stage {
   --player-bg: #1a2025;
@@ -273,12 +274,12 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   flex: none;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: 2px;
   background: transparent;
   color: var(--player-muted);
   cursor: pointer;
@@ -291,6 +292,7 @@
 .player-rail-button:hover {
   color: var(--player-ink);
   background: var(--player-hover);
+  border-color: var(--player-line);
 }
 
 .player-rail-button:focus-visible {
@@ -301,22 +303,22 @@
 .player-rail-button.is-current {
   color: var(--player-accent);
   background: var(--player-accent-soft);
-  border-color: color-mix(in srgb, var(--player-accent) 28%, transparent);
+  border-color: color-mix(in srgb, var(--player-accent) 34%, transparent);
 }
 
 .player-rail-button.is-channel.is-current .player-avatar {
-  box-shadow: 0 0 0 1.5px var(--player-accent);
+  border-color: var(--player-accent);
+  color: var(--player-accent);
 }
 
 .player-rail-warning-dot {
   position: absolute;
-  top: 3px;
+  top: 4px;
   right: 3px;
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   background: #eab308;
-  box-shadow: 0 0 0 1px var(--player-panel);
 }
 
 .player-rail-footer {
@@ -503,7 +505,9 @@
   color: #facc15;
 }
 .player-nav-count {
-  font-weight: 400;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
 }
 .player-nav-item {
   display: flex;
@@ -553,6 +557,7 @@
 }
 .player-nav-badge {
   color: var(--player-muted);
+  font-family: var(--mono);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
@@ -618,10 +623,17 @@
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  border-radius: 50%;
-  color: #fff;
+  border-radius: 2px;
+  border: 1px solid var(--player-line);
+  background: var(--player-panel-alt);
+  color: var(--player-muted);
   font-weight: 600;
   line-height: 1;
+}
+.player-avatar.is-index {
+  font-family: var(--mono);
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
 }
 .player-avatar img {
   display: block;

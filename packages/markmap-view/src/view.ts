@@ -609,10 +609,10 @@ export class Markmap {
     const parentMap: Record<number, number> = {};
     const nodes: INode[] = [];
     walkTree(rootNode, (item, next, parent) => {
-      if (!item.payload?.fold) next();
       nodeMap[item.state.id] = item;
       if (parent) parentMap[item.state.id] = parent.state.id;
       nodes.push(item);
+      if (!item.payload?.fold) next();
     });
 
     const originMap: Record<number, number> = {};

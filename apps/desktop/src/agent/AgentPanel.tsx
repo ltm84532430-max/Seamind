@@ -10,6 +10,7 @@ import {
   noteSessionResolution,
   runAgentSession,
 } from './runtime';
+import { buildMarkdownDiffHunks } from './session';
 import type {
   AgentCallEvent,
   AgentChatMessage,
@@ -909,23 +910,56 @@ export default function AgentPanel({
               组件。
             </small>
           ) : null}
-          <details className="agent-diff">
-            <summary>查看 Markdown 分支预览</summary>
-            <pre>
-              {markdownChange(
-                conversation.proposal.baseMarkdown,
-                conversation.proposal.markdown,
-              )
-                .removed.map((line) => `− ${line}`)
-                .concat(
-                  markdownChange(
-                    conversation.proposal.baseMarkdown,
-                    conversation.proposal.markdown,
-                  ).added.map((line) => `+ ${line}`),
-                )
-                .join('\n') || '没有可显示的文本差异'}
-            </pre>
-          </details>
+          {(() => {
+            const diff = buildMarkdownDiffHunks(
+              conversation.proposal.baseMarkdown,
+              conversation.proposal.markdown,
+            );
+            return (
+              <details className="agent-diff" open>
+                <summary>
+                  查看 Markdown 分支预览
+                  {diff.hunks.length > 0
+                    ? `（+${diff.totalAdded} / −${diff.totalRemoved} 行 · ${diff.hunks.length} 处变更块）`
+                    : ''}
+                </summary>
+                <pre>
+                  {diff.hunks.length > 0
+                    ? diff.hunks
+                        .map((hunk) =>
+                          [
+                            hunk.header,
+                            ...hunk.lines.map((line) => {
+                              const prefix =
+                                line.kind === 'add'
+                                  ? '+'
+                                  : line.kind === 'del'
+                                    ? '−'
+                                    : ' ';
+                              const lineNo = String(
+                                line.newLineNo ?? line.oldLineNo ?? '',
+                              ).padStart(3, ' ');
+                              return `${lineNo} ${prefix} ${line.text}`;
+                            }),
+                          ].join('\n'),
+                        )
+                        .join('\n\n')
+                    : markdownChange(
+                        conversation.proposal.baseMarkdown,
+                        conversation.proposal.markdown,
+                      )
+                        .removed.map((line) => `− ${line}`)
+                        .concat(
+                          markdownChange(
+                            conversation.proposal.baseMarkdown,
+                            conversation.proposal.markdown,
+                          ).added.map((line) => `+ ${line}`),
+                        )
+                        .join('\n') || '没有可显示的文本差异'}
+                </pre>
+              </details>
+            );
+          })()}
           <div className="agent-proposal-actions">
             <button
               type="button"

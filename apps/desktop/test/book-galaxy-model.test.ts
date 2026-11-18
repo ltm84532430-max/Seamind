@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildBookGalaxyGraph,
   buildGalaxyAdjacencyMap,
+  computeVisibleGalaxyLabelIds,
   createGalaxyPhysicsState,
   DEFAULT_GALAXY_PHYSICS_CONFIG,
   extractChapterIndex,
@@ -478,5 +479,62 @@ describe('Book Galaxy Model', () => {
     expect(
       Math.hypot(collapsedAi.x - expectedX, collapsedAi.y - expectedY),
     ).toBeLessThan(1.5);
+  });
+
+  it('culls colliding secondary labels in screen space while preserving priority nodes', () => {
+    const nodes = [
+      {
+        id: 'sun',
+        kind: 'sun' as const,
+        label: 'Root',
+        x: 0,
+        y: 0,
+        radius: 36,
+      },
+      {
+        id: 'p1',
+        kind: 'planet' as const,
+        label: '1.1 紧密相邻的第一小节',
+        x: 120,
+        y: 80,
+        radius: 6,
+      },
+      {
+        id: 'p2',
+        kind: 'satellite' as const,
+        label: '1.1.1 叠在正下方的子节',
+        x: 121,
+        y: 81,
+        radius: 3,
+      },
+      {
+        id: 'p3',
+        kind: 'planet' as const,
+        label: '2.1 远离的独立小节',
+        x: -240,
+        y: -180,
+        radius: 6,
+      },
+    ];
+    const visibleIds = new Set(nodes.map((n) => n.id));
+    const culled = computeVisibleGalaxyLabelIds({
+      nodes,
+      positions: {},
+      scale: 0.5,
+      visibleIds,
+    });
+    expect(culled.has('sun')).toBe(true);
+    expect(culled.has('p1')).toBe(true);
+    expect(culled.has('p2')).toBe(false);
+    expect(culled.has('p3')).toBe(true);
+
+    const forced = computeVisibleGalaxyLabelIds({
+      nodes,
+      positions: {},
+      scale: 0.5,
+      visibleIds,
+      priorityIds: new Set(['p2']),
+    });
+    expect(forced.has('p2')).toBe(true);
   });
 });

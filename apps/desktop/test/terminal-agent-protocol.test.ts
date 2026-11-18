@@ -7,11 +7,18 @@ import {
   detectTriggerAutocomplete,
   DOT_MATRIX_BOOK_SPLASH,
   hasTerminalErrorSignal,
+  METALLIC_BOOK_PALETTE,
+  METALLIC_BOOK_PIXEL_GRID,
   parseTerminalAgentInput,
   TERMINAL_SLASH_COMMANDS,
   tokenizePromptEntities,
   WORKSPACE_LAYOUT_PRESETS,
 } from '../src/terminal/terminal-agent-protocol';
+import {
+  assembleFullScriptSource,
+  createDefaultCodeLabCollection,
+  groupCodeLabFilesByFolder,
+} from '../src/terminal/terminal-codelab-model';
 
 describe('terminal agent /## protocol', () => {
   it('parses slash command and #resource mentions uniformly', () => {
@@ -140,5 +147,42 @@ describe('terminal agent /## protocol', () => {
     expect(zoomedLabHints.find((h) => h.keys === 'Ctrl+Shift+M')?.label).toBe(
       '还原分屏',
     );
+  });
+
+  it('defines a strict 22x15 integer pixel grid for the metallic open-book CLI emblem', () => {
+    expect(METALLIC_BOOK_PIXEL_GRID).toHaveLength(15);
+    for (const row of METALLIC_BOOK_PIXEL_GRID) {
+      expect(row).toHaveLength(22);
+      for (const ch of row) {
+        if (ch !== '.') {
+          expect(METALLIC_BOOK_PALETTE[ch]).toMatch(/^#[0-9A-F]{6}$/i);
+        }
+      }
+    }
+  });
+
+  it('groups collected Code Lab files by folder and assembles full script source', () => {
+    const files = createDefaultCodeLabCollection();
+    expect(files.length).toBeGreaterThanOrEqual(3);
+
+    const pyOnly = groupCodeLabFilesByFolder(files, '', 'python');
+    const pyItems = pyOnly.flatMap((g) => g.items);
+    expect(pyItems.length).toBe(1);
+    expect(pyItems[0].language).toBe('python');
+
+    const bySearch = groupCodeLabFilesByFolder(files, 'CSAPP', 'all');
+    expect(bySearch.flatMap((g) => g.items)).toHaveLength(1);
+
+    const pyScript = assembleFullScriptSource(files[0].cells, 'python');
+    expect(pyScript).toContain('import math');
+    expect(pyScript).toContain('# --- [代码格 #2] ---');
+
+    const cScript = assembleFullScriptSource(
+      files[1].cells,
+      'c',
+      files[1].prologueSource,
+    );
+    expect(cScript).toContain('#include <stdio.h>');
+    expect(cScript).toContain('int main(void)');
   });
 });

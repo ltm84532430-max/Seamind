@@ -343,3 +343,104 @@ export function stepGalaxyPhysics(
   if (!hasPinned) state.alpha *= 0.965;
   return true;
 }
+
+const KIND_PRIORITY: Record<GalaxyNodeKind, number> = {
+  sun: 5,
+  cluster: 4,
+  planet: 3,
+  footnote: 2,
+  satellite: 1,
+};
+
+interface ScreenLabelBox {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
+function estimateLabelWidth(text: string): number {
+  let width = 10;
+  for (const ch of text) {
+    const code = ch.codePointAt(0) ?? 0;
+    width += code > 0x2e80 ? 10.5 : 6.2;
+  }
+  return Math.min(180, width);
+}
+
+/**
+ * 屏幕空间标签碰撞消隐（Screen-Space Label Culling）：
+ * 高优先级节点（sun / cluster / 悬停焦点）优先占位，低缩放倍率下剔除发生包围盒重叠的次级标签。
+ */
+export function computeVisibleGalaxyLabelIds<
+  TNode extends Pick<
+    GalaxyPhysicsNode,
+    'id' | 'kind' | 'x' | 'y' | 'radius'
+  > & {
+    label: string;
+  },
+>(args: {
+  nodes: readonly TNode[];
+  positions: Record<string, { x: number; y: number }>;
+  scale: number;
+  visibleIds: Set<string>;
+  priorityIds?: Set<string>;
+}): Set<string> {
+  const { nodes, positions, scale, visibleIds, priorityIds } = args;
+  const accepted = new Set<string>();
+  const boxes: ScreenLabelBox[] = [];
+  const candidates = nodes.filter((node) => visibleIds.has(node.id));
+
+  candidates.sort((a, b) => {
+    const aForced = priorityIds?.has(a.id) ? 1 : 0;
+    const bForced = priorityIds?.has(b.id) ? 1 : 0;
+    if (aForced !== bForced) return bForced - aForced;
+    const tierDiff = KIND_PRIORITY[b.kind] - KIND_PRIORITY[a.kind];
+    if (tierDiff !== 0) return tierDiff;
+    return b.radius - a.radius;
+  });
+
+  for (const node of candidates) {
+    const pos = positions[node.id] ?? node;
+    const sx = pos.x * scale;
+    const sy = pos.y * scale;
+    const sr = node.radius * scale;
+    const isForced =
+      node.kind === 'sun' ||
+      node.kind === 'cluster' ||
+      Boolean(priorityIds?.has(node.id));
+    const halfW = estimateLabelWidth(node.label.slice(0, 18)) * 0.5;
+    const box: ScreenLabelBox = {
+      minX: sx - halfW,
+      maxX: sx + halfW,
+      minY: sy + sr + 3,
+      maxY: sy + sr + 18,
+    };
+
+    if (isForced) {
+      accepted.add(node.id);
+      boxes.push(box);
+      continue;
+    }
+
+    let collides = false;
+    for (let i = 0; i < boxes.length; i += 1) {
+      const other = boxes[i];
+      if (
+        box.minX < other.maxX &&
+        box.maxX > other.minX &&
+        box.minY < other.maxY &&
+        box.maxY > other.minY
+      ) {
+        collides = true;
+        break;
+      }
+    }
+    if (!collides) {
+      accepted.add(node.id);
+      boxes.push(box);
+    }
+  }
+
+  return accepted;
+}

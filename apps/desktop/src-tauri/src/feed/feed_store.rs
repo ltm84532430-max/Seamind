@@ -199,8 +199,13 @@ fn ensure_column(
 
 pub fn open(path: &std::path::Path) -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(|e| format!("无法打开订阅数据库：{e}"))?;
-    conn.execute_batch("PRAGMA foreign_keys = ON;")
-        .map_err(|e| format!("启用订阅数据库关联约束失败：{e}"))?;
+    conn.execute_batch(
+        "PRAGMA foreign_keys = ON;
+         PRAGMA journal_mode = WAL;
+         PRAGMA synchronous = NORMAL;
+         PRAGMA busy_timeout = 5000;",
+    )
+    .map_err(|e| format!("启用订阅数据库关联约束失败：{e}"))?;
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(|e| format!("Cannot read feed schema version: {e}"))?;

@@ -84,6 +84,15 @@ export function agentToolCatalogForWorkspace(
       return catalogEntriesNamed(SURFACE_TOOL_NAMES.reader);
     case 'feed':
       return catalogEntriesNamed(SURFACE_TOOL_NAMES.feed);
+    case 'exams':
+      return catalogEntriesNamed([
+        'exam_list_papers',
+        'exam_get_paper',
+        'code_run_c',
+        'code_run_python',
+      ]);
+    case 'literature':
+      return catalogEntriesNamed(['literature_list_papers']);
     default:
       return null;
   }

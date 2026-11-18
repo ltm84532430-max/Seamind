@@ -3552,3 +3552,763 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* --------------------------------------------------------------------------
+   8. Modular Left Rail (Shell | Agent | Code Lab File Collection)
+   -------------------------------------------------------------------------- */
+.terminal-left-rail {
+  width: 244px;
+  flex: 0 0 244px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--term-border);
+  background: var(--term-subtle);
+  overflow: hidden;
+}
+
+.terminal-left-rail.is-collapsed {
+  width: 44px;
+  flex: 0 0 44px;
+}
+
+.terminal-rail-slim {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0;
+  width: 100%;
+  height: 100%;
+}
+
+.terminal-rail-slim-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--term-muted);
+  font: 700 10.5px var(--mono, Consolas, monospace);
+  cursor: pointer;
+}
+
+.terminal-rail-slim-btn:hover {
+  border-color: var(--term-border);
+  background: var(--term-surface);
+  color: var(--term-ink);
+}
+
+.terminal-rail-slim-btn.is-active {
+  border-color: var(--term-accent);
+  background: var(--term-accent-soft);
+  color: var(--term-accent);
+  box-shadow: inset 2px 0 0 var(--term-accent);
+}
+
+.terminal-rail-slim-sep {
+  width: 22px;
+  height: 1px;
+  margin: 2px 0;
+  background: var(--term-border);
+}
+
+.terminal-rail-top {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--term-border);
+  background: var(--term-surface);
+}
+
+.terminal-rail-brand-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.terminal-rail-brand-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--term-ink);
+  letter-spacing: 0.02em;
+}
+
+.terminal-rail-collapse-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--term-border);
+  background: var(--term-subtle);
+  color: var(--term-muted);
+  font: 700 11px var(--mono);
+  cursor: pointer;
+}
+
+.terminal-rail-collapse-btn:hover {
+  border-color: var(--term-border-strong);
+  color: var(--term-ink);
+}
+
+.terminal-rail-mode-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid var(--term-border);
+  background: var(--term-subtle);
+}
+
+.terminal-rail-mode-tab {
+  height: 26px;
+  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--term-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.terminal-rail-mode-tab + .terminal-rail-mode-tab {
+  border-left: 1px solid var(--term-border);
+}
+
+.terminal-rail-mode-tab:hover {
+  color: var(--term-ink);
+}
+
+.terminal-rail-mode-tab.is-active {
+  background: var(--term-surface);
+  color: var(--term-accent);
+  box-shadow: inset 0 -2px 0 var(--term-accent);
+}
+
+.terminal-rail-count {
+  padding: 0 4px;
+  font: 600 9.5px var(--mono);
+  color: var(--term-muted);
+  background: rgba(128, 128, 128, 0.12);
+}
+
+.terminal-rail-mode-tab.is-active .terminal-rail-count {
+  color: var(--term-accent);
+  background: var(--term-accent-soft);
+}
+
+.terminal-rail-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 10px 14px;
+}
+
+.terminal-rail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.terminal-rail-group-label {
+  margin-top: 2px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--term-muted);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.terminal-rail-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--term-muted);
+}
+
+.terminal-rail-sub-seg {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border: 1px solid var(--term-border);
+  background: var(--term-surface);
+}
+
+.terminal-rail-sub-seg button {
+  height: 24px;
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--term-muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.terminal-rail-sub-seg button + button {
+  border-left: 1px solid var(--term-border);
+}
+
+.terminal-rail-sub-seg button.is-active {
+  background: var(--term-accent-soft);
+  color: var(--term-accent);
+}
+
+.terminal-rail-action-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.terminal-rail-mini-btn {
+  height: 23px;
+  padding: 0 7px;
+  border: 1px solid var(--term-border);
+  background: var(--term-surface);
+  color: var(--term-ink);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.terminal-rail-mini-btn:hover:not(:disabled) {
+  border-color: var(--term-border-strong);
+  color: var(--term-accent);
+}
+
+.terminal-rail-mini-btn.is-accent {
+  border-color: var(--term-accent);
+  background: var(--term-accent-soft);
+  color: var(--term-accent);
+}
+
+.terminal-rail-search {
+  width: 100%;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--term-border);
+  background: var(--term-surface);
+  color: var(--term-ink);
+  font-size: 11.5px;
+  outline: none;
+}
+
+.terminal-rail-search:focus {
+  border-color: var(--term-accent);
+}
+
+.terminal-rail-filter-pills {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.terminal-rail-pill {
+  flex: 1 1 0;
+  height: 21px;
+  padding: 0 4px;
+  border: 1px solid var(--term-border);
+  background: var(--term-surface);
+  color: var(--term-muted);
+  font: 700 10px var(--mono);
+  cursor: pointer;
+}
+
+.terminal-rail-pill.is-active {
+  border-color: var(--term-accent);
+  background: var(--term-accent-soft);
+  color: var(--term-accent);
+}
+
+.terminal-rail-folders {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.terminal-rail-folder-group {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--term-border);
+  background: var(--term-surface);
+}
+
+.terminal-rail-folder-head {
+  height: 25px;
+  padding: 0 7px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: rgba(128, 128, 128, 0.05);
+  color: var(--term-ink);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.terminal-rail-folder-caret {
+  font-size: 10px;
+  color: var(--term-muted);
+}
+
+.terminal-rail-folder-name {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-rail-folder-count {
+  font: 600 9.5px var(--mono);
+  color: var(--term-muted);
+}
+
+.terminal-rail-folder-items {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--term-border);
+}
+
+.terminal-rail-empty-hint {
+  padding: 6px 8px;
+  font-size: 10.5px;
+  color: var(--term-muted);
+}
+
+.terminal-rail-file-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px 2px 6px;
+  border-bottom: 1px solid var(--term-border);
+}
+
+.terminal-rail-file-row:last-child {
+  border-bottom: 0;
+}
+
+.terminal-rail-file-row.is-active {
+  background: var(--term-accent-soft);
+  box-shadow: inset 2px 0 0 var(--term-accent);
+}
+
+.terminal-rail-file-main {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 24px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: transparent;
+  color: var(--term-ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.terminal-rail-lang-badge {
+  flex: none;
+  padding: 1px 4px;
+  border: 1px solid var(--term-border-strong);
+  background: var(--term-subtle);
+  color: var(--term-ink);
+  font: 700 9px var(--mono);
+}
+
+.terminal-rail-lang-badge.is-python {
+  border-color: rgba(70, 123, 94, 0.45);
+  color: var(--term-accent);
+}
+
+.terminal-rail-lang-badge.is-c,
+.terminal-rail-lang-badge.is-cpp {
+  border-color: rgba(217, 119, 87, 0.45);
+  color: #d97757;
+}
+
+.terminal-rail-file-title {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.terminal-rail-file-cells {
+  flex: none;
+  font: 500 9.5px var(--mono);
+  color: var(--term-muted);
+}
+
+.terminal-rail-star-btn,
+.terminal-rail-del-btn {
+  width: 18px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--term-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.terminal-rail-star-btn.is-starred {
+  color: #e5a93c;
+}
+
+.terminal-rail-del-btn:hover {
+  color: var(--term-danger);
+}
+
+.terminal-rail-snippets-list,
+.terminal-rail-preset-list,
+.terminal-rail-session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.terminal-rail-snippet-card,
+.terminal-rail-preset-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 8px;
+  border: 1px solid var(--term-border);
+  background: var(--term-surface);
+  color: var(--term-ink);
+  text-align: left;
+}
+
+.terminal-rail-preset-card {
+  cursor: pointer;
+}
+
+.terminal-rail-preset-card:hover {
+  border-color: var(--term-accent);
+}
+
+.terminal-rail-snippet-top,
+.terminal-rail-preset-top {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+}
+
+.terminal-rail-snippet-desc,
+.terminal-rail-preset-card span {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--term-muted);
+}
+
+.terminal-rail-snippet-actions {
+  display: flex;
+  gap: 5px;
+  margin-top: 2px;
+}
+
+.terminal-rail-session-item {
+  height: 27px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--term-border);
+  background: var(--term-surface);
+  color: var(--term-ink);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.terminal-rail-session-item.is-active {
+  border-color: var(--term-accent);
+  background: var(--term-accent-soft);
+  font-weight: 600;
+}
+
+.terminal-rail-session-main {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.terminal-rail-session-name {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-rail-full-btn {
+  width: 100%;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--term-border);
+  background: var(--term-surface);
+  color: var(--term-ink);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.terminal-rail-full-btn:hover {
+  border-color: var(--term-accent);
+  color: var(--term-accent);
+}
+
+/* --------------------------------------------------------------------------
+   9. Strict-Pixel Metallic Open-Book CLI Banner (Fig 3 Antigravity CLI Style)
+   -------------------------------------------------------------------------- */
+.t-agent-cli-banner {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 4px 0 14px;
+}
+
+.t-agent-cli-emblem-box {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: linear-gradient(
+    180deg,
+    rgba(15, 23, 42, 0.92) 0%,
+    rgba(30, 41, 59, 0.88) 100%
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(248, 250, 252, 0.14),
+    0 2px 6px rgba(0, 0, 0, 0.16);
+}
+
+.t-agent-pixel-book-svg {
+  display: block;
+  image-rendering: pixelated;
+  shape-rendering: crispEdges;
+}
+
+.t-agent-cli-meta-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--mono, 'JetBrains Mono', Consolas, monospace);
+  line-height: 1.38;
+}
+
+.t-agent-cli-line-brand {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--term-accent);
+  letter-spacing: 0.01em;
+}
+
+.t-agent-cli-line-sub {
+  font-size: 12px;
+  color: var(--term-muted);
+}
+
+.t-agent-cli-line-model {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--term-ink);
+}
+
+.t-agent-cli-line-path {
+  font-size: 12px;
+  color: var(--term-muted);
+}
+
+.t-agent-cli-prompt-strip {
+  width: 100%;
+  max-width: 68ch;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 4px;
+  border-top: 1px solid var(--term-border-strong);
+  border-bottom: 1px solid var(--term-border-strong);
+  font-family: var(--mono, Consolas, monospace);
+  cursor: text;
+}
+
+.t-agent-cli-chevron {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--term-accent);
+}
+
+.t-agent-cli-block-cursor {
+  width: 8px;
+  height: 16px;
+  background: linear-gradient(180deg, #f8fafc 0%, #94a3b8 100%);
+  box-shadow: 0 0 4px rgba(148, 163, 184, 0.45);
+  flex: none;
+}
+
+.t-agent-cli-quick-pills {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-left: 6px;
+}
+
+.t-agent-cli-pill {
+  height: 21px;
+  padding: 0 7px;
+  border: 1px solid var(--term-border);
+  background: var(--term-surface);
+  color: var(--term-muted);
+  font: 600 10.5px var(--mono, Consolas, monospace);
+  cursor: pointer;
+}
+
+.t-agent-cli-pill:hover {
+  border-color: var(--term-accent);
+  color: var(--term-accent);
+}
+
+.t-agent-cli-footer-row {
+  width: 100%;
+  max-width: 68ch;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 8px;
+  font: 500 11.5px var(--mono, Consolas, monospace);
+  color: var(--term-muted);
+}
+
+.t-agent-cli-footer-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.t-agent-cli-footer-right {
+  margin-left: auto;
+}
+
+/* --------------------------------------------------------------------------
+   10. Code Lab File Collection Bar & Full Script Assembler View
+   -------------------------------------------------------------------------- */
+.codelab-file-meta-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.codelab-file-title-input {
+  width: 156px;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid var(--term-border);
+  background: var(--term-surface);
+  color: var(--term-ink);
+  font: 600 11.5px var(--mono, Consolas, monospace);
+  outline: none;
+}
+
+.codelab-file-title-input:focus {
+  border-color: var(--term-accent);
+}
+
+.codelab-folder-select {
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--term-border);
+  background: var(--term-surface);
+  color: var(--term-muted);
+  font-size: 11px;
+}
+
+.codelab-tool-btn.is-collect {
+  border-color: rgba(217, 119, 87, 0.45);
+  background: rgba(217, 119, 87, 0.1);
+  color: #d97757;
+}
+
+.codelab-view-seg {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--term-border);
+  background: var(--term-subtle);
+}
+
+.codelab-script-view {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--term-border-strong);
+  background: var(--term-surface);
+}
+
+.codelab-script-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--term-border);
+  background: var(--term-subtle);
+}
+
+.codelab-script-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.codelab-script-title span {
+  color: var(--term-muted);
+  font-size: 11px;
+}
+
+.codelab-script-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.codelab-script-pre {
+  margin: 0;
+  padding: 14px 16px;
+  overflow-x: auto;
+  font: 500 12.5px/1.6 var(--mono, 'JetBrains Mono', Consolas, monospace);
+  color: var(--term-ink);
+  background: var(--term-surface);
+  user-select: text;
+}

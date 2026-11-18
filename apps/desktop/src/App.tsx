@@ -230,6 +230,7 @@ import {
   clonePureNode,
   findNavigationPath,
   findPureNodeBySourcePath,
+  normalizeMindmapPureTree,
   prepareMindmapTree,
 } from './library/app-tree-utils';
 import {
@@ -1165,6 +1166,28 @@ function AppContent() {
     setSaveMessage('有未保存修改');
   };
 
+  const syncMarkdownNodeSourcesImmediate = (markdown: string) => {
+    try {
+      const { root } = transformer.transform(
+        normalizeKatexDelimiters(markdownForMindmap(markdown)),
+        htmlCardParserOptions,
+      );
+      const safeRoot = normalizeMindmapPureTree(
+        prepareHtmlCardNodes(
+          prepareYouTubeCards(sanitizeNode(root)),
+          undefined,
+          { value: false },
+        ),
+      );
+      const nextSources = buildMarkdownNodeSourceMap(markdown, safeRoot);
+      markdownNodeSourcesMarkdownRef.current = markdown;
+      markdownNodeSourcesRef.current = nextSources;
+      return nextSources;
+    } catch {
+      return markdownNodeSourcesRef.current;
+    }
+  };
+
   const handleMarkdownEditorChange = (markdown: string) => {
     const current = draftRef.current;
     const title =
@@ -1173,6 +1196,7 @@ function AppContent() {
         ? markdownTitle(markdown)
         : null);
     pendingMarkdownTitleRef.current = null;
+    syncMarkdownNodeSourcesImmediate(markdown);
     patchDraft({ markdown, ...(title ? { title } : {}) });
   };
 
@@ -1187,6 +1211,7 @@ function AppContent() {
   ) => {
     if (markdown === draftRef.current.markdown) return;
     pendingMarkdownTitleRef.current = options.title || null;
+    const nextSources = syncMarkdownNodeSourcesImmediate(markdown);
     if (markdownEditorRef.current) {
       markdownEditorRef.current.applyDocument(markdown, options);
     } else {
@@ -1196,9 +1221,18 @@ function AppContent() {
         ...(options.title ? { title: options.title } : {}),
       });
     }
+    if (options.lineIndex !== undefined) {
+      const targetPath = findSourcePathForLine(options.lineIndex, nextSources);
+      if (targetPath) {
+        setActiveMapPath(targetPath);
+      }
+    }
   };
 
   const handleMarkdownSelectionChange = (selection: MarkdownSelection) => {
+    if (markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown) {
+      syncMarkdownNodeSourcesImmediate(draftRef.current.markdown);
+    }
     setActiveMapPath(
       findSourcePathForLine(
         selection.lineIndex,
@@ -1211,8 +1245,9 @@ function AppContent() {
     operation: 'child' | 'sibling' | 'delete',
   ) => {
     if (!activeMapPath) return;
-    if (markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown)
-      return;
+    if (markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown) {
+      syncMarkdownNodeSourcesImmediate(draftRef.current.markdown);
+    }
     const source = markdownNodeSourcesRef.current.get(activeMapPath);
     if (!source || (source.kind === 'block' && operation !== 'delete')) return;
     const markdown = draftRef.current.markdown;
@@ -1228,10 +1263,11 @@ function AppContent() {
         '新主题',
       );
       if (command.markdown === markdown) return;
+      setLibraryError('');
       if (operation === 'delete') setActiveMapPath(null);
       applyMarkdownFromCanvas(command.markdown, {
         lineIndex: command.lineIndex,
-        focus: true,
+        focus: false,
         ...(source.lineIndex === markdownTitleLineIndex(markdown)
           ? { title: markdownTitle(command.markdown) }
           : {}),
@@ -4639,24 +4675,31 @@ function AppContent() {
       const nodeGroup = target.closest<SVGGElement>('g.markmap-node');
       if (!nodeGroup) return;
       const sourcePath = nodeGroup.getAttribute('data-path');
+      if (
+        markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown
+      ) {
+        syncMarkdownNodeSourcesImmediate(draftRef.current.markdown);
+      }
       const source = sourcePath
         ? markdownNodeSourcesRef.current.get(sourcePath)
         : undefined;
       const editor = nodeGroup.querySelector<HTMLElement>(
         'foreignObject > div > div',
       );
-      if (
-        !source ||
-        source.kind === 'block' ||
-        !editor ||
-        markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown
-      )
-        return;
+      if (!source || source.kind === 'block' || !editor || !sourcePath) return;
       if (svg.querySelector('[contenteditable="true"]')) return;
 
       event.preventDefault();
       event.stopPropagation();
-      const originalText = editor.innerText || editor.textContent || '';
+      setActiveMapPath(sourcePath);
+      const originalHtml = editor.innerHTML;
+      const hadNodeNote = Boolean(editor.querySelector('.seamind-node-note'));
+      const originalText = hadNodeNote
+        ? source.label || ''
+        : editor.innerText || editor.textContent || '';
+      if (hadNodeNote) {
+        editor.textContent = originalText;
+      }
       let finished = false;
       editor.contentEditable = 'true';
       editor.setAttribute('role', 'textbox');
@@ -4682,30 +4725,36 @@ function AppContent() {
         editor.removeAttribute('spellcheck');
         editor.classList.remove('is-canvas-editing');
 
-        if (action === 'cancel') {
-          editor.textContent = originalText;
+        if (action === 'cancel' || (!action && !nextText.trim())) {
+          editor.innerHTML = originalHtml;
           return;
         }
         const activeDraft = draftRef.current;
         const titleLineIndex = markdownTitleLineIndex(activeDraft.markdown);
-        const command = applyMarkdownNodeCommand(
-          activeDraft.markdown,
-          source,
-          action === 'child'
-            ? 'add_child'
-            : action === 'sibling'
-              ? 'add_sibling'
-              : 'rename',
-          nextText,
-        );
-        if (command.markdown !== activeDraft.markdown) {
-          applyMarkdownFromCanvas(command.markdown, {
-            lineIndex: command.lineIndex,
-            focus: true,
-            ...(!action && source.lineIndex === titleLineIndex
-              ? { title: markdownTitle(command.markdown) }
-              : {}),
-          });
+        try {
+          const command = applyMarkdownNodeCommand(
+            activeDraft.markdown,
+            source,
+            action === 'child'
+              ? 'add_child'
+              : action === 'sibling'
+                ? 'add_sibling'
+                : 'rename',
+            nextText,
+          );
+          if (command.markdown !== activeDraft.markdown) {
+            setLibraryError('');
+            applyMarkdownFromCanvas(command.markdown, {
+              lineIndex: command.lineIndex,
+              focus: false,
+              ...(!action && source.lineIndex === titleLineIndex
+                ? { title: markdownTitle(command.markdown) }
+                : {}),
+            });
+          }
+        } catch (error) {
+          editor.innerHTML = originalHtml;
+          setLibraryError(errorMessage(error, '无法修改所选节点。'));
         }
       };
 
@@ -4799,8 +4848,11 @@ function AppContent() {
         )
       )
         return;
-      if (markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown)
-        return;
+      if (
+        markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown
+      ) {
+        syncMarkdownNodeSourcesImmediate(draftRef.current.markdown);
+      }
       const nodeGroup = target.closest<SVGGElement>('g.markmap-node');
       const path = nodeGroup?.getAttribute('data-path');
       if (!nodeGroup || !path) return;
@@ -4808,12 +4860,12 @@ function AppContent() {
       setCanvasNodeContextMenu(null);
       setActiveMapPath(path);
       const source = markdownNodeSourcesRef.current.get(path);
-      if (source) {
+      if (source && event.detail <= 1) {
         const selectSource = () =>
           markdownEditorRef.current?.selectLines(
             source.lineIndex,
             source.endLineIndex,
-            true,
+            false,
           );
         if (markdownPaneModeRef.current === 'preview') {
           setMarkdownPaneMode('edit');
@@ -5013,10 +5065,12 @@ function AppContent() {
           ? htmlCanvasEmbed
           : undefined;
       const embeddingApplied = { value: false };
-      const safeRoot = prepareHtmlCardNodes(
-        prepareYouTubeCards(sanitizeNode(root)),
-        embedding,
-        embeddingApplied,
+      const safeRoot = normalizeMindmapPureTree(
+        prepareHtmlCardNodes(
+          prepareYouTubeCards(sanitizeNode(root)),
+          embedding,
+          embeddingApplied,
+        ),
       );
       const displayRoot = addFallbackMindmapTitle(
         safeRoot,
@@ -5772,63 +5826,6 @@ function AppContent() {
         </div>
       </header>
 
-      {(activeWorkspace === 'knowledge' || activeWorkspace === 'mindmap') && (
-        <nav
-          className={`knowledge-workspace-tabs${(activeWorkspace === 'mindmap' ? libraryCollapsed : knowledgeSidebarCollapsed) ? ' is-sidebar-collapsed' : ''}`}
-          aria-label="知识库页面"
-        >
-          <span className="knowledge-workspace-tabs-label" title="知识库">
-            <svg
-              className="knowledge-workspace-tabs-icon"
-              viewBox="0 0 16 16"
-              width="14"
-              height="14"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.35"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M3 3.2a1.5 1.5 0 0 1 1.5-1.4h7.8v10.8H4.5A1.5 1.5 0 0 0 3 14.1V3.2Z" />
-              <path d="M3 12.6A1.5 1.5 0 0 1 4.5 11.2h7.8M5.6 5.2h4.2" />
-            </svg>
-            <span className="knowledge-workspace-tabs-label-text">知识库</span>
-          </span>
-          <div
-            className="knowledge-page-tabs"
-            role="group"
-            aria-label="内容类型"
-          >
-            <button
-              type="button"
-              aria-pressed={activeWorkspace === 'knowledge'}
-              className={activeWorkspace === 'knowledge' ? 'is-active' : ''}
-              onClick={() => void showKnowledgeDocuments()}
-            >
-              文档{' '}
-              <small>
-                {catalogDocuments.filter((item) => item.kind === 'doc').length}
-              </small>
-            </button>
-            <button
-              type="button"
-              aria-pressed={activeWorkspace === 'mindmap'}
-              className={activeWorkspace === 'mindmap' ? 'is-active' : ''}
-              onClick={() => setActiveWorkspace('mindmap')}
-            >
-              导图{' '}
-              <small>
-                {
-                  catalogDocuments.filter((item) => item.kind === 'mindmap')
-                    .length
-                }
-              </small>
-            </button>
-          </div>
-        </nav>
-      )}
-
       <section
         className={`workspace${sourceCollapsed ? ' is-source-collapsed' : ''}${libraryCollapsed ? ' is-library-collapsed' : ''}${aiCollapsed ? ' is-ai-collapsed' : ''}${markdownFullscreen ? ' is-markdown-fullscreen' : ''}${activeDocument?.kind === 'mermaid' ? ' is-document-open' : ''}${activeWorkspace === 'mindmap' ? ' is-knowledge-map' : ''}${activeWorkspace !== 'mindmap' && !readerSplitActive ? ' is-workspace-hidden' : ''}`}
         aria-label="Markdown 思维导图编辑器"
@@ -5837,6 +5834,10 @@ function AppContent() {
         <LibraryPanel
           snapshot={librarySnapshot}
           documents={mindmapDocuments}
+          docCount={
+            catalogDocuments.filter((item) => item.kind === 'doc').length
+          }
+          onSwitchToDocuments={() => void showKnowledgeDocuments()}
           currentMarkdown={editorDraft.markdown}
           selectedPath={
             activeDocument?.kind === 'mermaid' || openPlantUmlPath
@@ -6254,6 +6255,18 @@ function AppContent() {
                       退出 HTML 交互
                     </button>
                   )}
+                  <span
+                    className={`canvas-active-node-pill${selectedNodeSource ? ' is-selected' : ''}`}
+                    title={
+                      selectedNodeSource
+                        ? `当前操作目标节点：${selectedNodeSource.label}`
+                        : '点击导图中的任意节点以选中并操作'
+                    }
+                  >
+                    {selectedNodeSource
+                      ? `目标：${selectedNodeSource.label || '未命名节点'}`
+                      : '未选节点'}
+                  </span>
                   <button
                     type="button"
                     className="canvas-node-action"
@@ -7025,6 +7038,10 @@ function AppContent() {
             active={activeWorkspace === 'knowledge'}
             rootPath={librarySnapshot?.rootPath ?? null}
             documents={catalogDocuments}
+            mindmapCount={
+              catalogDocuments.filter((item) => item.kind === 'mindmap').length
+            }
+            onSwitchToMindmap={() => setActiveWorkspace('mindmap')}
             categories={librarySnapshot?.documentCategories ?? []}
             activeDocument={
               knowledgeSplit.focusedDocument?.kind === 'doc'

@@ -1,14 +1,15 @@
 import type { Transformer } from 'markmap-lib';
 import type { EditorDraft } from '../app/app-storage';
 import {
+  buildMarkdownNodeSourceMap,
   applyMarkdownNodeBranch,
   applyMarkdownNodeCommand,
-  buildMarkdownNodeSourceMap,
   getMarkdownNodeNote,
   markdownForMindmap,
   MAX_AGENT_BRANCH_CHARS,
   normalizeMindmapText,
 } from '../mindmap/commands';
+import { normalizeMindmapPureTree } from '../library/app-tree-utils';
 import {
   buildAgentMindmapTree,
   findAgentMindmapNode,
@@ -48,7 +49,9 @@ export function readAgentMindmap(
   draft: EditorDraft,
   transformer: Transformer,
 ): ActiveMindmapSnapshot {
-  const root = transformer.transform(markdownForMindmap(draft.markdown)).root;
+  const root = normalizeMindmapPureTree(
+    transformer.transform(markdownForMindmap(draft.markdown)).root,
+  );
   const sources = buildMarkdownNodeSourceMap(draft.markdown, root);
   const tree = buildAgentMindmapTree(root, sources, draft.markdown);
   return {
@@ -72,7 +75,9 @@ export function buildAgentNodeEditProposal(args: {
   if (draft.revision !== input.baseRevision) {
     throw new Error('当前导图已变化，请重新读取后再提出修改。');
   }
-  const root = transformer.transform(markdownForMindmap(draft.markdown)).root;
+  const root = normalizeMindmapPureTree(
+    transformer.transform(markdownForMindmap(draft.markdown)).root,
+  );
   const sources = buildMarkdownNodeSourceMap(draft.markdown, root);
   const targetEntry = input.nodeId
     ? [...sources.entries()].find(([, source]) => source.id === input.nodeId)
@@ -152,7 +157,9 @@ export function buildAgentNodeBranchProposal(args: {
   if (input.branchMarkdown.length > MAX_AGENT_BRANCH_CHARS) {
     throw new Error('生成的下探分支超过字符上限，请缩小主题后重试。');
   }
-  const root = transformer.transform(markdownForMindmap(draft.markdown)).root;
+  const root = normalizeMindmapPureTree(
+    transformer.transform(markdownForMindmap(draft.markdown)).root,
+  );
   const sources = buildMarkdownNodeSourceMap(draft.markdown, root);
   const targetEntry = input.nodeId
     ? [...sources.entries()].find(([, source]) => source.id === input.nodeId)

@@ -23,15 +23,20 @@ import type {
 import { terminalApi, type PythonEnvInfo } from './terminal-api';
 import {
   assembleCCellProgram,
+  assembleFullScriptSource,
   createStarterCodeLabCells,
   DEFAULT_C_PROLOGUE,
+  DEFAULT_CODELAB_FOLDERS,
   DEFAULT_CPP_PROLOGUE,
   exportCodeLabToMarkdown,
+  loadCodeLabCollection,
   makeCodeLabCellId,
   parseIpynbJson,
   serializeIpynbJson,
+  upsertCodeLabFile,
   type CodeLabCell,
   type CodeLabOutputItem,
+  type CodeLabSavedFile,
 } from './terminal-codelab-model';
 import {
   BookProseView,
@@ -45,6 +50,8 @@ import type {
   TerminalWorkspaceBridge,
 } from './terminal-types';
 
+export type CodeLabCanvasViewMode = 'notebook' | 'script';
+
 export interface TerminalCodeLabViewHandle {
   focus: () => void;
   insertAndRunCell: (
@@ -52,6 +59,15 @@ export interface TerminalCodeLabViewHandle {
     source: string,
     autoRun?: boolean,
   ) => void;
+  loadSavedFile: (file: CodeLabSavedFile) => void;
+  saveCurrentToCollection: (asNew?: boolean) => CodeLabSavedFile;
+  createNewNotebook: (
+    language: TerminalCodeLabLanguage,
+    folder?: string,
+  ) => void;
+  setCanvasViewMode: (mode: CodeLabCanvasViewMode) => void;
+  getCanvasViewMode: () => CodeLabCanvasViewMode;
+  getActiveFileId: () => string | null;
   getScreenText: (maxLines?: number) => string;
   getLastErrorText: () => string;
 }
@@ -67,6 +83,13 @@ interface TerminalCodeLabViewProps {
   onStatusChange?: (status: TerminalTab['status'], message?: string) => void;
   onSendToShellPane?: (command: string, execute?: boolean) => void;
   onSendToAgentPane?: (prompt: string) => void;
+  onActiveFileChange?: (info: {
+    fileId: string | null;
+    title: string;
+    folder: string;
+    language: TerminalCodeLabLanguage;
+    viewMode: CodeLabCanvasViewMode;
+  }) => void;
 }
 
 interface ReplHistoryEntry {
@@ -285,6 +308,7 @@ export const TerminalCodeLabView = forwardRef<
     onStatusChange,
     onSendToShellPane,
     onSendToAgentPane,
+    onActiveFileChange,
   },
   ref,
 ) {
@@ -294,6 +318,28 @@ export const TerminalCodeLabView = forwardRef<
   const [cells, setCells] = useState<CodeLabCell[]>(() =>
     createStarterCodeLabCells(initialLang),
   );
+  const [activeFileId, setActiveFileId] = useState<string | null>(() => {
+    const initialFiles = loadCodeLabCollection();
+    const match = initialFiles.find((f) => f.language === initialLang);
+    return match?.id ?? null;
+  });
+  const [activeFileTitle, setActiveFileTitle] = useState<string>(() => {
+    const initialFiles = loadCodeLabCollection();
+    const match = initialFiles.find((f) => f.language === initialLang);
+    return (
+      match?.title ??
+      (initialLang === 'c'
+        ? 'C 语言步进实验.c'
+        : initialLang === 'cpp'
+          ? 'C++ 算法验证实验.cpp'
+          : 'Python 交互实验本.ipynb')
+    );
+  });
+  const [activeFileFolder, setActiveFileFolder] =
+    useState<string>('书籍伴读验证');
+  const [activeFileStarred, setActiveFileStarred] = useState<boolean>(true);
+  const [canvasViewMode, setCanvasViewMode] =
+    useState<CodeLabCanvasViewMode>('notebook');
   const [focusedCellId, setFocusedCellId] = useState<string>(
     () => cells[1]?.id ?? cells[0]?.id ?? '',
   );
@@ -372,6 +418,136 @@ export const TerminalCodeLabView = forwardRef<
   useEffect(() => {
     onStatusChange?.('ready', 'Euporie 实验本就绪');
   }, [onStatusChange]);
+
+  useEffect(() => {
+    onActiveFileChange?.({
+      fileId: activeFileId,
+      title: activeFileTitle,
+      folder: activeFileFolder,
+      language,
+      viewMode: canvasViewMode,
+    });
+  }, [
+    activeFileId,
+    activeFileTitle,
+    activeFileFolder,
+    language,
+    canvasViewMode,
+    onActiveFileChange,
+  ]);
+
+  const handleLoadSavedFile = useCallback(
+    (file: CodeLabSavedFile) => {
+      setActiveFileId(file.id);
+      setActiveFileTitle(file.title);
+      setActiveFileFolder(file.folder || '未归类代码');
+      setActiveFileStarred(Boolean(file.starred));
+      setLanguage(file.language);
+      const nextCells =
+        file.cells.length > 0
+          ? file.cells.map((c) => ({ ...c, id: c.id || makeCodeLabCellId() }))
+          : createStarterCodeLabCells(file.language);
+      setCells(nextCells);
+      const firstCode =
+        nextCells.find((c) => c.kind === 'code') ?? nextCells[0];
+      if (firstCode) {
+        setFocusedCellId(firstCode.id);
+        setEditingCellId(firstCode.id);
+      }
+      if (file.language !== 'python') {
+        setShowPrologue(true);
+        setPrologueSource(
+          file.prologueSource ||
+            (file.language === 'cpp'
+              ? DEFAULT_CPP_PROLOGUE
+              : DEFAULT_C_PROLOGUE),
+        );
+      }
+      showTempNotice(`已加载代码文件：${file.title}`);
+    },
+    [showTempNotice],
+  );
+
+  const handleSaveToCollection = useCallback(
+    (asNew = false): CodeLabSavedFile => {
+      const ext =
+        language === 'cpp' ? '.cpp' : language === 'c' ? '.c' : '.ipynb';
+      const rawTitle = activeFileTitle.trim() || `未命名实验${ext}`;
+      const id =
+        !asNew && activeFileId
+          ? activeFileId
+          : `codelab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+      const savedList = upsertCodeLabFile({
+        id,
+        title: rawTitle,
+        folder: activeFileFolder || '未归类代码',
+        language,
+        cells: cellsRef.current,
+        prologueSource: language !== 'python' ? prologueSource : undefined,
+        tags: [
+          language === 'cpp' ? 'C++' : language === 'c' ? 'C' : 'Python',
+          activeFileFolder || '实验',
+        ],
+        starred: activeFileStarred,
+      });
+      setActiveFileId(id);
+      showTempNotice(
+        asNew ? `已另存至代码库：${rawTitle}` : `已保存至代码库：${rawTitle}`,
+      );
+      return (
+        savedList.find((item) => item.id === id) ?? {
+          id,
+          title: rawTitle,
+          folder: activeFileFolder,
+          language,
+          cells: cellsRef.current,
+          tags: [],
+          starred: activeFileStarred,
+          updatedAt: Date.now(),
+        }
+      );
+    },
+    [
+      activeFileFolder,
+      activeFileId,
+      activeFileStarred,
+      activeFileTitle,
+      language,
+      prologueSource,
+      showTempNotice,
+    ],
+  );
+
+  const handleCreateNewNotebook = useCallback(
+    (nextLang: TerminalCodeLabLanguage, folder = '未归类代码') => {
+      const ext =
+        nextLang === 'cpp' ? '.cpp' : nextLang === 'c' ? '.c' : '.ipynb';
+      const nextCells = createStarterCodeLabCells(nextLang);
+      setActiveFileId(null);
+      setActiveFileTitle(
+        `新建 ${nextLang.toUpperCase()} 实验_${new Date().toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' })}${ext}`,
+      );
+      setActiveFileFolder(folder);
+      setActiveFileStarred(false);
+      setLanguage(nextLang);
+      setCells(nextCells);
+      setCanvasViewMode('notebook');
+      const firstCode =
+        nextCells.find((c) => c.kind === 'code') ?? nextCells[0];
+      if (firstCode) {
+        setFocusedCellId(firstCode.id);
+        setEditingCellId(firstCode.id);
+      }
+      if (nextLang !== 'python') {
+        setShowPrologue(true);
+        setPrologueSource(
+          nextLang === 'cpp' ? DEFAULT_CPP_PROLOGUE : DEFAULT_C_PROLOGUE,
+        );
+      }
+      showTempNotice(`已新建 ${nextLang.toUpperCase()} 实验本`);
+    },
+    [showTempNotice],
+  );
 
   useEffect(() => {
     if (!active) return;
@@ -965,6 +1141,20 @@ export const TerminalCodeLabView = forwardRef<
           });
         }
       },
+      loadSavedFile: (file) => {
+        handleLoadSavedFile(file);
+      },
+      saveCurrentToCollection: (asNew = false) => {
+        return handleSaveToCollection(asNew);
+      },
+      createNewNotebook: (nextLang, folder) => {
+        handleCreateNewNotebook(nextLang, folder);
+      },
+      setCanvasViewMode: (mode) => {
+        setCanvasViewMode(mode);
+      },
+      getCanvasViewMode: () => canvasViewMode,
+      getActiveFileId: () => activeFileId,
       getScreenText: (maxLines = 80) => {
         const lines: string[] = [];
         for (const c of cellsRef.current) {
@@ -995,7 +1185,14 @@ export const TerminalCodeLabView = forwardRef<
         return '';
       },
     }),
-    [runCellById],
+    [
+      activeFileId,
+      canvasViewMode,
+      handleCreateNewNotebook,
+      handleLoadSavedFile,
+      handleSaveToCollection,
+      runCellById,
+    ],
   );
 
   // Euporie / Jupyter Command Mode hotkeys when focus is on container outside editors
@@ -1060,24 +1257,46 @@ export const TerminalCodeLabView = forwardRef<
   };
 
   const handleExportIpynb = () => {
-    const content = serializeIpynbJson(cells, language, tab.title);
+    const docTitle = activeFileTitle.trim() || tab.title;
+    const content = serializeIpynbJson(cells, language, docTitle);
     const blob = new Blob([content], {
       type: 'application/json;charset=utf-8',
     });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${tab.title.replace(/[^\w\u4e00-\u9fa5-]+/g, '_')}.ipynb`;
+    a.download = `${docTitle.replace(/\.[^.]+$/, '').replace(/[^\w\u4e00-\u9fa5-]+/g, '_')}.ipynb`;
     a.click();
     URL.revokeObjectURL(url);
     showTempNotice('已导出标准 .ipynb 文件');
   };
 
+  const handleExportScriptFile = () => {
+    const ext = language === 'cpp' ? 'cpp' : language === 'c' ? 'c' : 'py';
+    const docTitle = activeFileTitle.trim() || tab.title;
+    const scriptText = assembleFullScriptSource(
+      cells,
+      language,
+      prologueSource,
+    );
+    const blob = new Blob([scriptText], {
+      type: 'text/plain;charset=utf-8',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${docTitle.replace(/\.[^.]+$/, '').replace(/[^\w\u4e00-\u9fa5-]+/g, '_')}.${ext}`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showTempNotice(`已导出完整 .${ext} 源码文件`);
+  };
+
   const handleExportMarkdownNote = async () => {
-    const md = exportCodeLabToMarkdown(tab.title, language, cells);
+    const docTitle = activeFileTitle.trim() || tab.title;
+    const md = exportCodeLabToMarkdown(docTitle, language, cells);
     if (bridge?.onSaveMarkdownNote) {
       const ok = await bridge.onSaveMarkdownNote({
-        title: `${tab.title} 实验笔记`,
+        title: `${docTitle} 实验笔记`,
         category: '代码实验',
         source: md,
       });
@@ -1087,6 +1306,11 @@ export const TerminalCodeLabView = forwardRef<
       showTempNotice('已复制 Markdown 实验笔记到剪贴板');
     }
   };
+
+  const assembledFullScript = useMemo(
+    () => assembleFullScriptSource(cells, language, prologueSource),
+    [cells, language, prologueSource],
+  );
 
   const activeEnvObj = useMemo(
     () => pythonEnvs.find((e) => e.pythonPath === selectedPyRuntime),
@@ -1173,9 +1397,61 @@ export const TerminalCodeLabView = forwardRef<
               {localKernelId ? '内核存活' : '按需拉起'}
             </span>
           )}
+
+          <div className="codelab-file-meta-pill">
+            <input
+              type="text"
+              className="codelab-file-title-input"
+              value={activeFileTitle}
+              onChange={(e) => setActiveFileTitle(e.target.value)}
+              placeholder="代码文件名…"
+              aria-label="当前代码实验文件名"
+            />
+            <select
+              className="codelab-folder-select"
+              value={activeFileFolder}
+              onChange={(e) => setActiveFileFolder(e.target.value)}
+              aria-label="代码库分类目录"
+            >
+              {DEFAULT_CODELAB_FOLDERS.map((folder) => (
+                <option key={folder} value={folder}>
+                  {folder}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="codelab-tool-btn is-collect"
+              onClick={() => handleSaveToCollection(false)}
+              title="将当前实验本保存至左侧代码收集库"
+            >
+              ★ 存代码库
+            </button>
+          </div>
         </div>
 
         <div className="codelab-toolbar-group">
+          <div
+            className="codelab-view-seg"
+            role="group"
+            aria-label="实验室主画布视图切换"
+          >
+            <button
+              type="button"
+              className={`codelab-seg-btn${canvasViewMode === 'notebook' ? ' is-active' : ''}`}
+              onClick={() => setCanvasViewMode('notebook')}
+            >
+              单元格
+            </button>
+            <button
+              type="button"
+              className={`codelab-seg-btn${canvasViewMode === 'script' ? ' is-active' : ''}`}
+              onClick={() => setCanvasViewMode('script')}
+            >
+              完整源码
+            </button>
+          </div>
+
           <span
             className={`codelab-mode-badge is-${interactionMode}`}
             title="Esc 切入命令模式 (j/k 选格, a/b 插格, dd 删格); Enter 返回编辑"
@@ -1255,6 +1531,15 @@ export const TerminalCodeLabView = forwardRef<
                   type="button"
                   onClick={() => {
                     setShowExportMenu(false);
+                    handleSaveToCollection(true);
+                  }}
+                >
+                  另存为代码库新文件
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowExportMenu(false);
                     fileInputRef.current?.click();
                   }}
                 >
@@ -1268,6 +1553,16 @@ export const TerminalCodeLabView = forwardRef<
                   }}
                 >
                   导出标准 .ipynb 文件
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowExportMenu(false);
+                    handleExportScriptFile();
+                  }}
+                >
+                  导出完整源码 (.
+                  {language === 'cpp' ? 'cpp' : language === 'c' ? 'c' : 'py'})
                 </button>
                 <button
                   type="button"
@@ -1312,287 +1607,359 @@ export const TerminalCodeLabView = forwardRef<
 
       <div className="codelab-main-area">
         <div className="codelab-cells-scroll">
-          {/* C/C++ Shared Prologue Header Strip */}
-          {showPrologue && language !== 'python' && (
-            <div className="codelab-prologue-box">
-              <div className="codelab-prologue-head">
-                <span>
-                  SHARED PROLOGUE · {language === 'cpp' ? 'C++' : 'C'}{' '}
-                  公共头文件 / 结构体与辅助函数（编译每格时自动前置合并）
-                </span>
-                <button
-                  type="button"
-                  className="codelab-mini-btn"
-                  onClick={() => setShowPrologue(false)}
-                >
-                  收起
-                </button>
-              </div>
-              <textarea
-                className="codelab-prologue-input"
-                rows={4}
-                value={prologueSource}
-                onChange={(e) => setPrologueSource(e.target.value)}
-                spellCheck={false}
-              />
-            </div>
-          )}
-
-          {/* Euporie Notebook Cells */}
-          {cells.map((cell, index) => {
-            const isCellFocused = cell.id === focusedCellId;
-            const hasErr = cell.outputs.some((o) => o.kind === 'error');
-            const isMarkdownPreview =
-              cell.kind === 'markdown' && editingCellId !== cell.id;
-
-            return (
-              <div
-                key={cell.id}
-                className={`codelab-cell is-${cell.status}${isCellFocused ? ' is-cell-focused' : ''}`}
-                onClick={() => {
-                  setFocusedCellId(cell.id);
-                }}
-              >
-                <div className="codelab-cell-gutter">
-                  <span className="codelab-cell-prompt">
-                    {cell.kind === 'markdown'
-                      ? 'MD'
-                      : cell.status === 'running'
-                        ? '[*]'
-                        : `[${cell.executionCount ?? ' '}]`}
+          {canvasViewMode === 'script' ? (
+            <div className="codelab-script-view">
+              <div className="codelab-script-head">
+                <div className="codelab-script-title">
+                  <span className="codelab-cell-kind-tag">
+                    {language.toUpperCase()} SCRIPT
                   </span>
-                  <span className="codelab-cell-idx">#{index + 1}</span>
+                  <strong>{activeFileTitle}</strong>
+                  <span>
+                    （共 {cells.length} 格自动汇编 ·{' '}
+                    {assembledFullScript.split('\n').length} 行）
+                  </span>
                 </div>
+                <div className="codelab-script-actions">
+                  <button
+                    type="button"
+                    className="codelab-tool-btn"
+                    onClick={() => {
+                      void navigator.clipboard
+                        ?.writeText(assembledFullScript)
+                        .then(() => showTempNotice('已复制完整汇编源码'));
+                    }}
+                  >
+                    复制完整源码
+                  </button>
+                  <button
+                    type="button"
+                    className="codelab-tool-btn"
+                    onClick={() => handleExportScriptFile()}
+                  >
+                    下载 .
+                    {language === 'cpp' ? 'cpp' : language === 'c' ? 'c' : 'py'}{' '}
+                    文件
+                  </button>
+                  <button
+                    type="button"
+                    className="codelab-tool-btn is-primary"
+                    onClick={() => handleSaveToCollection(false)}
+                  >
+                    ★ 存入代码库
+                  </button>
+                  <button
+                    type="button"
+                    className="codelab-tool-btn"
+                    onClick={() => setCanvasViewMode('notebook')}
+                  >
+                    返回单元格视图
+                  </button>
+                </div>
+              </div>
+              <pre className="codelab-script-pre">
+                <code>{assembledFullScript}</code>
+              </pre>
+            </div>
+          ) : (
+            <>
+              {/* C/C++ Shared Prologue Header Strip */}
+              {showPrologue && language !== 'python' && (
+                <div className="codelab-prologue-box">
+                  <div className="codelab-prologue-head">
+                    <span>
+                      SHARED PROLOGUE · {language === 'cpp' ? 'C++' : 'C'}{' '}
+                      公共头文件 / 结构体与辅助函数（编译每格时自动前置合并）
+                    </span>
+                    <button
+                      type="button"
+                      className="codelab-mini-btn"
+                      onClick={() => setShowPrologue(false)}
+                    >
+                      收起
+                    </button>
+                  </div>
+                  <textarea
+                    className="codelab-prologue-input"
+                    rows={4}
+                    value={prologueSource}
+                    onChange={(e) => setPrologueSource(e.target.value)}
+                    spellCheck={false}
+                  />
+                </div>
+              )}
 
-                <div className="codelab-cell-body">
-                  <div className="codelab-cell-bar">
-                    <div className="codelab-cell-bar-left">
-                      {cell.kind === 'code' ? (
-                        <select
-                          className="codelab-cell-lang-select"
-                          value={cell.language}
-                          onChange={(e) => {
-                            const nextLang = e.target
-                              .value as TerminalCodeLabLanguage;
-                            setCells((prev) =>
-                              prev.map((c) =>
-                                c.id === cell.id
-                                  ? { ...c, language: nextLang }
-                                  : c,
-                              ),
-                            );
-                          }}
-                          aria-label="单元格语言"
-                        >
-                          <option value="python">Python</option>
-                          <option value="c">C</option>
-                          <option value="cpp">C++</option>
-                        </select>
-                      ) : (
-                        <span className="codelab-cell-kind-tag">MARKDOWN</span>
-                      )}
-                      {cell.durationMs !== undefined && (
-                        <span className="codelab-cell-meta">
-                          {cell.stage ? `${cell.stage} · ` : ''}
-                          {cell.durationMs}ms
-                        </span>
-                      )}
+              {/* Euporie Notebook Cells */}
+              {cells.map((cell, index) => {
+                const isCellFocused = cell.id === focusedCellId;
+                const hasErr = cell.outputs.some((o) => o.kind === 'error');
+                const isMarkdownPreview =
+                  cell.kind === 'markdown' && editingCellId !== cell.id;
+
+                return (
+                  <div
+                    key={cell.id}
+                    className={`codelab-cell is-${cell.status}${isCellFocused ? ' is-cell-focused' : ''}`}
+                    onClick={() => {
+                      setFocusedCellId(cell.id);
+                    }}
+                  >
+                    <div className="codelab-cell-gutter">
+                      <span className="codelab-cell-prompt">
+                        {cell.kind === 'markdown'
+                          ? 'MD'
+                          : cell.status === 'running'
+                            ? '[*]'
+                            : `[${cell.executionCount ?? ' '}]`}
+                      </span>
+                      <span className="codelab-cell-idx">#{index + 1}</span>
                     </div>
 
-                    <div className="codelab-cell-actions">
-                      {cell.kind === 'markdown' ? (
-                        <button
-                          type="button"
-                          className="codelab-mini-btn"
-                          onClick={() =>
-                            setEditingCellId((curr) =>
-                              curr === cell.id ? null : cell.id,
-                            )
-                          }
-                        >
-                          {editingCellId === cell.id ? '预览' : '编辑'}
-                        </button>
-                      ) : (
-                        <>
-                          <button
-                            type="button"
-                            className="codelab-mini-btn is-run"
-                            onClick={() => void runCellById(cell.id, false)}
-                            disabled={cell.status === 'running'}
-                          >
-                            ▶ 运行
-                          </button>
-                          {onSendToShellPane && (
+                    <div className="codelab-cell-body">
+                      <div className="codelab-cell-bar">
+                        <div className="codelab-cell-bar-left">
+                          {cell.kind === 'code' ? (
+                            <select
+                              className="codelab-cell-lang-select"
+                              value={cell.language}
+                              onChange={(e) => {
+                                const nextLang = e.target
+                                  .value as TerminalCodeLabLanguage;
+                                setCells((prev) =>
+                                  prev.map((c) =>
+                                    c.id === cell.id
+                                      ? { ...c, language: nextLang }
+                                      : c,
+                                  ),
+                                );
+                              }}
+                              aria-label="单元格语言"
+                            >
+                              <option value="python">Python</option>
+                              <option value="c">C</option>
+                              <option value="cpp">C++</option>
+                            </select>
+                          ) : (
+                            <span className="codelab-cell-kind-tag">
+                              MARKDOWN
+                            </span>
+                          )}
+                          {cell.durationMs !== undefined && (
+                            <span className="codelab-cell-meta">
+                              {cell.stage ? `${cell.stage} · ` : ''}
+                              {cell.durationMs}ms
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="codelab-cell-actions">
+                          {cell.kind === 'markdown' ? (
                             <button
                               type="button"
                               className="codelab-mini-btn"
-                              onClick={() => void handleSendCellToShell(cell)}
-                              title="保存文件并在右侧终端窗格交互运行 / GDB"
+                              onClick={() =>
+                                setEditingCellId((curr) =>
+                                  curr === cell.id ? null : cell.id,
+                                )
+                              }
                             >
-                              ↗ 终端运行
+                              {editingCellId === cell.id ? '预览' : '编辑'}
                             </button>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                className="codelab-mini-btn is-run"
+                                onClick={() => void runCellById(cell.id, false)}
+                                disabled={cell.status === 'running'}
+                              >
+                                ▶ 运行
+                              </button>
+                              {onSendToShellPane && (
+                                <button
+                                  type="button"
+                                  className="codelab-mini-btn"
+                                  onClick={() =>
+                                    void handleSendCellToShell(cell)
+                                  }
+                                  title="保存文件并在右侧终端窗格交互运行 / GDB"
+                                >
+                                  ↗ 终端运行
+                                </button>
+                              )}
+                              {hasErr && onSendToAgentPane && (
+                                <button
+                                  type="button"
+                                  className="codelab-mini-btn is-debug"
+                                  onClick={() => {
+                                    const err = cell.outputs.find(
+                                      (o) => o.kind === 'error',
+                                    );
+                                    onSendToAgentPane(
+                                      `/code 请诊断这段 ${cell.language.toUpperCase()} 代码的报错并给出修正：\n\`\`\`${cell.language}\n${cell.source}\n\`\`\`\n报错信息：\n${err && err.kind === 'error' ? err.message : ''}`,
+                                    );
+                                  }}
+                                >
+                                  ⚡ Agent 排错
+                                </button>
+                              )}
+                            </>
                           )}
-                          {hasErr && onSendToAgentPane && (
+                          {cells.length > 1 && (
                             <button
                               type="button"
-                              className="codelab-mini-btn is-debug"
-                              onClick={() => {
-                                const err = cell.outputs.find(
-                                  (o) => o.kind === 'error',
-                                );
-                                onSendToAgentPane(
-                                  `/code 请诊断这段 ${cell.language.toUpperCase()} 代码的报错并给出修正：\n\`\`\`${cell.language}\n${cell.source}\n\`\`\`\n报错信息：\n${err && err.kind === 'error' ? err.message : ''}`,
-                                );
-                              }}
+                              className="codelab-mini-btn is-danger"
+                              onClick={() => deleteCellById(cell.id)}
+                              title="删除此格"
                             >
-                              ⚡ Agent 排错
+                              ×
                             </button>
                           )}
-                        </>
-                      )}
-                      {cells.length > 1 && (
-                        <button
-                          type="button"
-                          className="codelab-mini-btn is-danger"
-                          onClick={() => deleteCellById(cell.id)}
-                          title="删除此格"
+                        </div>
+                      </div>
+
+                      {isMarkdownPreview ? (
+                        <div
+                          className="codelab-md-preview"
+                          onDoubleClick={() => {
+                            setEditingCellId(cell.id);
+                            setInteractionMode('edit');
+                          }}
                         >
-                          ×
-                        </button>
+                          <BookProseView
+                            content={cell.source || '*双击编辑笔记…*'}
+                          />
+                        </div>
+                      ) : (
+                        <CodeLabCellEditor
+                          value={cell.source}
+                          language={cell.language}
+                          kind={cell.kind}
+                          theme={theme}
+                          shouldFocus={
+                            editingCellId === cell.id && isCellFocused
+                          }
+                          onChange={(next) => {
+                            setCells((prev) =>
+                              prev.map((c) =>
+                                c.id === cell.id ? { ...c, source: next } : c,
+                              ),
+                            );
+                          }}
+                          onFocus={() => {
+                            setFocusedCellId(cell.id);
+                            setEditingCellId(cell.id);
+                            setInteractionMode('edit');
+                          }}
+                          onBlur={() => {
+                            if (cell.kind === 'markdown') {
+                              setEditingCellId((curr) =>
+                                curr === cell.id ? null : curr,
+                              );
+                            }
+                          }}
+                          onRunAndAdvance={() =>
+                            void runCellById(cell.id, true)
+                          }
+                          onRunInPlace={() => void runCellById(cell.id, false)}
+                          onEscapeToCommandMode={() => {
+                            setInteractionMode('command');
+                            if (cell.kind === 'markdown')
+                              setEditingCellId(null);
+                            rootContainerRef.current?.focus();
+                          }}
+                        />
+                      )}
+
+                      {cell.kind === 'code' && cell.language !== 'python' && (
+                        <div className="codelab-stdin-row">
+                          <span className="codelab-stdin-label">stdin</span>
+                          <input
+                            type="text"
+                            className="codelab-stdin-input"
+                            value={cell.stdinInput}
+                            onChange={(e) => {
+                              const nextStdin = e.target.value;
+                              setCells((prev) =>
+                                prev.map((c) =>
+                                  c.id === cell.id
+                                    ? { ...c, stdinInput: nextStdin }
+                                    : c,
+                                ),
+                              );
+                            }}
+                            placeholder="可选：传递给 scanf / cin 的标准输入内容…"
+                          />
+                        </div>
+                      )}
+
+                      {cell.outputs.length > 0 && (
+                        <div className="codelab-outputs">
+                          {cell.outputs.map((out, oIdx) => {
+                            if (out.kind === 'stream') {
+                              return (
+                                <pre
+                                  key={oIdx}
+                                  className={`codelab-stream is-${out.name}`}
+                                >
+                                  {out.text}
+                                </pre>
+                              );
+                            }
+                            if (out.kind === 'text') {
+                              return (
+                                <pre key={oIdx} className="codelab-text-out">
+                                  {out.text}
+                                </pre>
+                              );
+                            }
+                            if (out.kind === 'image/png') {
+                              return (
+                                <div key={oIdx} className="codelab-image-wrap">
+                                  <img
+                                    src={out.dataUrl}
+                                    alt="实验绘图输出（点击放大）"
+                                    title="点击放大查看图表"
+                                    onClick={() =>
+                                      setZoomedImageSrc(out.dataUrl)
+                                    }
+                                  />
+                                </div>
+                              );
+                            }
+                            if (out.kind === 'image/svg+xml') {
+                              return <SafeSvgOutput key={oIdx} svg={out.svg} />;
+                            }
+                            if (out.kind === 'text/html') {
+                              return (
+                                <SandboxedHtmlTableFrame
+                                  key={oIdx}
+                                  html={out.html}
+                                />
+                              );
+                            }
+                            if (out.kind === 'text/latex') {
+                              return (
+                                <KatexOutputBlock
+                                  key={oIdx}
+                                  latex={out.latex}
+                                />
+                              );
+                            }
+                            return (
+                              <pre key={oIdx} className="codelab-error-out">
+                                {out.message}
+                              </pre>
+                            );
+                          })}
+                        </div>
                       )}
                     </div>
                   </div>
-
-                  {isMarkdownPreview ? (
-                    <div
-                      className="codelab-md-preview"
-                      onDoubleClick={() => {
-                        setEditingCellId(cell.id);
-                        setInteractionMode('edit');
-                      }}
-                    >
-                      <BookProseView
-                        content={cell.source || '*双击编辑笔记…*'}
-                      />
-                    </div>
-                  ) : (
-                    <CodeLabCellEditor
-                      value={cell.source}
-                      language={cell.language}
-                      kind={cell.kind}
-                      theme={theme}
-                      shouldFocus={editingCellId === cell.id && isCellFocused}
-                      onChange={(next) => {
-                        setCells((prev) =>
-                          prev.map((c) =>
-                            c.id === cell.id ? { ...c, source: next } : c,
-                          ),
-                        );
-                      }}
-                      onFocus={() => {
-                        setFocusedCellId(cell.id);
-                        setEditingCellId(cell.id);
-                        setInteractionMode('edit');
-                      }}
-                      onBlur={() => {
-                        if (cell.kind === 'markdown') {
-                          setEditingCellId((curr) =>
-                            curr === cell.id ? null : curr,
-                          );
-                        }
-                      }}
-                      onRunAndAdvance={() => void runCellById(cell.id, true)}
-                      onRunInPlace={() => void runCellById(cell.id, false)}
-                      onEscapeToCommandMode={() => {
-                        setInteractionMode('command');
-                        if (cell.kind === 'markdown') setEditingCellId(null);
-                        rootContainerRef.current?.focus();
-                      }}
-                    />
-                  )}
-
-                  {cell.kind === 'code' && cell.language !== 'python' && (
-                    <div className="codelab-stdin-row">
-                      <span className="codelab-stdin-label">stdin</span>
-                      <input
-                        type="text"
-                        className="codelab-stdin-input"
-                        value={cell.stdinInput}
-                        onChange={(e) => {
-                          const nextStdin = e.target.value;
-                          setCells((prev) =>
-                            prev.map((c) =>
-                              c.id === cell.id
-                                ? { ...c, stdinInput: nextStdin }
-                                : c,
-                            ),
-                          );
-                        }}
-                        placeholder="可选：传递给 scanf / cin 的标准输入内容…"
-                      />
-                    </div>
-                  )}
-
-                  {cell.outputs.length > 0 && (
-                    <div className="codelab-outputs">
-                      {cell.outputs.map((out, oIdx) => {
-                        if (out.kind === 'stream') {
-                          return (
-                            <pre
-                              key={oIdx}
-                              className={`codelab-stream is-${out.name}`}
-                            >
-                              {out.text}
-                            </pre>
-                          );
-                        }
-                        if (out.kind === 'text') {
-                          return (
-                            <pre key={oIdx} className="codelab-text-out">
-                              {out.text}
-                            </pre>
-                          );
-                        }
-                        if (out.kind === 'image/png') {
-                          return (
-                            <div key={oIdx} className="codelab-image-wrap">
-                              <img
-                                src={out.dataUrl}
-                                alt="实验绘图输出（点击放大）"
-                                title="点击放大查看图表"
-                                onClick={() => setZoomedImageSrc(out.dataUrl)}
-                              />
-                            </div>
-                          );
-                        }
-                        if (out.kind === 'image/svg+xml') {
-                          return <SafeSvgOutput key={oIdx} svg={out.svg} />;
-                        }
-                        if (out.kind === 'text/html') {
-                          return (
-                            <SandboxedHtmlTableFrame
-                              key={oIdx}
-                              html={out.html}
-                            />
-                          );
-                        }
-                        if (out.kind === 'text/latex') {
-                          return (
-                            <KatexOutputBlock key={oIdx} latex={out.latex} />
-                          );
-                        }
-                        return (
-                          <pre key={oIdx} className="codelab-error-out">
-                            {out.message}
-                          </pre>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+                );
+              })}
+            </>
+          )}
         </div>
 
         {/* Side Variable Inspector Drawer */}

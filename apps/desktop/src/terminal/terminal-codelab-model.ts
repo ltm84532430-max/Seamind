@@ -478,3 +478,326 @@ export function exportCodeLabToMarkdown(
   }
   return parts.join('\n\n') + `\n\n<!-- language: ${language} -->\n`;
 }
+
+/* ==========================================================================
+   Code Lab Persistent Collection Library & Script Assembler
+   ========================================================================== */
+
+export interface CodeLabSavedFile {
+  id: string;
+  title: string;
+  folder: string;
+  language: TerminalCodeLabLanguage;
+  cells: CodeLabCell[];
+  prologueSource?: string;
+  tags: string[];
+  starred: boolean;
+  updatedAt: number;
+}
+
+export interface CodeLabSnippetItem {
+  id: string;
+  title: string;
+  language: TerminalCodeLabLanguage;
+  category: string;
+  description: string;
+  code: string;
+}
+
+export const CODELAB_COLLECTION_STORAGE_KEY =
+  'seamind:codelab-collection-files:v1';
+export const CODELAB_SNIPPETS_STORAGE_KEY =
+  'seamind:codelab-collection-snippets:v1';
+export const CODELAB_COLLECTION_EVENT = 'seamind:codelab-collection-changed';
+
+export const DEFAULT_CODELAB_FOLDERS: readonly string[] = [
+  '书籍伴读验证',
+  '算法与数据结构',
+  '系统与网络实验',
+  '未归类代码',
+];
+
+export const DEFAULT_CODELAB_SNIPPETS: readonly CodeLabSnippetItem[] = [
+  {
+    id: 'snip-py-math-table',
+    title: '数值梯度与误差收敛表',
+    language: 'python',
+    category: '书籍伴读验证',
+    description: '中心差分求导与解析导数误差对比（无需第三方库）',
+    code: `import math
+
+def f(x):
+    return math.sin(x) * math.exp(-0.2 * x)
+
+def df_exact(x):
+    return math.exp(-0.2 * x) * (math.cos(x) - 0.2 * math.sin(x))
+
+x0 = 1.0
+for k in range(1, 6):
+    h = 10 ** (-k)
+    approx = (f(x0 + h) - f(x0 - h)) / (2 * h)
+    err = abs(approx - df_exact(x0))
+    print(f"h=1e-{k} | 差分={approx:.8f} | 误差={err:.2e}")`,
+  },
+  {
+    id: 'snip-py-svg-curve',
+    title: '零依赖 SVG 函数曲线绘制',
+    language: 'python',
+    category: '书籍伴读验证',
+    description: '直接生成高对比度 SVG 曲线并在实验本内联渲染',
+    code: `import math
+
+pts = []
+for i in range(121):
+    x = i / 20.0
+    y = math.sin(x) * math.cos(0.5 * x)
+    px = 20 + i * 3.5
+    py = 90 - y * 65
+    pts.append(f"{px:.1f},{py:.1f}")
+
+svg = f"""<svg viewBox="0 0 460 180" width="460" height="180" xmlns="http://www.w3.org/2000/svg">
+  <rect width="460" height="180" fill="#0d131a" rx="4"/>
+  <line x1="20" y1="90" x2="440" y2="90" stroke="#334155" stroke-dasharray="3 3"/>
+  <polyline fill="none" stroke="#d97757" stroke-width="2.2" points="{' '.join(pts)}"/>
+</svg>"""
+svg`,
+  },
+  {
+    id: 'snip-c-bit-inspect',
+    title: 'C 语言 IEEE754 浮点位模式探针',
+    language: 'c',
+    category: '系统与网络实验',
+    description: '按位拆解 float 的符号位、阶码与尾数（CSAPP 伴读）',
+    code: `union FloatBits {
+    float f;
+    unsigned int u;
+} fb;
+fb.f = 15213.0f;
+unsigned int sign = (fb.u >> 31) & 1;
+unsigned int exp  = (fb.u >> 23) & 0xFF;
+unsigned int frac = fb.u & 0x7FFFFF;
+printf("value=%.2f | hex=0x%08X | sign=%u exp=%u (unbiased=%d) frac=0x%06X\\n",
+       fb.f, fb.u, sign, exp, (int)exp - 127, frac);`,
+  },
+  {
+    id: 'snip-cpp-dijkstra',
+    title: 'C++ 优先队列最短路验证模板',
+    language: 'cpp',
+    category: '算法与数据结构',
+    description: '使用 STL vector 与简易松弛验证图的最短路径',
+    code: `const int INF = 1e9;
+vector<vector<pair<int, int>>> adj = {
+    {{1, 4}, {2, 1}},
+    {{3, 1}},
+    {{1, 2}, {3, 5}},
+    {}
+};
+vector<int> dist(4, INF);
+dist[0] = 0;
+for (int step = 0; step < 4; ++step) {
+    for (int u = 0; u < 4; ++u) {
+        if (dist[u] == INF) continue;
+        for (auto [v, w] : adj[u]) dist[v] = min(dist[v], dist[u] + w);
+    }
+}
+for (int i = 0; i < 4; ++i) cout << "0 -> " << i << " shortest = " << dist[i] << endl;`,
+  },
+];
+
+export function createDefaultCodeLabCollection(): CodeLabSavedFile[] {
+  return [
+    {
+      id: 'codelab-default-py-companion',
+      title: '圆面积与微积分收敛实验.ipynb',
+      folder: '书籍伴读验证',
+      language: 'python',
+      cells: createStarterCodeLabCells('python'),
+      tags: ['Python', '伴读', '数学'],
+      starred: true,
+      updatedAt: 1731920000000,
+    },
+    {
+      id: 'codelab-default-c-memory',
+      title: 'CSAPP 整数平方和与位探针.c',
+      folder: '系统与网络实验',
+      language: 'c',
+      cells: createStarterCodeLabCells('c'),
+      prologueSource: DEFAULT_C_PROLOGUE,
+      tags: ['C', 'CSAPP', '系统'],
+      starred: true,
+      updatedAt: 1731910000000,
+    },
+    {
+      id: 'codelab-default-cpp-stl',
+      title: 'STL 排序与区间检索实验.cpp',
+      folder: '算法与数据结构',
+      language: 'cpp',
+      cells: createStarterCodeLabCells('cpp'),
+      prologueSource: DEFAULT_CPP_PROLOGUE,
+      tags: ['C++', 'STL', '算法'],
+      starred: false,
+      updatedAt: 1731900000000,
+    },
+  ];
+}
+
+export function loadCodeLabCollection(): CodeLabSavedFile[] {
+  if (typeof localStorage === 'undefined') {
+    return createDefaultCodeLabCollection();
+  }
+  try {
+    const raw = localStorage.getItem(CODELAB_COLLECTION_STORAGE_KEY);
+    if (!raw) {
+      const defaults = createDefaultCodeLabCollection();
+      localStorage.setItem(
+        CODELAB_COLLECTION_STORAGE_KEY,
+        JSON.stringify(defaults),
+      );
+      return defaults;
+    }
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      return createDefaultCodeLabCollection();
+    }
+    return parsed as CodeLabSavedFile[];
+  } catch {
+    return createDefaultCodeLabCollection();
+  }
+}
+
+export function saveCodeLabCollection(files: CodeLabSavedFile[]): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(CODELAB_COLLECTION_STORAGE_KEY, JSON.stringify(files));
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(CODELAB_COLLECTION_EVENT));
+    }
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
+export function upsertCodeLabFile(
+  input: Omit<CodeLabSavedFile, 'updatedAt'> & { updatedAt?: number },
+): CodeLabSavedFile[] {
+  const current = loadCodeLabCollection();
+  const nextItem: CodeLabSavedFile = {
+    ...input,
+    title: input.title.trim() || '未命名代码实验',
+    folder: input.folder.trim() || '未归类代码',
+    updatedAt: input.updatedAt ?? Date.now(),
+  };
+  const existsIdx = current.findIndex((item) => item.id === nextItem.id);
+  const next =
+    existsIdx >= 0
+      ? current.map((item, idx) => (idx === existsIdx ? nextItem : item))
+      : [nextItem, ...current];
+  saveCodeLabCollection(next);
+  return next;
+}
+
+export function deleteCodeLabFile(fileId: string): CodeLabSavedFile[] {
+  const current = loadCodeLabCollection();
+  const next = current.filter((item) => item.id !== fileId);
+  saveCodeLabCollection(next);
+  return next;
+}
+
+export function toggleStarCodeLabFile(fileId: string): CodeLabSavedFile[] {
+  const current = loadCodeLabCollection();
+  const next = current.map((item) =>
+    item.id === fileId ? { ...item, starred: !item.starred } : item,
+  );
+  saveCodeLabCollection(next);
+  return next;
+}
+
+export function groupCodeLabFilesByFolder(
+  files: readonly CodeLabSavedFile[],
+  query: string,
+  filter: 'all' | TerminalCodeLabLanguage | 'starred' = 'all',
+): Array<{ folder: string; items: CodeLabSavedFile[] }> {
+  const cleanQuery = query.trim().toLowerCase();
+  const filtered = files.filter((file) => {
+    if (filter === 'starred' && !file.starred) return false;
+    if (
+      (filter === 'python' || filter === 'c' || filter === 'cpp') &&
+      file.language !== filter
+    ) {
+      return false;
+    }
+    if (!cleanQuery) return true;
+    const inTitle = file.title.toLowerCase().includes(cleanQuery);
+    const inFolder = file.folder.toLowerCase().includes(cleanQuery);
+    const inTags = file.tags.some((t) => t.toLowerCase().includes(cleanQuery));
+    const inSource = file.cells.some((c) =>
+      c.source.toLowerCase().includes(cleanQuery),
+    );
+    return inTitle || inFolder || inTags || inSource;
+  });
+
+  const folderMap = new Map<string, CodeLabSavedFile[]>();
+  for (const folder of DEFAULT_CODELAB_FOLDERS) {
+    folderMap.set(folder, []);
+  }
+  for (const item of filtered) {
+    const folder = item.folder.trim() || '未归类代码';
+    const bucket = folderMap.get(folder) ?? [];
+    bucket.push(item);
+    folderMap.set(folder, bucket);
+  }
+
+  const groups: Array<{ folder: string; items: CodeLabSavedFile[] }> = [];
+  for (const [folder, items] of folderMap.entries()) {
+    if (items.length === 0 && cleanQuery) continue;
+    items.sort((a, b) => {
+      if (a.starred !== b.starred) return a.starred ? -1 : 1;
+      return b.updatedAt - a.updatedAt;
+    });
+    groups.push({ folder, items });
+  }
+  return groups;
+}
+
+/**
+ * Assembles all cells of a notebook into a single executable source script (.py / .c / .cpp)
+ * for the "完整源码视图 (Script)" mode.
+ */
+export function assembleFullScriptSource(
+  cells: readonly CodeLabCell[],
+  language: TerminalCodeLabLanguage,
+  prologueSource?: string,
+): string {
+  const commentPrefix = language === 'python' ? '# ' : '// ';
+  const codeSegments: string[] = [];
+
+  for (let i = 0; i < cells.length; i += 1) {
+    const cell = cells[i];
+    const trimmed = cell.source.trim();
+    if (!trimmed) continue;
+    if (cell.kind === 'markdown') {
+      const commented = trimmed
+        .split(/\r?\n/)
+        .map((line) => `${commentPrefix}${line}`)
+        .join('\n');
+      codeSegments.push(
+        `${commentPrefix}--- [笔记 #${i + 1}] ---\n${commented}`,
+      );
+    } else {
+      codeSegments.push(
+        `${commentPrefix}--- [代码格 #${i + 1}] ---\n${trimmed}`,
+      );
+    }
+  }
+
+  const combinedBody = codeSegments.join('\n\n');
+  if (language === 'python') {
+    return combinedBody || '# 空 Python 实验脚本\n';
+  }
+  return assembleCCellProgram(
+    prologueSource ??
+      (language === 'cpp' ? DEFAULT_CPP_PROLOGUE : DEFAULT_C_PROLOGUE),
+    combinedBody,
+    language === 'cpp',
+  );
+}

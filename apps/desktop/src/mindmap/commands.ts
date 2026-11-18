@@ -123,28 +123,29 @@ export function parseMarkdownNodeSource(
       return undefined;
     }
   })();
-  const heading = cleanLine.match(/^(\s*)(#{1,6})(\s+)(.*)$/);
+  const heading = cleanLine.match(/^(\s*)(#{1,6})(?:(\s+)(.*)|\s*)$/);
   if (heading) {
-    const content = heading[4].replace(/\s+#+\s*$/, '');
+    const spacing = heading[3] || ' ';
+    const content = (heading[4] ?? '').replace(/\s+#+\s*$/, '');
     return {
       kind: 'heading',
       ...(id ? { id } : {}),
       ...(epubHref ? { epubHref } : {}),
       lineIndex,
       endLineIndex,
-      prefix: `${heading[1]}${heading[2]}${heading[3]}`,
+      prefix: `${heading[1]}${heading[2]}${spacing}`,
       level: heading[2].length,
       label: normalizeMindmapText(content),
     };
   }
 
   const list = cleanLine.match(
-    /^(\s*)([-+*]|\d+[.)])(\s+)(?:\[([ xX])\]\s+)?(.*)$/,
+    /^(\s*)([-+*]|\d+[.)])(?:(\s+)(?:\[([ xX])\]\s+)?(.*)|\s*)$/,
   );
   if (!list) return null;
   const indent = list[1];
   const marker = list[2];
-  const spacing = list[3];
+  const spacing = list[3] || ' ';
   const taskPrefix = list[4] ? `[${list[4]}] ` : '';
   return {
     kind: 'list',
@@ -156,7 +157,7 @@ export function parseMarkdownNodeSource(
     indent,
     marker,
     hasCheckbox: Boolean(list[4]),
-    label: normalizeMindmapText(list[5]),
+    label: normalizeMindmapText(list[5] ?? ''),
   };
 }
 
@@ -202,7 +203,10 @@ export function buildMarkdownNodeSourceMap(
       if (source) {
         result.set(path, source);
         if (uniqueId) usedNodeIds.add(uniqueId);
-      } else if (normalizeMindmapText(node.content)) {
+      } else if (
+        normalizeMindmapText(node.content) ||
+        lines[lineIndex]?.trim()
+      ) {
         const blockId =
           candidateId && !usedNodeIds.has(candidateId)
             ? candidateId
@@ -272,8 +276,25 @@ function headingSubtreeEnd(
       Math.max(source.lineIndex + 1, source.endLineIndex),
     );
   }
+  let fence: { marker: string; length: number } | null = null;
   for (let index = source.lineIndex + 1; index < lines.length; index += 1) {
-    const next = parseMarkdownNodeSource(lines[index], index);
+    const line = lines[index];
+    const fenceMatch = line.match(/^\s*(`{3,}|~{3,})/);
+    if (fence) {
+      if (
+        fenceMatch &&
+        fenceMatch[1][0] === fence.marker &&
+        fenceMatch[1].length >= fence.length
+      ) {
+        fence = null;
+      }
+      continue;
+    }
+    if (fenceMatch) {
+      fence = { marker: fenceMatch[1][0], length: fenceMatch[1].length };
+      continue;
+    }
+    const next = parseMarkdownNodeSource(line, index);
     if (next?.kind === 'heading' && (next.level || 7) <= source.level)
       return index;
   }
@@ -285,13 +306,21 @@ function markdownNodeInsertionIndex(
   source: MarkdownNodeSource,
 ): number {
   const lines = markdown.split(/\r?\n/);
-  if (source.kind === 'heading') return headingSubtreeEnd(lines, source);
-  if (source.kind === 'list')
-    return Math.min(
-      lines.length,
-      Math.max(source.lineIndex + 1, source.endLineIndex),
-    );
-  return source.lineIndex + 1;
+  let end =
+    source.kind === 'heading'
+      ? headingSubtreeEnd(lines, source)
+      : source.kind === 'list'
+        ? Math.min(
+            lines.length,
+            Math.max(source.lineIndex + 1, source.endLineIndex),
+          )
+        : source.lineIndex + 1;
+  if (source.kind === 'heading' || source.kind === 'list') {
+    while (end > source.lineIndex + 1 && !lines[end - 1]?.trim()) {
+      end -= 1;
+    }
+  }
+  return end;
 }
 
 function createNodeId(): string {
@@ -470,16 +499,22 @@ function formatNewNode(
   const label = text.trim() || '新主题';
   if (source.kind === 'heading' && source.level !== undefined) {
     const level = operation === 'add_child' ? source.level + 1 : source.level;
-    if (level > 6)
-      throw new Error('这个标题已经达到 Markdown 的最大层级，无法添加子标题。');
+    // Markdown headings cap at ###### (level 6); deeper child nodes seamlessly
+    // continue as Markdown list items so the mind map hierarchy can grow without limit.
+    if (level > 6) {
+      return `- ${label}${nodeMarker(nodeId)}`;
+    }
     return `${'#'.repeat(level)} ${label}${nodeMarker(nodeId)}`;
   }
   if (source.kind === 'list') {
-    const indent =
+    const stepIndent =
       operation === 'add_child'
-        ? `${source.indent || ''}  `
-        : source.indent || '';
-    const marker = source.marker || '-';
+        ? ' '.repeat(Math.max(2, (source.marker?.length ?? 1) + 1))
+        : '';
+    const indent = `${source.indent || ''}${stepIndent}`;
+    const isOrderedMarker = /^\d+[.)]$/.test(source.marker || '');
+    const marker =
+      operation === 'add_child' && isOrderedMarker ? '-' : source.marker || '-';
     const taskPrefix = source.hasCheckbox ? '[ ] ' : '';
     return `${indent}${marker} ${taskPrefix}${label}${nodeMarker(nodeId)}`;
   }
@@ -545,6 +580,9 @@ export function applyMarkdownNodeCommand(
     if (currentSource.kind === 'block')
       throw new Error('目前只能改写标题或列表节点。');
     const encodedLabel = encodeNodeLineBreaks(text);
+    if (!encodedLabel.trim()) {
+      throw new Error('节点文本不能为空；如需移除该节点请点击「删除」。');
+    }
     lines[currentSource.lineIndex] = withNodeMarker(
       `${currentSource.prefix}${encodedLabel}`,
       ensured.nodeId,
@@ -650,6 +688,7 @@ export function applyMarkdownNodeBranch(
   const output: string[] = [];
   let fence: { marker: string; length: number } | null = null;
   let currentDepth = 0;
+  let activeHeadingLevel = source.level || 1;
 
   parsed.lines.forEach((line, index) => {
     const fenceMatch = line.match(/^\s*(`{3,}|~{3,})/);
@@ -660,14 +699,15 @@ export function applyMarkdownNodeBranch(
         const nodeId = createNodeId();
         if (source.kind === 'heading') {
           const level = (source.level || 1) + 1 + depth;
+          activeHeadingLevel = level;
           if (level > 6) {
-            throw new Error(
-              '下探分支层级超过 Markdown 六级标题上限，请减少层级后重试。',
+            const listIndent = '  '.repeat(level - 7);
+            output.push(`${listIndent}- ${heading.text}${nodeMarker(nodeId)}`);
+          } else {
+            output.push(
+              `${'#'.repeat(level)} ${heading.text}${nodeMarker(nodeId)}`,
             );
           }
-          output.push(
-            `${'#'.repeat(level)} ${heading.text}${nodeMarker(nodeId)}`,
-          );
         } else {
           const indent = `${source.indent || ''}  ${'  '.repeat(depth)}`;
           output.push(`${indent}- ${heading.text}${nodeMarker(nodeId)}`);
@@ -688,6 +728,9 @@ export function applyMarkdownNodeBranch(
 
     if (source.kind === 'list') {
       const contentIndent = `${source.indent || ''}  ${'  '.repeat(currentDepth + 1)}`;
+      output.push(line.trim() ? `${contentIndent}${line.trimStart()}` : '');
+    } else if (activeHeadingLevel > 6) {
+      const contentIndent = '  '.repeat(activeHeadingLevel - 6);
       output.push(line.trim() ? `${contentIndent}${line.trimStart()}` : '');
     } else {
       output.push(line);

@@ -171,12 +171,13 @@
 
 .knowledge-sidebar-head {
   display: flex;
-  height: 52px;
-  flex: 0 0 auto;
+  height: 36px;
+  min-height: 36px;
+  flex: 0 0 36px;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 0 12px 0 14px;
+  gap: 6px;
+  padding: 0 8px 0 10px;
   border-bottom: 1px solid var(--kb-line);
 }
 
@@ -309,6 +310,50 @@
   min-width: 0;
   align-items: center;
   gap: 7px;
+}
+
+.knowledge-sidebar-mode-tabs {
+  display: inline-flex;
+  height: 100%;
+  min-width: 0;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.knowledge-sidebar-mode-tab {
+  display: inline-flex;
+  height: 100%;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--kb-muted);
+  font: 500 12.5px/1 var(--ui-font);
+  white-space: nowrap;
+  cursor: pointer;
+  outline: none;
+  transition:
+    color 0.12s ease,
+    border-color 0.12s ease,
+    background-color 0.12s ease;
+}
+
+.knowledge-sidebar-mode-tab:hover {
+  color: var(--kb-ink);
+  background: var(--kb-hover);
+}
+
+.knowledge-sidebar-mode-tab.is-active {
+  color: var(--kb-accent);
+  border-bottom-color: var(--kb-accent);
+  font-weight: 600;
+}
+
+.knowledge-sidebar-mode-tab.is-active .knowledge-count-pill {
+  color: var(--kb-accent);
+  font-weight: 600;
 }
 
 .knowledge-sidebar-title strong {
@@ -1582,8 +1627,9 @@
   background: var(--panel);
 }
 .app-shell.is-knowledge-surface .knowledge-sidebar-head {
-  height: 52px;
-  padding: 0 10px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 8px 0 10px;
 }
 .app-shell.is-knowledge-surface .knowledge-toolbar {
   gap: 6px;
@@ -2035,32 +2081,38 @@ button.knowledge-heatmap-cell.is-selected {
 
 .kb-split-topbar {
   display: flex;
-  flex: 0 0 auto;
+  flex: 0 0 36px;
   height: 36px;
+  min-height: 36px;
   min-width: 0;
-  align-items: center;
-  gap: 6px;
-  padding: 0 10px;
+  align-items: stretch;
+  gap: 0;
+  padding: 0 8px 0 0;
   border-bottom: 1px solid var(--kb-line);
   background: var(--kb-surface-subtle);
+  box-sizing: border-box;
 }
 
 .kb-overview-tab-btn {
   display: inline-flex;
   flex: none;
-  height: 24px;
+  height: 100%;
   align-items: center;
-  gap: 5px;
-  padding: 0 8px;
+  gap: 6px;
+  padding: 0 14px;
   border: 0;
+  border-top: 2px solid transparent;
+  border-right: 1px solid var(--kb-line);
   border-radius: 0;
   background: transparent;
   color: var(--kb-muted);
-  font-size: 12px;
-  font-weight: 500;
+  font: 500 12px/1 var(--ui-font);
+  box-sizing: border-box;
+  outline: none;
   cursor: pointer;
   transition:
     color 0.12s ease,
+    border-color 0.12s ease,
     background-color 0.12s ease;
 }
 
@@ -2076,8 +2128,14 @@ button.knowledge-heatmap-cell.is-selected {
 
 .kb-overview-tab-btn.is-active {
   color: var(--kb-accent);
-  background: var(--kb-active);
+  background: var(--kb-surface);
+  border-top-color: var(--kb-accent);
   font-weight: 600;
+}
+
+.kb-overview-tab-btn:focus-visible {
+  box-shadow: inset 0 -2px 0
+    color-mix(in srgb, var(--kb-accent) 45%, transparent);
 }
 
 .kb-tab-strip {
@@ -2086,7 +2144,7 @@ button.knowledge-heatmap-cell.is-selected {
   min-width: 0;
   height: 100%;
   align-items: stretch;
-  gap: 1px;
+  gap: 0;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
@@ -2100,12 +2158,15 @@ button.knowledge-heatmap-cell.is-selected {
   position: relative;
   display: inline-flex;
   flex: 0 1 auto;
+  height: 100%;
   min-width: 96px;
-  max-width: 210px;
+  max-width: 220px;
   align-items: center;
   border-top: 2px solid transparent;
+  border-right: 1px solid var(--kb-line);
   background: transparent;
   color: var(--kb-muted);
+  box-sizing: border-box;
   transition:
     background-color 0.12s ease,
     color 0.12s ease,
@@ -2129,21 +2190,25 @@ button.knowledge-heatmap-cell.is-selected {
   border-top-color: var(--kb-accent);
 }
 
+.kb-doc-tab:focus-within {
+  box-shadow: inset 0 -2px 0
+    color-mix(in srgb, var(--kb-accent) 45%, transparent);
+}
+
 .kb-doc-tab-main {
   display: inline-flex;
   flex: 1 1 0;
   min-width: 0;
   height: 100%;
   align-items: center;
-  gap: 5px;
-  padding: 0 4px 0 9px;
+  gap: 6px;
+  padding: 0 6px 0 12px;
   border: 0;
   background: transparent;
   color: inherit;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 500;
+  font: 500 12px/1 var(--ui-font);
   text-align: left;
+  outline: none;
   cursor: pointer;
 }
 
@@ -2179,7 +2244,7 @@ button.knowledge-heatmap-cell.is-selected {
   display: inline-flex;
   width: 20px;
   height: 20px;
-  margin-right: 4px;
+  margin-right: 6px;
   flex: none;
   align-items: center;
   justify-content: center;
@@ -2189,6 +2254,7 @@ button.knowledge-heatmap-cell.is-selected {
   font-size: 13px;
   line-height: 1;
   opacity: 0.45;
+  outline: none;
   cursor: pointer;
 }
 
@@ -2257,6 +2323,36 @@ button.knowledge-heatmap-cell.is-selected {
 .kb-layout-btn.is-active {
   color: var(--kb-accent);
   background: var(--kb-active);
+}
+
+.kb-sync-scroll-btn {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  padding: 0 7px;
+  border: 1px solid var(--kb-line);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--kb-muted);
+  font: 500 11px/1 var(--ui-font);
+  cursor: pointer;
+  transition:
+    color 0.12s ease,
+    border-color 0.12s ease,
+    background-color 0.12s ease;
+}
+
+.kb-sync-scroll-btn:hover {
+  color: var(--kb-ink);
+  border-color: color-mix(in srgb, var(--kb-ink) 28%, var(--kb-line));
+  background: var(--kb-hover);
+}
+
+.kb-sync-scroll-btn.is-active {
+  color: var(--kb-accent);
+  border-color: color-mix(in srgb, var(--kb-accent) 48%, var(--kb-line));
+  background: var(--kb-active);
+  font-weight: 600;
 }
 
 /* Split-Pane Grid Canvas */
@@ -2652,6 +2748,8 @@ button.knowledge-heatmap-cell.is-selected {
 }
 
 .kb-pane-divider {
+  position: relative;
+  z-index: 25;
   display: flex;
   flex: none;
   grid-area: divider;
@@ -2660,14 +2758,16 @@ button.knowledge-heatmap-cell.is-selected {
   background: var(--kb-line);
   cursor: col-resize;
   touch-action: none;
+  transition: background-color 0.12s ease;
 }
 
 .kb-split-stage.is-horizontal .kb-pane-divider {
   cursor: row-resize;
 }
 
-.kb-pane-divider:hover {
-  background: color-mix(in srgb, var(--kb-accent) 40%, var(--kb-line));
+.kb-pane-divider:hover,
+.kb-pane-divider.is-dragging {
+  background: color-mix(in srgb, var(--kb-accent) 55%, var(--kb-line));
 }
 
 .kb-divider-handle {
@@ -2680,6 +2780,27 @@ button.knowledge-heatmap-cell.is-selected {
 .kb-split-stage.is-horizontal .kb-divider-handle {
   width: 28px;
   height: 2px;
+}
+
+.kb-divider-ratio-badge {
+  position: absolute;
+  pointer-events: none;
+  opacity: 0;
+  padding: 2px 5px;
+  border: 1px solid var(--kb-line);
+  border-radius: 2px;
+  background: var(--kb-surface);
+  color: var(--kb-accent);
+  font: 600 10px/1.2 var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+  transition: opacity 0.12s ease;
+}
+
+.kb-pane-divider:hover .kb-divider-ratio-badge,
+.kb-pane-divider.is-dragging .kb-divider-ratio-badge {
+  opacity: 1;
 }
 
 .kb-pane-empty-slot {

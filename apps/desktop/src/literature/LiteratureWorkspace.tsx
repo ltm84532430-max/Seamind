@@ -830,8 +830,8 @@ export const LiteratureWorkspace: React.FC<LiteratureWorkspaceProps> = ({
                   active: activeCollectionId === col.id,
                   thumb: {
                     name: col.name,
-                    color: col.color,
-                    shape: 'circle',
+                    shape: 'square' as const,
+                    tone: 'index' as const,
                   },
                   onClick: () => {
                     setActiveCollectionId(col.id);

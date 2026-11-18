@@ -10,6 +10,7 @@ import {
 } from 'react';
 import {
   buildGalaxyAdjacencyMap,
+  computeVisibleGalaxyLabelIds,
   createGalaxyPhysicsState,
   DEFAULT_GALAXY_PHYSICS_CONFIG,
   stepGalaxyPhysics,
@@ -212,6 +213,21 @@ export function BookGalaxyGraphView({
   const visibleIdsRef = useRef<Set<string>>(visibleNodeIds);
   visibleIdsRef.current = visibleNodeIds;
 
+  const nonCollidingLabelIds = useMemo(() => {
+    const priorityIds = new Set<string>();
+    if (activeHoveredId) priorityIds.add(activeHoveredId);
+    for (const node of graph.nodes) {
+      if (node.isCurrent || node.hasNote) priorityIds.add(node.id);
+    }
+    return computeVisibleGalaxyLabelIds({
+      nodes: graph.nodes,
+      positions: livePositions,
+      scale,
+      visibleIds: visibleNodeIds,
+      priorityIds,
+    });
+  }, [activeHoveredId, graph.nodes, livePositions, scale, visibleNodeIds]);
+
   const syncPositionsFromPhysics = useCallback((state: GalaxyPhysicsState) => {
     const next: Record<string, { x: number; y: number }> = {};
     for (const body of state.bodyList) {
@@ -220,10 +236,11 @@ export function BookGalaxyGraphView({
     setLivePositions(next);
   }, []);
 
-  // Initialize & run 60fps force simulation
+  // Initialize & run 60fps force simulation (throttled during final settling tail)
   const rafRef = useRef<number | null>(null);
   const startSimulationLoop = useCallback(() => {
     if (rafRef.current !== null) return;
+    let frameCount = 0;
     const tick = () => {
       const state = physicsRef.current;
       if (!state) {
@@ -235,7 +252,18 @@ export function BookGalaxyGraphView({
         physicsConfigRef.current,
         visibleIdsRef.current,
       );
-      syncPositionsFromPhysics(state);
+      frameCount += 1;
+      const hasPinned = state.bodyList.some(
+        (body) => body.fx !== null || body.fy !== null,
+      );
+      if (
+        hasPinned ||
+        state.alpha >= 0.08 ||
+        frameCount % 2 === 0 ||
+        !keepRunning
+      ) {
+        syncPositionsFromPhysics(state);
+      }
       if (keepRunning) {
         rafRef.current = requestAnimationFrame(tick);
       } else {
@@ -1053,12 +1081,13 @@ export function BookGalaxyGraphView({
                 Boolean(node.hasNote) ||
                 (Boolean(searchFilter) && isMatch);
 
+              const labelClear = nonCollidingLabelIds.has(node.id);
               let planetLabelOpacity = 0;
               if (forceShowLabel) {
                 planetLabelOpacity = 1;
-              } else if (scale >= t2) {
+              } else if (labelClear && scale >= t2) {
                 planetLabelOpacity = 0.88;
-              } else if (scale > t1) {
+              } else if (labelClear && scale > t1) {
                 planetLabelOpacity = ((scale - t1) / (t2 - t1)) * 0.85;
               }
 
@@ -1066,14 +1095,14 @@ export function BookGalaxyGraphView({
                 isHoveredSelf ||
                 isSpotlightNeighbor ||
                 node.hasNote ||
-                scale >= labelFadeThreshold * 1.35;
+                (labelClear && scale >= labelFadeThreshold * 1.35);
 
               const showFootnoteLabel =
                 isHoveredSelf ||
                 hoveredNode?.node.id === node.parentId ||
                 (isSpotlightNeighbor && hoveredNode?.node.kind !== 'cluster') ||
                 (Boolean(searchFilter.trim()) && isMatch) ||
-                scale >= labelFadeThreshold * 1.15;
+                (labelClear && scale >= labelFadeThreshold * 1.15);
 
               const diamondR = displayRadius * 1.18;
               const diamondPoints = `0,${-diamondR} ${diamondR},0 0,${diamondR} ${-diamondR},0`;

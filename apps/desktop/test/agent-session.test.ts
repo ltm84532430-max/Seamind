@@ -8,7 +8,11 @@ import {
 } from '../src/agent/capabilities';
 import { LEARNING_PATH_BUDGET } from '../src/agent/learning-path-budget';
 import { agentProfiles } from '../src/agent/profiles';
-import { compactHistory, completeToolBatch } from '../src/agent/session';
+import {
+  buildMarkdownDiffHunks,
+  compactHistory,
+  completeToolBatch,
+} from '../src/agent/session';
 import type { AgentChatMessage, AgentToolCall } from '../src/agent/types';
 
 const MAX_AGENT_TOOLS = 24;
@@ -131,6 +135,56 @@ describe('agent session history', () => {
       'later',
     ]);
     expect(completed[1]?.content).toContain('未执行');
+  });
+
+  it('preserves key entity identifiers when compacting read-only tool payloads and builds hunk diffs', () => {
+    const history: AgentChatMessage[] = [
+      assistantWithCalls([toolCall('read-doc', 'library_read_document')]),
+      toolMessage('read-doc', {
+        permission: 'read',
+        version: 1,
+        data: {
+          nodeId: 'node-42',
+          relativePath: 'notes/network-bridge.md',
+          title: '透明网桥与生成树协议',
+          revision: 7,
+          markdown: 'A'.repeat(600),
+        },
+      }),
+      assistantWithCalls([toolCall('read-latest', 'library_search')]),
+      toolMessage('read-latest', {
+        permission: 'read',
+        version: 1,
+        body: 'recent',
+      }),
+    ];
+
+    const compacted = compactHistory(history, {
+      maxMessages: 10,
+      keepRecentToolResults: 1,
+      shrinkAt: 120,
+    });
+    const firstTool = JSON.parse(compacted[1]?.content ?? '{}') as {
+      compacted?: boolean;
+      identifiers?: Record<string, unknown>;
+    };
+    expect(firstTool.compacted).toBe(true);
+    expect(firstTool.identifiers).toEqual({
+      nodeId: 'node-42',
+      relativePath: 'notes/network-bridge.md',
+      title: '透明网桥与生成树协议',
+      revision: 7,
+    });
+
+    const diff = buildMarkdownDiffHunks(
+      '# Title\n\nSection A\nOld line 1\n\nSection B\nKeep\nOld line 2',
+      '# Title\n\nSection A\nNew line 1\n\nSection B\nKeep\nNew line 2',
+      1,
+    );
+    expect(diff.totalAdded).toBe(2);
+    expect(diff.totalRemoved).toBe(2);
+    expect(diff.hunks.length).toBeGreaterThanOrEqual(1);
+    expect(diff.hunks[0]?.header).toMatch(/^@@ -\d+,\d+ \+\d+,\d+ @@$/);
   });
 });
 

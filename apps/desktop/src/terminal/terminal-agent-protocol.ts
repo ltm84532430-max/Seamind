@@ -129,6 +129,46 @@ export const TERMINAL_ENGINE_SPECS: Array<{
 ];
 
 /**
+ * Strict integer pixel-grid matrix (22 cols × 15 rows) for the metallic open-book + `>_` CLI emblem.
+ * Palette codes:
+ *  '.' = transparent
+ *  'C' = Specular Chrome Highlight (#F8FAFC)
+ *  'T' = Brushed Titanium Light (#CBD5E1)
+ *  'S' = Forged Steel Midtone (#94A3B8)
+ *  'I' = Dark Iron Etching / Fold (#64748B)
+ *  'G' = Deep Gunmetal Spine & Shadow (#334155)
+ *  'B' = Tempered Bronze Cover Rim (#D97757)
+ *  'A' = Specular Amber Gold Rune & Clasp (#F59E0B)
+ */
+export const METALLIC_BOOK_PIXEL_GRID: readonly string[] = [
+  '..BTTTTTB....BTTTTTB..',
+  '.BCCCCCCTB..BTCCCCCCB.',
+  'BCTTTTTTSIBBISTTTTTTCB',
+  'BCTTAATTSIGGISTTIIITCB',
+  'BCTTTAATSIGGISTTTTTTCB',
+  'BCTTTTAASIGGISTTIIITCB',
+  'BCTTTAATSIGGISTTTTTTCB',
+  'BCTTAATTSIGGISTACCCACB',
+  'BCSSSSSSSIAAISSSSSSSCB',
+  'BCSSSSSSIGGGGISSSSSSCB',
+  'BBIISSSIGGBBGGISSSIIBB',
+  '.BBCCCCCIGBBGICCCCCBB.',
+  '..BBSSSSSGAAGSSSSSBB..',
+  '...BBBBBBBAABBBBBBB...',
+  '.....GGGGGGGGGGGG.....',
+];
+
+export const METALLIC_BOOK_PALETTE: Record<string, string> = {
+  C: '#F8FAFC',
+  T: '#CBD5E1',
+  S: '#94A3B8',
+  I: '#64748B',
+  G: '#334155',
+  B: '#D97757',
+  A: '#F59E0B',
+};
+
+/**
  * Pixel dot-matrix open-book + `>_` emblem matching Seamind Book-Terminal TUI aesthetic.
  */
 export const DOT_MATRIX_BOOK_SPLASH = [

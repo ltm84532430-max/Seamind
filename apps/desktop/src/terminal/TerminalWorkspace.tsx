@@ -40,8 +40,19 @@ import {
 } from './TerminalAgentView';
 import {
   TerminalCodeLabView,
+  type CodeLabCanvasViewMode,
   type TerminalCodeLabViewHandle,
 } from './TerminalCodeLabView';
+import {
+  CODELAB_COLLECTION_EVENT,
+  DEFAULT_CODELAB_SNIPPETS,
+  deleteCodeLabFile,
+  groupCodeLabFilesByFolder,
+  loadCodeLabCollection,
+  toggleStarCodeLabFile,
+  type CodeLabSavedFile,
+  type CodeLabSnippetItem,
+} from './terminal-codelab-model';
 import {
   TerminalSessionView,
   type TerminalSessionRuntimeMeta,
@@ -338,6 +349,70 @@ export default function TerminalWorkspace({
   const [showShellMenu, setShowShellMenu] = useState(false);
   const [editingTabId, setEditingTabId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
+
+  // Modular Left Rail (Shell | Agent | Code Lab Collection)
+  const [leftRailCollapsed, setLeftRailCollapsed] = useState<boolean>(() => {
+    try {
+      return (
+        localStorage.getItem('seamind:terminal-left-rail-collapsed:v1') === '1'
+      );
+    } catch {
+      return false;
+    }
+  });
+  const [railModule, setRailModule] = useState<TerminalTabKind>(
+    initialKind ?? 'shell',
+  );
+  const [labRailSubTab, setLabRailSubTab] = useState<'files' | 'snippets'>(
+    'files',
+  );
+  const [codeLabFiles, setCodeLabFiles] = useState<CodeLabSavedFile[]>(() =>
+    loadCodeLabCollection(),
+  );
+  const [codeLabSearch, setCodeLabSearch] = useState('');
+  const [codeLabFilter, setCodeLabFilter] = useState<
+    'all' | TerminalCodeLabLanguage | 'starred'
+  >('all');
+  const [collapsedLabFolders, setCollapsedLabFolders] = useState<
+    Record<string, boolean>
+  >({});
+  const [activeLabInfo, setActiveLabInfo] = useState<{
+    fileId: string | null;
+    title: string;
+    folder: string;
+    language: TerminalCodeLabLanguage;
+    viewMode: CodeLabCanvasViewMode;
+  }>({
+    fileId: null,
+    title: 'Python 交互实验本.ipynb',
+    folder: '书籍伴读验证',
+    language: 'python',
+    viewMode: 'notebook',
+  });
+
+  useEffect(() => {
+    const syncCollection = () => {
+      setCodeLabFiles(loadCodeLabCollection());
+    };
+    window.addEventListener(CODELAB_COLLECTION_EVENT, syncCollection);
+    return () =>
+      window.removeEventListener(CODELAB_COLLECTION_EVENT, syncCollection);
+  }, []);
+
+  const toggleLeftRail = useCallback(() => {
+    setLeftRailCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(
+          'seamind:terminal-left-rail-collapsed:v1',
+          next ? '1' : '0',
+        );
+      } catch {
+        // ignore storage errors
+      }
+      return next;
+    });
+  }, []);
 
   const terminalRefs = useRef<Map<string, TerminalSessionViewHandle>>(
     new Map(),
@@ -1491,6 +1566,129 @@ export default function TerminalWorkspace({
     [activeTab?.kind, isStageZoomed],
   );
 
+  // Auto-sync left rail module with active tab kind
+  useEffect(() => {
+    const currentKind: TerminalTabKind = activeTab?.kind ?? 'shell';
+    setRailModule(currentKind);
+  }, [activeTab?.id, activeTab?.kind]);
+
+  const shellTabs = useMemo(
+    () => tabs.filter((t) => !t.kind || t.kind === 'shell'),
+    [tabs],
+  );
+  const agentTabs = useMemo(
+    () => tabs.filter((t) => t.kind === 'agent'),
+    [tabs],
+  );
+  const labTabs = useMemo(() => tabs.filter((t) => t.kind === 'lab'), [tabs]);
+
+  const groupedCodeLabFiles = useMemo(
+    () => groupCodeLabFilesByFolder(codeLabFiles, codeLabSearch, codeLabFilter),
+    [codeLabFiles, codeLabSearch, codeLabFilter],
+  );
+
+  const activateOrCreateTabInFocusedPane = useCallback(
+    (tabId: string) => {
+      const paneIdx = activePaneIds.indexOf(tabId);
+      if (paneIdx >= 0) {
+        setFocusedPaneIndex(paneIdx);
+      } else {
+        setPaneTabIds((prev) => {
+          const next = [...prev];
+          next[safeFocusedPane] = tabId;
+          return next;
+        });
+      }
+      requestAnimationFrame(() => focusTabHandle(tabId));
+    },
+    [activePaneIds, focusTabHandle, safeFocusedPane],
+  );
+
+  const handleSelectRailModule = useCallback(
+    (nextModule: TerminalTabKind) => {
+      setRailModule(nextModule);
+      const currentKind: TerminalTabKind = activeTab?.kind ?? 'shell';
+      if (currentKind === nextModule) return;
+      const existing = tabs.find((t) => (t.kind ?? 'shell') === nextModule);
+      if (existing) {
+        activateOrCreateTabInFocusedPane(existing.id);
+      } else if (nextModule === 'agent') {
+        createSpecialTab('agent');
+      } else if (nextModule === 'lab') {
+        createSpecialTab('lab', 'python');
+      } else {
+        createNewTab('powershell');
+      }
+    },
+    [
+      activateOrCreateTabInFocusedPane,
+      activeTab?.kind,
+      createNewTab,
+      createSpecialTab,
+      tabs,
+    ],
+  );
+
+  const withActiveLabHandle = useCallback(
+    (
+      preferredLang: TerminalCodeLabLanguage,
+      callback: (handle: TerminalCodeLabViewHandle) => void,
+    ) => {
+      if (activeTab?.kind === 'lab') {
+        const handle = labRefs.current.get(activeTab.id);
+        if (handle) {
+          callback(handle);
+          return;
+        }
+      }
+      const existingLab =
+        tabs.find((t) => t.kind === 'lab' && t.labLanguage === preferredLang) ??
+        tabs.find((t) => t.kind === 'lab');
+      if (existingLab) {
+        activateOrCreateTabInFocusedPane(existingLab.id);
+        window.setTimeout(() => {
+          const handle = labRefs.current.get(existingLab.id);
+          if (handle) callback(handle);
+        }, 60);
+      } else {
+        createSpecialTab('lab', preferredLang);
+        window.setTimeout(() => {
+          for (const [, handle] of labRefs.current.entries()) {
+            callback(handle);
+            break;
+          }
+        }, 90);
+      }
+    },
+    [
+      activateOrCreateTabInFocusedPane,
+      activeTab?.id,
+      activeTab?.kind,
+      createSpecialTab,
+      tabs,
+    ],
+  );
+
+  const handleOpenSavedCodeFile = useCallback(
+    (file: CodeLabSavedFile) => {
+      setRailModule('lab');
+      withActiveLabHandle(file.language, (handle) => {
+        handle.loadSavedFile(file);
+      });
+    },
+    [withActiveLabHandle],
+  );
+
+  const handleInsertSnippetToLab = useCallback(
+    (snippet: CodeLabSnippetItem, autoRun: boolean) => {
+      setRailModule('lab');
+      withActiveLabHandle(snippet.language, (handle) => {
+        handle.insertAndRunCell(snippet.language, snippet.code, autoRun);
+      });
+    },
+    [withActiveLabHandle],
+  );
+
   interface PaletteActionItem {
     id: string;
     badge: string;
@@ -2109,8 +2307,629 @@ export default function TerminalWorkspace({
         </div>
       </nav>
 
-      {/* Center Multi-Pane Stage + Optional Right Drawer */}
+      {/* Center Multi-Pane Stage + Left Modular Rail + Optional Right Drawer */}
       <div className="terminal-workspace-body">
+        <aside
+          className={`terminal-left-rail${leftRailCollapsed ? ' is-collapsed' : ''}`}
+          aria-label="终端模块切换与代码文件收集侧边栏"
+        >
+          {leftRailCollapsed ? (
+            <div className="terminal-rail-slim">
+              <button
+                type="button"
+                className="terminal-rail-slim-btn"
+                onClick={toggleLeftRail}
+                title="展开终端与代码收集侧边栏"
+                aria-label="展开侧边栏"
+              >
+                &gt;
+              </button>
+              <button
+                type="button"
+                className={`terminal-rail-slim-btn${railModule === 'shell' ? ' is-active' : ''}`}
+                onClick={() => handleSelectRailModule('shell')}
+                title={`终端会话 (${shellTabs.length})`}
+              >
+                &gt;_
+              </button>
+              <button
+                type="button"
+                className={`terminal-rail-slim-btn${railModule === 'agent' ? ' is-active' : ''}`}
+                onClick={() => handleSelectRailModule('agent')}
+                title={`Seamind Agent (${agentTabs.length})`}
+              >
+                AI
+              </button>
+              <button
+                type="button"
+                className={`terminal-rail-slim-btn${railModule === 'lab' ? ' is-active' : ''}`}
+                onClick={() => handleSelectRailModule('lab')}
+                title={`代码实验室与文件收集库 (${codeLabFiles.length})`}
+              >
+                Lab
+              </button>
+              <div className="terminal-rail-slim-sep" />
+              <button
+                type="button"
+                className="terminal-rail-slim-btn"
+                onClick={() => {
+                  if (railModule === 'agent') createSpecialTab('agent');
+                  else if (railModule === 'lab')
+                    createSpecialTab('lab', 'python');
+                  else createNewTab('powershell');
+                }}
+                title="新建当前模块会话"
+              >
+                +
+              </button>
+              <button
+                type="button"
+                className="terminal-rail-slim-btn"
+                onClick={() => {
+                  setPaletteOpen(true);
+                  setPaletteQuery('');
+                  setPaletteIndex(0);
+                }}
+                title="命令面板 (Ctrl+K)"
+              >
+                ⌘
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="terminal-rail-top">
+                <div className="terminal-rail-brand-row">
+                  <span className="terminal-rail-brand-title">
+                    终端与代码实验室
+                  </span>
+                  <button
+                    type="button"
+                    className="terminal-rail-collapse-btn"
+                    onClick={toggleLeftRail}
+                    title="收起左侧边栏"
+                    aria-label="收起左侧边栏"
+                  >
+                    &lt;
+                  </button>
+                </div>
+
+                <div
+                  className="terminal-rail-mode-tabs"
+                  role="tablist"
+                  aria-label="终端三大模块切换"
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={railModule === 'shell'}
+                    className={`terminal-rail-mode-tab${railModule === 'shell' ? ' is-active' : ''}`}
+                    onClick={() => handleSelectRailModule('shell')}
+                  >
+                    <span>终端</span>
+                    <span className="terminal-rail-count">
+                      {shellTabs.length}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={railModule === 'agent'}
+                    className={`terminal-rail-mode-tab${railModule === 'agent' ? ' is-active' : ''}`}
+                    onClick={() => handleSelectRailModule('agent')}
+                  >
+                    <span>Agent</span>
+                    <span className="terminal-rail-count">
+                      {agentTabs.length}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={railModule === 'lab'}
+                    className={`terminal-rail-mode-tab${railModule === 'lab' ? ' is-active' : ''}`}
+                    onClick={() => handleSelectRailModule('lab')}
+                  >
+                    <span>实验室</span>
+                    <span className="terminal-rail-count">
+                      {codeLabFiles.length}
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="terminal-rail-scroll">
+                {railModule === 'lab' && (
+                  <div className="terminal-rail-section">
+                    <div className="terminal-rail-group-label">
+                      主画布视图切换
+                    </div>
+                    <div className="terminal-rail-sub-seg">
+                      <button
+                        type="button"
+                        className={
+                          activeLabInfo.viewMode === 'notebook'
+                            ? 'is-active'
+                            : ''
+                        }
+                        onClick={() =>
+                          withActiveLabHandle(activeLabInfo.language, (h) =>
+                            h.setCanvasViewMode('notebook'),
+                          )
+                        }
+                      >
+                        单元格实验本
+                      </button>
+                      <button
+                        type="button"
+                        className={
+                          activeLabInfo.viewMode === 'script' ? 'is-active' : ''
+                        }
+                        onClick={() =>
+                          withActiveLabHandle(activeLabInfo.language, (h) =>
+                            h.setCanvasViewMode('script'),
+                          )
+                        }
+                      >
+                        完整源码视图
+                      </button>
+                    </div>
+
+                    <div className="terminal-rail-group-label">
+                      代码资产收集区
+                    </div>
+                    <div className="terminal-rail-sub-seg">
+                      <button
+                        type="button"
+                        className={labRailSubTab === 'files' ? 'is-active' : ''}
+                        onClick={() => setLabRailSubTab('files')}
+                      >
+                        代码文件库 ({codeLabFiles.length})
+                      </button>
+                      <button
+                        type="button"
+                        className={
+                          labRailSubTab === 'snippets' ? 'is-active' : ''
+                        }
+                        onClick={() => setLabRailSubTab('snippets')}
+                      >
+                        代码片段 ({DEFAULT_CODELAB_SNIPPETS.length})
+                      </button>
+                    </div>
+
+                    {labRailSubTab === 'files' ? (
+                      <>
+                        <div className="terminal-rail-action-grid">
+                          <button
+                            type="button"
+                            className="terminal-rail-mini-btn"
+                            onClick={() =>
+                              withActiveLabHandle('python', (h) =>
+                                h.createNewNotebook('python', '书籍伴读验证'),
+                              )
+                            }
+                          >
+                            + Python
+                          </button>
+                          <button
+                            type="button"
+                            className="terminal-rail-mini-btn"
+                            onClick={() =>
+                              withActiveLabHandle('c', (h) =>
+                                h.createNewNotebook('c', '系统与网络实验'),
+                              )
+                            }
+                          >
+                            + C
+                          </button>
+                          <button
+                            type="button"
+                            className="terminal-rail-mini-btn"
+                            onClick={() =>
+                              withActiveLabHandle('cpp', (h) =>
+                                h.createNewNotebook('cpp', '算法与数据结构'),
+                              )
+                            }
+                          >
+                            + C++
+                          </button>
+                          <button
+                            type="button"
+                            className="terminal-rail-mini-btn is-accent"
+                            onClick={() =>
+                              withActiveLabHandle(activeLabInfo.language, (h) =>
+                                h.saveCurrentToCollection(false),
+                              )
+                            }
+                          >
+                            ★ 存当前
+                          </button>
+                        </div>
+
+                        <input
+                          type="search"
+                          className="terminal-rail-search"
+                          value={codeLabSearch}
+                          onChange={(e) => setCodeLabSearch(e.target.value)}
+                          placeholder="搜索代码文件、标签或函数…"
+                          aria-label="搜索收集的代码文件"
+                        />
+
+                        <div className="terminal-rail-filter-pills">
+                          {(
+                            [
+                              ['all', '全部'],
+                              ['python', 'PY'],
+                              ['c', 'C'],
+                              ['cpp', 'C++'],
+                              ['starred', '★'],
+                            ] as const
+                          ).map(([key, label]) => (
+                            <button
+                              key={key}
+                              type="button"
+                              className={`terminal-rail-pill${codeLabFilter === key ? ' is-active' : ''}`}
+                              onClick={() => setCodeLabFilter(key)}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+
+                        <div className="terminal-rail-folders">
+                          {groupedCodeLabFiles.map((group) => {
+                            const isCollapsed = Boolean(
+                              collapsedLabFolders[group.folder],
+                            );
+                            return (
+                              <div
+                                key={group.folder}
+                                className="terminal-rail-folder-group"
+                              >
+                                <button
+                                  type="button"
+                                  className="terminal-rail-folder-head"
+                                  onClick={() =>
+                                    setCollapsedLabFolders((prev) => ({
+                                      ...prev,
+                                      [group.folder]: !prev[group.folder],
+                                    }))
+                                  }
+                                >
+                                  <span className="terminal-rail-folder-caret">
+                                    {isCollapsed ? '▸' : '▾'}
+                                  </span>
+                                  <span className="terminal-rail-folder-name">
+                                    {group.folder}
+                                  </span>
+                                  <span className="terminal-rail-folder-count">
+                                    {group.items.length}
+                                  </span>
+                                </button>
+
+                                {!isCollapsed && (
+                                  <div className="terminal-rail-folder-items">
+                                    {group.items.length === 0 ? (
+                                      <div className="terminal-rail-empty-hint">
+                                        暂无归档代码文件
+                                      </div>
+                                    ) : (
+                                      group.items.map((file) => {
+                                        const isCurrent =
+                                          activeLabInfo.fileId === file.id;
+                                        const badge =
+                                          file.language === 'cpp'
+                                            ? 'CPP'
+                                            : file.language === 'c'
+                                              ? 'C'
+                                              : 'PY';
+                                        return (
+                                          <div
+                                            key={file.id}
+                                            className={`terminal-rail-file-row${isCurrent ? ' is-active' : ''}`}
+                                          >
+                                            <button
+                                              type="button"
+                                              className="terminal-rail-file-main"
+                                              onClick={() =>
+                                                handleOpenSavedCodeFile(file)
+                                              }
+                                              title={`${file.title} (${file.cells.length} 格)`}
+                                            >
+                                              <span
+                                                className={`terminal-rail-lang-badge is-${file.language}`}
+                                              >
+                                                {badge}
+                                              </span>
+                                              <span className="terminal-rail-file-title">
+                                                {file.title}
+                                              </span>
+                                              <span className="terminal-rail-file-cells">
+                                                {file.cells.length}格
+                                              </span>
+                                            </button>
+                                            <button
+                                              type="button"
+                                              className={`terminal-rail-star-btn${file.starred ? ' is-starred' : ''}`}
+                                              onClick={() =>
+                                                setCodeLabFiles(
+                                                  toggleStarCodeLabFile(
+                                                    file.id,
+                                                  ),
+                                                )
+                                              }
+                                              title={
+                                                file.starred
+                                                  ? '取消收藏'
+                                                  : '收藏代码文件'
+                                              }
+                                            >
+                                              {file.starred ? '★' : '☆'}
+                                            </button>
+                                            <button
+                                              type="button"
+                                              className="terminal-rail-del-btn"
+                                              onClick={() =>
+                                                setCodeLabFiles(
+                                                  deleteCodeLabFile(file.id),
+                                                )
+                                              }
+                                              title="从收集库移除"
+                                            >
+                                              ×
+                                            </button>
+                                          </div>
+                                        );
+                                      })
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="terminal-rail-snippets-list">
+                        {DEFAULT_CODELAB_SNIPPETS.map((snip) => (
+                          <div
+                            key={snip.id}
+                            className="terminal-rail-snippet-card"
+                          >
+                            <div className="terminal-rail-snippet-top">
+                              <span
+                                className={`terminal-rail-lang-badge is-${snip.language}`}
+                              >
+                                {snip.language.toUpperCase()}
+                              </span>
+                              <strong>{snip.title}</strong>
+                            </div>
+                            <p className="terminal-rail-snippet-desc">
+                              {snip.description}
+                            </p>
+                            <div className="terminal-rail-snippet-actions">
+                              <button
+                                type="button"
+                                className="terminal-rail-mini-btn"
+                                onClick={() =>
+                                  handleInsertSnippetToLab(snip, false)
+                                }
+                              >
+                                + 插入格
+                              </button>
+                              <button
+                                type="button"
+                                className="terminal-rail-mini-btn is-accent"
+                                onClick={() =>
+                                  handleInsertSnippetToLab(snip, true)
+                                }
+                              >
+                                ▶ 插入并运行
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {labTabs.length > 0 && (
+                      <>
+                        <div className="terminal-rail-group-label">
+                          打开的实验室窗格 ({labTabs.length})
+                        </div>
+                        <div className="terminal-rail-session-list">
+                          {labTabs.map((t) => (
+                            <button
+                              key={t.id}
+                              type="button"
+                              className={`terminal-rail-session-item${t.id === activeTabId ? ' is-active' : ''}`}
+                              onClick={() =>
+                                activateOrCreateTabInFocusedPane(t.id)
+                              }
+                            >
+                              <span
+                                className={`tab-status-dot is-${t.status}`}
+                              />
+                              <span className="terminal-rail-session-name">
+                                {t.title}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {railModule === 'agent' && (
+                  <div className="terminal-rail-section">
+                    <div className="terminal-rail-group-head">
+                      <span>活跃 Agent 会话 ({agentTabs.length})</span>
+                      <button
+                        type="button"
+                        className="terminal-rail-mini-btn is-accent"
+                        onClick={() => createSpecialTab('agent')}
+                      >
+                        + 新建 Agent
+                      </button>
+                    </div>
+                    <div className="terminal-rail-session-list">
+                      {agentTabs.map((t) => (
+                        <button
+                          key={t.id}
+                          type="button"
+                          className={`terminal-rail-session-item${t.id === activeTabId ? ' is-active' : ''}`}
+                          onClick={() => activateOrCreateTabInFocusedPane(t.id)}
+                        >
+                          <span className={`tab-status-dot is-${t.status}`} />
+                          <span className="terminal-rail-session-name">
+                            {t.title}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="terminal-rail-group-label">
+                      多窗协同场景模板
+                    </div>
+                    <div className="terminal-rail-preset-list">
+                      {WORKSPACE_LAYOUT_PRESETS.map((preset) => (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          className="terminal-rail-preset-card"
+                          onClick={() => applyWorkspacePreset(preset)}
+                        >
+                          <div className="terminal-rail-preset-top">
+                            <span className="option-badge">{preset.badge}</span>
+                            <strong>{preset.title}</strong>
+                          </div>
+                          <span>{preset.description}</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="terminal-rail-group-label">
+                      快捷指令与模型配置
+                    </div>
+                    <div className="terminal-rail-action-grid">
+                      <button
+                        type="button"
+                        className="terminal-rail-mini-btn"
+                        onClick={() => sendToAgentPane('/help')}
+                      >
+                        /help 指南
+                      </button>
+                      <button
+                        type="button"
+                        className="terminal-rail-mini-btn"
+                        onClick={() => {
+                          if (activeTab?.kind === 'agent') {
+                            agentRefs.current
+                              .get(activeTab.id)
+                              ?.openModelModal();
+                          }
+                        }}
+                      >
+                        Ctrl+M 模型
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {railModule === 'shell' && (
+                  <div className="terminal-rail-section">
+                    <div className="terminal-rail-group-head">
+                      <span>活跃终端会话 ({shellTabs.length})</span>
+                      <button
+                        type="button"
+                        className="terminal-rail-mini-btn is-accent"
+                        onClick={() => createNewTab('powershell')}
+                      >
+                        + 新建终端
+                      </button>
+                    </div>
+                    <div className="terminal-rail-session-list">
+                      {shellTabs.map((t) => (
+                        <div
+                          key={t.id}
+                          className={`terminal-rail-session-item${t.id === activeTabId ? ' is-active' : ''}`}
+                        >
+                          <button
+                            type="button"
+                            className="terminal-rail-session-main"
+                            onClick={() =>
+                              activateOrCreateTabInFocusedPane(t.id)
+                            }
+                          >
+                            <span className={`tab-status-dot is-${t.status}`} />
+                            <span className="option-badge">
+                              {t.shell.toUpperCase()}
+                            </span>
+                            <span className="terminal-rail-session-name">
+                              {t.title}
+                            </span>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="terminal-rail-group-label">
+                      启动 Shell 外壳
+                    </div>
+                    <div className="terminal-rail-action-grid">
+                      {shells.map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          className="terminal-rail-mini-btn"
+                          disabled={
+                            !opt.available || tabs.length >= MAX_WORKSPACE_TABS
+                          }
+                          onClick={() => createNewTab(opt.id)}
+                          title={opt.description}
+                        >
+                          + {opt.badge}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="terminal-rail-group-label">
+                      CLI 模型套娃会话
+                    </div>
+                    <div className="terminal-rail-action-grid">
+                      {CLI_PRESETS.map((cli) => (
+                        <button
+                          key={cli.id}
+                          type="button"
+                          className="terminal-rail-mini-btn"
+                          disabled={tabs.length >= MAX_WORKSPACE_TABS}
+                          onClick={() => createNewTab('powershell', cli.id)}
+                          title={cli.desc}
+                        >
+                          ⚡ {cli.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="terminal-rail-group-label">
+                      命令速查与知识动作
+                    </div>
+                    <button
+                      type="button"
+                      className="terminal-rail-full-btn"
+                      onClick={() => setDrawerOpen((o) => !o)}
+                    >
+                      {drawerOpen
+                        ? '收起右侧命令速查栏'
+                        : '展开 Linux / 知识库命令栏'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </aside>
+
         <section
           className={`terminal-stage-panes is-${isStageZoomed ? 'single' : splitMode}${isStageZoomed ? ' is-zoomed' : ''}${showPaneHeaders ? '' : ' is-headerless'}`}
           aria-label="终端多窗格画布"
@@ -2376,6 +3195,7 @@ export default function TerminalWorkspace({
                   onStatusChange={onTabStatus}
                   onSendToShellPane={sendToShellPane}
                   onSendToAgentPane={sendToAgentPane}
+                  onActiveFileChange={setActiveLabInfo}
                 />
               );
             }

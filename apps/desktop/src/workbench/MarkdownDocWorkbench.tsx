@@ -6,7 +6,7 @@ import {
 } from './code-blocks';
 import type { CodeBlockHandlers } from './code-blocks';
 import MarkdownEditor from './MarkdownEditor';
-import type { MarkdownEditorHandle } from './MarkdownEditor';
+import type { MarkdownEditorHandle, MarkdownSelection } from './MarkdownEditor';
 import MarkdownPreview from './MarkdownPreview';
 import type { PreviewFootnoteJumpRequest } from './MarkdownPreview';
 import type { ActiveDocument } from './active-document';
@@ -23,9 +23,19 @@ import { extractMarkdownHeadings } from './markdown-outline';
 import type { MarkdownHeading } from './markdown-outline';
 import { useDebouncedValue } from './use-debounced-value';
 import WorkbenchShell from './WorkbenchShell';
-import type { MapDocument } from '../library/library';
+import type {
+  DocumentVersion,
+  DocumentVersionSnapshot,
+  MapDocument,
+} from '../library/library';
+import { libraryApi } from '../library/library-api';
+import { buildMarkdownDiffHunks } from '../agent/session';
 import { createKnowledgeEditorExtensions } from '../knowledge/knowledge-completions';
-import { enhanceKnowledgePreviewHtml } from '../knowledge/knowledge-markdown';
+import {
+  computeDocumentKnowledgeLinks,
+  enhanceKnowledgePreviewHtml,
+  type UnlinkedKnowledgeMention,
+} from '../knowledge/knowledge-markdown';
 import {
   analyzeKnowledgePaste,
   finalizeSkippedPasteMedia,
@@ -94,7 +104,6 @@ export interface MarkdownDocWorkbenchProps {
   onConvertToMindmap(): void;
 }
 
-const ignoreSelection = () => {};
 const headingSelector = 'h1, h2, h3, h4, h5, h6';
 
 interface PendingKnowledgePaste extends KnowledgePasteDraft {
@@ -212,11 +221,25 @@ export default function MarkdownDocWorkbench({
   );
   const viewMode = controlledViewMode ?? internalViewMode;
   const [outlineOpen, setOutlineOpen] = useState(false);
-  const [railTab, setRailTab] = useState<'outline' | 'footnotes'>('outline');
+  const [railTab, setRailTab] = useState<'outline' | 'footnotes' | 'links'>(
+    'outline',
+  );
   const [localFootnoteJump, setLocalFootnoteJump] =
     useState<PreviewFootnoteJumpRequest | null>(null);
   const [addingTag, setAddingTag] = useState(false);
   const [tagDraft, setTagDraft] = useState('');
+  const [editorSelection, setEditorSelection] =
+    useState<MarkdownSelection | null>(null);
+  const [extractingSubnote, setExtractingSubnote] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyVersions, setHistoryVersions] = useState<DocumentVersion[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState('');
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(
+    null,
+  );
+  const [versionSnapshot, setVersionSnapshot] =
+    useState<DocumentVersionSnapshot | null>(null);
   const [pendingPaste, setPendingPaste] =
     useState<PendingKnowledgePaste | null>(null);
   const [pasteBusy, setPasteBusy] = useState(false);
@@ -228,6 +251,8 @@ export default function MarkdownDocWorkbench({
   useEffect(() => {
     setFootnoteComposer(null);
     setFootnoteComposerError('');
+    setEditorSelection(null);
+    setHistoryOpen(false);
   }, [document.session]);
 
   const handleKnowledgePaste = useCallback(
@@ -416,6 +441,207 @@ export default function MarkdownDocWorkbench({
   const footnotes = useMemo(
     () => parseMarkdownFootnotes(document.source).footnotes,
     [document.source],
+  );
+
+  const knowledgeLinks = useMemo(
+    () =>
+      computeDocumentKnowledgeLinks({
+        currentPath: document.relativePath,
+        currentTitle: document.title,
+        source: document.source,
+        tags: document.tags,
+        category: document.category,
+        documents: documents ?? [],
+      }),
+    [
+      document.relativePath,
+      document.title,
+      document.source,
+      document.tags,
+      document.category,
+      documents,
+    ],
+  );
+
+  const totalKnowledgeLinksCount =
+    knowledgeLinks.outgoingLinks.length +
+    knowledgeLinks.unlinkedMentions.length +
+    knowledgeLinks.relatedNotes.length;
+
+  const openHistoryModal = useCallback(async () => {
+    if (!document.id) return;
+    setHistoryOpen(true);
+    setHistoryLoading(true);
+    setHistoryError('');
+    setVersionSnapshot(null);
+    try {
+      const list = await libraryApi.listVersions({ documentId: document.id });
+      setHistoryVersions(list);
+      if (list.length > 0) {
+        const firstId = list[0].versionId;
+        setSelectedVersionId(firstId);
+        const snap = await libraryApi.loadVersion({
+          documentId: document.id,
+          versionId: firstId,
+        });
+        setVersionSnapshot(snap);
+      } else {
+        setSelectedVersionId(null);
+      }
+    } catch (err) {
+      setHistoryError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [document.id]);
+
+  const selectHistoryVersion = useCallback(
+    async (versionId: string) => {
+      if (!document.id) return;
+      setSelectedVersionId(versionId);
+      setHistoryLoading(true);
+      setHistoryError('');
+      try {
+        const snap = await libraryApi.loadVersion({
+          documentId: document.id,
+          versionId,
+        });
+        setVersionSnapshot(snap);
+      } catch (err) {
+        setHistoryError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setHistoryLoading(false);
+      }
+    },
+    [document.id],
+  );
+
+  const restoreSelectedVersion = useCallback(() => {
+    if (!versionSnapshot) return;
+    if (showEditor && editorRef.current) {
+      editorRef.current.applyDocument(versionSnapshot.markdown, {
+        focus: true,
+      });
+    } else {
+      onSourceChange(versionSnapshot.markdown);
+    }
+    setHistoryOpen(false);
+  }, [onSourceChange, showEditor, versionSnapshot]);
+
+  const handleWrapSelection = useCallback(
+    (kind: 'wikilink' | 'embed' | 'callout') => {
+      const sel = editorRef.current?.getSelection() ?? editorSelection;
+      if (!sel || sel.to <= sel.from || !editorRef.current) return;
+      const raw = sourceRef.current.slice(sel.from, sel.to).trim();
+      if (!raw) return;
+      if (kind === 'wikilink') {
+        editorRef.current.replaceRange(
+          sel.from,
+          sel.to,
+          `[[${raw.replace(/\r?\n/g, ' ')}]]`,
+        );
+      } else if (kind === 'embed') {
+        editorRef.current.replaceRange(
+          sel.from,
+          sel.to,
+          `![[${raw.replace(/\r?\n/g, ' ')}]]`,
+        );
+      } else {
+        const quoted = raw
+          .split(/\r?\n/)
+          .map((line) => `> ${line}`)
+          .join('\n');
+        editorRef.current.replaceRange(
+          sel.from,
+          sel.to,
+          `> [!NOTE]\n${quoted}\n`,
+        );
+      }
+      setEditorSelection(null);
+    },
+    [editorSelection],
+  );
+
+  const handleExtractSelectionToSubnote = useCallback(async () => {
+    const sel = editorRef.current?.getSelection() ?? editorSelection;
+    if (!sel || sel.to <= sel.from || !editorRef.current || extractingSubnote) {
+      return;
+    }
+    const raw = sourceRef.current.slice(sel.from, sel.to).trim();
+    if (!raw) return;
+    const firstLine = raw
+      .split(/\r?\n/)[0]
+      .replace(/^#+\s*/, '')
+      .replace(/[*_`~[\]]/g, '')
+      .trim();
+    const noteTitle = firstLine.slice(0, 36) || `${document.title} · 子卡`;
+    const bodySource = raw.startsWith('#')
+      ? raw
+      : `# ${noteTitle}\n\n${raw}\n\n## 来源\n\n- 拆自：[[${document.title}]]\n`;
+    setExtractingSubnote(true);
+    try {
+      const created = await libraryApi.createTextDocument({
+        kind: 'doc',
+        category: document.category || UNFILED_FOLDER,
+        title: noteTitle,
+        source: bodySource,
+      });
+      editorRef.current.replaceRange(
+        sel.from,
+        sel.to,
+        `![[${created.document.title}]]`,
+      );
+      setEditorSelection(null);
+      onOpenWikilink?.(created.document.title, { split: true });
+    } catch {
+      // Fallback: wrap as wikilink if creation fails
+      editorRef.current.replaceRange(sel.from, sel.to, `[[${noteTitle}]]`);
+      setEditorSelection(null);
+    } finally {
+      setExtractingSubnote(false);
+    }
+  }, [
+    document.category,
+    document.title,
+    editorSelection,
+    extractingSubnote,
+    onOpenWikilink,
+  ]);
+
+  const convertUnlinkedMention = useCallback(
+    (mention: UnlinkedKnowledgeMention) => {
+      const lines = sourceRef.current.split(/\r?\n/);
+      const line = lines[mention.lineIndex];
+      if (!line) return;
+      const title = mention.document.title.trim();
+      const idx = line.toLowerCase().indexOf(title.toLowerCase());
+      if (idx < 0) return;
+      lines[mention.lineIndex] =
+        `${line.slice(0, idx)}[[${title}]]${line.slice(idx + title.length)}`;
+      const next = lines.join('\n');
+      if (showEditor && editorRef.current) {
+        editorRef.current.applyDocument(next, {
+          lineIndex: mention.lineIndex,
+          focus: true,
+        });
+      } else {
+        onSourceChange(next);
+      }
+    },
+    [onSourceChange, showEditor],
+  );
+
+  const insertWikilinkReference = useCallback(
+    (targetTitle: string) => {
+      const sel = showEditor ? editorRef.current?.getSelection() : null;
+      if (showEditor && editorRef.current && sel) {
+        editorRef.current.replaceRange(sel.from, sel.to, `[[${targetTitle}]]`);
+      } else {
+        const suffix = sourceRef.current.endsWith('\n') ? '' : '\n';
+        onSourceChange(`${sourceRef.current}${suffix}- [[${targetTitle}]]\n`);
+      }
+    },
+    [onSourceChange, showEditor],
   );
 
   const activeFootnoteJump = useMemo(() => {
@@ -611,6 +837,21 @@ export default function MarkdownDocWorkbench({
     void onChangeTags(document.tags.filter((tag) => tag !== tagToRemove));
   };
 
+  const STATUS_TAGS = ['状态:待整理', '状态:精读中', '状态:已内化'] as const;
+  const activeStatusTag =
+    document.tags.find((t) => (STATUS_TAGS as readonly string[]).includes(t)) ??
+    '';
+
+  const handleStatusTagChange = (nextStatus: string) => {
+    if (!onChangeTags) return;
+    const withoutStatus = document.tags.filter(
+      (t) => !(STATUS_TAGS as readonly string[]).includes(t),
+    );
+    void onChangeTags(
+      nextStatus ? [nextStatus, ...withoutStatus] : withoutStatus,
+    );
+  };
+
   const lineCount = document.source.split('\n').length;
 
   return (
@@ -665,20 +906,42 @@ export default function MarkdownDocWorkbench({
           )}
 
           {onChangeTags && (
+            <label
+              className={`workbench-status-prop${activeStatusTag ? ' is-set' : ''}`}
+              title="设置文档研读状态属性"
+            >
+              <select
+                value={activeStatusTag}
+                aria-label="文档状态属性"
+                onChange={(e) => handleStatusTagChange(e.target.value)}
+              >
+                <option value="">状态：未标记</option>
+                <option value="状态:待整理">状态：待整理</option>
+                <option value="状态:精读中">状态：精读中</option>
+                <option value="状态:已内化">状态：已内化</option>
+              </select>
+            </label>
+          )}
+
+          {onChangeTags && (
             <div className="workbench-tags-inline" aria-label="文档标签">
-              {document.tags.map((tag) => (
-                <span key={tag} className="workbench-tag-chip">
-                  <span>#{tag}</span>
-                  <button
-                    type="button"
-                    aria-label={`移除标签 ${tag}`}
-                    title={`移除 #${tag}`}
-                    onClick={() => removeTag(tag)}
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
+              {document.tags
+                .filter(
+                  (tag) => !(STATUS_TAGS as readonly string[]).includes(tag),
+                )
+                .map((tag) => (
+                  <span key={tag} className="workbench-tag-chip">
+                    <span>#{tag}</span>
+                    <button
+                      type="button"
+                      aria-label={`移除标签 ${tag}`}
+                      title={`移除 #${tag}`}
+                      onClick={() => removeTag(tag)}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
               {addingTag ? (
                 <input
                   type="text"
@@ -791,6 +1054,33 @@ export default function MarkdownDocWorkbench({
           </button>
           <button
             type="button"
+            className={outlineOpen && railTab === 'links' ? 'is-active' : ''}
+            aria-pressed={outlineOpen && railTab === 'links'}
+            onClick={() => {
+              if (outlineOpen && railTab === 'links') {
+                setOutlineOpen(false);
+              } else {
+                setRailTab('links');
+                setOutlineOpen(true);
+              }
+            }}
+            title="查看当前笔记的双向链接、未链接提及与同源关联笔记"
+          >
+            双链
+            {totalKnowledgeLinksCount > 0 ? ` ${totalKnowledgeLinksCount}` : ''}
+          </button>
+          {Boolean(document.id) && (
+            <button
+              type="button"
+              className={historyOpen ? 'is-active' : ''}
+              onClick={() => void openHistoryModal()}
+              title="查看历史版本快照与行级 Hunk Diff 对比恢复"
+            >
+              历史
+            </button>
+          )}
+          <button
+            type="button"
             onClick={onOpenAsMindmap}
             title="在思维导图画布上查看这份笔记（保持文档类型不变）"
           >
@@ -833,13 +1123,62 @@ export default function MarkdownDocWorkbench({
                 <span className="workbench-format">.md</span>
               </div>
             )}
+            {editorSelection &&
+              editorSelection.to - editorSelection.from >= 2 && (
+                <div
+                  className="workbench-selection-bar"
+                  role="toolbar"
+                  aria-label="选中文本快捷加工"
+                >
+                  <span className="workbench-selection-count">
+                    已选 {editorSelection.to - editorSelection.from} 字
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleWrapSelection('wikilink')}
+                    title="将选中文本转为 [[双链引用]]"
+                  >
+                    [[双链]]
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleWrapSelection('embed')}
+                    title="将选中文本转为 ![[块级嵌入]]"
+                  >
+                    ![[嵌入]]
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleWrapSelection('callout')}
+                    title="将选中段落包装为 > [!NOTE] 提示框"
+                  >
+                    &gt; 提示框
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleInsertFootnote}
+                    title="在选中位置附加独立脚注 [^n]"
+                  >
+                    + 脚注
+                  </button>
+                  <button
+                    type="button"
+                    className="is-accent"
+                    disabled={extractingSubnote}
+                    onClick={() => void handleExtractSelectionToSubnote()}
+                    title="将选中段落拆分为同分类下的独立原子笔记，并原地替换为 ![[子笔记]] 嵌入"
+                  >
+                    {extractingSubnote ? '拆分中…' : '拆为子笔记'}
+                  </button>
+                </div>
+              )}
             <div className="markdown-editor-frame">
               <MarkdownEditor
                 ref={editorRef}
                 id={`doc-source-${paneKey ? `${paneKey}-` : ''}${document.session}`}
                 value={document.source}
                 onChange={onSourceChange}
-                onSelectionChange={ignoreSelection}
+                onSelectionChange={setEditorSelection}
                 extraExtensions={knowledgeExtensions}
                 onPaste={handleKnowledgePaste}
                 hideMinimap
@@ -878,7 +1217,13 @@ export default function MarkdownDocWorkbench({
         {outlineOpen && (
           <nav
             className="workbench-pane workbench-outline-pane"
-            aria-label={railTab === 'footnotes' ? '脚注列表' : '文档目录'}
+            aria-label={
+              railTab === 'footnotes'
+                ? '脚注列表'
+                : railTab === 'links'
+                  ? '双向链接与关联网络'
+                  : '文档目录'
+            }
           >
             <div className="workbench-pane-heading workbench-rail-tabs">
               <button
@@ -895,9 +1240,183 @@ export default function MarkdownDocWorkbench({
               >
                 脚注 <span>{footnotes.length}</span>
               </button>
+              <button
+                type="button"
+                className={`workbench-rail-tab${railTab === 'links' ? ' is-active' : ''}`}
+                onClick={() => setRailTab('links')}
+              >
+                双链 <span>{totalKnowledgeLinksCount}</span>
+              </button>
             </div>
             <div className="workbench-outline-list">
-              {railTab === 'footnotes' ? (
+              {railTab === 'links' ? (
+                <div className="workbench-links-panel">
+                  <section className="workbench-links-section">
+                    <header className="workbench-links-head">
+                      <span>出链与嵌入</span>
+                      <small>{knowledgeLinks.outgoingLinks.length}</small>
+                    </header>
+                    {knowledgeLinks.outgoingLinks.length === 0 ? (
+                      <p className="workbench-outline-empty">
+                        使用 [[笔记名]]、[[笔记名#章节]] 或 ![[嵌入笔记]]
+                        建立知识连接。
+                      </p>
+                    ) : (
+                      knowledgeLinks.outgoingLinks.map((link, idx) => (
+                        <div
+                          key={`${link.rawTarget}-${link.lineIndex}-${idx}`}
+                          className="workbench-link-row"
+                        >
+                          <button
+                            type="button"
+                            className="workbench-link-main"
+                            title={`第 ${link.lineIndex + 1} 行 · 点击打开「${link.rawTarget}」`}
+                            onClick={(e) => {
+                              if (e.altKey || e.ctrlKey || e.metaKey) {
+                                onOpenWikilink?.(link.rawTarget, {
+                                  split: true,
+                                });
+                              } else if (showEditor && editorRef.current) {
+                                editorRef.current.selectLine(
+                                  link.lineIndex,
+                                  false,
+                                );
+                                onOpenWikilink?.(link.rawTarget);
+                              } else {
+                                onOpenWikilink?.(link.rawTarget);
+                              }
+                            }}
+                          >
+                            <span
+                              className={`workbench-link-badge${link.isEmbed ? ' is-embed' : ''}${link.resolved ? '' : ' is-missing'}`}
+                            >
+                              {link.isEmbed
+                                ? 'EMBED'
+                                : link.resolved
+                                  ? 'LINK'
+                                  : 'NEW'}
+                            </span>
+                            <span className="workbench-link-title">
+                              {link.displayLabel}
+                            </span>
+                            <span className="workbench-link-line">
+                              L{link.lineIndex + 1}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            className="workbench-link-split-btn"
+                            title="在右侧分屏窗格中并排打开"
+                            onClick={() =>
+                              onOpenWikilink?.(link.rawTarget, { split: true })
+                            }
+                          >
+                            分栏
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </section>
+
+                  {knowledgeLinks.unlinkedMentions.length > 0 && (
+                    <section className="workbench-links-section">
+                      <header className="workbench-links-head">
+                        <span>未链接提及（可一键转双链）</span>
+                        <small>{knowledgeLinks.unlinkedMentions.length}</small>
+                      </header>
+                      {knowledgeLinks.unlinkedMentions.map((mention) => (
+                        <div
+                          key={`unlinked-${mention.document.relativePath}`}
+                          className="workbench-link-row is-unlinked"
+                        >
+                          <button
+                            type="button"
+                            className="workbench-link-main"
+                            title={mention.lineText}
+                            onClick={() => {
+                              if (showEditor && editorRef.current) {
+                                editorRef.current.selectLine(
+                                  mention.lineIndex,
+                                  true,
+                                );
+                              }
+                            }}
+                          >
+                            <span className="workbench-link-badge">提及</span>
+                            <span className="workbench-link-title">
+                              {mention.document.title}
+                            </span>
+                            <span className="workbench-link-line">
+                              L{mention.lineIndex + 1}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            className="workbench-link-split-btn is-convert"
+                            title={`将第 ${mention.lineIndex + 1} 行的「${mention.document.title}」转为 [[双链]]`}
+                            onClick={() => convertUnlinkedMention(mention)}
+                          >
+                            + 双链
+                          </button>
+                        </div>
+                      ))}
+                    </section>
+                  )}
+
+                  <section className="workbench-links-section">
+                    <header className="workbench-links-head">
+                      <span>同源与标签关联笔记</span>
+                      <small>{knowledgeLinks.relatedNotes.length}</small>
+                    </header>
+                    {knowledgeLinks.relatedNotes.length === 0 ? (
+                      <p className="workbench-outline-empty">
+                        添加相同 #标签 或同分类下的相关笔记会自动聚合在此。
+                      </p>
+                    ) : (
+                      knowledgeLinks.relatedNotes.map(
+                        ({ document: rel, reason }) => (
+                          <div
+                            key={`rel-${rel.relativePath}`}
+                            className="workbench-link-row"
+                          >
+                            <button
+                              type="button"
+                              className="workbench-link-main"
+                              title={`${rel.title}\n${reason}`}
+                              onClick={() => onOpenWikilink?.(rel.title)}
+                            >
+                              <span className="workbench-link-title">
+                                {rel.title}
+                              </span>
+                              <span className="workbench-link-line">
+                                {reason}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              className="workbench-link-split-btn"
+                              title="在当前文档中插入 [[双链]] 引用"
+                              onClick={() => insertWikilinkReference(rel.title)}
+                            >
+                              + 引用
+                            </button>
+                            <button
+                              type="button"
+                              className="workbench-link-split-btn"
+                              title="在分屏副窗格中打开对照"
+                              onClick={() =>
+                                onOpenWikilink?.(rel.title, { split: true })
+                              }
+                            >
+                              分栏
+                            </button>
+                          </div>
+                        ),
+                      )
+                    )}
+                  </section>
+                </div>
+              ) : railTab === 'footnotes' ? (
                 footnotes.length === 0 ? (
                   <p className="workbench-outline-empty">
                     点击工具栏「+ 脚注」或使用 [^1]
@@ -1265,6 +1784,141 @@ export default function MarkdownDocWorkbench({
                 </button>
               </div>
             </form>
+          </section>
+        </div>
+      )}
+      {historyOpen && (
+        <div
+          className="workbench-paste-overlay"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setHistoryOpen(false);
+          }}
+        >
+          <section
+            className="workbench-paste-dialog workbench-history-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="workbench-history-title"
+          >
+            <div className="workbench-paste-heading">
+              <div>
+                <small>VERSION HISTORY / 历史快照与行级 Hunk Diff</small>
+                <h2 id="workbench-history-title">{document.title}</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setHistoryOpen(false)}
+                aria-label="关闭历史版本"
+              >
+                ×
+              </button>
+            </div>
+            {historyError && (
+              <p className="workbench-paste-error" role="alert">
+                {historyError}
+              </p>
+            )}
+            <div className="workbench-history-body">
+              <aside className="workbench-history-list">
+                {historyLoading && historyVersions.length === 0 ? (
+                  <p className="workbench-outline-empty">正在读取版本历史…</p>
+                ) : historyVersions.length === 0 ? (
+                  <p className="workbench-outline-empty">
+                    当前文档暂无历史快照，修改保存后会自动生成版本记录。
+                  </p>
+                ) : (
+                  historyVersions.map((ver) => (
+                    <button
+                      key={ver.versionId}
+                      type="button"
+                      className={`workbench-history-item${selectedVersionId === ver.versionId ? ' is-active' : ''}`}
+                      onClick={() => void selectHistoryVersion(ver.versionId)}
+                    >
+                      <strong>
+                        {new Intl.DateTimeFormat('zh-CN', {
+                          month: '2-digit',
+                          day: '2-digit',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          second: '2-digit',
+                        }).format(
+                          ver.createdAt < 1e11
+                            ? ver.createdAt * 1000
+                            : ver.createdAt,
+                        )}
+                      </strong>
+                      <span>
+                        {ver.source} · {ver.markdownBytes.toLocaleString()} B
+                      </span>
+                    </button>
+                  ))
+                )}
+              </aside>
+              <div className="workbench-history-diff">
+                {versionSnapshot ? (
+                  (() => {
+                    const diff = buildMarkdownDiffHunks(
+                      versionSnapshot.markdown,
+                      document.source,
+                    );
+                    return (
+                      <>
+                        <div className="workbench-history-diff-head">
+                          <span>
+                            历史版本 vs 当前草稿（+{diff.totalAdded} / −
+                            {diff.totalRemoved} 行）
+                          </span>
+                          <span>
+                            快照共 {versionSnapshot.markdown.split('\n').length}{' '}
+                            行
+                          </span>
+                        </div>
+                        <pre className="workbench-history-diff-pre">
+                          {diff.hunks.length > 0
+                            ? diff.hunks
+                                .map((hunk) =>
+                                  [
+                                    hunk.header,
+                                    ...hunk.lines.map((line) => {
+                                      const prefix =
+                                        line.kind === 'add'
+                                          ? '+'
+                                          : line.kind === 'del'
+                                            ? '−'
+                                            : ' ';
+                                      const no = String(
+                                        line.newLineNo ?? line.oldLineNo ?? '',
+                                      ).padStart(3, ' ');
+                                      return `${no} ${prefix} ${line.text}`;
+                                    }),
+                                  ].join('\n'),
+                                )
+                                .join('\n\n')
+                            : '当前内容与该历史快照完全一致，无差异。'}
+                        </pre>
+                      </>
+                    );
+                  })()
+                ) : (
+                  <p className="workbench-outline-empty">
+                    选择左侧快照以对比与当前文档的差异。
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="workbench-paste-actions">
+              <button type="button" onClick={() => setHistoryOpen(false)}>
+                关闭
+              </button>
+              <button
+                type="button"
+                className="is-primary"
+                disabled={!versionSnapshot}
+                onClick={restoreSelectedVersion}
+              >
+                恢复此历史版本到编辑器
+              </button>
+            </div>
           </section>
         </div>
       )}

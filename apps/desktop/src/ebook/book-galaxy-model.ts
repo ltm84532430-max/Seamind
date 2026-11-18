@@ -10,6 +10,7 @@ import {
 
 export {
   buildGalaxyAdjacencyMap,
+  computeVisibleGalaxyLabelIds,
   createGalaxyPhysicsState,
   DEFAULT_GALAXY_PHYSICS_CONFIG,
   stepGalaxyPhysics,

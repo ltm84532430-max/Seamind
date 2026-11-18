@@ -55,6 +55,8 @@ export interface KnowledgeWorkspaceProps {
   active?: boolean;
   rootPath: string | null;
   documents: MapDocument[];
+  mindmapCount?: number;
+  onSwitchToMindmap?(): void;
   categories: string[];
   activeDocument: ActiveDocument | null;
   split: KnowledgeSplitWorkspaceHandle;
@@ -573,6 +575,8 @@ export default function KnowledgeWorkspace({
   active = true,
   rootPath,
   documents,
+  mindmapCount = 0,
+  onSwitchToMindmap,
   categories,
   activeDocument,
   split,
@@ -613,9 +617,13 @@ export default function KnowledgeWorkspace({
   const [categoryInput, setCategoryInput] = useState('');
   const [categorySubmitting, setCategorySubmitting] = useState(false);
   const [openSwitcherPane, setOpenSwitcherPane] = useState<number | null>(null);
+  const [syncScrollEnabled, setSyncScrollEnabled] = useState(false);
+  const [isDraggingSplitRatio, setIsDraggingSplitRatio] = useState(false);
 
   const splitMenuRef = useRef<HTMLDivElement>(null);
   const switcherMenuRef = useRef<HTMLDivElement>(null);
+  const splitStageRef = useRef<HTMLElement>(null);
+  const syncingScrollLockRef = useRef(false);
   const categoryInputRef = useRef<HTMLInputElement>(null);
   const dragStateRef = useRef<{
     pointerId: number;
@@ -822,6 +830,61 @@ export default function KnowledgeWorkspace({
     }
     return Array.from({ length: visibleCount }, (_, idx) => idx);
   }, [isStageZoomed, splitState.zoomedPaneIndex, visibleCount]);
+
+  useEffect(() => {
+    const stage = splitStageRef.current;
+    if (!stage || !syncScrollEnabled || visibleCount <= 1 || isStageZoomed) {
+      return;
+    }
+    let unlockFrame: number | null = null;
+    const onScrollCapture = (event: Event) => {
+      if (syncingScrollLockRef.current) return;
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      if (
+        !target.classList.contains('cm-scroller') &&
+        !target.classList.contains('markdown-rendered-preview')
+      ) {
+        return;
+      }
+      const sourcePane = target.closest('.kb-pane-body');
+      if (!sourcePane) return;
+      const maxSourceScroll = target.scrollHeight - target.clientHeight;
+      if (maxSourceScroll <= 0) return;
+      const ratio = Math.max(
+        0,
+        Math.min(1, target.scrollTop / maxSourceScroll),
+      );
+      syncingScrollLockRef.current = true;
+      const paneBodies = stage.querySelectorAll<HTMLElement>('.kb-pane-body');
+      paneBodies.forEach((paneEl) => {
+        if (paneEl === sourcePane) return;
+        const scrollers = paneEl.querySelectorAll<HTMLElement>(
+          '.cm-scroller, .markdown-rendered-preview',
+        );
+        scrollers.forEach((scroller) => {
+          const maxTarget = scroller.scrollHeight - scroller.clientHeight;
+          if (maxTarget > 0) {
+            scroller.scrollTop = Math.round(ratio * maxTarget);
+          }
+        });
+      });
+      if (unlockFrame !== null) window.cancelAnimationFrame(unlockFrame);
+      unlockFrame = window.requestAnimationFrame(() => {
+        syncingScrollLockRef.current = false;
+        unlockFrame = null;
+      });
+    };
+    stage.addEventListener('scroll', onScrollCapture, {
+      capture: true,
+      passive: true,
+    });
+    return () => {
+      stage.removeEventListener('scroll', onScrollCapture, { capture: true });
+      if (unlockFrame !== null) window.cancelAnimationFrame(unlockFrame);
+      syncingScrollLockRef.current = false;
+    };
+  }, [hasDocStage, isStageZoomed, syncScrollEnabled, visibleCount]);
 
   const selectSource = (source: KnowledgeSourcePage) => {
     if (source === activeSource) return;
@@ -1138,9 +1201,40 @@ export default function KnowledgeWorkspace({
             ariaLabel="已收起的知识库侧栏"
             expandTitle="展开知识库目录 (快捷键 Ctrl+B)"
             expandAriaLabel="展开知识库目录"
-            headerHeight={52}
+            headerHeight={36}
             onExpand={toggleSidebarCollapsed}
             sections={[
+              ...(onSwitchToMindmap
+                ? [
+                    {
+                      key: 'surface-switch',
+                      items: [
+                        {
+                          key: 'surface:doc',
+                          label: `文档 (${docNotes.length})`,
+                          active: true,
+                          thumb: {
+                            name: '文',
+                            shape: 'square' as const,
+                            tone: 'index' as const,
+                          },
+                          onClick: () => undefined,
+                        },
+                        {
+                          key: 'surface:mindmap',
+                          label: `切换到导图 (${mindmapCount})`,
+                          active: false,
+                          thumb: {
+                            name: '导',
+                            shape: 'square' as const,
+                            tone: 'index' as const,
+                          },
+                          onClick: onSwitchToMindmap,
+                        },
+                      ],
+                    },
+                  ]
+                : []),
               {
                 key: 'sources',
                 items: KNOWLEDGE_SOURCE_PAGES.filter(
@@ -1233,13 +1327,37 @@ export default function KnowledgeWorkspace({
       ) : (
         <aside className="knowledge-sidebar" aria-label="知识库文档导航">
           <header className="knowledge-sidebar-head">
-            <div className="knowledge-sidebar-title">
-              <strong>文档</strong>
-              <span className="knowledge-count-pill">
-                {query.trim()
-                  ? `${visibleNoteCount}/${docNotes.length}`
-                  : docNotes.length}
-              </span>
+            <div
+              className="knowledge-sidebar-mode-tabs"
+              role="tablist"
+              aria-label="知识库模式切换"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={true}
+                className="knowledge-sidebar-mode-tab is-active"
+              >
+                <span>文档</span>
+                <small className="knowledge-count-pill">
+                  {query.trim()
+                    ? `${visibleNoteCount}/${docNotes.length}`
+                    : docNotes.length}
+                </small>
+              </button>
+              {onSwitchToMindmap && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={false}
+                  className="knowledge-sidebar-mode-tab"
+                  title="切换到思维导图工作台"
+                  onClick={onSwitchToMindmap}
+                >
+                  <span>导图</span>
+                  <small className="knowledge-count-pill">{mindmapCount}</small>
+                </button>
+              )}
             </div>
             <div className="knowledge-head-tools">
               {hasDocStage && (
@@ -1936,20 +2054,36 @@ export default function KnowledgeWorkspace({
               </div>
 
               {visibleCount > 1 && (
-                <button
-                  type="button"
-                  className={`kb-layout-btn kb-zoom-btn${isStageZoomed ? ' is-active' : ''}`}
-                  title={
-                    isStageZoomed
-                      ? '还原多窗格分屏 (Ctrl+Shift+M)'
-                      : '临时全屏放大当前聚焦窗格 (Ctrl+Shift+M)'
-                  }
-                  aria-label="放大或还原分屏窗格"
-                  aria-pressed={isStageZoomed}
-                  onClick={() => split.toggleZoom()}
-                >
-                  <ZoomPaneIcon zoomed={isStageZoomed} />
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className={`kb-sync-scroll-btn${syncScrollEnabled ? ' is-active' : ''}`}
+                    title={
+                      syncScrollEnabled
+                        ? '已开启多窗格同步滚动（点击关闭）'
+                        : '开启多窗格按比例同步滚动'
+                    }
+                    aria-label="多窗格同步滚动"
+                    aria-pressed={syncScrollEnabled}
+                    onClick={() => setSyncScrollEnabled((v) => !v)}
+                  >
+                    <span>联动滚动</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`kb-layout-btn kb-zoom-btn${isStageZoomed ? ' is-active' : ''}`}
+                    title={
+                      isStageZoomed
+                        ? '还原多窗格分屏 (Ctrl+Shift+M)'
+                        : '临时全屏放大当前聚焦窗格 (Ctrl+Shift+M)'
+                    }
+                    aria-label="放大或还原分屏窗格"
+                    aria-pressed={isStageZoomed}
+                    onClick={() => split.toggleZoom()}
+                  >
+                    <ZoomPaneIcon zoomed={isStageZoomed} />
+                  </button>
+                </>
               )}
             </div>
           </header>
@@ -1957,6 +2091,7 @@ export default function KnowledgeWorkspace({
 
         {hasDocStage ? (
           <section
+            ref={splitStageRef}
             className={`kb-split-stage is-${isStageZoomed ? 'single' : splitState.splitMode}${isStageZoomed ? ' is-zoomed' : ''}${showPaneHeaders ? '' : ' is-headerless'}`}
             aria-label="知识库多文档阅读分屏画布"
             style={
@@ -2307,7 +2442,7 @@ export default function KnowledgeWorkspace({
                 splitState.splitMode === 'horizontal' ||
                 splitState.splitMode === 'tri') && (
                 <div
-                  className="kb-pane-divider"
+                  className={`kb-pane-divider${isDraggingSplitRatio ? ' is-dragging' : ''}`}
                   role="separator"
                   aria-orientation={
                     splitState.splitMode === 'horizontal'
@@ -2319,6 +2454,7 @@ export default function KnowledgeWorkspace({
                     if (!container) return;
                     const rect = container.getBoundingClientRect();
                     const isHorizontal = splitState.splitMode === 'horizontal';
+                    setIsDraggingSplitRatio(true);
                     const onPointerMove = (moveEvent: PointerEvent) => {
                       const ratio = isHorizontal
                         ? (moveEvent.clientY - rect.top - 26) /
@@ -2328,6 +2464,7 @@ export default function KnowledgeWorkspace({
                       split.setSplitRatio(ratio);
                     };
                     const onPointerUp = () => {
+                      setIsDraggingSplitRatio(false);
                       window.removeEventListener('pointermove', onPointerMove);
                       window.removeEventListener('pointerup', onPointerUp);
                     };
@@ -2337,9 +2474,13 @@ export default function KnowledgeWorkspace({
                     });
                   }}
                   onDoubleClick={() => split.setSplitRatio(0.5)}
-                  title="拖拽调整分屏比例，双击还原均分"
+                  title="拖拽调整分屏比例，双击还原 50:50 均分"
                 >
                   <span className="kb-divider-handle" />
+                  <span className="kb-divider-ratio-badge">
+                    {Math.round(splitState.splitRatio * 100)}∶
+                    {100 - Math.round(splitState.splitRatio * 100)}
+                  </span>
                 </div>
               )}
           </section>

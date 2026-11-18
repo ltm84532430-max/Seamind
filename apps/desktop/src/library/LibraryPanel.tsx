@@ -27,6 +27,8 @@ import type { NewFileKind } from '../workbench/templates';
 export interface LibraryPanelProps {
   snapshot: LibrarySnapshot | null;
   documents: MapDocument[];
+  docCount?: number;
+  onSwitchToDocuments?: () => void;
   selectedPath: string | null;
   /** The .puml file open in the PlantUML canvas, if any. */
   selectedPlantUmlPath?: string | null;
@@ -175,6 +177,8 @@ type FolderContextMenu = { path: string; name: string; x: number; y: number };
 export default function LibraryPanel({
   snapshot,
   documents,
+  docCount = 0,
+  onSwitchToDocuments,
   selectedPath,
   selectedPlantUmlPath = null,
   selectedTextPath = null,
@@ -584,9 +588,40 @@ export default function LibraryPanel({
           expandTitle="展开侧边栏 (快捷键 Ctrl+B)"
           expandAriaLabel="展开侧边栏"
           ariaControls="library-content-body"
-          headerHeight={52}
+          headerHeight={36}
           onExpand={onToggleCollapse}
           sections={[
+            ...(onSwitchToDocuments
+              ? [
+                  {
+                    key: 'surface-switch',
+                    items: [
+                      {
+                        key: 'surface:doc',
+                        label: `切换到文档 (${docCount})`,
+                        active: false,
+                        thumb: {
+                          name: '文',
+                          shape: 'square' as const,
+                          tone: 'index' as const,
+                        },
+                        onClick: onSwitchToDocuments,
+                      },
+                      {
+                        key: 'surface:mindmap',
+                        label: `导图 (${documents.length})`,
+                        active: true,
+                        thumb: {
+                          name: '导',
+                          shape: 'square' as const,
+                          tone: 'index' as const,
+                        },
+                        onClick: () => setActiveTab('files'),
+                      },
+                    ],
+                  },
+                ]
+              : []),
             {
               key: 'tabs',
               items: [
@@ -668,6 +703,19 @@ export default function LibraryPanel({
       {/* 顶栏：Tab 标签页与折叠控制 */}
       <div className="library-header">
         <div className="library-tabs" role="tablist">
+          {onSwitchToDocuments && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={false}
+              className="library-tab"
+              title="切换到知识库文档工作台"
+              onClick={onSwitchToDocuments}
+            >
+              <span>文档</span>
+              <span className="library-tab-badge">{docCount}</span>
+            </button>
+          )}
           <button
             type="button"
             role="tab"
@@ -675,10 +723,7 @@ export default function LibraryPanel({
             className={`library-tab${activeTab === 'files' ? ' is-active' : ''}`}
             onClick={() => setActiveTab('files')}
           >
-            <svg viewBox="0 0 16 16" className="tab-icon" aria-hidden="true">
-              <path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.879a1.5 1.5 0 0 1 1.06.44l1.122 1.12A1.5 1.5 0 0 0 9.62 5H12.5A1.5 1.5 0 0 1 14 6.5v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12.5v-8z" />
-            </svg>
-            <span>导图文件</span>
+            <span>导图</span>
             <span className="library-tab-badge">{documents.length}</span>
           </button>
           <button
@@ -688,14 +733,6 @@ export default function LibraryPanel({
             className={`library-tab${activeTab === 'outline' ? ' is-active' : ''}`}
             onClick={() => setActiveTab('outline')}
           >
-            <svg viewBox="0 0 16 16" className="tab-icon" aria-hidden="true">
-              <line x1="3" y1="4" x2="6" y2="4" />
-              <line x1="8" y1="4" x2="13" y2="4" />
-              <line x1="3" y1="8" x2="6" y2="8" />
-              <line x1="8" y1="8" x2="13" y2="8" />
-              <line x1="3" y1="12" x2="6" y2="12" />
-              <line x1="8" y1="12" x2="13" y2="12" />
-            </svg>
             <span>大纲</span>
             <span className="library-tab-badge">{outlineItems.length}</span>
           </button>

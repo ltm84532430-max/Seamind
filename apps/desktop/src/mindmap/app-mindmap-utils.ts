@@ -111,7 +111,9 @@ export function addFallbackMindmapTitle(
 }
 
 export function errorMessage(error: unknown, fallback: string): string {
-  return typeof error === 'string' ? error : fallback;
+  if (typeof error === 'string' && error.trim()) return error;
+  if (error instanceof Error && error.message.trim()) return error.message;
+  return fallback;
 }
 
 export function formatHistoryTimestamp(timestamp: number): string {

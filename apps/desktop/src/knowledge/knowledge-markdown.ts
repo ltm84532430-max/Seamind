@@ -115,14 +115,29 @@ function normalizeLookupKey(raw: string): string {
   return raw.trim().replace(/\.md$/i, '').toLowerCase();
 }
 
+export function parseWikilinkTarget(raw: string): {
+  noteTarget: string;
+  headingTarget: string | null;
+} {
+  const trimmed = raw.trim();
+  const hashIdx = trimmed.indexOf('#');
+  if (hashIdx < 0) {
+    return { noteTarget: trimmed, headingTarget: null };
+  }
+  const noteTarget = trimmed.slice(0, hashIdx).trim();
+  const headingTarget = trimmed.slice(hashIdx + 1).trim() || null;
+  return { noteTarget, headingTarget };
+}
+
 /**
- * Resolves a `[[target]]` reference against library documents by title or relative path stem.
+ * Resolves a `[[target]]` or `[[target#heading]]` reference against library documents by title or relative path stem.
  */
 export function findWikilinkTarget(
   target: string,
   documents: readonly MapDocument[],
 ): MapDocument | undefined {
-  const clean = normalizeLookupKey(target);
+  const { noteTarget } = parseWikilinkTarget(target);
+  const clean = normalizeLookupKey(noteTarget);
   if (!clean) return undefined;
 
   const exactDoc = documents.find(
@@ -140,6 +155,150 @@ export function findWikilinkTarget(
     const stem = normalizedPath.split('/').pop() ?? '';
     return normalizedPath === clean || stem === clean;
   });
+}
+
+export interface OutgoingKnowledgeLink {
+  rawTarget: string;
+  noteTarget: string;
+  headingTarget: string | null;
+  displayLabel: string;
+  isEmbed: boolean;
+  lineIndex: number;
+  resolved: MapDocument | null;
+}
+
+export interface UnlinkedKnowledgeMention {
+  document: MapDocument;
+  lineIndex: number;
+  lineText: string;
+}
+
+export interface RelatedKnowledgeNote {
+  document: MapDocument;
+  reason: string;
+  sharedTags: string[];
+}
+
+export function computeDocumentKnowledgeLinks(args: {
+  currentPath: string;
+  currentTitle: string;
+  source: string;
+  tags: readonly string[];
+  category: string;
+  documents: readonly MapDocument[];
+}): {
+  outgoingLinks: OutgoingKnowledgeLink[];
+  unlinkedMentions: UnlinkedKnowledgeMention[];
+  relatedNotes: RelatedKnowledgeNote[];
+} {
+  const { currentPath, currentTitle, source, tags, category, documents } = args;
+  const outgoingLinks: OutgoingKnowledgeLink[] = [];
+  const linkedDocPaths = new Set<string>([currentPath]);
+  const lines = source.split(/\r?\n/);
+  let inFence = false;
+  const wikiRegex = /(!?)\[\[([^\]\n|]+?)(?:\|([^\]\n]+?))?\]\]/g;
+
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx += 1) {
+    const line = lines[lineIdx];
+    if (/^\s*(`{3,}|~{3,})/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    wikiRegex.lastIndex = 0;
+    let match = wikiRegex.exec(line);
+    while (match) {
+      const isEmbed = match[1] === '!';
+      const rawTarget = match[2].trim();
+      const alias = match[3]?.trim();
+      const { noteTarget, headingTarget } = parseWikilinkTarget(rawTarget);
+      if (noteTarget) {
+        const resolved = findWikilinkTarget(rawTarget, documents) ?? null;
+        if (resolved) linkedDocPaths.add(resolved.relativePath);
+        outgoingLinks.push({
+          rawTarget,
+          noteTarget,
+          headingTarget,
+          displayLabel:
+            alias ||
+            (headingTarget ? `${noteTarget} § ${headingTarget}` : noteTarget),
+          isEmbed,
+          lineIndex: lineIdx,
+          resolved,
+        });
+      }
+      match = wikiRegex.exec(line);
+    }
+  }
+
+  const candidateDocs = documents.filter(
+    (doc) =>
+      doc.kind === 'doc' &&
+      doc.relativePath !== currentPath &&
+      doc.title.trim().toLowerCase() !== currentTitle.trim().toLowerCase(),
+  );
+
+  const unlinkedMentions: UnlinkedKnowledgeMention[] = [];
+  const mentionedPaths = new Set<string>();
+  const eligibleCandidates = candidateDocs.filter(
+    (doc) =>
+      !linkedDocPaths.has(doc.relativePath) && doc.title.trim().length >= 3,
+  );
+
+  if (eligibleCandidates.length > 0 && lines.length <= 2500) {
+    let fence = false;
+    for (let lineIdx = 0; lineIdx < lines.length; lineIdx += 1) {
+      const line = lines[lineIdx];
+      if (/^\s*(`{3,}|~{3,})/.test(line)) {
+        fence = !fence;
+        continue;
+      }
+      if (fence || !line.trim() || /^\s*#/.test(line)) continue;
+      const strippedLine = line.replace(/!?\[\[[^\]]*\]\]/g, ' ');
+      const lowerLine = strippedLine.toLowerCase();
+      for (const candidate of eligibleCandidates) {
+        if (mentionedPaths.has(candidate.relativePath)) continue;
+        const needle = candidate.title.trim().toLowerCase();
+        if (needle.length >= 3 && lowerLine.includes(needle)) {
+          mentionedPaths.add(candidate.relativePath);
+          unlinkedMentions.push({
+            document: candidate,
+            lineIndex: lineIdx,
+            lineText: line.trim().slice(0, 80),
+          });
+          if (unlinkedMentions.length >= 8) break;
+        }
+      }
+      if (unlinkedMentions.length >= 8) break;
+    }
+  }
+
+  const currentTagSet = new Set(tags.map((t) => t.trim().toLowerCase()));
+  const relatedNotes: RelatedKnowledgeNote[] = [];
+  for (const doc of candidateDocs) {
+    const sharedTags = (doc.tags ?? []).filter((t) =>
+      currentTagSet.has(t.trim().toLowerCase()),
+    );
+    const sameCategory =
+      Boolean(category.trim()) && doc.category.trim() === category.trim();
+    if (sharedTags.length === 0 && !sameCategory) continue;
+    const reason =
+      sharedTags.length > 0
+        ? `共同标签 #${sharedTags.slice(0, 2).join(' #')}`
+        : `同分类 · ${category}`;
+    relatedNotes.push({ document: doc, reason, sharedTags });
+  }
+  relatedNotes.sort(
+    (a, b) =>
+      b.sharedTags.length - a.sharedTags.length ||
+      b.document.updatedAt - a.document.updatedAt,
+  );
+
+  return {
+    outgoingLinks,
+    unlinkedMentions,
+    relatedNotes: relatedNotes.slice(0, 12),
+  };
 }
 
 function upgradeCallouts(root: HTMLElement, doc: Document): void {
@@ -194,7 +353,7 @@ function upgradeCallouts(root: HTMLElement, doc: Document): void {
 }
 
 const TOKEN_PATTERN =
-  /\[\[([^\]\n|]+?)(?:\|([^\]\n]+?))?\]\]|(^|[\s(（])#([\w\u4e00-\u9fa5][\w\u4e00-\u9fa5\-_/]{0,38})/g;
+  /(!?)\[\[([^\]\n|]+?)(?:\|([^\]\n]+?))?\]\]|(^|[\s(（])#([\w\u4e00-\u9fa5][\w\u4e00-\u9fa5\-_/]{0,38})/g;
 
 function enhanceTextNodes(
   root: HTMLElement,
@@ -231,7 +390,8 @@ function enhanceTextNodes(
     let match = TOKEN_PATTERN.exec(value);
 
     while (match) {
-      const [fullMatch, wikiTarget, wikiAlias, tagLead, tagName] = match;
+      const [fullMatch, embedBang, wikiTarget, wikiAlias, tagLead, tagName] =
+        match;
       const matchStart = match.index;
 
       if (wikiTarget !== undefined) {
@@ -241,18 +401,53 @@ function enhanceTextNodes(
           );
         }
         const cleanTarget = wikiTarget.trim();
-        const displayLabel = (wikiAlias ?? cleanTarget).trim();
+        const { noteTarget, headingTarget } = parseWikilinkTarget(cleanTarget);
+        const defaultLabel = headingTarget
+          ? `${noteTarget} § ${headingTarget}`
+          : cleanTarget;
+        const displayLabel = (wikiAlias ?? defaultLabel).trim();
         const resolved = findWikilinkTarget(cleanTarget, documents);
+        const isEmbed = embedBang === '!';
 
-        const link = doc.createElement('a');
-        link.href = '#seamind-wikilink';
-        link.className = `seamind-wikilink${resolved ? '' : ' is-missing'}`;
-        link.setAttribute('data-wikilink', cleanTarget);
-        link.title = resolved
-          ? `打开笔记：${resolved.title} (${resolved.relativePath})`
-          : `尚未创建「${cleanTarget}」，点击立即新建`;
-        link.textContent = displayLabel;
-        fragment.appendChild(link);
+        if (isEmbed) {
+          const card = doc.createElement('span');
+          card.className = `seamind-transclusion-card${resolved ? '' : ' is-missing'}`;
+          const badge = doc.createElement('span');
+          badge.className = 'seamind-transclusion-badge';
+          badge.textContent = 'EMBED';
+          const link = doc.createElement('a');
+          link.href = '#seamind-wikilink';
+          link.className = `seamind-wikilink is-embed${resolved ? '' : ' is-missing'}`;
+          link.setAttribute('data-wikilink', cleanTarget);
+          if (headingTarget) {
+            link.setAttribute('data-wikilink-heading', headingTarget);
+          }
+          link.title = resolved
+            ? `嵌入笔记：${resolved.title}${headingTarget ? ` #${headingTarget}` : ''} (${resolved.relativePath}) · 点击打开，Alt+点击分栏对照`
+            : `尚未创建「${noteTarget}」，点击立即新建`;
+          link.textContent = displayLabel;
+          card.append(badge, link);
+          if (resolved?.category) {
+            const meta = doc.createElement('span');
+            meta.className = 'seamind-transclusion-meta';
+            meta.textContent = resolved.category;
+            card.appendChild(meta);
+          }
+          fragment.appendChild(card);
+        } else {
+          const link = doc.createElement('a');
+          link.href = '#seamind-wikilink';
+          link.className = `seamind-wikilink${resolved ? '' : ' is-missing'}`;
+          link.setAttribute('data-wikilink', cleanTarget);
+          if (headingTarget) {
+            link.setAttribute('data-wikilink-heading', headingTarget);
+          }
+          link.title = resolved
+            ? `打开笔记：${resolved.title}${headingTarget ? ` #${headingTarget}` : ''} (${resolved.relativePath})`
+            : `尚未创建「${noteTarget}」，点击立即新建`;
+          link.textContent = displayLabel;
+          fragment.appendChild(link);
+        }
 
         lastIndex = matchStart + fullMatch.length;
         changed = true;

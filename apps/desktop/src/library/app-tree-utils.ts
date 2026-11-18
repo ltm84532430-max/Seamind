@@ -58,6 +58,30 @@ export function clonePureNode(node: PureNode): PureNode {
   };
 }
 
+function isEmptyListWrapperNode(node: PureNode): boolean {
+  const payload = node.payload as Record<string, unknown> | undefined;
+  const tag = typeof payload?.tag === 'string' ? payload.tag : '';
+  return !node.content.trim() && (tag === 'ul' || tag === 'ol');
+}
+
+/**
+ * Unwraps empty `<ul>`/`<ol>` container nodes that `markmap-html-parser` retains when a
+ * heading contains multiple distinct lists (e.g., `-` mixed with `1.` or `*`), preventing
+ * phantom empty white boxes from appearing in the mind map.
+ */
+export function normalizeMindmapPureTree(node: PureNode): PureNode {
+  const nextChildren = node.children.flatMap((child) => {
+    const normalized = normalizeMindmapPureTree(child);
+    return isEmptyListWrapperNode(normalized)
+      ? normalized.children
+      : [normalized];
+  });
+  return {
+    ...node,
+    children: nextChildren,
+  };
+}
+
 export function findNavigationPath(
   root: MindmapMiniTreeNode | null,
   targetPath: string,

@@ -33,8 +33,8 @@ import type {
 import {
   applyAutocompleteCandidate,
   detectTriggerAutocomplete,
-  DOT_MATRIX_BOOK_SPLASH,
   hasTerminalErrorSignal,
+  METALLIC_BOOK_PIXEL_GRID,
   parseTerminalAgentInput,
   TERMINAL_API_PRESETS,
   TERMINAL_ENGINE_SPECS,
@@ -43,6 +43,7 @@ import {
   tokenizePromptEntities,
   type TerminalAutocompleteCandidate,
 } from './terminal-agent-protocol';
+import { normalizeDisplayPath } from './terminal-alacritty';
 import {
   terminalApi,
   type CliAgentStreamEvent,
@@ -171,6 +172,70 @@ function buildHelpMarkdown(): string {
     '',
     '> **快捷键**：`/` `/#` 即时补全（`↑/↓` 选择，`Tab/Enter` 填入） · `Ctrl+M` 模型与 CLI 套娃 · `Ctrl+O` 折叠取证步骤 · `Ctrl+K` 工作区命令面板 · `Ctrl+Shift+M` 单窗全屏放大。',
   ].join('\n');
+}
+
+function resolveMetallicBookCellColor(
+  code: string,
+  row: number,
+  col: number,
+): string | null {
+  switch (code) {
+    case 'C':
+      return (row + col) % 2 === 0 ? '#F8FAFC' : '#E2E8F0';
+    case 'T':
+      return col < 11
+        ? row % 2 === 0
+          ? '#CBD5E1'
+          : '#B8C4D4'
+        : row % 2 === 0
+          ? '#C2CEDB'
+          : '#AEBCCF';
+    case 'S':
+      return (row + col) % 2 === 0 ? '#94A3B8' : '#7E8FA6';
+    case 'I':
+      return '#64748B';
+    case 'G':
+      return row >= 14 ? '#1E293B' : '#334155';
+    case 'B':
+      return row <= 2 ? '#E08A6B' : row >= 12 ? '#B85A3C' : '#D97757';
+    case 'A':
+      return (row + col) % 2 === 0 ? '#FBBF24' : '#F59E0B';
+    default:
+      return null;
+  }
+}
+
+function MetallicBookPixelEmblem() {
+  const cellSize = 4;
+  const rows = METALLIC_BOOK_PIXEL_GRID.length;
+  const cols = METALLIC_BOOK_PIXEL_GRID[0]?.length ?? 22;
+  return (
+    <svg
+      viewBox={`0 0 ${cols * cellSize} ${rows * cellSize}`}
+      width={cols * cellSize}
+      height={rows * cellSize}
+      shapeRendering="crispEdges"
+      className="t-agent-pixel-book-svg"
+      aria-hidden="true"
+    >
+      {METALLIC_BOOK_PIXEL_GRID.map((rowStr, rIdx) =>
+        Array.from(rowStr).map((ch, cIdx) => {
+          const fill = resolveMetallicBookCellColor(ch, rIdx, cIdx);
+          if (!fill) return null;
+          return (
+            <rect
+              key={`${rIdx}-${cIdx}`}
+              x={cIdx * cellSize}
+              y={rIdx * cellSize}
+              width={cellSize}
+              height={cellSize}
+              fill={fill}
+            />
+          );
+        }),
+      )}
+    </svg>
+  );
 }
 
 function PromptHighlightedText({ text }: { text: string }) {
@@ -1091,8 +1156,12 @@ export const TerminalAgentView = forwardRef<
           <span className="t-agent-top-sep" aria-hidden="true">
             ·
           </span>
-          <span className="t-agent-top-cwd" title={tab.cwd || '.'}>
-            {tab.cwd || '.'}
+          <span className="t-agent-top-cwd">
+            {engineConfig.mode === 'hybrid'
+              ? 'API × CLI 协同内核'
+              : engineConfig.mode === 'api'
+                ? '直连 API 推理'
+                : '本机无头 CLI 内核'}
           </span>
         </div>
 
@@ -1155,41 +1224,95 @@ export const TerminalAgentView = forwardRef<
           <div className="t-agent-scroll" ref={scrollHostRef}>
             {turns.length === 0 ? (
               <div className="t-agent-startup">
-                <div className="t-agent-startup-brand">
-                  <pre className="t-agent-startup-mark" aria-hidden="true">
-                    {DOT_MATRIX_BOOK_SPLASH}
-                  </pre>
-                  <div className="t-agent-startup-info">
-                    <div className="t-agent-startup-title">
-                      Seamind Terminal
+                <div className="t-agent-cli-banner">
+                  <div className="t-agent-cli-emblem-box">
+                    <MetallicBookPixelEmblem />
+                  </div>
+                  <div className="t-agent-cli-meta-stack">
+                    <div className="t-agent-cli-line-brand">
+                      Seamind Terminal CLI 0.1.4
+                    </div>
+                    <div className="t-agent-cli-line-sub">
+                      workspace://local-library · 32 MCP tools mounted
+                    </div>
+                    <div className="t-agent-cli-line-model">
+                      {activeEngineTitle} ({engineConfig.mode.toUpperCase()})
                     </div>
                     <div
-                      className="t-agent-startup-path"
+                      className="t-agent-cli-line-path"
                       title={tab.cwd || '.'}
                     >
-                      {tab.cwd || '.'}
+                      {normalizeDisplayPath(tab.cwd || '.')}
                     </div>
                   </div>
                 </div>
-                <div className="t-agent-startup-ready">
-                  <span className="t-agent-prompt-glyph" aria-hidden="true">
-                    ❯
+
+                <div
+                  className="t-agent-cli-prompt-strip"
+                  onClick={() => inputRef.current?.focus()}
+                >
+                  <span className="t-agent-cli-chevron" aria-hidden="true">
+                    &gt;
                   </span>
-                  <span>准备就绪</span>
-                  <button
-                    type="button"
-                    className="t-agent-splash-link"
-                    onClick={() => void handleSubmit('/help')}
+                  <span
+                    className="t-agent-cli-block-cursor"
+                    aria-hidden="true"
+                  />
+                  <div
+                    className="t-agent-cli-quick-pills"
+                    onClick={(e) => e.stopPropagation()}
                   >
-                    /help 查看使用步骤
-                  </button>
-                  <span aria-hidden="true">·</span>
+                    <button
+                      type="button"
+                      className="t-agent-cli-pill"
+                      onClick={() => void handleSubmit('/help')}
+                    >
+                      /help 使用指南
+                    </button>
+                    <button
+                      type="button"
+                      className="t-agent-cli-pill"
+                      onClick={() => insertTokenIntoComposer('/book #chapter ')}
+                    >
+                      /book 伴读推导
+                    </button>
+                    <button
+                      type="button"
+                      className="t-agent-cli-pill"
+                      onClick={() => insertTokenIntoComposer('/code python ')}
+                    >
+                      /code 实验生成
+                    </button>
+                    <button
+                      type="button"
+                      className="t-agent-cli-pill"
+                      onClick={() =>
+                        insertTokenIntoComposer('/exec #last-error ')
+                      }
+                    >
+                      /exec 终端诊断
+                    </button>
+                  </div>
+                </div>
+
+                <div className="t-agent-cli-footer-row">
+                  <div className="t-agent-cli-footer-left">
+                    <button
+                      type="button"
+                      className="t-agent-splash-link"
+                      onClick={() => void handleSubmit('/help')}
+                    >
+                      ? for shortcuts (/help)
+                    </button>
+                    <span aria-hidden="true">·</span>
+                    <span># 挂载书籍/笔记/分屏现场</span>
+                  </div>
                   <button
                     type="button"
-                    className="t-agent-splash-link"
+                    className="t-agent-splash-link t-agent-cli-footer-right"
                     onClick={() => setModelModalOpen(true)}
                   >
-                    Ctrl+M 模型切换
+                    {activeEngineTitle} · {engineConfig.mode} (Ctrl+M)
                   </button>
                 </div>
               </div>
@@ -1604,9 +1727,6 @@ export const TerminalAgentView = forwardRef<
               >
                 + #pane:2 屏幕
               </button>
-              <span className="t-agent-composer-hints">
-                Ctrl+M 模型 · Ctrl+O 过程
-              </span>
             </div>
 
             <div className="t-agent-composer-box">

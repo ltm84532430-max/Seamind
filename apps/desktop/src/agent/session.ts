@@ -126,6 +126,244 @@ function isToolCall(value: unknown): value is AgentToolCall {
   );
 }
 
+const PRESERVED_IDENTIFIER_KEYS = [
+  'id',
+  'nodeId',
+  'path',
+  'relativePath',
+  'bookKey',
+  'examId',
+  'channelId',
+  'paperId',
+  'title',
+  'revision',
+  'sectionHref',
+  'total',
+  'count',
+] as const;
+
+export function extractCompactedIdentifiers(
+  record: Record<string, unknown>,
+): Record<string, string | number | boolean> | undefined {
+  const out: Record<string, string | number | boolean> = {};
+  const collectFrom = (source: Record<string, unknown>) => {
+    for (const key of PRESERVED_IDENTIFIER_KEYS) {
+      if (out[key] !== undefined) continue;
+      const val = source[key];
+      if (typeof val === 'string' && val.length > 0 && val.length <= 160) {
+        out[key] = val;
+      } else if (typeof val === 'number' && Number.isFinite(val)) {
+        out[key] = val;
+      } else if (typeof val === 'boolean') {
+        out[key] = val;
+      }
+    }
+  };
+  collectFrom(record);
+  for (const nestedKey of ['data', 'result', 'document', 'paper', 'exam']) {
+    const nested = record[nestedKey];
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      collectFrom(nested as Record<string, unknown>);
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+export interface MarkdownDiffLine {
+  kind: 'context' | 'add' | 'del';
+  oldLineNo: number | null;
+  newLineNo: number | null;
+  text: string;
+}
+
+export interface MarkdownDiffHunk {
+  header: string;
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  addedCount: number;
+  removedCount: number;
+  lines: MarkdownDiffLine[];
+}
+
+export function buildMarkdownDiffHunks(
+  before: string,
+  after: string,
+  contextRadius = 2,
+): {
+  hunks: MarkdownDiffHunk[];
+  totalAdded: number;
+  totalRemoved: number;
+} {
+  if (before === after) {
+    return { hunks: [], totalAdded: 0, totalRemoved: 0 };
+  }
+  const oldLines = before.split(/\r?\n/);
+  const newLines = after.split(/\r?\n/);
+
+  let prefix = 0;
+  while (
+    prefix < oldLines.length &&
+    prefix < newLines.length &&
+    oldLines[prefix] === newLines[prefix]
+  ) {
+    prefix += 1;
+  }
+  let suffix = 0;
+  while (
+    suffix < oldLines.length - prefix &&
+    suffix < newLines.length - prefix &&
+    oldLines[oldLines.length - 1 - suffix] ===
+      newLines[newLines.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
+
+  const midOld = oldLines.slice(prefix, oldLines.length - suffix);
+  const midNew = newLines.slice(prefix, newLines.length - suffix);
+
+  const rawOps: MarkdownDiffLine[] = [];
+  for (let i = 0; i < prefix; i += 1) {
+    rawOps.push({
+      kind: 'context',
+      oldLineNo: i + 1,
+      newLineNo: i + 1,
+      text: oldLines[i],
+    });
+  }
+
+  if (midOld.length * midNew.length <= 160_000) {
+    const m = midOld.length;
+    const n = midNew.length;
+    const dp = Array.from({ length: m + 1 }, () => new Int32Array(n + 1));
+    for (let i = m - 1; i >= 0; i -= 1) {
+      for (let j = n - 1; j >= 0; j -= 1) {
+        if (midOld[i] === midNew[j]) {
+          dp[i][j] = dp[i + 1][j + 1] + 1;
+        } else {
+          dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+        }
+      }
+    }
+    let i = 0;
+    let j = 0;
+    while (i < m || j < n) {
+      if (i < m && j < n && midOld[i] === midNew[j]) {
+        rawOps.push({
+          kind: 'context',
+          oldLineNo: prefix + i + 1,
+          newLineNo: prefix + j + 1,
+          text: midOld[i],
+        });
+        i += 1;
+        j += 1;
+      } else if (j < n && (i === m || dp[i][j + 1] >= dp[i + 1][j])) {
+        rawOps.push({
+          kind: 'add',
+          oldLineNo: null,
+          newLineNo: prefix + j + 1,
+          text: midNew[j],
+        });
+        j += 1;
+      } else {
+        rawOps.push({
+          kind: 'del',
+          oldLineNo: prefix + i + 1,
+          newLineNo: null,
+          text: midOld[i],
+        });
+        i += 1;
+      }
+    }
+  } else {
+    for (let i = 0; i < midOld.length; i += 1) {
+      rawOps.push({
+        kind: 'del',
+        oldLineNo: prefix + i + 1,
+        newLineNo: null,
+        text: midOld[i],
+      });
+    }
+    for (let j = 0; j < midNew.length; j += 1) {
+      rawOps.push({
+        kind: 'add',
+        oldLineNo: null,
+        newLineNo: prefix + j + 1,
+        text: midNew[j],
+      });
+    }
+  }
+
+  const oldTailStart = oldLines.length - suffix;
+  const newTailStart = newLines.length - suffix;
+  for (let k = 0; k < suffix; k += 1) {
+    rawOps.push({
+      kind: 'context',
+      oldLineNo: oldTailStart + k + 1,
+      newLineNo: newTailStart + k + 1,
+      text: oldLines[oldTailStart + k],
+    });
+  }
+
+  const changedIndices: number[] = [];
+  let totalAdded = 0;
+  let totalRemoved = 0;
+  rawOps.forEach((op, idx) => {
+    if (op.kind === 'add') {
+      totalAdded += 1;
+      changedIndices.push(idx);
+    } else if (op.kind === 'del') {
+      totalRemoved += 1;
+      changedIndices.push(idx);
+    }
+  });
+
+  if (changedIndices.length === 0) {
+    return { hunks: [], totalAdded: 0, totalRemoved: 0 };
+  }
+
+  const ranges: Array<[number, number]> = [];
+  for (const idx of changedIndices) {
+    const start = Math.max(0, idx - contextRadius);
+    const end = Math.min(rawOps.length - 1, idx + contextRadius);
+    const last = ranges[ranges.length - 1];
+    if (last && start <= last[1] + 1) {
+      last[1] = Math.max(last[1], end);
+    } else {
+      ranges.push([start, end]);
+    }
+  }
+
+  const hunks: MarkdownDiffHunk[] = ranges.slice(0, 8).map(([start, end]) => {
+    const slice = rawOps.slice(start, end + 1).slice(0, 48);
+    const oldNos = slice
+      .map((l) => l.oldLineNo)
+      .filter((n): n is number => n !== null);
+    const newNos = slice
+      .map((l) => l.newLineNo)
+      .filter((n): n is number => n !== null);
+    const oldStart = oldNos[0] ?? 1;
+    const newStart = newNos[0] ?? 1;
+    const oldCount = oldNos.length;
+    const newCount = newNos.length;
+    const addedCount = slice.filter((l) => l.kind === 'add').length;
+    const removedCount = slice.filter((l) => l.kind === 'del').length;
+    return {
+      header: `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@`,
+      oldStart,
+      oldLines: oldCount,
+      newStart,
+      newLines: newCount,
+      addedCount,
+      removedCount,
+      lines: slice,
+    };
+  });
+
+  return { hunks, totalAdded, totalRemoved };
+}
+
 function shrinkReadOnlyToolContent(content: string, shrinkAt: number): string {
   let parsed: unknown;
   try {
@@ -139,10 +377,12 @@ function shrinkReadOnlyToolContent(content: string, shrinkAt: number): string {
   const record = parsed as Record<string, unknown>;
   if (record.permission !== 'read' || content.length <= shrinkAt)
     return content;
+  const identifiers = extractCompactedIdentifiers(record);
   return JSON.stringify({
     version: record.version ?? 1,
     permission: 'read',
     compacted: true,
+    ...(identifiers ? { identifiers } : {}),
     summary: content.slice(0, Math.min(180, shrinkAt)),
   });
 }

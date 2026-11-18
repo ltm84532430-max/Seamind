@@ -10,7 +10,7 @@ import {
   mcpToolSpecs,
 } from '../src/agent/capabilities';
 
-const MAX_MCP_TOOLS = 16;
+const MAX_MCP_TOOLS = 32;
 const MAX_AGENT_TOOLS = 24;
 const MAX_AGENT_TOOLS_BYTES = 48_000;
 
@@ -51,9 +51,16 @@ describe('agent tool surfaces', () => {
       ...toolNames(agentToolDefinitionsFor('learning-path')),
       ...toolNames(agentToolDefinitionsFor('favorites')),
     ]);
+    expect(toolNames(agentToolCatalogForWorkspace('exams') ?? [])).toEqual([
+      'exam_list_papers',
+      'exam_get_paper',
+      'code_run_c',
+      'code_run_python',
+    ]);
+    expect(toolNames(agentToolCatalogForWorkspace('literature') ?? [])).toEqual(
+      ['literature_list_papers'],
+    );
     expect(agentToolCatalogForWorkspace('terminal')).toBeNull();
-    expect(agentToolCatalogForWorkspace('exams')).toBeNull();
-    expect(agentToolCatalogForWorkspace('literature')).toBeNull();
     expect(agentToolCatalogForWorkspace('tasks')).toBeNull();
   });
 

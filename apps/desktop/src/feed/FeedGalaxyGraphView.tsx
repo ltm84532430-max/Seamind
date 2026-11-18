@@ -10,6 +10,7 @@ import {
 } from 'react';
 import {
   buildGalaxyAdjacencyMap,
+  computeVisibleGalaxyLabelIds,
   createGalaxyPhysicsState,
   DEFAULT_GALAXY_PHYSICS_CONFIG,
   stepGalaxyPhysics,
@@ -255,6 +256,29 @@ export function FeedGalaxyGraphView({
   const visibleIdsRef = useRef(visibleNodeIds);
   visibleIdsRef.current = visibleNodeIds;
 
+  const nonCollidingLabelIds = useMemo(() => {
+    const priorityIds = new Set<string>();
+    if (hoveredNode?.node.id) priorityIds.add(hoveredNode.node.id);
+    if (pinnedCardNodeId) priorityIds.add(pinnedCardNodeId);
+    for (const node of graph.nodes) {
+      if (node.isFocus || node.isHighlighted) priorityIds.add(node.id);
+    }
+    return computeVisibleGalaxyLabelIds({
+      nodes: graph.nodes,
+      positions: livePositions,
+      scale,
+      visibleIds: visibleNodeIds,
+      priorityIds,
+    });
+  }, [
+    graph.nodes,
+    hoveredNode?.node.id,
+    livePositions,
+    pinnedCardNodeId,
+    scale,
+    visibleNodeIds,
+  ]);
+
   const syncPositions = useCallback((state: GalaxyPhysicsState) => {
     const next: Record<string, Point> = {};
     for (const body of state.bodyList) next[body.id] = { x: body.x, y: body.y };
@@ -263,6 +287,7 @@ export function FeedGalaxyGraphView({
 
   const startSimulation = useCallback(() => {
     if (rafRef.current !== null) return;
+    let frameCount = 0;
     const tick = () => {
       const state = physicsRef.current;
       if (!state) {
@@ -274,7 +299,18 @@ export function FeedGalaxyGraphView({
         physicsConfigRef.current,
         visibleIdsRef.current,
       );
-      syncPositions(state);
+      frameCount += 1;
+      const hasPinned = state.bodyList.some(
+        (body) => body.fx !== null || body.fy !== null,
+      );
+      if (
+        hasPinned ||
+        state.alpha >= 0.08 ||
+        frameCount % 2 === 0 ||
+        !keepRunning
+      ) {
+        syncPositions(state);
+      }
       if (keepRunning) rafRef.current = requestAnimationFrame(tick);
       else rafRef.current = null;
     };
@@ -1195,18 +1231,21 @@ export function FeedGalaxyGraphView({
                 isFocus ||
                 isHighlighted ||
                 (Boolean(filteredNodeIds) && isMatch);
+              const labelClear = nonCollidingLabelIds.has(node.id);
               let planetLabelOpacity = 0;
               if (forceShowLabel) planetLabelOpacity = 1;
-              else if (scale >= t2) planetLabelOpacity = 0.88;
-              else if (scale > t1) {
+              else if (labelClear && scale >= t2) planetLabelOpacity = 0.88;
+              else if (labelClear && scale > t1) {
                 planetLabelOpacity = ((scale - t1) / (t2 - t1)) * 0.85;
               }
               const showSatelliteLabel =
                 isHoveredSelf ||
                 isPinnedSelf ||
                 isSpotlightNeighbor ||
-                scale >= labelFadeThreshold * 1.15 ||
-                (isStarredArticle && scale >= labelFadeThreshold * 0.72);
+                (labelClear && scale >= labelFadeThreshold * 1.15) ||
+                (labelClear &&
+                  isStarredArticle &&
+                  scale >= labelFadeThreshold * 0.72);
               const cleanPlanetText =
                 scale >= 0.88 ||
                 isHoveredSelf ||

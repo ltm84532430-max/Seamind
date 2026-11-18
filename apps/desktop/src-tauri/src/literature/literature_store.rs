@@ -261,8 +261,13 @@ pub struct TagCount {
 
 pub fn open(path: &std::path::Path) -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(|e| format!("无法打开文献数据库：{e}"))?;
-    conn.execute_batch("PRAGMA foreign_keys = ON;")
-        .map_err(|e| format!("启用文献数据库关联约束失败：{e}"))?;
+    conn.execute_batch(
+        "PRAGMA foreign_keys = ON;
+         PRAGMA journal_mode = WAL;
+         PRAGMA synchronous = NORMAL;
+         PRAGMA busy_timeout = 5000;",
+    )
+    .map_err(|e| format!("启用文献数据库关联约束失败：{e}"))?;
     conn.execute_batch(SCHEMA)
         .map_err(|e| format!("初始化文献数据库结构失败：{e}"))?;
     ensure_column(&conn, "papers", "pdf_sha256", "TEXT")?;

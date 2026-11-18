@@ -27,6 +27,7 @@
 
   &-foreign {
     display: inline-block;
+    pointer-events: none;
 
     p {
       margin: 0;
@@ -88,8 +89,10 @@
     > div {
       width: var(--markmap-max-width);
       text-align: left;
+      pointer-events: none;
       > div {
         display: inline-block;
+        pointer-events: auto;
       }
     }
   }

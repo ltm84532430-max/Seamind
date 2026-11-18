@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { avatarHue, initialOf } from './format';
+import { formatRailIndexCode } from '../components/WorkspaceSidebarRail';
 
 /** The only hosts the app's content security policy lets a channel picture come from. */
 const PICTURE_HOSTS = new Set(['yt3.googleusercontent.com', 'yt3.ggpht.com']);
@@ -16,7 +16,7 @@ function usablePicture(url: string | null | undefined): string | null {
   }
 }
 
-/** A channel's picture, or a round badge with its first letter when it has none or it does not load. */
+/** A channel's picture, or a monochrome index square when it has none or it does not load. */
 export default function Avatar({
   name,
   url,
@@ -31,12 +31,13 @@ export default function Avatar({
   const showPicture = picture !== null && picture !== failedUrl;
   return (
     <span
-      className="player-avatar"
+      className={`player-avatar${showPicture ? '' : ' is-index'}`}
       style={{
         width: size,
         height: size,
-        fontSize: Math.round(size * 0.46),
-        background: showPicture ? undefined : `hsl(${avatarHue(name)} 34% 42%)`,
+        fontSize: showPicture
+          ? Math.round(size * 0.46)
+          : Math.max(9, Math.round(size * 0.42)),
       }}
       aria-hidden="true"
     >
@@ -49,7 +50,7 @@ export default function Avatar({
           onError={() => setFailedUrl(picture)}
         />
       ) : (
-        initialOf(name)
+        formatRailIndexCode(name)
       )}
     </span>
   );
