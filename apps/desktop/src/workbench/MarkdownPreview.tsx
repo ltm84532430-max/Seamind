@@ -48,7 +48,7 @@ interface MarkdownPreviewProps {
   scrollToFootnoteRequest?: PreviewFootnoteJumpRequest | null;
   onCodeChange?: CodeBlockHandlers['onCodeChange'];
   onOpenPlantUmlEditor?: CodeBlockHandlers['onOpenPlantUmlEditor'];
-  onOpenWikilink?: (target: string) => void;
+  onOpenWikilink?: (target: string, options?: { split?: boolean }) => void;
   onOpenYouTubeLink?: (videoId: string, startSeconds: number) => void;
   onRunInTerminal?: CodeBlockHandlers['onRunInTerminal'];
   onEditFootnote?: (footnoteId: string) => void;
@@ -482,7 +482,9 @@ export default function MarkdownPreview({
         event.preventDefault();
         const noteTarget = wikilink.getAttribute('data-wikilink')?.trim();
         if (noteTarget) {
-          onOpenWikilink(noteTarget);
+          onOpenWikilink(noteTarget, {
+            split: event.ctrlKey || event.metaKey || event.altKey,
+          });
         }
         return;
       }

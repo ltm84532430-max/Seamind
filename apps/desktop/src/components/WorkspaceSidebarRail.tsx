@@ -11,7 +11,9 @@ export interface RailItem {
   thumb?: {
     name: string;
     color?: string | null;
-    shape?: 'circle' | 'rounded';
+    shape?: 'circle' | 'rounded' | 'square';
+    tone?: 'index' | 'avatar';
+    code?: string;
   };
   dot?: boolean;
   disabled?: boolean;
@@ -82,21 +84,59 @@ export function SidebarCollapseButton({
   );
 }
 
+const HAS_CJK_RE = /[\u4e00-\u9fff]/;
+
+/**
+ * Produces a concise 1–2 character typographic index code for collapsed rails
+ * (e.g. "阿杉电脑" -> "阿杉", "Bloomberg-Originals" -> "BO", "MIT OpenCourseWare" -> "MO").
+ */
+export function formatRailIndexCode(rawName: string): string {
+  const clean = rawName.trim();
+  if (!clean) return '--';
+  if (HAS_CJK_RE.test(clean)) {
+    const chars = Array.from(clean.replace(/[\s/\\_-]+/g, ''));
+    return chars.slice(0, 2).join('') || '--';
+  }
+  const tokens = clean.split(/[\s./\\_-]+/).filter(Boolean);
+  if (tokens.length >= 2) {
+    return `${tokens[0][0] ?? ''}${tokens[1][0] ?? ''}`.toUpperCase();
+  }
+  const letters = clean.replace(/[^A-Za-z0-9]/g, '');
+  if (letters.length >= 2) return letters.slice(0, 2).toUpperCase();
+  return initialOf(clean);
+}
+
 export function SidebarThumbAvatar({
   name,
   color,
   size = 22,
   shape = 'circle',
+  tone = 'avatar',
+  code,
 }: {
   name: string;
   color?: string | null;
   size?: number;
-  shape?: 'circle' | 'rounded';
+  shape?: 'circle' | 'rounded' | 'square';
+  tone?: 'index' | 'avatar';
+  code?: string;
 }) {
+  if (tone === 'index') {
+    const label = code ?? formatRailIndexCode(name);
+    const hasCjk = HAS_CJK_RE.test(label);
+    return (
+      <span
+        className={`seamind-rail-thumb is-index${hasCjk ? ' is-cjk' : ''}${shape === 'square' ? ' is-square' : ''}`}
+        aria-hidden="true"
+      >
+        {label}
+      </span>
+    );
+  }
   const background = color || `hsl(${avatarHue(name)} 34% 42%)`;
   return (
     <span
-      className={`seamind-rail-thumb${shape === 'rounded' ? ' is-rounded' : ''}`}
+      className={`seamind-rail-thumb${shape === 'rounded' ? ' is-rounded' : shape === 'square' ? ' is-square' : ''}`}
       style={{
         width: size,
         height: size,
@@ -186,6 +226,8 @@ function RailItemButton({ item }: { item: RailItem }) {
           name={item.thumb.name}
           color={item.thumb.color}
           shape={item.thumb.shape ?? 'circle'}
+          tone={item.thumb.tone ?? 'avatar'}
+          code={item.thumb.code}
         />
       ) : (
         item.icon

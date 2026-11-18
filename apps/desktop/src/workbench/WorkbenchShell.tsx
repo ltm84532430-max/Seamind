@@ -19,6 +19,7 @@ export interface WorkbenchShellProps {
   /** Shown at the right end of the status line, e.g. the size of the source. */
   summary?: string;
   layout: WorkbenchLayout;
+  compact?: boolean;
   /** Buttons that belong to this kind of document, shown at the right of the header. */
   actions?: ReactNode;
   onSave(): void;
@@ -90,6 +91,7 @@ export default function WorkbenchShell({
   meta,
   summary,
   layout,
+  compact,
   actions,
   onSave,
   onRename,
@@ -111,6 +113,7 @@ export default function WorkbenchShell({
       className="document-workbench"
       aria-label={label}
       data-layout={layout}
+      data-compact={compact ? 'true' : undefined}
       onKeyDown={onKeyDown}
     >
       <header className="workbench-header">

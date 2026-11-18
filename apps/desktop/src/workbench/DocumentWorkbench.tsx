@@ -1,5 +1,5 @@
 import type { ActiveDocument } from './active-document';
-import MarkdownDocWorkbench from './MarkdownDocWorkbench';
+import MarkdownDocWorkbench, { type DocViewMode } from './MarkdownDocWorkbench';
 import type { PreviewFootnoteJumpRequest } from './MarkdownPreview';
 import MermaidWorkbench from './MermaidWorkbench';
 import type { MapDocument } from '../library/library';
@@ -14,13 +14,17 @@ export interface DocumentWorkbenchProps {
   documents?: readonly MapDocument[];
   categories?: readonly string[];
   scrollToFootnoteRequest?: PreviewFootnoteJumpRequest | null;
+  paneKey?: string;
+  compactSplit?: boolean;
+  controlledViewMode?: DocViewMode;
+  onViewModeChange?(mode: DocViewMode): void;
   renderMarkdownPreview(markdown: string): { html: string; source: string };
   onSourceChange(source: string): void;
   onSave(): void;
   onRename(title: string): Promise<boolean>;
   onChangeCategory?(category: string): Promise<boolean>;
   onChangeTags?(tags: string[]): Promise<boolean>;
-  onOpenWikilink?(target: string): void;
+  onOpenWikilink?(target: string, options?: { split?: boolean }): void;
   onOpenYouTubeLink?(
     videoId: string,
     startSeconds: number,
@@ -39,6 +43,10 @@ export default function DocumentWorkbench({
   document,
   renderMarkdownPreview,
   scrollToFootnoteRequest,
+  paneKey,
+  compactSplit,
+  controlledViewMode,
+  onViewModeChange,
   onOpenAsMindmap,
   onConvertToMindmap,
   onChangeCategory,
@@ -62,12 +70,16 @@ export default function DocumentWorkbench({
     );
   return (
     <MarkdownDocWorkbench
-      key={document.session}
+      key={paneKey ? `${paneKey}-${document.session}` : document.session}
       document={document}
       documents={documents}
       categories={categories}
       theme={theme}
       scrollToFootnoteRequest={scrollToFootnoteRequest}
+      paneKey={paneKey}
+      compactSplit={compactSplit}
+      controlledViewMode={controlledViewMode}
+      onViewModeChange={onViewModeChange}
       renderPreview={renderMarkdownPreview}
       onChangeCategory={onChangeCategory}
       onChangeTags={onChangeTags}

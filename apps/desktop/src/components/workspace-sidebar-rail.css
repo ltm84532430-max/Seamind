@@ -1,6 +1,7 @@
 /* Shared collapsed 42px icon & thumbnail rail aligned with Player Sidebar. */
 /* Strictly flat CSS rules (no nested rules). */
 
+.seamind-rail .seamind-rail-collapse-btn,
 .seamind-rail-collapse-btn {
   display: inline-flex;
   align-items: center;
@@ -9,9 +10,9 @@
   height: 28px;
   padding: 0;
   flex: none;
-  border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--panel) 94%, var(--ink));
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
   color: var(--muted);
   cursor: pointer;
   transition:
@@ -20,10 +21,11 @@
     background-color 0.14s ease;
 }
 
+.seamind-rail .seamind-rail-collapse-btn:hover,
 .seamind-rail-collapse-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-color: transparent;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
 }
 
 .seamind-rail-collapse-btn:focus-visible {
@@ -95,45 +97,47 @@
   background: var(--line);
 }
 
+.seamind-rail .seamind-rail-button,
 .seamind-rail-button {
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 30px;
+  width: 34px;
+  height: 28px;
   flex: none;
   padding: 0;
-  border: 1px solid transparent;
-  border-radius: 5px;
+  border: 0;
+  border-radius: 2px;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
   transition:
     color 0.14s ease,
-    background-color 0.14s ease,
-    border-color 0.14s ease;
+    background-color 0.14s ease;
 }
 
+.seamind-rail .seamind-rail-button:hover:not(:disabled),
 .seamind-rail-button:hover:not(:disabled) {
   color: var(--ink);
-  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  background: color-mix(in srgb, var(--ink) 5.5%, transparent);
 }
 
 .seamind-rail-button:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 1.5px solid var(--accent);
   outline-offset: -1px;
 }
 
 .seamind-rail-button:disabled {
-  opacity: 0.38;
+  opacity: 0.36;
   cursor: not-allowed;
 }
 
+.seamind-rail .seamind-rail-button.is-current,
 .seamind-rail-button.is-current {
   color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 13%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .seamind-rail-thumb {
@@ -144,6 +148,7 @@
   overflow: hidden;
   border-radius: 50%;
   color: #ffffff;
+  font-family: var(--ui-font, sans-serif);
   font-weight: 600;
   line-height: 1;
 }
@@ -152,19 +157,46 @@
   border-radius: 6px;
 }
 
-.seamind-rail-button.is-thumb.is-current .seamind-rail-thumb {
+.seamind-rail-thumb.is-square {
+  border-radius: 2px;
+}
+
+.seamind-rail-thumb.is-index {
+  width: 28px;
+  height: 22px;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--muted);
+  font: 550 10px/1 var(--mono, monospace);
+  letter-spacing: 0.03em;
+}
+
+.seamind-rail-thumb.is-index.is-cjk {
+  font: 500 10.5px/1 var(--ui-font, sans-serif);
+  letter-spacing: 0.01em;
+}
+
+.seamind-rail-button:hover:not(:disabled) .seamind-rail-thumb.is-index {
+  color: var(--ink);
+}
+
+.seamind-rail-button.is-current .seamind-rail-thumb.is-index {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.seamind-rail-button.is-thumb.is-current .seamind-rail-thumb:not(.is-index) {
   box-shadow: 0 0 0 1.5px var(--accent);
 }
 
 .seamind-rail-dot {
   position: absolute;
-  top: 3px;
+  top: 4px;
   right: 3px;
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: 0 0 0 1px var(--panel);
 }
 
 .seamind-rail-footer {

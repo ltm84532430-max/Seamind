@@ -4,10 +4,12 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type FormEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import type { MapDocument } from '../library/library';
+import type { Theme } from '../app/app-storage';
 import { UNFILED_FOLDER } from './knowledge-notes';
 import {
   groupKnowledgeBySource,
@@ -18,12 +20,22 @@ import {
 import DocumentWorkbench, {
   type DocumentWorkbenchProps,
 } from '../workbench/DocumentWorkbench';
-import type { ActiveDocument } from '../workbench/active-document';
+import { isDirty, type ActiveDocument } from '../workbench/active-document';
 import { formatRelativeDate } from './knowledge-completions';
 import {
   KNOWLEDGE_NOTE_TEMPLATES,
   type KnowledgeNoteTemplate,
 } from './knowledge-markdown';
+import {
+  normalizeKnowledgePath,
+  visibleKnowledgePaneCount,
+  type KnowledgePaneDocViewMode,
+  type KnowledgeSplitMode,
+} from './knowledge-split-model';
+import type {
+  KnowledgeSplitWorkspaceHandle,
+  OpenKnowledgeNoteOptions,
+} from './use-knowledge-split';
 import {
   RailBookIcon,
   RailFolderIcon,
@@ -40,21 +52,55 @@ import KnowledgeHeatmap from './KnowledgeHeatmap';
 import './knowledge-workspace.css';
 
 export interface KnowledgeWorkspaceProps {
+  active?: boolean;
   rootPath: string | null;
   documents: MapDocument[];
   categories: string[];
   activeDocument: ActiveDocument | null;
+  split: KnowledgeSplitWorkspaceHandle;
   errorMessage?: string;
   busy?: boolean;
   onChooseRoot(): void;
   onRefresh(): void;
   onCreateCategory(category: string): Promise<boolean>;
-  onOpenNote(note: MapDocument): void;
-  onCloseNote?(): Promise<boolean>;
-  onCreateNote(folder: string, template?: KnowledgeNoteTemplate): void;
+  onOpenNote(note: MapDocument, options?: OpenKnowledgeNoteOptions): void;
+  onCreateNote(
+    folder: string,
+    template?: KnowledgeNoteTemplate,
+    targetPaneIndex?: number,
+  ): void;
   onDeleteNote(note: MapDocument): void;
   onSidebarLayoutChange?(width: number, collapsed: boolean): void;
-  workbench: Omit<DocumentWorkbenchProps, 'document'>;
+  workbench: {
+    statusText: string;
+    theme: Theme;
+    renderMarkdownPreview(markdown: string): { html: string; source: string };
+    onOpenWikilink?(target: string, options?: { split?: boolean }): void;
+    onOpenYouTubeLink?: DocumentWorkbenchProps['onOpenYouTubeLink'];
+    onRunInTerminal?: DocumentWorkbenchProps['onRunInTerminal'];
+    onOpenAsMindmap?(path: string): void;
+    onConvertToMindmap?(path: string): void;
+  };
+}
+
+const DOC_VIEW_MODE_STORAGE_KEY = 'seamind.docWorkbench.viewMode';
+
+function readPreferredDocViewMode(): KnowledgePaneDocViewMode {
+  try {
+    const raw = localStorage.getItem(DOC_VIEW_MODE_STORAGE_KEY);
+    if (raw === 'edit' || raw === 'split' || raw === 'read') return raw;
+    return 'split';
+  } catch {
+    return 'split';
+  }
+}
+
+function defaultCompactPaneViewMode(
+  paneIndex: number,
+): KnowledgePaneDocViewMode {
+  if (paneIndex > 0) return 'read';
+  const preferred = readPreferredDocViewMode();
+  return preferred === 'split' ? 'edit' : preferred;
 }
 
 const COLLAPSED_STORAGE_KEY = 'seamind.knowledge.collapsedFolders';
@@ -401,21 +447,141 @@ function HomeOverviewIcon() {
   );
 }
 
+function SplitColumnsIcon() {
+  return (
+    <svg
+      className="kb-svg-icon"
+      viewBox="0 0 16 16"
+      fill="none"
+      aria-hidden="true"
+    >
+      <rect
+        x="2"
+        y="2.5"
+        width="12"
+        height="11"
+        rx="1"
+        stroke="currentColor"
+        strokeWidth="1.3"
+      />
+      <line
+        x1="8"
+        y1="2.5"
+        x2="8"
+        y2="13.5"
+        stroke="currentColor"
+        strokeWidth="1.3"
+      />
+    </svg>
+  );
+}
+
+function SplitLayoutIcon({ mode }: { mode: KnowledgeSplitMode }) {
+  return (
+    <svg
+      className="kb-svg-icon"
+      viewBox="0 0 16 16"
+      fill="none"
+      aria-hidden="true"
+    >
+      <rect
+        x="2"
+        y="2.5"
+        width="12"
+        height="11"
+        rx="1"
+        stroke="currentColor"
+        strokeWidth="1.3"
+      />
+      {(mode === 'vertical' || mode === 'tri' || mode === 'quad') && (
+        <line
+          x1="8"
+          y1="2.5"
+          x2="8"
+          y2="13.5"
+          stroke="currentColor"
+          strokeWidth="1.3"
+        />
+      )}
+      {mode === 'horizontal' && (
+        <line
+          x1="2"
+          y1="8"
+          x2="14"
+          y2="8"
+          stroke="currentColor"
+          strokeWidth="1.3"
+        />
+      )}
+      {mode === 'tri' && (
+        <line
+          x1="8"
+          y1="8"
+          x2="14"
+          y2="8"
+          stroke="currentColor"
+          strokeWidth="1.3"
+        />
+      )}
+      {mode === 'quad' && (
+        <line
+          x1="2"
+          y1="8"
+          x2="14"
+          y2="8"
+          stroke="currentColor"
+          strokeWidth="1.3"
+        />
+      )}
+    </svg>
+  );
+}
+
+function ZoomPaneIcon({ zoomed }: { zoomed: boolean }) {
+  return (
+    <svg
+      className="kb-svg-icon"
+      viewBox="0 0 16 16"
+      fill="none"
+      aria-hidden="true"
+    >
+      {zoomed ? (
+        <path
+          d="M6 2.5v3.5H2.5M10 13.5V10h3.5M13.5 6H10V2.5M2.5 10H6v3.5"
+          stroke="currentColor"
+          strokeWidth="1.3"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      ) : (
+        <path
+          d="M2.5 6V2.5H6M13.5 10v3.5H10M10 2.5h3.5V6M6 13.5H2.5V10"
+          stroke="currentColor"
+          strokeWidth="1.3"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      )}
+    </svg>
+  );
+}
+
 /**
  * Clean, architectural Knowledge Base workspace aligned with SeaMind's editorial visual language.
  */
 export default function KnowledgeWorkspace({
+  active = true,
   rootPath,
   documents,
   categories,
   activeDocument,
+  split,
   errorMessage,
   busy = false,
   onChooseRoot,
   onRefresh,
   onCreateCategory,
   onOpenNote,
-  onCloseNote,
   onCreateNote,
   onDeleteNote,
   onSidebarLayoutChange,
@@ -446,8 +612,10 @@ export default function KnowledgeWorkspace({
   const [creatingCategory, setCreatingCategory] = useState(false);
   const [categoryInput, setCategoryInput] = useState('');
   const [categorySubmitting, setCategorySubmitting] = useState(false);
+  const [openSwitcherPane, setOpenSwitcherPane] = useState<number | null>(null);
 
   const splitMenuRef = useRef<HTMLDivElement>(null);
+  const switcherMenuRef = useRef<HTMLDivElement>(null);
   const categoryInputRef = useRef<HTMLInputElement>(null);
   const dragStateRef = useRef<{
     pointerId: number;
@@ -631,9 +799,35 @@ export default function KnowledgeWorkspace({
     activeDocument?.kind,
   ]);
 
-  const selectSource = async (source: KnowledgeSourcePage) => {
+  const splitState = split.splitState;
+  const visibleCount = visibleKnowledgePaneCount(splitState.splitMode);
+  const isStageZoomed = splitState.zoomedPaneIndex !== null && visibleCount > 1;
+  const showPaneHeaders = visibleCount > 1 && !isStageZoomed;
+  const hasDocStage = Boolean(
+    rootPath && splitState.tabs.length > 0 && !splitState.showHomeOverview,
+  );
+
+  const activePanePaths = useMemo(
+    () =>
+      Array.from({ length: visibleCount }, (_, idx) => {
+        const raw = splitState.panePaths[idx] ?? null;
+        return raw ? normalizeKnowledgePath(raw) : null;
+      }),
+    [splitState.panePaths, visibleCount],
+  );
+
+  const visiblePaneIndices = useMemo(() => {
+    if (isStageZoomed && splitState.zoomedPaneIndex !== null) {
+      return [splitState.zoomedPaneIndex];
+    }
+    return Array.from({ length: visibleCount }, (_, idx) => idx);
+  }, [isStageZoomed, splitState.zoomedPaneIndex, visibleCount]);
+
+  const selectSource = (source: KnowledgeSourcePage) => {
     if (source === activeSource) return;
-    if (isDocOpen && onCloseNote && !(await onCloseNote())) return;
+    if (splitState.tabs.length > 0) {
+      split.showOverview(true);
+    }
     setActiveSource(source);
     setQuery('');
     setGlobalSearch(false);
@@ -695,7 +889,138 @@ export default function KnowledgeWorkspace({
     });
   }, []);
 
-  useSidebarCollapseShortcut(toggleSidebarCollapsed, true);
+  useSidebarCollapseShortcut(toggleSidebarCollapsed, active);
+
+  // Dismiss pane doc switcher menu on outside click or Escape
+  useEffect(() => {
+    if (openSwitcherPane === null) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (
+        switcherMenuRef.current &&
+        !switcherMenuRef.current.contains(event.target as Node)
+      ) {
+        setOpenSwitcherPane(null);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        setOpenSwitcherPane(null);
+      }
+    };
+    window.addEventListener('mousedown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      window.removeEventListener('mousedown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown, true);
+    };
+  }, [openSwitcherPane]);
+
+  useEffect(() => {
+    setOpenSwitcherPane(null);
+  }, [splitState.splitMode, splitState.zoomedPaneIndex]);
+
+  // Split & multi-tab keyboard shortcuts (active only when Knowledge workspace is frontmost).
+  useEffect(() => {
+    if (!active || !rootPath) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (pendingDeletePath || creatingCategory) return;
+      if (
+        event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.shiftKey &&
+        /^[1-9]$/.test(event.key)
+      ) {
+        const targetTab = splitState.tabs[Number(event.key) - 1];
+        if (!targetTab) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const alreadyPane = activePanePaths.indexOf(targetTab.path);
+        if (alreadyPane >= 0) {
+          split.focusPane(alreadyPane);
+        } else {
+          split.assignTab(split.safeFocusedPaneIndex, targetTab.path);
+        }
+        return;
+      }
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        event.shiftKey &&
+        !event.altKey &&
+        event.key.toLowerCase() === 'm'
+      ) {
+        if (visibleCount > 1) {
+          event.preventDefault();
+          event.stopPropagation();
+          split.toggleZoom();
+        }
+        return;
+      }
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey &&
+        event.key === '\\'
+      ) {
+        if (splitState.tabs.length === 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (splitState.splitMode === 'single') {
+          split.switchLayout('vertical');
+        } else {
+          split.splitOutPane(split.safeFocusedPaneIndex, 'next-or-empty');
+        }
+        return;
+      }
+      if (event.ctrlKey && event.altKey && !event.shiftKey) {
+        if (event.key === 'ArrowRight' || event.key.toLowerCase() === 'l') {
+          if (visibleCount > 1) {
+            event.preventDefault();
+            event.stopPropagation();
+            split.moveFocus(1);
+          }
+          return;
+        }
+        if (event.key === 'ArrowLeft' || event.key.toLowerCase() === 'h') {
+          if (visibleCount > 1) {
+            event.preventDefault();
+            event.stopPropagation();
+            split.moveFocus(-1);
+          }
+          return;
+        }
+      }
+      if (
+        hasDocStage &&
+        split.focusedPath &&
+        !event.shiftKey &&
+        ((event.altKey &&
+          !event.ctrlKey &&
+          !event.metaKey &&
+          event.key.toLowerCase() === 'w') ||
+          ((event.ctrlKey || event.metaKey) &&
+            !event.altKey &&
+            event.key.toLowerCase() === 'w'))
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        void split.closeTab(split.focusedPath);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [
+    active,
+    activePanePaths,
+    creatingCategory,
+    hasDocStage,
+    pendingDeletePath,
+    rootPath,
+    split,
+    splitState.splitMode,
+    splitState.tabs,
+    visibleCount,
+  ]);
 
   const toggleFolder = useCallback((folderName: string) => {
     setActiveFolder(folderName);
@@ -798,8 +1123,6 @@ export default function KnowledgeWorkspace({
     persistSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
   }, []);
 
-  const isDocOpen = activeDocument?.kind === 'doc';
-
   return (
     <div
       className={`knowledge-workspace${isResizing ? ' is-resizing' : ''}${sidebarCollapsed ? ' is-sidebar-collapsed' : ''}`}
@@ -847,7 +1170,8 @@ export default function KnowledgeWorkspace({
                   active: effectiveFolder === group.name,
                   thumb: {
                     name: group.name,
-                    shape: 'circle',
+                    shape: 'square',
+                    tone: 'index',
                   },
                   onClick: () => {
                     setActiveFolder(group.name);
@@ -893,13 +1217,13 @@ export default function KnowledgeWorkspace({
                     },
                   ]
                 : []),
-              ...(isDocOpen && onCloseNote
+              ...(hasDocStage
                 ? [
                     {
                       key: 'home',
-                      label: '返回知识库概览',
+                      label: '返回知识库概览（保留已打开文档）',
                       icon: <RailHomeIcon />,
-                      onClick: () => void onCloseNote(),
+                      onClick: () => split.showOverview(true),
                     },
                   ]
                 : []),
@@ -918,13 +1242,13 @@ export default function KnowledgeWorkspace({
               </span>
             </div>
             <div className="knowledge-head-tools">
-              {isDocOpen && onCloseNote && (
+              {hasDocStage && (
                 <button
                   type="button"
                   className="kb-icon-btn"
-                  title="返回知识库概览与模板页"
+                  title="返回知识库概览与模板页（后台文档保持打开）"
                   aria-label="返回知识库概览"
-                  onClick={onCloseNote}
+                  onClick={() => split.showOverview(true)}
                 >
                   <HomeOverviewIcon />
                 </button>
@@ -1217,28 +1541,68 @@ export default function KnowledgeWorkspace({
                             </div>
                           ) : (
                             group.notes.map((note) => {
-                              const isActive =
-                                activeDocument?.relativePath ===
-                                note.relativePath;
+                              const normPath = normalizeKnowledgePath(
+                                note.relativePath,
+                              );
+                              const paneSlots = activePanePaths.reduce<
+                                number[]
+                              >((acc, p, idx) => {
+                                if (p === normPath) acc.push(idx);
+                                return acc;
+                              }, []);
+                              const isFocusedActive =
+                                hasDocStage && split.focusedPath === normPath;
+                              const isSplitVisible =
+                                hasDocStage &&
+                                !isFocusedActive &&
+                                paneSlots.length > 0;
+                              const isNoteDirty = split.documentsByPath[
+                                normPath
+                              ]
+                                ? isDirty(split.documentsByPath[normPath])
+                                : false;
                               const isDeleting =
                                 pendingDeletePath === note.relativePath;
 
                               return (
                                 <div
-                                  className={`knowledge-note-row${isActive ? ' is-active' : ''}${isDeleting ? ' is-confirming' : ''}`}
+                                  className={`knowledge-note-row${isFocusedActive ? ' is-active' : ''}${isSplitVisible ? ' is-split-visible' : ''}${isDeleting ? ' is-confirming' : ''}`}
                                   key={note.relativePath}
                                 >
                                   <button
                                     type="button"
                                     className="knowledge-note-main"
-                                    title={`${note.title}\n${note.relativePath}`}
-                                    onClick={() => onOpenNote(note)}
+                                    title={`${note.title}\n${note.relativePath}\n点击打开 · Alt+点击在分栏打开`}
+                                    onClick={(event) =>
+                                      onOpenNote(note, {
+                                        split:
+                                          event.altKey ||
+                                          event.ctrlKey ||
+                                          event.metaKey,
+                                      })
+                                    }
                                   >
                                     <div className="knowledge-note-line">
                                       <NoteIcon />
                                       <strong className="knowledge-note-title">
                                         {note.title}
                                       </strong>
+                                      {isNoteDirty && (
+                                        <span
+                                          className="knowledge-note-dirty-dot"
+                                          aria-label="未保存"
+                                          title="有未保存修改"
+                                        />
+                                      )}
+                                      {hasDocStage &&
+                                        visibleCount > 1 &&
+                                        paneSlots.length > 0 && (
+                                          <span className="knowledge-note-pane-tag">
+                                            {paneSlots
+                                              .map((s) => `P${s + 1}`)
+                                              .join('·')}
+                                          </span>
+                                        )}
                                     </div>
                                     <div className="knowledge-note-sub">
                                       {note.updatedAt > 0 && (
@@ -1317,20 +1681,34 @@ export default function KnowledgeWorkspace({
                                         </button>
                                       </div>
                                     ) : (
-                                      <button
-                                        type="button"
-                                        className="knowledge-note-trash"
-                                        title={`删除「${note.title}」`}
-                                        aria-label={`删除笔记 ${note.title}`}
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          setPendingDeletePath(
-                                            note.relativePath,
-                                          );
-                                        }}
-                                      >
-                                        <TrashIcon />
-                                      </button>
+                                      <>
+                                        <button
+                                          type="button"
+                                          className="knowledge-note-split"
+                                          title="在分栏中并排打开 (Alt+点击)"
+                                          aria-label={`在分栏中打开 ${note.title}`}
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            onOpenNote(note, { split: true });
+                                          }}
+                                        >
+                                          <SplitColumnsIcon />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="knowledge-note-trash"
+                                          title={`删除「${note.title}」`}
+                                          aria-label={`删除笔记 ${note.title}`}
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            setPendingDeletePath(
+                                              note.relativePath,
+                                            );
+                                          }}
+                                        >
+                                          <TrashIcon />
+                                        </button>
+                                      </>
                                     )}
                                   </div>
                                 </div>
@@ -1384,13 +1762,587 @@ export default function KnowledgeWorkspace({
       )}
 
       <main className="knowledge-main">
-        {isDocOpen && activeDocument ? (
-          <DocumentWorkbench
-            document={activeDocument}
-            documents={documents}
-            categories={categories}
-            {...workbench}
-          />
+        {rootPath && splitState.tabs.length > 0 && (
+          <header
+            className="kb-split-topbar"
+            aria-label="已打开文档标签与分屏栏"
+          >
+            <button
+              type="button"
+              className={`kb-overview-tab-btn${splitState.showHomeOverview ? ' is-active' : ''}`}
+              aria-pressed={splitState.showHomeOverview}
+              title={
+                splitState.showHomeOverview
+                  ? '返回已打开的文档阅读区'
+                  : '切回知识库概览（已打开文档保持活跃）'
+              }
+              onClick={() => split.showOverview(!splitState.showHomeOverview)}
+            >
+              <HomeOverviewIcon />
+              <span>概览</span>
+            </button>
+
+            <div className="kb-tab-strip" role="tablist" aria-label="文档标签">
+              {splitState.tabs.map((tab, idx) => {
+                const doc = split.documentsByPath[tab.path] ?? null;
+                const dirty = doc ? isDirty(doc) : false;
+                const paneSlots = activePanePaths.reduce<number[]>(
+                  (acc, p, slotIdx) => {
+                    if (p === tab.path) acc.push(slotIdx);
+                    return acc;
+                  },
+                  [],
+                );
+                const isFocusedTab =
+                  !splitState.showHomeOverview &&
+                  split.focusedPath === tab.path;
+                const isSplitTab =
+                  !splitState.showHomeOverview &&
+                  !isFocusedTab &&
+                  paneSlots.length > 0;
+                const shortcutLabel = idx < 9 ? ` · Alt+${idx + 1}` : '';
+
+                return (
+                  <div
+                    key={tab.path}
+                    className={`kb-doc-tab${isFocusedTab ? ' is-focused' : ''}${isSplitTab ? ' is-split-visible' : ''}${dirty ? ' is-dirty' : ''}`}
+                    role="tab"
+                    aria-selected={isFocusedTab}
+                    title={`${tab.title}\n${tab.path}${dirty ? ' (未保存)' : ''}\n点击切换 · Alt+点击分栏打开 · 中键关闭${shortcutLabel}`}
+                    onAuxClick={(event) => {
+                      if (event.button !== 1) return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void split.closeTab(tab.path);
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className="kb-doc-tab-main"
+                      onClick={(event) => {
+                        if (event.altKey || event.ctrlKey || event.metaKey) {
+                          if (paneSlots.length > 0) {
+                            split.focusPane(paneSlots[0]);
+                          } else {
+                            split.splitOutPane(
+                              split.safeFocusedPaneIndex,
+                              'next-or-empty',
+                            );
+                            const nextStateCount = Math.min(
+                              4,
+                              visibleKnowledgePaneCount(
+                                splitState.splitMode,
+                              ) === 1
+                                ? 2
+                                : visibleKnowledgePaneCount(
+                                    splitState.splitMode,
+                                  ) + 1,
+                            );
+                            const nextSlot = Math.max(
+                              0,
+                              Math.min(
+                                nextStateCount - 1,
+                                activePanePaths.indexOf(null) >= 0
+                                  ? activePanePaths.indexOf(null)
+                                  : split.safeFocusedPaneIndex + 1,
+                              ),
+                            );
+                            split.assignTab(nextSlot, tab.path);
+                          }
+                          return;
+                        }
+                        if (
+                          !splitState.showHomeOverview &&
+                          paneSlots.length > 0
+                        ) {
+                          split.focusPane(paneSlots[0]);
+                          return;
+                        }
+                        split.assignTab(split.safeFocusedPaneIndex, tab.path);
+                      }}
+                    >
+                      {dirty && (
+                        <span
+                          className="kb-tab-dirty-dot"
+                          aria-label="未保存"
+                        />
+                      )}
+                      {visibleCount > 1 && paneSlots.length > 0 && (
+                        <span className="kb-tab-pane-badge">
+                          {paneSlots.map((slot) => `P${slot + 1}`).join('·')}
+                        </span>
+                      )}
+                      <span className="kb-doc-tab-title">
+                        {doc?.title ?? tab.title}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="kb-doc-tab-close"
+                      aria-label={`关闭文档 ${doc?.title ?? tab.title}`}
+                      title="关闭此文档标签（自动保存未落盘内容）"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void split.closeTab(tab.path);
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="kb-split-controls">
+              {split.anyDirty && (
+                <button
+                  type="button"
+                  className="kb-save-all-btn"
+                  title="立即保存全部未落盘的已打开文档"
+                  onClick={() => void split.saveAll(true)}
+                >
+                  全部保存
+                </button>
+              )}
+
+              <div
+                className="kb-layout-icons"
+                role="group"
+                aria-label="多文档分屏布局"
+              >
+                {(
+                  [
+                    ['single', '单窗格专注阅读'],
+                    ['vertical', '左右并排双开对比'],
+                    ['horizontal', '上下并排双开对比'],
+                    ['tri', '三窗格布局（左主 + 右上下）'],
+                    ['quad', '四宫格多开（同时阅读 4 篇）'],
+                  ] as const
+                ).map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={`kb-layout-btn${!isStageZoomed && splitState.splitMode === mode ? ' is-active' : ''}`}
+                    title={label}
+                    aria-label={label}
+                    aria-pressed={
+                      !isStageZoomed && splitState.splitMode === mode
+                    }
+                    onClick={() => split.switchLayout(mode)}
+                  >
+                    <SplitLayoutIcon mode={mode} />
+                  </button>
+                ))}
+              </div>
+
+              {visibleCount > 1 && (
+                <button
+                  type="button"
+                  className={`kb-layout-btn kb-zoom-btn${isStageZoomed ? ' is-active' : ''}`}
+                  title={
+                    isStageZoomed
+                      ? '还原多窗格分屏 (Ctrl+Shift+M)'
+                      : '临时全屏放大当前聚焦窗格 (Ctrl+Shift+M)'
+                  }
+                  aria-label="放大或还原分屏窗格"
+                  aria-pressed={isStageZoomed}
+                  onClick={() => split.toggleZoom()}
+                >
+                  <ZoomPaneIcon zoomed={isStageZoomed} />
+                </button>
+              )}
+            </div>
+          </header>
+        )}
+
+        {hasDocStage ? (
+          <section
+            className={`kb-split-stage is-${isStageZoomed ? 'single' : splitState.splitMode}${isStageZoomed ? ' is-zoomed' : ''}${showPaneHeaders ? '' : ' is-headerless'}`}
+            aria-label="知识库多文档阅读分屏画布"
+            style={
+              {
+                '--kb-primary-pane-size': `${splitState.splitRatio}fr`,
+                '--kb-secondary-pane-size': `${1 - splitState.splitRatio}fr`,
+              } as CSSProperties
+            }
+          >
+            {showPaneHeaders &&
+              visiblePaneIndices.map((paneIdx) => {
+                const panePath = activePanePaths[paneIdx] ?? null;
+                const paneDoc = panePath
+                  ? (split.documentsByPath[panePath] ?? null)
+                  : null;
+                const isPaneFocused = paneIdx === split.safeFocusedPaneIndex;
+                const paneDirty = paneDoc ? isDirty(paneDoc) : false;
+                const switcherOpen = openSwitcherPane === paneIdx;
+                const activePaneTitle =
+                  paneDoc?.title ??
+                  splitState.tabs.find((t) => t.path === panePath)?.title ??
+                  '选择文档…';
+
+                return (
+                  <div
+                    key={`kb-header-${paneIdx}`}
+                    className={`kb-pane-header pane-header-${paneIdx}${isPaneFocused ? ' is-focused' : ''}${switcherOpen ? ' has-open-menu' : ''}`}
+                    style={{ gridArea: `header${paneIdx}` }}
+                    onMouseDown={() => split.focusPane(paneIdx)}
+                  >
+                    <div className="kb-pane-header-left">
+                      <span
+                        className={`kb-pane-status-dot${paneDirty ? ' is-dirty' : paneDoc ? ' is-ready' : ''}`}
+                        aria-hidden="true"
+                      />
+                      <span
+                        className={`kb-pane-badge${isPaneFocused ? ' is-focused' : ''}`}
+                      >
+                        P{paneIdx + 1}
+                      </span>
+                      <div
+                        className="kb-pane-switcher"
+                        ref={switcherOpen ? switcherMenuRef : undefined}
+                      >
+                        <button
+                          type="button"
+                          className={`kb-pane-switcher-trigger${switcherOpen ? ' is-open' : ''}${!panePath ? ' is-placeholder' : ''}`}
+                          aria-haspopup="listbox"
+                          aria-expanded={switcherOpen}
+                          aria-label={`窗格 ${paneIdx + 1} 文档切换`}
+                          title={
+                            paneDoc
+                              ? `${paneDoc.title}\n${paneDoc.relativePath}`
+                              : `为窗格 P${paneIdx + 1} 选择文档`
+                          }
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            split.focusPane(paneIdx);
+                            setOpenSwitcherPane((curr) =>
+                              curr === paneIdx ? null : paneIdx,
+                            );
+                          }}
+                        >
+                          <span className="kb-pane-switcher-label">
+                            {activePaneTitle}
+                          </span>
+                          <ChevronDownIcon />
+                        </button>
+
+                        {switcherOpen && (
+                          <div
+                            className="kb-pane-switcher-menu"
+                            role="listbox"
+                            aria-label={`选择窗格 P${paneIdx + 1} 的已打开文档`}
+                            onMouseDown={(event) => event.stopPropagation()}
+                          >
+                            <div className="kb-pane-switcher-head">
+                              <span>切换窗格 P{paneIdx + 1} 文档</span>
+                              <span>{splitState.tabs.length} 篇已开</span>
+                            </div>
+                            <div className="kb-pane-switcher-list">
+                              {splitState.tabs.map((tab) => {
+                                const doc = split.documentsByPath[tab.path];
+                                const itemDirty = doc ? isDirty(doc) : false;
+                                const isCurrent = panePath === tab.path;
+                                const otherSlots = activePanePaths.reduce<
+                                  number[]
+                                >((acc, p, slotIdx) => {
+                                  if (slotIdx !== paneIdx && p === tab.path) {
+                                    acc.push(slotIdx);
+                                  }
+                                  return acc;
+                                }, []);
+                                return (
+                                  <button
+                                    key={tab.path}
+                                    type="button"
+                                    role="option"
+                                    aria-selected={isCurrent}
+                                    className={`kb-pane-switcher-option${isCurrent ? ' is-selected' : ''}`}
+                                    onClick={() => {
+                                      split.assignTab(paneIdx, tab.path);
+                                      setOpenSwitcherPane(null);
+                                    }}
+                                  >
+                                    <span
+                                      className={`kb-pane-switcher-dot${itemDirty ? ' is-dirty' : isCurrent ? ' is-selected' : ''}`}
+                                      aria-hidden="true"
+                                    />
+                                    <div className="kb-pane-switcher-text">
+                                      <strong>{doc?.title ?? tab.title}</strong>
+                                      <span>{tab.path}</span>
+                                    </div>
+                                    <div className="kb-pane-switcher-tags">
+                                      {otherSlots.length > 0 && (
+                                        <span className="kb-pane-switcher-slot-tag">
+                                          {otherSlots
+                                            .map((s) => `P${s + 1}`)
+                                            .join('·')}
+                                        </span>
+                                      )}
+                                      {isCurrent && (
+                                        <span className="kb-pane-switcher-current">
+                                          当前
+                                        </span>
+                                      )}
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            {panePath && (
+                              <div className="kb-pane-switcher-footer">
+                                <button
+                                  type="button"
+                                  className="kb-pane-switcher-clear"
+                                  onClick={() => {
+                                    split.assignTab(paneIdx, null);
+                                    setOpenSwitcherPane(null);
+                                  }}
+                                >
+                                  置空此窗格（重新选文）
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="kb-pane-header-actions">
+                      {paneDoc && (
+                        <button
+                          type="button"
+                          className="kb-pane-mini-btn"
+                          title="将同一篇文档拆开对照阅读（左编右读 / 上下比对）"
+                          aria-label="同篇分栏对照"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            split.splitOutPane(paneIdx, 'mirror');
+                          }}
+                        >
+                          <SplitColumnsIcon />
+                          <span>对照</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="kb-pane-mini-btn"
+                        title="放大此窗格 (Ctrl+Shift+M)"
+                        aria-label={`放大窗格 ${paneIdx + 1}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          split.toggleZoom(paneIdx);
+                        }}
+                      >
+                        <ZoomPaneIcon zoomed={false} />
+                      </button>
+                      <button
+                        type="button"
+                        className="kb-pane-mini-btn is-close"
+                        title="关闭此分屏窗格（文档继续保留在顶部标签栏）"
+                        aria-label={`关闭窗格 ${paneIdx + 1}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          split.closePaneSlot(paneIdx);
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+
+            {visiblePaneIndices.map((paneIdx) => {
+              const panePath = activePanePaths[paneIdx] ?? null;
+              const paneDoc = panePath
+                ? (split.documentsByPath[panePath] ?? null)
+                : null;
+              const isPaneFocused = paneIdx === split.safeFocusedPaneIndex;
+              const controlledViewMode = showPaneHeaders
+                ? (splitState.paneViewModes[paneIdx] ??
+                  defaultCompactPaneViewMode(paneIdx))
+                : undefined;
+
+              return (
+                <div
+                  key={`kb-pane-${paneIdx}`}
+                  className={`kb-pane-body kb-pane-${paneIdx}${isPaneFocused ? ' is-focused' : ''}`}
+                  style={{
+                    gridArea: isStageZoomed ? 'pane0' : `pane${paneIdx}`,
+                  }}
+                  onMouseDownCapture={() => split.focusPane(paneIdx)}
+                >
+                  {paneDoc ? (
+                    <DocumentWorkbench
+                      document={paneDoc}
+                      dirty={isDirty(paneDoc)}
+                      statusText={workbench.statusText}
+                      theme={workbench.theme}
+                      documents={documents}
+                      categories={categories}
+                      paneKey={`kb-pane-${paneIdx}`}
+                      compactSplit={showPaneHeaders}
+                      controlledViewMode={controlledViewMode}
+                      onViewModeChange={
+                        showPaneHeaders
+                          ? (mode) => split.setPaneViewMode(paneIdx, mode)
+                          : undefined
+                      }
+                      renderMarkdownPreview={workbench.renderMarkdownPreview}
+                      onSourceChange={(source) =>
+                        split.editDoc(paneDoc.relativePath, source)
+                      }
+                      onSave={() =>
+                        void split.saveDoc(paneDoc.relativePath, true)
+                      }
+                      onRename={(title) =>
+                        split.renameDoc(paneDoc.relativePath, title)
+                      }
+                      onChangeCategory={(category) =>
+                        split.setCategoryDoc(paneDoc.relativePath, category)
+                      }
+                      onChangeTags={(tags) =>
+                        split.setTagsDoc(paneDoc.relativePath, tags)
+                      }
+                      onOpenWikilink={workbench.onOpenWikilink}
+                      onOpenYouTubeLink={workbench.onOpenYouTubeLink}
+                      onRunInTerminal={workbench.onRunInTerminal}
+                      onOpenAsMindmap={() =>
+                        workbench.onOpenAsMindmap?.(paneDoc.relativePath)
+                      }
+                      onConvertToMindmap={() =>
+                        workbench.onConvertToMindmap?.(paneDoc.relativePath)
+                      }
+                    />
+                  ) : (
+                    <div className="kb-pane-empty-slot">
+                      <div className="kb-pane-empty-card">
+                        <span className="knowledge-kicker">
+                          SPLIT PANE {paneIdx + 1}
+                        </span>
+                        <h3>选择要在此窗格阅读的文档</h3>
+                        <p>
+                          可直接点击左侧目录树中的任意笔记（将自动打开到此聚焦窗格），或从下面快速选取：
+                        </p>
+
+                        {splitState.tabs.length > 0 && (
+                          <div className="kb-pane-empty-group">
+                            <span className="kb-pane-empty-label">
+                              已打开文档（支持同篇对照）
+                            </span>
+                            <div className="kb-pane-empty-chips">
+                              {splitState.tabs.map((tab) => (
+                                <button
+                                  key={tab.path}
+                                  type="button"
+                                  className="kb-pane-pick-chip"
+                                  onClick={() =>
+                                    split.assignTab(paneIdx, tab.path)
+                                  }
+                                >
+                                  <span>{tab.title}</span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {docNotes.length > 0 && (
+                          <div className="kb-pane-empty-group">
+                            <span className="kb-pane-empty-label">
+                              最近文档
+                            </span>
+                            <div className="kb-pane-empty-list">
+                              {docNotes.slice(0, 6).map((note) => (
+                                <button
+                                  key={note.relativePath}
+                                  type="button"
+                                  className="kb-pane-recent-btn"
+                                  onClick={() =>
+                                    onOpenNote(note, {
+                                      split: true,
+                                      targetPaneIndex: paneIdx,
+                                    })
+                                  }
+                                >
+                                  <strong>{note.title}</strong>
+                                  <span>
+                                    {note.category || UNFILED_FOLDER} ·{' '}
+                                    {formatRelativeDate(note.updatedAt)}
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="kb-pane-empty-actions">
+                          <button
+                            type="button"
+                            className="knowledge-cta-btn"
+                            onClick={() =>
+                              onCreateNote(effectiveFolder, undefined, paneIdx)
+                            }
+                          >
+                            <PlusIcon />
+                            <span>在此窗格新建笔记</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="knowledge-secondary-btn"
+                            onClick={() => split.closePaneSlot(paneIdx)}
+                          >
+                            关闭空窗格
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {!isStageZoomed &&
+              (splitState.splitMode === 'vertical' ||
+                splitState.splitMode === 'horizontal' ||
+                splitState.splitMode === 'tri') && (
+                <div
+                  className="kb-pane-divider"
+                  role="separator"
+                  aria-orientation={
+                    splitState.splitMode === 'horizontal'
+                      ? 'horizontal'
+                      : 'vertical'
+                  }
+                  onPointerDown={(event) => {
+                    const container = event.currentTarget.parentElement;
+                    if (!container) return;
+                    const rect = container.getBoundingClientRect();
+                    const isHorizontal = splitState.splitMode === 'horizontal';
+                    const onPointerMove = (moveEvent: PointerEvent) => {
+                      const ratio = isHorizontal
+                        ? (moveEvent.clientY - rect.top - 26) /
+                          Math.max(1, rect.height - 52)
+                        : (moveEvent.clientX - rect.left) /
+                          Math.max(1, rect.width);
+                      split.setSplitRatio(ratio);
+                    };
+                    const onPointerUp = () => {
+                      window.removeEventListener('pointermove', onPointerMove);
+                      window.removeEventListener('pointerup', onPointerUp);
+                    };
+                    window.addEventListener('pointermove', onPointerMove);
+                    window.addEventListener('pointerup', onPointerUp, {
+                      once: true,
+                    });
+                  }}
+                  onDoubleClick={() => split.setSplitRatio(0.5)}
+                  title="拖拽调整分屏比例，双击还原均分"
+                >
+                  <span className="kb-divider-handle" />
+                </div>
+              )}
+          </section>
         ) : !rootPath ? (
           <div className="knowledge-setup">
             <div className="knowledge-setup-card">
@@ -1441,7 +2393,11 @@ export default function KnowledgeWorkspace({
                       type="button"
                       className="knowledge-source-recent"
                       key={note.relativePath}
-                      onClick={() => onOpenNote(note)}
+                      onClick={(event) =>
+                        onOpenNote(note, {
+                          split: event.altKey || event.ctrlKey || event.metaKey,
+                        })
+                      }
                     >
                       <span className="knowledge-source-recent-title">
                         {note.title}
@@ -1492,7 +2448,11 @@ export default function KnowledgeWorkspace({
                     type="button"
                     className="knowledge-source-recent"
                     key={note.relativePath}
-                    onClick={() => onOpenNote(note)}
+                    onClick={(event) =>
+                      onOpenNote(note, {
+                        split: event.altKey || event.ctrlKey || event.metaKey,
+                      })
+                    }
                   >
                     <span className="knowledge-source-recent-title">
                       {note.title}
@@ -1609,7 +2569,12 @@ export default function KnowledgeWorkspace({
                           key={note.relativePath}
                           type="button"
                           className="knowledge-recent-item"
-                          onClick={() => onOpenNote(note)}
+                          onClick={(event) =>
+                            onOpenNote(note, {
+                              split:
+                                event.altKey || event.ctrlKey || event.metaKey,
+                            })
+                          }
                         >
                           <NoteIcon />
                           <div className="knowledge-recent-body">
@@ -1742,6 +2707,9 @@ export default function KnowledgeWorkspace({
                 </span>
                 <span>
                   <kbd>Ctrl+S</kbd> 立即保存
+                </span>
+                <span>
+                  <kbd>Alt+点击</kbd> / <kbd>Ctrl+\</kbd> 分栏对比阅读
                 </span>
               </footer>
             </div>

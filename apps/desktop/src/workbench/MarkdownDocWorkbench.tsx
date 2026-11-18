@@ -70,6 +70,10 @@ export interface MarkdownDocWorkbenchProps {
   documents?: readonly MapDocument[];
   categories?: readonly string[];
   scrollToFootnoteRequest?: PreviewFootnoteJumpRequest | null;
+  paneKey?: string;
+  compactSplit?: boolean;
+  controlledViewMode?: DocViewMode;
+  onViewModeChange?(mode: DocViewMode): void;
   /** Turns Markdown into the sanitized HTML the preview shows. */
   renderPreview(markdown: string): { html: string; source: string };
   onSourceChange(source: string): void;
@@ -77,7 +81,7 @@ export interface MarkdownDocWorkbenchProps {
   onRename(title: string): Promise<boolean>;
   onChangeCategory?(category: string): Promise<boolean>;
   onChangeTags?(tags: string[]): Promise<boolean>;
-  onOpenWikilink?(target: string): void;
+  onOpenWikilink?(target: string, options?: { split?: boolean }): void;
   onOpenYouTubeLink?(
     videoId: string,
     startSeconds: number,
@@ -174,6 +178,10 @@ export default function MarkdownDocWorkbench({
   documents,
   categories,
   scrollToFootnoteRequest,
+  paneKey,
+  compactSplit,
+  controlledViewMode,
+  onViewModeChange,
   renderPreview,
   onSourceChange,
   onSave,
@@ -199,9 +207,10 @@ export default function MarkdownDocWorkbench({
     [],
   );
 
-  const [viewMode, setViewMode] = useState<DocViewMode>(() =>
+  const [internalViewMode, setInternalViewMode] = useState<DocViewMode>(() =>
     readStoredViewMode(),
   );
+  const viewMode = controlledViewMode ?? internalViewMode;
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [railTab, setRailTab] = useState<'outline' | 'footnotes'>('outline');
   const [localFootnoteJump, setLocalFootnoteJump] =
@@ -345,10 +354,17 @@ export default function MarkdownDocWorkbench({
     applyWithPartialImported,
   ]);
 
-  const switchViewMode = useCallback((mode: DocViewMode) => {
-    setViewMode(mode);
-    writeStoredViewMode(mode);
-  }, []);
+  const switchViewMode = useCallback(
+    (mode: DocViewMode) => {
+      if (onViewModeChange) {
+        onViewModeChange(mode);
+        return;
+      }
+      setInternalViewMode(mode);
+      writeStoredViewMode(mode);
+    },
+    [onViewModeChange],
+  );
 
   const showEditor = viewMode === 'edit' || viewMode === 'split';
   const showPreview = viewMode === 'split' || viewMode === 'read';
@@ -607,6 +623,7 @@ export default function MarkdownDocWorkbench({
       statusText={statusText}
       summary={`${lineCount} 行 · ${document.source.length} 字`}
       layout="source-preview-outline"
+      compact={compactSplit}
       onSave={onSave}
       onRename={onRename}
       meta={
@@ -819,7 +836,7 @@ export default function MarkdownDocWorkbench({
             <div className="markdown-editor-frame">
               <MarkdownEditor
                 ref={editorRef}
-                id={`doc-source-${document.session}`}
+                id={`doc-source-${paneKey ? `${paneKey}-` : ''}${document.session}`}
                 value={document.source}
                 onChange={onSourceChange}
                 onSelectionChange={ignoreSelection}
@@ -847,7 +864,7 @@ export default function MarkdownDocWorkbench({
               source={preview.source}
               theme={theme}
               mediaDocumentPath={document.relativePath}
-              hideMinimap={viewMode !== 'read'}
+              hideMinimap={Boolean(compactSplit) || viewMode !== 'read'}
               scrollToFootnoteRequest={activeFootnoteJump}
               onCodeChange={handleCodeChange}
               onOpenWikilink={onOpenWikilink}

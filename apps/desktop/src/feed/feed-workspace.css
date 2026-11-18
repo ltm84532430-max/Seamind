@@ -27,7 +27,7 @@
   overflow: hidden;
   background: var(--panel);
   color: var(--ink);
-  font-family: inherit;
+  font-family: var(--ui-font);
   user-select: none;
 }
 
@@ -54,7 +54,7 @@
   flex-basis: 42px;
   align-items: center;
   padding: 0;
-  border-right: 0;
+  border-right: 1px solid var(--line);
   box-sizing: border-box;
 }
 
@@ -117,28 +117,27 @@
   align-items: center;
   justify-content: center;
   gap: 4px;
-  height: 28px;
-  padding: 0 10px;
-  background: color-mix(in srgb, var(--ink) 4%, transparent);
-  border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
-  border-radius: 5px;
+  height: 26px;
+  padding: 0 9px;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 2px;
   color: var(--ink);
   font-size: 11.5px;
   font-weight: 500;
   cursor: pointer;
-  transition: all 130ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    color 120ms ease;
   white-space: nowrap;
   box-sizing: border-box;
 }
 
 .feed-header-btn:hover {
   border-color: color-mix(in srgb, var(--ink) 25%, var(--line));
-  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
   color: var(--ink);
-}
-
-.feed-header-btn:active {
-  transform: scale(0.97);
 }
 
 .feed-header-btn.is-primary {
@@ -146,16 +145,10 @@
   border-color: var(--accent);
   color: #fff;
   font-weight: 600;
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .feed-header-btn.is-primary:hover {
-  opacity: 0.92;
-  box-shadow: 0 2px 4px color-mix(in srgb, var(--accent) 40%, transparent);
-}
-
-.feed-header-btn.is-primary:active {
-  transform: scale(0.97);
+  filter: brightness(1.06);
 }
 
 .feed-sidebar-scroll {
@@ -231,13 +224,14 @@
   align-items: center;
   gap: 8px;
   width: 100%;
-  height: 31px;
+  height: 30px;
   padding: 0 8px;
-  border-radius: 5px;
+  border-radius: 2px;
   border: none;
   background: transparent;
   color: var(--ink);
   font-size: 12.5px;
+  font-weight: 480;
   text-align: left;
   cursor: pointer;
   transition:
@@ -250,9 +244,9 @@
 }
 
 .feed-nav-row.is-active {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--ink);
-  font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-weight: 580;
 }
 
 .feed-nav-icon {
@@ -287,24 +281,19 @@
 .feed-nav-count {
   margin-left: auto;
   flex-shrink: 0;
-  min-width: 22px;
-  height: 18px;
-  padding: 0 6px;
-  border-radius: 9999px;
+  padding: 0;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 500;
+  justify-content: flex-end;
+  font: 400 11px/1 var(--mono);
   font-variant-numeric: tabular-nums;
   color: var(--muted);
-  background: color-mix(in srgb, var(--ink) 4%, transparent);
-  transition: all 120ms ease;
-  box-sizing: border-box;
+  background: transparent;
+  transition: color 120ms ease;
 }
 
 .feed-nav-count.has-unread {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  background: transparent;
   color: var(--accent);
   font-weight: 600;
 }
@@ -327,9 +316,9 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 31px;
+  height: 30px;
   padding: 0 8px 0 4px;
-  border-radius: 5px;
+  border-radius: 2px;
   background: transparent;
   color: var(--ink);
   cursor: pointer;
@@ -407,11 +396,10 @@
 }
 
 .feed-category-indicator {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   flex-shrink: 0;
   border-radius: 50%;
-  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.12);
 }
 
 .feed-category-name {
@@ -420,8 +408,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12.5px;
-  font-weight: 550;
+  font-size: 12px;
+  font-weight: 560;
 }
 
 .feed-category-actions {
@@ -469,23 +457,17 @@
 .feed-category-pill {
   margin-left: auto;
   flex-shrink: 0;
-  min-width: 22px;
-  height: 18px;
-  padding: 0 6px;
-  border-radius: 9999px;
+  padding: 0;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 600;
+  justify-content: flex-end;
+  font: 500 10.5px/1 var(--mono);
   font-variant-numeric: tabular-nums;
-  line-height: 1;
-  transition: all 120ms ease;
-  box-sizing: border-box;
+  transition: color 120ms ease;
 }
 
 .feed-category-pill.has-unread {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  background: transparent;
   color: var(--accent);
 }
 
@@ -526,7 +508,7 @@
   gap: 7px;
   height: 27px;
   padding: 0 8px 0 4px;
-  border-radius: 4px;
+  border-radius: 2px;
   color: var(--muted);
   cursor: pointer;
   transition:
@@ -542,8 +524,8 @@
 
 .feed-channel-row.is-active {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
-  color: var(--ink);
-  font-weight: 600;
+  color: var(--accent);
+  font-weight: 580;
 }
 
 .feed-channel-icon {
@@ -569,7 +551,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11.5px;
+  font-size: 12px;
+  font-weight: 480;
 }
 
 .feed-channel-actions {
@@ -618,30 +601,24 @@
 .feed-channel-pill {
   margin-left: auto;
   flex-shrink: 0;
-  min-width: 20px;
-  height: 16px;
-  padding: 0 5px;
-  border-radius: 9999px;
+  padding: 0;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 500;
+  justify-content: flex-end;
+  font: 400 10.5px/1 var(--mono);
   font-variant-numeric: tabular-nums;
-  line-height: 1;
-  background: color-mix(in srgb, var(--ink) 4%, transparent);
+  background: transparent;
   color: var(--muted);
-  transition: all 120ms ease;
-  box-sizing: border-box;
+  transition: color 120ms ease;
 }
 
 .feed-channel-row:hover .feed-channel-pill.has-unread {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  background: transparent;
   color: var(--accent);
 }
 
 .feed-channel-row.is-active .feed-channel-pill.has-unread {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  background: transparent;
   color: var(--accent);
   font-weight: 600;
 }

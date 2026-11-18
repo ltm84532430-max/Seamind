@@ -189,7 +189,11 @@ export const FeedSidebar: React.FC<FeedSidebarProps> = ({
                 key: `ch:${channel.id}`,
                 label: `${channel.title}${channel.unreadCount > 0 ? ` (${channel.unreadCount} 未读)` : ''}`,
                 active: selectedChannelId === channel.id,
-                thumb: { name: channel.title, shape: 'circle' },
+                thumb: {
+                  name: channel.title,
+                  shape: 'square' as const,
+                  tone: 'index' as const,
+                },
                 dot: channel.unreadCount > 0,
                 onClick: () => onSelectChannel(channel.id),
               })),

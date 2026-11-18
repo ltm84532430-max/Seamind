@@ -1791,3 +1791,109 @@
     display: none;
   }
 }
+
+/* Compact multi-pane styling inside Knowledge Base split views */
+.document-workbench[data-compact='true'] .workbench-header,
+.app-shell.is-knowledge-surface
+  .document-workbench[data-compact='true']
+  .workbench-header {
+  height: auto;
+  min-height: 36px;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+  padding: 5px 10px;
+}
+.document-workbench[data-compact='true'] .workbench-badge,
+.app-shell.is-knowledge-surface
+  .document-workbench[data-compact='true']
+  .workbench-badge,
+.document-workbench[data-compact='true'] .workbench-path,
+.app-shell.is-knowledge-surface
+  .document-workbench[data-compact='true']
+  .workbench-path,
+.document-workbench[data-compact='true'] .workbench-status,
+.app-shell.is-knowledge-surface
+  .document-workbench[data-compact='true']
+  .workbench-status {
+  display: none;
+}
+.document-workbench[data-compact='true'] .workbench-title,
+.app-shell.is-knowledge-surface
+  .document-workbench[data-compact='true']
+  .workbench-title {
+  width: auto;
+  min-width: 110px;
+  max-width: 240px;
+  flex: 1 1 130px;
+  padding: 2px 6px;
+  font-size: 13px;
+}
+.document-workbench[data-compact='true'] .workbench-meta-bar,
+.app-shell.is-knowledge-surface
+  .document-workbench[data-compact='true']
+  .workbench-meta-bar {
+  flex: 1 1 140px;
+  min-width: 90px;
+  gap: 4px;
+}
+.document-workbench[data-compact='true'] .workbench-folder-chip,
+.app-shell.is-knowledge-surface
+  .document-workbench[data-compact='true']
+  .workbench-folder-chip {
+  height: 22px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+.document-workbench[data-compact='true'] .workbench-tag-chip,
+.app-shell.is-knowledge-surface
+  .document-workbench[data-compact='true']
+  .workbench-tag-chip {
+  height: 20px;
+  font-size: 10px;
+}
+.document-workbench[data-compact='true'] .workbench-actions,
+.app-shell.is-knowledge-surface
+  .document-workbench[data-compact='true']
+  .workbench-actions {
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+.document-workbench[data-compact='true'] .workbench-actions > button,
+.app-shell.is-knowledge-surface
+  .document-workbench[data-compact='true']
+  .workbench-actions
+  > button {
+  height: 24px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+.document-workbench[data-compact='true'] .workbench-view-segmented,
+.app-shell.is-knowledge-surface
+  .document-workbench[data-compact='true']
+  .workbench-view-segmented {
+  height: 24px;
+}
+.document-workbench[data-compact='true'] .workbench-view-segmented button,
+.app-shell.is-knowledge-surface
+  .document-workbench[data-compact='true']
+  .workbench-view-segmented
+  button {
+  height: 22px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+.document-workbench[data-compact='true']
+  .workbench-split[data-doc-mode='split'].is-outline-hidden,
+.app-shell.is-knowledge-surface
+  .document-workbench[data-compact='true']
+  .workbench-split[data-doc-mode='split'].is-outline-hidden {
+  grid-template-columns: minmax(160px, 44%) minmax(0, 1fr);
+}
+.document-workbench[data-compact='true']
+  .workbench-split[data-doc-mode='split'].has-outline,
+.app-shell.is-knowledge-surface
+  .document-workbench[data-compact='true']
+  .workbench-split[data-doc-mode='split'].has-outline {
+  grid-template-columns: minmax(140px, 38%) minmax(140px, 1fr) 164px;
+}

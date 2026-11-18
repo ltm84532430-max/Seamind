@@ -1014,10 +1014,6 @@ export default function HabitWorkspace({
                     onClick: () => setCategoryFilter('all'),
                   },
                   ...snapshot.categories.map((category) => {
-                    const categoryColor = habitCategoryColor(
-                      category.id,
-                      snapshot.categories,
-                    );
                     const count = snapshot.habits.filter(
                       (habit) =>
                         habit.categoryId === category.id &&
@@ -1035,8 +1031,8 @@ export default function HabitWorkspace({
                       active: categoryFilter === category.id,
                       thumb: {
                         name: category.name,
-                        color: categoryColor,
-                        shape: 'circle' as const,
+                        shape: 'square' as const,
+                        tone: 'index' as const,
                       },
                       onClick: () => setCategoryFilter(category.id),
                     };

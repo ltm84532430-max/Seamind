@@ -34,6 +34,7 @@
   overflow: hidden;
   color: var(--ink);
   background: var(--panel);
+  font-family: var(--ui-font);
   font-size: 12px;
 }
 
@@ -65,7 +66,10 @@
   background: var(--panel);
 }
 
-.task-workspace button:not(.task-filter) {
+.task-workspace
+  button:not(.task-filter):not(.seamind-rail-button):not(
+    .seamind-rail-collapse-btn
+  ):not(.task-sidebar-toggle) {
   padding: 6px 10px;
   border: 1px solid var(--line);
   border-radius: 0;
@@ -101,7 +105,7 @@
   max-width: 42px;
   align-items: center;
   padding: 0;
-  border-right: 0;
+  border-right: 1px solid var(--line);
   overflow: hidden;
 }
 
@@ -140,7 +144,7 @@
   align-items: center;
   justify-content: center;
   padding: 0;
-  border-color: transparent;
+  border: 0;
   color: var(--muted);
   background: transparent;
 }
@@ -152,9 +156,8 @@
 }
 
 .task-workspace button.task-sidebar-toggle:hover {
-  border-color: var(--line);
   color: var(--ink);
-  background: color-mix(in srgb, var(--panel) 88%, var(--ink));
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
 }
 
 .task-section-label {
@@ -179,6 +182,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.task-filter span:last-child {
+  flex: 0 0 auto;
+  font: 400 11px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
 }
 .task-filter.is-active {
   color: var(--accent);

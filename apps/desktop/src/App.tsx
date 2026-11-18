@@ -49,6 +49,10 @@ import KnowledgeWorkspace, {
   readKnowledgeSidebarWidth,
 } from './knowledge/KnowledgeWorkspace';
 import {
+  useKnowledgeSplitWorkspace,
+  type OpenKnowledgeNoteOptions,
+} from './knowledge/use-knowledge-split';
+import {
   findWikilinkTarget,
   type KnowledgeNoteTemplate,
 } from './knowledge/knowledge-markdown';
@@ -404,6 +408,10 @@ function AppContent() {
   const [terminalWorkspaceOpened, setTerminalWorkspaceOpened] = useState(
     () => activeWorkspace === 'terminal',
   );
+  // 知识库首次打开后保持挂载，切换工作区时保留多文档标签与分屏布局。
+  const [knowledgeWorkspaceOpened, setKnowledgeWorkspaceOpened] = useState(
+    () => activeWorkspace === 'knowledge',
+  );
   const [theme, setTheme] = useState<Theme>(readTheme);
   const [mindmapStyle, setMindmapStyle] =
     useState<MindmapStyle>(readMindmapStyle);
@@ -712,7 +720,25 @@ function AppContent() {
     setError: (message) => setLibraryError(message),
     confirmDiscard: (message) => window.confirm(message),
   });
+  const knowledgeSplit = useKnowledgeSplitWorkspace({
+    getSnapshot: () => librarySnapshotRef.current,
+    installSnapshot: (snapshot) => installLibrarySnapshot(snapshot),
+    refreshList: () => {
+      void searchLibrary().catch((error) =>
+        setLibraryError(errorMessage(error, '更新搜索索引失败')),
+      );
+    },
+    setStatus: (message) => setSaveMessage(message),
+    setError: (message) => setLibraryError(message),
+    confirmDiscard: (message) => window.confirm(message),
+  });
+  const knowledgeSplitRef = useRef(knowledgeSplit);
+  knowledgeSplitRef.current = knowledgeSplit;
   const activeDocument = workbench.active;
+  const effectiveActiveDoc =
+    activeWorkspace === 'knowledge'
+      ? (knowledgeSplit.focusedDocument ?? activeDocument)
+      : activeDocument;
   const catalogDocuments = librarySnapshot?.documents ?? [];
 
   useEffect(() => {
@@ -826,6 +852,7 @@ function AppContent() {
     if (activeWorkspace === 'player') setPlayerOpened(true);
     if (activeWorkspace === 'feed') setFeedOpened(true);
     if (activeWorkspace === 'reader') setReaderOpened(true);
+    if (activeWorkspace === 'knowledge') setKnowledgeWorkspaceOpened(true);
     if (activeWorkspace === 'terminal') setTerminalWorkspaceOpened(true);
   }, [media, activeWorkspace]);
 
@@ -1432,11 +1459,43 @@ function AppContent() {
       getReaderBridge: () => readerAgentBridgeRef.current,
       getLibrarySnapshot: () => librarySnapshotRef.current,
       getCurrentChapter: () => currentEpubChapter,
-      getOpenDocument: () => workbench.controller.getState(),
-      editOpenDocument: (markdown) => workbench.controller.edit(markdown),
-      saveOpenDocument: () => workbench.controller.save({ manual: true }),
-      createKnowledgeDocument: (options) =>
-        workbench.controller.createCustomDocument(options),
+      getOpenDocument: () =>
+        activeWorkspace === 'knowledge'
+          ? (knowledgeSplitRef.current.focusedDocument ??
+            workbench.controller.getState())
+          : workbench.controller.getState(),
+      editOpenDocument: (markdown) => {
+        if (
+          activeWorkspace === 'knowledge' &&
+          knowledgeSplitRef.current.focusedPath
+        ) {
+          knowledgeSplitRef.current.editDoc(
+            knowledgeSplitRef.current.focusedPath,
+            markdown,
+          );
+          return;
+        }
+        workbench.controller.edit(markdown);
+      },
+      saveOpenDocument: () => {
+        if (
+          activeWorkspace === 'knowledge' &&
+          knowledgeSplitRef.current.focusedPath
+        ) {
+          return knowledgeSplitRef.current.saveDoc(
+            knowledgeSplitRef.current.focusedPath,
+            true,
+          );
+        }
+        return workbench.controller.save({ manual: true });
+      },
+      createKnowledgeDocument: async (options) => {
+        if (activeWorkspace === 'knowledge') {
+          const created = await knowledgeSplitRef.current.createNote(options);
+          return Boolean(created);
+        }
+        return workbench.controller.createCustomDocument(options);
+      },
       reloadLibrary: () =>
         agentHostRef.current.loadLibrary(false).then(() => undefined),
       openKnowledgeNote: (note) =>
@@ -2413,7 +2472,7 @@ function AppContent() {
     if (!leavePlantUmlSession()) return false;
     if (document.kind === 'doc' && !options.asMindmap) {
       if (!(await canLeaveMindmapDraft())) return false;
-      if (await workbench.controller.openMarkdown(document)) {
+      if (await knowledgeSplit.openNote(document)) {
         setPreviewDocumentPath(null);
         setActiveWorkspace('knowledge');
         return true;
@@ -2454,7 +2513,7 @@ function AppContent() {
 
   const showKnowledgeDocuments = async () => {
     if (activeWorkspace === 'knowledge') return;
-    if (workbench.controller.getState()?.kind === 'doc') {
+    if (knowledgeSplit.splitState.tabs.length > 0) {
       setActiveWorkspace('knowledge');
       return;
     }
@@ -2502,6 +2561,7 @@ function AppContent() {
       if (typeof selected !== 'string') return;
       if (!leavePlantUmlSession()) return;
       if (!(await workbench.controller.leave())) return;
+      if (!(await knowledgeSplit.closeAll())) return;
       const keepKnowledgeWorkspace = activeWorkspace === 'knowledge';
       setLibraryBusy(true);
       const snapshot = await libraryApi.setRoot({
@@ -2513,7 +2573,7 @@ function AppContent() {
       setLibraryQuery('');
       if (keepKnowledgeWorkspace) {
         const firstNote = snapshot.documents.find((doc) => doc.kind === 'doc');
-        if (firstNote) await workbench.controller.openMarkdown(firstNote);
+        if (firstNote) await knowledgeSplit.openNote(firstNote);
         setSaveMessage('文件库已设置');
       } else if (snapshot.documents.some((doc) => doc.kind === 'mindmap')) {
         const firstMindmap = snapshot.documents.find(
@@ -2883,10 +2943,24 @@ function AppContent() {
       setActiveWorkspace('mindmap');
   };
 
-  // The knowledge page has its own layout, so opening or creating a note there stays on that page.
+  // The knowledge page supports multi-tab & split-pane reading/editing via knowledgeSplit.
+  const openKnowledgeWorkspaceNote = async (
+    note: MapDocument,
+    options?: OpenKnowledgeNoteOptions,
+  ) => {
+    if (!leavePlantUmlSession()) return;
+    if (!(await canLeaveMindmapDraft())) return;
+    await knowledgeSplit.openNote(note, options);
+  };
+
+  // Ebook split panel & legacy callers open markdown inside single-doc workbench, while knowledge page syncs when active.
   const openKnowledgeNote = async (note: MapDocument) => {
     if (!leavePlantUmlSession()) return;
     if (!(await canLeaveMindmapDraft())) return;
+    if (activeWorkspace === 'knowledge') {
+      await knowledgeSplit.openNote(note);
+      return;
+    }
     await workbench.controller.openMarkdown(note);
   };
   agentHostRef.current.loadLibrary = loadLibrary;
@@ -2895,6 +2969,7 @@ function AppContent() {
   const createKnowledgeNote = async (
     folder: string,
     template?: KnowledgeNoteTemplate,
+    targetPaneIndex?: number,
   ) => {
     if (!librarySnapshotRef.current?.rootPath) {
       setLibraryError('请先选择文件库目录，再新建笔记。');
@@ -2903,16 +2978,16 @@ function AppContent() {
     if (!leavePlantUmlSession()) return;
     if (draftRef.current.dirty && !(await saveDraft())) return;
     if (template) {
-      await workbench.controller.createCustomDocument({
-        kind: 'doc',
+      await knowledgeSplit.createNote({
         category: folder,
         title: template.titlePrefix,
         source: template.source,
         tags: template.tags,
+        targetPaneIndex,
       });
       return;
     }
-    await workbench.controller.createDocument('doc', folder);
+    await knowledgeSplit.createNote({ category: folder, targetPaneIndex });
   };
 
   const upsertSavedInLibrary = (doc: MapDocument) => {
@@ -2986,13 +3061,14 @@ function AppContent() {
       relativePath: currentDoc.relativePath,
       open: () => {
         void (async () => {
-          await openKnowledgeNote(currentDoc);
+          await openKnowledgeWorkspaceNote(currentDoc);
           setActiveWorkspace('knowledge');
         })();
       },
       updateMarkdown: async (nextMarkdown: string, statusLabel?: string) => {
         if (
-          !workbench.controller.canSyncSavedMarkdown(currentDoc.relativePath)
+          !workbench.controller.canSyncSavedMarkdown(currentDoc.relativePath) ||
+          !knowledgeSplit.canSyncSavedMarkdown(currentDoc.relativePath)
         ) {
           throw new Error(
             '知识库文档有未保存的编辑，已停止后续阶段精修以保护你的修改。',
@@ -3018,6 +3094,11 @@ function AppContent() {
         });
         upsertSavedInLibrary(currentDoc);
         workbench.controller.syncSavedMarkdown(
+          currentDoc.relativePath,
+          nextMarkdown,
+          statusLabel,
+        );
+        knowledgeSplit.syncSavedMarkdown(
           currentDoc.relativePath,
           nextMarkdown,
           statusLabel,
@@ -3097,13 +3178,14 @@ function AppContent() {
       relativePath: currentDoc.relativePath,
       open: () => {
         void (async () => {
-          await openKnowledgeNote(currentDoc);
+          await openKnowledgeWorkspaceNote(currentDoc);
           setActiveWorkspace('knowledge');
         })();
       },
       updateMarkdown: async (nextMarkdown: string, statusLabel?: string) => {
         if (
-          !workbench.controller.canSyncSavedMarkdown(currentDoc.relativePath)
+          !workbench.controller.canSyncSavedMarkdown(currentDoc.relativePath) ||
+          !knowledgeSplit.canSyncSavedMarkdown(currentDoc.relativePath)
         ) {
           throw new Error(
             '知识库文档有未保存的编辑，已暂停自动同步以保护你的修改。',
@@ -3127,6 +3209,11 @@ function AppContent() {
         });
         upsertSavedInLibrary(currentDoc);
         workbench.controller.syncSavedMarkdown(
+          currentDoc.relativePath,
+          nextMarkdown,
+          statusLabel,
+        );
+        knowledgeSplit.syncSavedMarkdown(
           currentDoc.relativePath,
           nextMarkdown,
           statusLabel,
@@ -3160,7 +3247,7 @@ function AppContent() {
           markdown: opened.markdown,
           openKnowledge: () => {
             void (async () => {
-              await openKnowledgeNote(currentDoc);
+              await openKnowledgeWorkspaceNote(currentDoc);
               setActiveWorkspace('knowledge');
             })();
           },
@@ -3171,7 +3258,8 @@ function AppContent() {
             if (
               !workbench.controller.canSyncSavedMarkdown(
                 currentDoc.relativePath,
-              )
+              ) ||
+              !knowledgeSplit.canSyncSavedMarkdown(currentDoc.relativePath)
             ) {
               throw new Error(
                 '知识库文档有未保存的编辑，已暂停自动同步以保护你的修改。',
@@ -3195,6 +3283,11 @@ function AppContent() {
             });
             upsertSavedInLibrary(currentDoc);
             workbench.controller.syncSavedMarkdown(
+              currentDoc.relativePath,
+              nextMarkdown,
+              statusLabel,
+            );
+            knowledgeSplit.syncSavedMarkdown(
               currentDoc.relativePath,
               nextMarkdown,
               statusLabel,
@@ -3235,7 +3328,10 @@ function AppContent() {
     }
   };
 
-  const openWikilinkTarget = async (rawTarget: string) => {
+  const openWikilinkTarget = async (
+    rawTarget: string,
+    options?: OpenKnowledgeNoteOptions,
+  ) => {
     const cleanTarget = rawTarget.trim();
     if (!cleanTarget) return;
     const found = findWikilinkTarget(
@@ -3244,7 +3340,7 @@ function AppContent() {
     );
     if (found?.kind === 'doc') {
       if (activeWorkspace === 'knowledge') {
-        await openKnowledgeNote(found);
+        await openKnowledgeWorkspaceNote(found, options);
       } else {
         await openMap(found);
       }
@@ -3261,6 +3357,17 @@ function AppContent() {
     }
     if (!leavePlantUmlSession()) return;
     if (draftRef.current.dirty && !(await saveDraft())) return;
+    if (activeWorkspace === 'knowledge') {
+      const currentCategory =
+        knowledgeSplit.focusedDocument?.category || categoryFilter || '未分类';
+      await knowledgeSplit.createNote({
+        category: currentCategory,
+        title: cleanTarget,
+        source: `# ${cleanTarget}\n\n`,
+        split: options?.split,
+      });
+      return;
+    }
     const currentCategory =
       workbench.controller.getState()?.category || categoryFilter || '未分类';
     await workbench.controller.createCustomDocument({
@@ -3272,7 +3379,16 @@ function AppContent() {
   };
 
   // Opening a note as a mind map from the knowledge page shows the mind map on its own workspace.
-  const openKnowledgeNoteAsMindmap = async () => {
+  const openKnowledgeNoteAsMindmap = async (targetPath?: string) => {
+    if (targetPath) {
+      if (!(await knowledgeSplit.flushForMindmapPreview(targetPath))) return;
+      const opened = await openMap(
+        { relativePath: targetPath, kind: 'doc' },
+        { asMindmap: true },
+      );
+      if (opened) setActiveWorkspace('mindmap');
+      return;
+    }
     await openActiveDocumentAsMindmap();
   };
 
@@ -3334,8 +3450,14 @@ function AppContent() {
       }
       return;
     }
+    if (kind === 'doc') {
+      if (await knowledgeSplit.createNote({ category })) {
+        setActiveWorkspace('knowledge');
+      }
+      return;
+    }
     if (await workbench.controller.createDocument(kind, category))
-      setActiveWorkspace(kind === 'doc' ? 'knowledge' : 'mindmap');
+      setActiveWorkspace('mindmap');
   };
 
   const openActiveDocumentAsMindmap = async () => {
@@ -3350,13 +3472,22 @@ function AppContent() {
     return opened;
   };
 
-  const convertActiveDocumentToMindmap = async () => {
+  const convertActiveDocumentToMindmap = async (targetPath?: string) => {
     if (
       !window.confirm(
         '转为思维导图后，这份文档会按思维导图打开，内容不变。继续吗？',
       )
     )
       return;
+    if (targetPath) {
+      const convertedFromSplit =
+        await knowledgeSplit.convertToMindmapDoc(targetPath);
+      if (convertedFromSplit) {
+        await openMap(convertedFromSplit);
+        setActiveWorkspace('mindmap');
+      }
+      return;
+    }
     const converted = await workbench.controller.convertToMindmap();
     if (converted) {
       await openMap(converted);
@@ -3626,6 +3757,11 @@ function AppContent() {
         workbench.controller.getState()?.relativePath ??
         currentDoc.relativePath ??
         target.relativePath;
+      knowledgeSplit.syncSavedMarkdown(
+        resolvedPath,
+        appended.nextSource,
+        '已同步电子书批注笔记',
+      );
 
       setBookNoteMarkdownCache((prev) => ({
         ...prev,
@@ -4015,6 +4151,11 @@ function AppContent() {
       if (activeSave && !(await activeSave)) {
         throw new Error('当前导图保存失败，请处理保存错误后再重命名文件夹。');
       }
+      if (!(await knowledgeSplit.saveAll(true))) {
+        throw new Error(
+          '当前已打开的知识库文档保存失败，请先处理保存错误后再重命名文件夹。',
+        );
+      }
 
       const snapshot = await libraryApi.renameFolder({
         relativePath,
@@ -4044,6 +4185,7 @@ function AppContent() {
 
       setCategoryFilter((current) => remapFolderPath(current) ?? '');
       workbench.controller.remapPaths(remapFolderPath);
+      knowledgeSplit.remapPaths(remapFolderPath);
       const currentDraft = draftRef.current;
       const nextRelativePath = remapFolderPath(currentDraft.relativePath);
       if (nextRelativePath !== currentDraft.relativePath) {
@@ -4130,6 +4272,7 @@ function AppContent() {
         workbench.controller.getState()?.relativePath === document.relativePath
       )
         await workbench.controller.discard();
+      knowledgeSplit.discardDoc(document.relativePath);
       await libraryApi.deleteDocument({ relativePath: document.relativePath });
       if (draftRef.current.relativePath === document.relativePath) {
         installDraft(
@@ -6872,50 +7015,51 @@ function AppContent() {
         )}
       </section>
 
-      {activeWorkspace === 'knowledge' && (
-        <section
-          className="knowledge-workspace-stage"
-          aria-label="知识库工作区"
-        >
+      <section
+        className={`knowledge-workspace-stage${activeWorkspace !== 'knowledge' ? ' is-workspace-hidden' : ''}`}
+        aria-label="知识库工作区"
+        aria-hidden={activeWorkspace !== 'knowledge'}
+      >
+        {knowledgeWorkspaceOpened && (
           <KnowledgeWorkspace
+            active={activeWorkspace === 'knowledge'}
             rootPath={librarySnapshot?.rootPath ?? null}
             documents={catalogDocuments}
             categories={librarySnapshot?.documentCategories ?? []}
             activeDocument={
-              activeDocument?.kind === 'doc' ? activeDocument : null
+              knowledgeSplit.focusedDocument?.kind === 'doc'
+                ? knowledgeSplit.focusedDocument
+                : null
             }
+            split={knowledgeSplit}
             errorMessage={libraryError}
             busy={libraryBusy}
             onChooseRoot={() => void chooseLibraryRoot()}
             onRefresh={() => void loadLibrary(false)}
             onCreateCategory={(category) => createKnowledgeCategory(category)}
-            onOpenNote={(note) => void openKnowledgeNote(note)}
-            onCloseNote={() => workbench.controller.leave()}
-            onCreateNote={(folder, template) =>
-              void createKnowledgeNote(folder, template)
+            onOpenNote={(note, options) =>
+              void openKnowledgeWorkspaceNote(note, options)
+            }
+            onCreateNote={(folder, template, targetPaneIndex) =>
+              void createKnowledgeNote(folder, template, targetPaneIndex)
             }
             onDeleteNote={(note) => void deleteMap(note, { skipConfirm: true })}
             onSidebarLayoutChange={onKnowledgeSidebarLayoutChange}
             workbench={{
-              dirty: workbench.dirty,
               statusText: saveMessage,
               theme,
               renderMarkdownPreview: renderDocumentPreview,
-              onSourceChange: (source) => workbench.controller.edit(source),
-              onSave: () => void workbench.controller.save({ manual: true }),
-              onRename: (title) => workbench.controller.rename(title),
-              onChangeCategory: (category) =>
-                workbench.controller.setCategory(category),
-              onChangeTags: (tags) => workbench.controller.setTags(tags),
-              onOpenWikilink: (target) => void openWikilinkTarget(target),
+              onOpenWikilink: (target, options) =>
+                void openWikilinkTarget(target, options),
               onOpenYouTubeLink: openYouTubeVideoInPlayer,
               onRunInTerminal: handleRunCodeInTerminal,
-              onOpenAsMindmap: () => void openKnowledgeNoteAsMindmap(),
-              onConvertToMindmap: () => void convertActiveDocumentToMindmap(),
+              onOpenAsMindmap: (path) => void openKnowledgeNoteAsMindmap(path),
+              onConvertToMindmap: (path) =>
+                void convertActiveDocumentToMindmap(path),
             }}
           />
-        </section>
-      )}
+        )}
+      </section>
 
       <section
         className={`terminal-workspace-stage${activeWorkspace !== 'terminal' ? ' is-workspace-hidden' : ''}`}
@@ -6941,11 +7085,11 @@ function AppContent() {
                 capabilities: agentCapabilities,
                 books: librarySnapshot?.books ?? [],
                 documents: librarySnapshot?.documents ?? [],
-                activeDocument: activeDocument
+                activeDocument: effectiveActiveDoc
                   ? {
-                      title: activeDocument.title,
-                      relativePath: activeDocument.relativePath ?? null,
-                      kind: activeDocument.kind,
+                      title: effectiveActiveDoc.title,
+                      relativePath: effectiveActiveDoc.relativePath ?? null,
+                      kind: effectiveActiveDoc.kind,
                     }
                   : null,
                 activeMindmapTitle: editorDraft.title,

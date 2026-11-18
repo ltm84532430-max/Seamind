@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { avatarHue, initialOf } from '../src/player/format';
-import { shouldHandleSidebarShortcut } from '../src/components/WorkspaceSidebarRail';
+import {
+  formatRailIndexCode,
+  shouldHandleSidebarShortcut,
+} from '../src/components/WorkspaceSidebarRail';
 
 describe('workspace sidebar rail helpers', () => {
   it('handles Ctrl+B and Cmd+B while ignoring editable fields and modified chords', () => {
@@ -59,6 +62,20 @@ describe('workspace sidebar rail helpers', () => {
     expect(avatarHue('黑客')).toBe(avatarHue('黑客'));
     expect(avatarHue('黑客')).toBeGreaterThanOrEqual(0);
     expect(avatarHue('黑客')).toBeLessThan(360);
+  });
+
+  it('formats institutional 1-2 character index codes for textual rail navigation', () => {
+    expect(formatRailIndexCode('阿杉电脑')).toBe('阿杉');
+    expect(formatRailIndexCode('湖科大教书匠 Gj Teacher')).toBe('湖科');
+    expect(formatRailIndexCode('C语言全链路进阶修炼路径')).toBe('C语');
+    expect(formatRailIndexCode('综合学习计划')).toBe('综合');
+    expect(formatRailIndexCode('Bloomberg-Originals')).toBe('BO');
+    expect(formatRailIndexCode('Corey-Schafer')).toBe('CS');
+    expect(formatRailIndexCode('MIT OpenCourseWare')).toBe('MO');
+    expect(formatRailIndexCode('J.P. Morgan - Eye on the Market')).toBe('JP');
+    expect(formatRailIndexCode('UK Ministry of Defence - GOV.UK')).toBe('UM');
+    expect(formatRailIndexCode('WorkBuddy')).toBe('WO');
+    expect(formatRailIndexCode('  ')).toBe('--');
   });
 
   it('keeps workspace-sidebar-rail.css brace-balanced with flat selectors', () => {

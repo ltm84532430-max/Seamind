@@ -627,7 +627,11 @@ export default function LibraryPanel({
                   key: `folder:${folder.path}`,
                   label: `${folder.name} (${folder.documentCount})`,
                   active: categoryFilter === folder.path,
-                  thumb: { name: folder.name, shape: 'circle' as const },
+                  thumb: {
+                    name: folder.name,
+                    shape: 'square' as const,
+                    tone: 'index' as const,
+                  },
                   onClick: () =>
                     onSelectCategory(
                       categoryFilter === folder.path ? '' : folder.path,

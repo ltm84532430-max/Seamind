@@ -1,5 +1,11 @@
 :root {
-  font-family: 'Segoe UI', 'Microsoft YaHei UI', sans-serif;
+  --ui-font:
+    'Inter', 'Noto Sans SC', 'Source Han Sans SC', 'PingFang SC', 'Segoe UI',
+    'Microsoft YaHei UI', sans-serif;
+  --mono:
+    'JetBrains Mono', 'Cascadia Mono', 'Cascadia Code', Consolas,
+    'Microsoft YaHei UI', monospace;
+  font-family: var(--ui-font);
   color: #20252b;
   background: #f4f5f6;
   font-synthesis: none;
@@ -10,7 +16,6 @@
   --ink: #20252b;
   --accent: #d9573b;
   --panel: #fff;
-  --mono: 'Cascadia Code', Consolas, 'Microsoft YaHei UI', monospace;
   --scrollbar-slider: #64646466;
   --scrollbar-slider-hover: #646464b3;
   --scrollbar-slider-active: #00000099;

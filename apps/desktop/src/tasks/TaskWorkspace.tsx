@@ -1471,7 +1471,11 @@ export default function TaskWorkspace({
                     key: `plan:${plan.id}`,
                     label: `${plan.title} (${countPlanActiveTasks(snapshot.tasks, plan.id)})`,
                     active: planFilter === plan.id,
-                    thumb: { name: plan.title, shape: 'circle' },
+                    thumb: {
+                      name: plan.title,
+                      shape: 'square',
+                      tone: 'index',
+                    },
                     onClick: () => setPlanFilter(plan.id),
                   })),
                 },
