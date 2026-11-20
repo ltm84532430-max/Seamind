@@ -215,11 +215,9 @@ export class Markmap {
             return false;
           }
           if (event.type === 'wheel' && !event.ctrlKey && !event.metaKey) {
-            const scroller = target.closest<HTMLElement>(
-              '[data-seamind-code-scroll]',
-            );
+            const scroller = target.closest('[data-seamind-code-scroll]');
             if (
-              scroller &&
+              scroller instanceof HTMLElement &&
               (scroller.scrollHeight > scroller.clientHeight + 1 ||
                 scroller.scrollWidth > scroller.clientWidth + 1)
             ) {
