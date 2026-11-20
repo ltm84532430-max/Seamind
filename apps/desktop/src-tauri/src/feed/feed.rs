@@ -14,7 +14,7 @@ use crate::feed_store as store;
 const DATABASE_FILE: &str = "feed.sqlite3";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(25);
 const USER_AGENT_STRING: &str =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) MarkmapDesktop/0.1.6 (RSS/Atom Reader)";
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) MarkmapDesktop/0.1.7 (RSS/Atom Reader)";
 
 fn feed_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()

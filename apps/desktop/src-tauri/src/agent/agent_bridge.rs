@@ -410,7 +410,7 @@ async fn handle_mcp(
             json!({
                 "protocolVersion": requested,
                 "capabilities": { "tools": { "listChanged": false } },
-                "serverInfo": { "name": "seamind", "version": "0.1.6" },
+                "serverInfo": { "name": "seamind", "version": "0.1.7" },
                 "instructions": "读取、搜索知识库和搜索 YouTube 视频（player_search_youtube）均为只读操作。思维导图修改和播放器学习路径生成（learning_path_propose）会回到 Seamind 应用中弹出预览对话框，等待用户确认后才会应用。生成学习路径时请先用 player_search_youtube 搜索真实视频，切勿编造视频编号。"
             })
         }
