@@ -583,7 +583,7 @@ async fn download_to(
     }
     let _ = fs::remove_file(destination);
     let client = reqwest::Client::builder()
-        .user_agent("Seamind/0.1.5 local podcast captions")
+        .user_agent("Seamind/0.1.6 local podcast captions")
         .timeout(Duration::from_secs(900))
         .build()
         .map_err(|error| format!("无法准备模型下载：{error}"))?;
@@ -998,7 +998,7 @@ fn spawn_decoder(
         DecoderInput::Remote(_) => {
             command
                 .arg("-user_agent")
-                .arg("Seamind/0.1.5")
+                .arg("Seamind/0.1.6")
                 .arg("-rw_timeout")
                 .arg("15000000")
                 .arg("-protocol_whitelist")
