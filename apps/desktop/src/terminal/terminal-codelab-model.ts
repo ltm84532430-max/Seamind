@@ -668,13 +668,178 @@ export function loadCodeLabCollection(): CodeLabSavedFile[] {
 export function saveCodeLabCollection(files: CodeLabSavedFile[]): void {
   if (typeof localStorage === 'undefined') return;
   try {
-    localStorage.setItem(CODELAB_COLLECTION_STORAGE_KEY, JSON.stringify(files));
+    const lightweight = files.map((file) => ({
+      ...file,
+      cells: stripHeavyOutputsForStorage(file.cells),
+    }));
+    localStorage.setItem(
+      CODELAB_COLLECTION_STORAGE_KEY,
+      JSON.stringify(lightweight),
+    );
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent(CODELAB_COLLECTION_EVENT));
     }
   } catch {
     // ignore storage quota errors
   }
+}
+
+export interface OutputDisplaySlice {
+  previewText: string;
+  truncated: boolean;
+  totalLines: number;
+  totalChars: number;
+  hiddenLines: number;
+}
+
+const DEFAULT_OUTPUT_MAX_LINES = 240;
+const DEFAULT_OUTPUT_MAX_CHARS = 24_000;
+const STORAGE_MAX_TEXT_OUTPUT_CHARS = 8_000;
+const STORAGE_MAX_MEDIA_CHARS = 16_000;
+
+/**
+ * Prevents massive stdout/stderr dumps from freezing the WebView DOM layout.
+ * Keeps head + tail slices so both initial context and trailing summaries stay visible.
+ */
+export function truncateOutputForDisplay(
+  text: string,
+  maxLines = DEFAULT_OUTPUT_MAX_LINES,
+  maxChars = DEFAULT_OUTPUT_MAX_CHARS,
+): OutputDisplaySlice {
+  const normalized = text.replace(/\r\n?/g, '\n');
+  const lines = normalized.split('\n');
+  const totalLines = lines.length;
+  const totalChars = normalized.length;
+
+  if (totalLines <= maxLines && totalChars <= maxChars) {
+    return {
+      previewText: normalized,
+      truncated: false,
+      totalLines,
+      totalChars,
+      hiddenLines: 0,
+    };
+  }
+
+  if (totalLines > maxLines) {
+    const headCount = Math.max(1, Math.floor(maxLines * 0.62));
+    const tailCount = Math.max(1, maxLines - headCount);
+    const hiddenLines = Math.max(0, totalLines - headCount - tailCount);
+    let preview = [
+      ...lines.slice(0, headCount),
+      `\n… 已折叠中间 ${hiddenLines} 行输出（共 ${totalLines} 行）…\n`,
+      ...lines.slice(totalLines - tailCount),
+    ].join('\n');
+    if (preview.length > maxChars) {
+      const half = Math.max(200, Math.floor(maxChars / 2));
+      preview = `${preview.slice(0, half)}\n… 输出过长已截断（共 ${totalChars.toLocaleString()} 字符）…\n${preview.slice(-half)}`;
+    }
+    return {
+      previewText: preview,
+      truncated: true,
+      totalLines,
+      totalChars,
+      hiddenLines,
+    };
+  }
+
+  const headChars = Math.max(200, Math.floor(maxChars * 0.6));
+  const tailChars = Math.max(200, maxChars - headChars);
+  return {
+    previewText: `${normalized.slice(0, headChars)}\n… 已折叠中间输出（共 ${totalChars.toLocaleString()} 字符）…\n${normalized.slice(-tailChars)}`,
+    truncated: true,
+    totalLines,
+    totalChars,
+    hiddenLines: 0,
+  };
+}
+
+/**
+ * Strips heavy binary/image/HTML outputs before synchronous localStorage writes
+ * to avoid main-thread JSON.stringify jank and quota overflow while preserving code.
+ */
+export function stripHeavyOutputsForStorage(
+  cells: readonly CodeLabCell[],
+): CodeLabCell[] {
+  return cells.map((cell) => {
+    if (cell.outputs.length === 0) return cell;
+    const slimOutputs: CodeLabOutputItem[] = [];
+    for (const out of cell.outputs) {
+      if (out.kind === 'image/png') {
+        if (out.dataUrl.length <= STORAGE_MAX_MEDIA_CHARS) {
+          slimOutputs.push(out);
+        } else {
+          slimOutputs.push({
+            kind: 'text',
+            text: '[图表输出已省略持久化 · 重新运行此格即可生成]',
+          });
+        }
+      } else if (out.kind === 'image/svg+xml') {
+        if (out.svg.length <= STORAGE_MAX_MEDIA_CHARS) {
+          slimOutputs.push(out);
+        } else {
+          slimOutputs.push({
+            kind: 'text',
+            text: '[大型 SVG 输出已省略持久化 · 重新运行此格即可生成]',
+          });
+        }
+      } else if (out.kind === 'text/html') {
+        if (out.html.length <= STORAGE_MAX_MEDIA_CHARS) {
+          slimOutputs.push(out);
+        } else {
+          slimOutputs.push({
+            kind: 'text',
+            text: '[大型 HTML 表格输出已省略持久化 · 重新运行此格即可生成]',
+          });
+        }
+      } else if (out.kind === 'stream') {
+        slimOutputs.push(
+          out.text.length > STORAGE_MAX_TEXT_OUTPUT_CHARS
+            ? {
+                ...out,
+                text: `${out.text.slice(0, STORAGE_MAX_TEXT_OUTPUT_CHARS)}\n… [持久化已截断]`,
+              }
+            : out,
+        );
+      } else if (out.kind === 'text') {
+        slimOutputs.push(
+          out.text.length > STORAGE_MAX_TEXT_OUTPUT_CHARS
+            ? {
+                ...out,
+                text: `${out.text.slice(0, STORAGE_MAX_TEXT_OUTPUT_CHARS)}\n… [持久化已截断]`,
+              }
+            : out,
+        );
+      } else {
+        slimOutputs.push(out);
+      }
+    }
+    return { ...cell, outputs: slimOutputs };
+  });
+}
+
+export function moveCodeLabCell(
+  cells: readonly CodeLabCell[],
+  cellId: string,
+  direction: 'up' | 'down',
+): CodeLabCell[] {
+  const index = cells.findIndex((c) => c.id === cellId);
+  if (index < 0) return [...cells];
+  const target = direction === 'up' ? index - 1 : index + 1;
+  if (target < 0 || target >= cells.length) return [...cells];
+  const next = [...cells];
+  const [moved] = next.splice(index, 1);
+  next.splice(target, 0, moved);
+  return next;
+}
+
+export function formatDurationCompact(ms?: number): string {
+  if (ms === undefined || !Number.isFinite(ms) || ms < 0) return '';
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(2)} s`;
+  const mins = Math.floor(ms / 60_000);
+  const secs = ((ms % 60_000) / 1000).toFixed(1);
+  return `${mins}m ${secs}s`;
 }
 
 export function upsertCodeLabFile(

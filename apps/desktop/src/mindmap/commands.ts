@@ -1,8 +1,14 @@
 import { parseDocument } from 'yaml';
 import type { PureNode } from 'markmap-lib';
+import {
+  codeLanguageDisplayName,
+  detectCodeLanguageFromSource,
+  normalizeCodeBlockLanguage,
+} from '../workbench/code-execution-service';
 
 export const MAX_MARKDOWN_NODE_NOTE_CHARS = 8_000;
 export const MAX_AGENT_BRANCH_CHARS = 40_000;
+export const MAX_MINDMAP_CODE_BLOCK_CHARS = 32_000;
 
 export interface MarkdownNodeSource {
   kind: 'heading' | 'list' | 'block';
@@ -747,5 +753,293 @@ export function applyMarkdownNodeBranch(
     markdown: lines.join('\n'),
     lineIndex: insertionLineIndex,
     nodeId: ensured.nodeId,
+  };
+}
+
+export interface MarkdownCodeFenceInfo {
+  index: number;
+  language: string;
+  rawLanguage: string;
+  source: string;
+  startLine: number;
+  endLine: number;
+  indent: string;
+  lineCount: number;
+}
+
+export function extractMarkdownCodeFences(
+  markdown: string,
+): MarkdownCodeFenceInfo[] {
+  const lines = markdown.split(/\r?\n/);
+  const fm = frontmatterMatch(markdown);
+  const startScanLine = fm ? fm[0].split(/\r?\n/).length : 0;
+  const results: MarkdownCodeFenceInfo[] = [];
+  let i = startScanLine;
+
+  while (i < lines.length) {
+    const opening = lines[i].match(/^([ \t]*)(`{3,}|~{3,})[ \t]*(.*)$/);
+    if (!opening) {
+      i += 1;
+      continue;
+    }
+    const indent = opening[1];
+    const fence = opening[2];
+    const rawLang = opening[3].trim().split(/[ \t]+/, 1)[0] ?? '';
+    let end = i + 1;
+    while (end < lines.length) {
+      const closing = lines[end].match(/^[ \t]*(`{3,}|~{3,})[ \t]*$/);
+      if (
+        closing &&
+        closing[1][0] === fence[0] &&
+        closing[1].length >= fence.length
+      ) {
+        break;
+      }
+      end += 1;
+    }
+    if (end >= lines.length) {
+      i += 1;
+      continue;
+    }
+    const bodyLines = lines.slice(i + 1, end).map((line) => {
+      if (indent && line.startsWith(indent)) return line.slice(indent.length);
+      return line;
+    });
+    results.push({
+      index: results.length,
+      language: normalizeCodeBlockLanguage(rawLang),
+      rawLanguage: rawLang,
+      source: bodyLines.join('\n'),
+      startLine: i,
+      endLine: end + 1,
+      indent,
+      lineCount: bodyLines.length,
+    });
+    i = end + 1;
+  }
+  return results;
+}
+
+function chooseCodeFenceDelimiter(code: string): string {
+  let maxTicks = 2;
+  for (const match of code.matchAll(/`{3,}/g)) {
+    if (match[0].length > maxTicks) maxTicks = match[0].length;
+  }
+  return '`'.repeat(maxTicks + 1);
+}
+
+function buildFencedCodeLines(
+  language: string,
+  code: string,
+  indent = '',
+): string[] {
+  const normalizedCode = code.replace(/\r\n?/g, '\n').replace(/\n+$/, '');
+  const fence = chooseCodeFenceDelimiter(normalizedCode);
+  const cleanLang = normalizeCodeBlockLanguage(language);
+  const langTag = cleanLang === 'text' ? 'text' : cleanLang;
+  const bodyLines = normalizedCode
+    .split('\n')
+    .map((line) =>
+      indent ? (line.length > 0 ? `${indent}${line}` : '') : line,
+    );
+  return [`${indent}${fence}${langTag}`, ...bodyLines, `${indent}${fence}`];
+}
+
+export interface InsertCodeBlockOptions {
+  language: string;
+  code: string;
+  title?: string;
+}
+
+export function applyInsertCodeBlockCommand(
+  markdown: string,
+  source: MarkdownNodeSource,
+  options: InsertCodeBlockOptions,
+): MarkdownCommandResult {
+  if (source.kind === 'block') {
+    throw new Error(
+      '不能在代码块或媒体节点下继续插入子代码块，请选择标题或列表节点。',
+    );
+  }
+  const cleanCode = options.code.replace(/\r\n?/g, '\n').replace(/\n+$/, '');
+  if (!cleanCode.trim()) {
+    throw new Error('代码块内容不能为空。');
+  }
+  if (cleanCode.length > MAX_MINDMAP_CODE_BLOCK_CHARS) {
+    throw new Error(
+      `代码块不能超过 ${MAX_MINDMAP_CODE_BLOCK_CHARS.toLocaleString()} 个字符。`,
+    );
+  }
+  const ensured = ensureMarkdownNodeId(markdown, source);
+  const currentSource: MarkdownNodeSource = {
+    ...source,
+    id: ensured.nodeId,
+    lineIndex: ensured.lineIndex,
+  };
+  const lines = ensured.markdown.split(/\r?\n/);
+  const insertionIndex = markdownNodeInsertionIndex(
+    ensured.markdown,
+    currentSource,
+  );
+  const cleanTitle = (options.title ?? '')
+    .replace(/\r\n?/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const childNodeId = createNodeId();
+  const blockLines: string[] = [];
+
+  if (currentSource.kind === 'heading' && currentSource.level !== undefined) {
+    const childLevel = currentSource.level + 1;
+    if (cleanTitle) {
+      if (childLevel > 6) {
+        blockLines.push(`- ${cleanTitle}${nodeMarker(childNodeId)}`);
+        blockLines.push(
+          ...buildFencedCodeLines(options.language, cleanCode, '  '),
+        );
+      } else {
+        blockLines.push(
+          `${'#'.repeat(childLevel)} ${cleanTitle}${nodeMarker(childNodeId)}`,
+        );
+        blockLines.push(
+          ...buildFencedCodeLines(options.language, cleanCode, ''),
+        );
+      }
+    } else if (childLevel > 6) {
+      blockLines.push(
+        `- ${codeLanguageDisplayName(options.language)} 代码块${nodeMarker(childNodeId)}`,
+      );
+      blockLines.push(
+        ...buildFencedCodeLines(options.language, cleanCode, '  '),
+      );
+    } else {
+      blockLines.push(...buildFencedCodeLines(options.language, cleanCode, ''));
+    }
+  } else {
+    const stepIndent = ' '.repeat(
+      Math.max(2, (currentSource.marker?.length ?? 1) + 1),
+    );
+    const childIndent = `${currentSource.indent || ''}${stepIndent}`;
+    const label =
+      cleanTitle || `${codeLanguageDisplayName(options.language)} 代码块`;
+    blockLines.push(`${childIndent}- ${label}${nodeMarker(childNodeId)}`);
+    blockLines.push(
+      ...buildFencedCodeLines(options.language, cleanCode, `${childIndent}  `),
+    );
+  }
+
+  const needsBlankBefore =
+    currentSource.kind === 'heading' &&
+    insertionIndex > 0 &&
+    Boolean(lines[insertionIndex - 1]?.trim());
+  const inserted = needsBlankBefore ? ['', ...blockLines] : blockLines;
+  const lineIndex = insertionIndex + (needsBlankBefore ? 1 : 0);
+  lines.splice(insertionIndex, 0, ...inserted);
+  return {
+    markdown: lines.join('\n'),
+    lineIndex,
+    nodeId: childNodeId,
+  };
+}
+
+export function applyConvertNodeToCodeBlockCommand(
+  markdown: string,
+  source: MarkdownNodeSource,
+  options?: { language?: string; title?: string },
+): MarkdownCommandResult {
+  if (source.kind === 'block') {
+    throw new Error('该节点已经是独立块节点。');
+  }
+  const ensured = ensureMarkdownNodeId(markdown, source);
+  const lines = ensured.markdown.split(/\r?\n/);
+  const rawLine = lines[ensured.lineIndex] ?? '';
+  const stripped = rawLine
+    .replace(nodeIdInlinePattern, '')
+    .replace(epubHrefAnywherePattern, '')
+    .trimEnd();
+  const bodyRaw = stripped.startsWith(source.prefix)
+    ? stripped.slice(source.prefix.length)
+    : source.label;
+  const decodedCode = bodyRaw.replace(/&#10;/gi, '\n').trim();
+  if (!decodedCode) {
+    throw new Error('所选节点内容为空，无法转为代码块。');
+  }
+  const language = options?.language
+    ? normalizeCodeBlockLanguage(options.language)
+    : detectCodeLanguageFromSource(decodedCode);
+  const firstCommentMatch = decodedCode
+    .split('\n')[0]
+    ?.match(/^\s*(?:#|\/\/|--)\s*(.+)$/);
+  const inferredTitle =
+    options?.title?.trim() ||
+    firstCommentMatch?.[1]?.trim().slice(0, 48) ||
+    `${codeLanguageDisplayName(language)} 代码块`;
+
+  const updatedHeadingLine = withNodeMarker(
+    `${source.prefix}${inferredTitle}`,
+    ensured.nodeId,
+    source.epubHref,
+  );
+  const fenceIndent =
+    source.kind === 'list'
+      ? `${source.indent || ''}${' '.repeat(Math.max(2, (source.marker?.length ?? 1) + 1))}`
+      : '';
+  const fenced = buildFencedCodeLines(language, decodedCode, fenceIndent);
+  lines.splice(ensured.lineIndex, 1, updatedHeadingLine, ...fenced);
+  return {
+    markdown: lines.join('\n'),
+    lineIndex: ensured.lineIndex + 1,
+    nodeId: ensured.nodeId,
+  };
+}
+
+export function applyReplaceCodeBlockCommand(
+  markdown: string,
+  options: {
+    language: string;
+    code: string;
+    startLine?: number;
+    endLine?: number;
+    blockIndex?: number;
+  },
+): { markdown: string; lineIndex: number; endLineIndex: number } {
+  const cleanCode = options.code.replace(/\r\n?/g, '\n').replace(/\n+$/, '');
+  if (cleanCode.length > MAX_MINDMAP_CODE_BLOCK_CHARS) {
+    throw new Error(
+      `代码块不能超过 ${MAX_MINDMAP_CODE_BLOCK_CHARS.toLocaleString()} 个字符。`,
+    );
+  }
+  const fences = extractMarkdownCodeFences(markdown);
+  let target: MarkdownCodeFenceInfo | undefined;
+  if (options.startLine !== undefined) {
+    target = fences.find(
+      (f) =>
+        f.startLine === options.startLine ||
+        (options.endLine !== undefined &&
+          f.startLine <= options.endLine &&
+          f.endLine >= options.startLine!),
+    );
+  }
+  if (!target && options.blockIndex !== undefined) {
+    target = fences[options.blockIndex];
+  }
+  if (!target) {
+    throw new Error('找不到要更新的代码块位置，请重新读取导图后再试。');
+  }
+  const lineEnding = markdown.includes('\r\n') ? '\r\n' : '\n';
+  const lines = markdown.split(/\r?\n/);
+  const replacement = buildFencedCodeLines(
+    options.language || target.language,
+    cleanCode,
+    target.indent,
+  );
+  lines.splice(
+    target.startLine,
+    target.endLine - target.startLine,
+    ...replacement,
+  );
+  return {
+    markdown: lines.join(lineEnding),
+    lineIndex: target.startLine,
+    endLineIndex: target.startLine + replacement.length,
   };
 }

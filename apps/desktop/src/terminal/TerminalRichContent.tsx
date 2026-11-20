@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
+import type { Theme } from '../app/app-storage';
 import { parseSafeSvgElement } from '../app/svg-sanitize';
 
 export interface CodeBlockActionCallbacks {
@@ -318,7 +319,7 @@ function InteractiveCodeBlock({
   );
 }
 
-export function BookProseView({
+export const BookProseView = memo(function BookProseView({
   content,
   actions,
 }: {
@@ -424,9 +425,13 @@ export function BookProseView({
       })}
     </div>
   );
-}
+});
 
-export function SafeSvgOutput({ svg }: { svg: string }) {
+export const SafeSvgOutput = memo(function SafeSvgOutput({
+  svg,
+}: {
+  svg: string;
+}) {
   const hostRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -444,9 +449,13 @@ export function SafeSvgOutput({ svg }: { svg: string }) {
   }, [svg]);
 
   return <div ref={hostRef} className="codelab-svg-output" />;
-}
+});
 
-export function KatexOutputBlock({ latex }: { latex: string }) {
+export const KatexOutputBlock = memo(function KatexOutputBlock({
+  latex,
+}: {
+  latex: string;
+}) {
   const html = useMemo(() => {
     const stripped = latex
       .trim()
@@ -461,18 +470,62 @@ export function KatexOutputBlock({ latex }: { latex: string }) {
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );
-}
+});
 
-export function SandboxedHtmlTableFrame({ html }: { html: string }) {
-  const srcDoc = useMemo(
-    () => `<!doctype html><html><head><meta charset="utf-8"><style>
-body { margin: 0; padding: 6px; font-family: ui-sans-serif, system-ui, sans-serif; font-size: 12px; color: #e2e8ec; background: #141a1f; }
-table { border-collapse: collapse; width: 100%; }
-th, td { border: 1px solid #2a343d; padding: 4px 8px; text-align: left; }
-thead th { background: #1b2228; font-weight: 600; }
-</style></head><body>${html}</body></html>`,
-    [html],
-  );
+export const SandboxedHtmlTableFrame = memo(function SandboxedHtmlTableFrame({
+  html,
+  theme = 'light',
+}: {
+  html: string;
+  theme?: Theme;
+}) {
+  const srcDoc = useMemo(() => {
+    const palette =
+      theme === 'navy'
+        ? {
+            bg: '#08111f',
+            fg: '#dce9f8',
+            muted: '#7f9fc2',
+            headBg: '#0d1a2e',
+            zebraBg: 'rgba(100, 181, 246, 0.04)',
+            border: '#193050',
+          }
+        : theme === 'purple'
+          ? {
+              bg: '#100a1d',
+              fg: '#f0e6ff',
+              muted: '#a48fbe',
+              headBg: '#170f28',
+              zebraBg: 'rgba(179, 152, 216, 0.05)',
+              border: '#2d1c47',
+            }
+          : theme === 'dark'
+            ? {
+                bg: '#12161a',
+                fg: '#d8dfe4',
+                muted: '#86929b',
+                headBg: '#171c21',
+                zebraBg: 'rgba(255, 255, 255, 0.025)',
+                border: '#242b33',
+              }
+            : {
+                bg: '#ffffff',
+                fg: '#1a2026',
+                muted: '#616b74',
+                headBg: '#f4f6f8',
+                zebraBg: '#fafbfc',
+                border: '#e2e6eb',
+              };
+    return `<!doctype html><html><head><meta charset="utf-8"><style>
+body { margin: 0; padding: 8px 10px; font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; font-size: 12px; color: ${palette.fg}; background: ${palette.bg}; font-variant-numeric: tabular-nums; }
+table { border-collapse: collapse; width: 100%; border: 1px solid ${palette.border}; }
+th, td { border-bottom: 1px solid ${palette.border}; border-right: 1px solid ${palette.border}; padding: 5px 9px; text-align: left; }
+th:last-child, td:last-child { border-right: 0; }
+thead th { background: ${palette.headBg}; color: ${palette.muted}; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; text-transform: none; }
+tbody tr:nth-child(even) { background: ${palette.zebraBg}; }
+tbody th { color: ${palette.muted}; font-weight: 500; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 11px; }
+</style></head><body>${html}</body></html>`;
+  }, [html, theme]);
 
   return (
     <iframe
@@ -482,4 +535,4 @@ thead th { background: #1b2228; font-weight: 600; }
       className="codelab-html-frame"
     />
   );
-}
+});

@@ -1,11 +1,13 @@
 export type {
   AgentCapabilities,
   AgentToolResult,
+  ProposeCodeBlockInput,
   ProposeFavoritesCategorizationInput,
   ProposeLearningPathInput,
   ProposeLearningPathRawNode,
   ProposeNodeBranchInput,
   ProposeNodeEditInput,
+  RunMindmapCodeBlockInput,
 } from './tool-api';
 
 export { buildValidatedLearningPathNodes } from './tools/learning-path';

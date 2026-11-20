@@ -1,11 +1,13 @@
 import type { PureNode } from 'markmap-lib';
 import type {
   GeneratedHtmlAsset,
+  MindmapCodeBlockSnapshot,
   MindmapNodeSnapshot,
   NodeEditOperation,
 } from '../agent/types';
 import type { DocumentVersion } from '../library/library';
 import {
+  extractMarkdownCodeFences,
   getMarkdownNodeNotes,
   markdownBody,
   markdownForMindmap,
@@ -278,6 +280,19 @@ export function findMathInNodeLabelLines(markdown: string): number[] {
   return issueLines;
 }
 
+export function summarizeMindmapCodeBlocks(
+  markdown: string,
+): MindmapCodeBlockSnapshot[] {
+  return extractMarkdownCodeFences(markdown).map((fence) => ({
+    blockIndex: fence.index,
+    language: fence.language,
+    lineCount: fence.lineCount,
+    startLine: fence.startLine,
+    endLine: fence.endLine,
+    preview: fence.source.split('\n').slice(0, 3).join(' | ').slice(0, 140),
+  }));
+}
+
 export function buildAgentMindmapTree(
   root: PureNode,
   sources: Map<string, MarkdownNodeSource>,
@@ -292,6 +307,7 @@ export function buildAgentMindmapTree(
   let remainingNoteChars = 12_000;
   let truncated = false;
   const markdownNotes = getMarkdownNodeNotes(markdown);
+  const allCodeBlocks = summarizeMindmapCodeBlocks(markdown);
   let nextId = 0;
   let nodeCount = 0;
   const visit = (
@@ -328,9 +344,19 @@ export function buildAgentMindmapTree(
       Math.min(maxNoteCharsPerNode, remainingNoteChars),
     );
     remainingNoteChars = Math.max(0, remainingNoteChars - note.length);
+    const matchedCodeBlocks = source
+      ? allCodeBlocks.filter(
+          (cb) =>
+            cb.startLine >= source.lineIndex &&
+            cb.startLine < source.endLineIndex,
+        )
+      : [];
     const allowedOperations: NodeEditOperation[] = source
       ? ['set_note', 'delete']
       : [];
+    if (matchedCodeBlocks.length > 0) {
+      allowedOperations.unshift('update_code_block');
+    }
     if (
       source &&
       source.kind !== 'block' &&
@@ -343,6 +369,7 @@ export function buildAgentMindmapTree(
         'add_child',
         'add_sibling',
         'add_branch',
+        'add_code_block',
       );
     }
     return {
@@ -353,6 +380,9 @@ export function buildAgentMindmapTree(
       noteTruncated: note.length < fullNote.length,
       allowedOperations,
       editable: allowedOperations.length > 0,
+      ...(matchedCodeBlocks.length > 0
+        ? { codeBlocks: matchedCodeBlocks }
+        : {}),
       children,
     };
   };

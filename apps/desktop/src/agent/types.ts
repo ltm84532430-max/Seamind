@@ -1,5 +1,14 @@
 import type { FavoriteCategoryColor, LearningPathInput } from '../player/types';
 
+export interface MindmapCodeBlockSnapshot {
+  blockIndex: number;
+  language: string;
+  lineCount: number;
+  startLine: number;
+  endLine: number;
+  preview: string;
+}
+
 export interface MindmapNodeSnapshot {
   path: string;
   nodeId: string | null;
@@ -8,6 +17,7 @@ export interface MindmapNodeSnapshot {
   noteTruncated: boolean;
   allowedOperations: NodeEditOperation[];
   editable: boolean;
+  codeBlocks?: MindmapCodeBlockSnapshot[];
   children: MindmapNodeSnapshot[];
 }
 
@@ -18,11 +28,19 @@ export interface ActiveMindmapSnapshot {
   nodeCount: number;
   truncated: boolean;
   markdown: string;
+  codeBlocks?: MindmapCodeBlockSnapshot[];
   root: MindmapNodeSnapshot;
 }
 
 export type NodeEditOperation =
-  'rename' | 'add_child' | 'add_sibling' | 'add_branch' | 'delete' | 'set_note';
+  | 'rename'
+  | 'add_child'
+  | 'add_sibling'
+  | 'add_branch'
+  | 'add_code_block'
+  | 'update_code_block'
+  | 'delete'
+  | 'set_note';
 
 export type AgentAnalysisMode = 'drilldown' | 'visualization';
 

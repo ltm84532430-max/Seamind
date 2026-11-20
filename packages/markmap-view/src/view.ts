@@ -204,6 +204,29 @@ export class Markmap {
     this.styleNode = this.svg.append('style');
     this.zoom = zoom<SVGElement, INode>()
       .filter((event) => {
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest('[data-seamind-code-interactive]')) {
+          if (
+            event.type === 'mousedown' ||
+            event.type === 'pointerdown' ||
+            event.type === 'dblclick' ||
+            event.type === 'touchstart'
+          ) {
+            return false;
+          }
+          if (event.type === 'wheel' && !event.ctrlKey && !event.metaKey) {
+            const scroller = target.closest<HTMLElement>(
+              '[data-seamind-code-scroll]',
+            );
+            if (
+              scroller &&
+              (scroller.scrollHeight > scroller.clientHeight + 1 ||
+                scroller.scrollWidth > scroller.clientWidth + 1)
+            ) {
+              return false;
+            }
+          }
+        }
         if (this.options.scrollForPan) {
           // Pan with wheels, zoom with ctrl+wheels
           if (event.type === 'wheel') return event.ctrlKey && !event.button;

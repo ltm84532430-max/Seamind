@@ -1,9 +1,11 @@
 import type { Transformer } from 'markmap-lib';
 import type { EditorDraft } from '../app/app-storage';
 import {
-  buildMarkdownNodeSourceMap,
+  applyInsertCodeBlockCommand,
   applyMarkdownNodeBranch,
   applyMarkdownNodeCommand,
+  applyReplaceCodeBlockCommand,
+  buildMarkdownNodeSourceMap,
   getMarkdownNodeNote,
   markdownForMindmap,
   MAX_AGENT_BRANCH_CHARS,
@@ -15,11 +17,13 @@ import {
   findAgentMindmapNode,
   markdownTitle,
   prepareGeneratedBranchAssets,
+  summarizeMindmapCodeBlocks,
 } from '../mindmap/app-mindmap-utils';
 import { playerApi } from '../player/player-api';
 import type { VideoInput } from '../player/types';
 import { buildValidatedLearningPathNodes } from './tools/learning-path';
 import type {
+  ProposeCodeBlockInput,
   ProposeLearningPathInput,
   ProposeNodeEditInput,
 } from './tool-api';
@@ -54,6 +58,7 @@ export function readAgentMindmap(
   );
   const sources = buildMarkdownNodeSourceMap(draft.markdown, root);
   const tree = buildAgentMindmapTree(root, sources, draft.markdown);
+  const codeBlocks = summarizeMindmapCodeBlocks(draft.markdown);
   return {
     title: draft.title,
     revision: draft.revision,
@@ -61,6 +66,7 @@ export function readAgentMindmap(
     nodeCount: tree.nodeCount,
     truncated: tree.truncated,
     markdown: draft.markdown,
+    ...(codeBlocks.length > 0 ? { codeBlocks } : {}),
     root: tree.root,
   };
 }
@@ -204,6 +210,85 @@ export function buildAgentNodeBranchProposal(args: {
     analysisMode: input.analysisMode,
     branchMarkdown: prepared.markdown,
     ...(prepared.assets.length ? { htmlAssets: prepared.assets } : {}),
+  };
+}
+
+export function buildAgentCodeBlockProposal(args: {
+  draft: EditorDraft;
+  transformer: Transformer;
+  input: ProposeCodeBlockInput;
+}): NodeEditProposal {
+  const { draft, transformer, input } = args;
+  if (draft.revision !== input.baseRevision) {
+    throw new Error('当前导图已变化，请重新读取后再提案代码块。');
+  }
+  const root = normalizeMindmapPureTree(
+    transformer.transform(markdownForMindmap(draft.markdown)).root,
+  );
+  const sources = buildMarkdownNodeSourceMap(draft.markdown, root);
+
+  if (input.mode === 'replace') {
+    const replaced = applyReplaceCodeBlockCommand(draft.markdown, {
+      language: input.language,
+      code: input.code,
+      startLine: input.startLine,
+      endLine: input.endLine,
+      blockIndex: input.blockIndex,
+    });
+    if (replaced.markdown === draft.markdown) {
+      throw new Error('代码块提案没有产生任何变化。');
+    }
+    const targetEntry = input.nodeId
+      ? [...sources.entries()].find(([, s]) => s.id === input.nodeId)
+      : input.nodePath
+        ? ([input.nodePath, sources.get(input.nodePath)] as const)
+        : undefined;
+    const [nodePath, source] = targetEntry || ['1', undefined];
+    return {
+      baseRevision: draft.revision,
+      baseRelativePath: draft.relativePath,
+      baseMarkdown: draft.markdown,
+      baseTitle: draft.title,
+      markdown: replaced.markdown,
+      title: markdownTitle(replaced.markdown),
+      nodeId: source?.id || input.nodeId || null,
+      nodePath: nodePath || '1',
+      operation: 'update_code_block',
+      previousLabel: source?.label || `${input.language.toUpperCase()} 代码块`,
+      nextLabel:
+        input.title?.trim() || `更新 ${input.language.toUpperCase()} 代码块`,
+      rationale: input.rationale,
+    };
+  }
+
+  const targetEntry = input.nodeId
+    ? [...sources.entries()].find(([, s]) => s.id === input.nodeId)
+    : input.nodePath
+      ? ([input.nodePath, sources.get(input.nodePath)] as const)
+      : undefined;
+  const [nodePath, source] = targetEntry || [];
+  if (!nodePath || !source) {
+    throw new Error('找不到目标节点的 Markdown 源位置，请重新读取导图。');
+  }
+  const command = applyInsertCodeBlockCommand(draft.markdown, source, {
+    language: input.language,
+    title: input.title,
+    code: input.code,
+  });
+  return {
+    baseRevision: draft.revision,
+    baseRelativePath: draft.relativePath,
+    baseMarkdown: draft.markdown,
+    baseTitle: draft.title,
+    markdown: command.markdown,
+    title: markdownTitle(command.markdown),
+    nodeId: command.nodeId || source.id || null,
+    nodePath,
+    operation: 'add_code_block',
+    previousLabel: source.label,
+    nextLabel:
+      input.title?.trim() || `${input.language.toUpperCase()} 可运行代码块`,
+    rationale: input.rationale,
   };
 }
 

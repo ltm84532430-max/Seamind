@@ -44,6 +44,15 @@ import {
   type TerminalCodeLabViewHandle,
 } from './TerminalCodeLabView';
 import {
+  LabChevronDownIcon,
+  LabChevronRightIcon,
+  LabCloseIcon,
+  LabPlayIcon,
+  LabPlusIcon,
+  LabSaveIcon,
+  LabStarIcon,
+} from './CodeLabIcons';
+import {
   CODELAB_COLLECTION_EVENT,
   DEFAULT_CODELAB_SNIPPETS,
   deleteCodeLabFile,
@@ -99,6 +108,13 @@ interface TerminalWorkspaceProps {
   initialCli?: TerminalCliPreset;
   initialKind?: TerminalTabKind;
   initialLabLanguage?: TerminalCodeLabLanguage;
+  externalCodeLabPush?: {
+    id: number;
+    language: TerminalCodeLabLanguage;
+    source: string;
+    autoRun?: boolean;
+  } | null;
+  onExternalCodeLabPushConsumed?: (id: number) => void;
 }
 
 const DEFAULT_SHELLS: TerminalShellOption[] = [
@@ -268,6 +284,8 @@ export default function TerminalWorkspace({
   initialCli,
   initialKind = 'shell',
   initialLabLanguage = 'python',
+  externalCodeLabPush,
+  onExternalCodeLabPushConsumed,
 }: TerminalWorkspaceProps) {
   const initialCleanCwd = normalizeDisplayPath(cwd);
   const initialTabRef = useRef<TerminalTab>({
@@ -1126,6 +1144,19 @@ export default function TerminalWorkspace({
     },
     [createSpecialTab, ensurePaneForTab, safeFocusedPane],
   );
+
+  useEffect(() => {
+    if (!active || !externalCodeLabPush) return;
+    const { id, language, source, autoRun } = externalCodeLabPush;
+    onExternalCodeLabPushConsumed?.(id);
+    setRailModule('lab');
+    pushToCodeLab(language, source, Boolean(autoRun));
+  }, [
+    active,
+    externalCodeLabPush,
+    onExternalCodeLabPushConsumed,
+    pushToCodeLab,
+  ]);
 
   const sendToAgentPane = useCallback(
     (prompt: string) => {
@@ -2439,51 +2470,18 @@ export default function TerminalWorkspace({
 
               <div className="terminal-rail-scroll">
                 {railModule === 'lab' && (
-                  <div className="terminal-rail-section">
-                    <div className="terminal-rail-group-label">
-                      主画布视图切换
-                    </div>
-                    <div className="terminal-rail-sub-seg">
-                      <button
-                        type="button"
-                        className={
-                          activeLabInfo.viewMode === 'notebook'
-                            ? 'is-active'
-                            : ''
-                        }
-                        onClick={() =>
-                          withActiveLabHandle(activeLabInfo.language, (h) =>
-                            h.setCanvasViewMode('notebook'),
-                          )
-                        }
-                      >
-                        单元格实验本
-                      </button>
-                      <button
-                        type="button"
-                        className={
-                          activeLabInfo.viewMode === 'script' ? 'is-active' : ''
-                        }
-                        onClick={() =>
-                          withActiveLabHandle(activeLabInfo.language, (h) =>
-                            h.setCanvasViewMode('script'),
-                          )
-                        }
-                      >
-                        完整源码视图
-                      </button>
-                    </div>
-
-                    <div className="terminal-rail-group-label">
-                      代码资产收集区
-                    </div>
-                    <div className="terminal-rail-sub-seg">
+                  <div className="terminal-rail-section is-lab-institutional">
+                    <div
+                      className="terminal-rail-sub-seg"
+                      role="tablist"
+                      aria-label="代码资产与视图"
+                    >
                       <button
                         type="button"
                         className={labRailSubTab === 'files' ? 'is-active' : ''}
                         onClick={() => setLabRailSubTab('files')}
                       >
-                        代码文件库 ({codeLabFiles.length})
+                        代码库 ({codeLabFiles.length})
                       </button>
                       <button
                         type="button"
@@ -2494,6 +2492,42 @@ export default function TerminalWorkspace({
                       >
                         代码片段 ({DEFAULT_CODELAB_SNIPPETS.length})
                       </button>
+                    </div>
+
+                    <div className="terminal-rail-view-row">
+                      <span className="terminal-rail-view-label">视图</span>
+                      <div className="terminal-rail-view-pills">
+                        <button
+                          type="button"
+                          className={
+                            activeLabInfo.viewMode === 'notebook'
+                              ? 'is-active'
+                              : ''
+                          }
+                          onClick={() =>
+                            withActiveLabHandle(activeLabInfo.language, (h) =>
+                              h.setCanvasViewMode('notebook'),
+                            )
+                          }
+                        >
+                          单元格
+                        </button>
+                        <button
+                          type="button"
+                          className={
+                            activeLabInfo.viewMode === 'script'
+                              ? 'is-active'
+                              : ''
+                          }
+                          onClick={() =>
+                            withActiveLabHandle(activeLabInfo.language, (h) =>
+                              h.setCanvasViewMode('script'),
+                            )
+                          }
+                        >
+                          完整源码
+                        </button>
+                      </div>
                     </div>
 
                     {labRailSubTab === 'files' ? (
@@ -2508,7 +2542,8 @@ export default function TerminalWorkspace({
                               )
                             }
                           >
-                            + Python
+                            <LabPlusIcon size={11} />
+                            <span>PY</span>
                           </button>
                           <button
                             type="button"
@@ -2519,7 +2554,8 @@ export default function TerminalWorkspace({
                               )
                             }
                           >
-                            + C
+                            <LabPlusIcon size={11} />
+                            <span>C</span>
                           </button>
                           <button
                             type="button"
@@ -2530,7 +2566,8 @@ export default function TerminalWorkspace({
                               )
                             }
                           >
-                            + C++
+                            <LabPlusIcon size={11} />
+                            <span>C++</span>
                           </button>
                           <button
                             type="button"
@@ -2540,8 +2577,10 @@ export default function TerminalWorkspace({
                                 h.saveCurrentToCollection(false),
                               )
                             }
+                            title="归档当前实验本至代码库"
                           >
-                            ★ 存当前
+                            <LabSaveIcon size={11} />
+                            <span>归档</span>
                           </button>
                         </div>
 
@@ -2550,7 +2589,7 @@ export default function TerminalWorkspace({
                           className="terminal-rail-search"
                           value={codeLabSearch}
                           onChange={(e) => setCodeLabSearch(e.target.value)}
-                          placeholder="搜索代码文件、标签或函数…"
+                          placeholder="筛选文件名、标签或函数…"
                           aria-label="搜索收集的代码文件"
                         />
 
@@ -2561,7 +2600,7 @@ export default function TerminalWorkspace({
                               ['python', 'PY'],
                               ['c', 'C'],
                               ['cpp', 'C++'],
-                              ['starred', '★'],
+                              ['starred', '收藏'],
                             ] as const
                           ).map(([key, label]) => (
                             <button
@@ -2596,7 +2635,11 @@ export default function TerminalWorkspace({
                                   }
                                 >
                                   <span className="terminal-rail-folder-caret">
-                                    {isCollapsed ? '▸' : '▾'}
+                                    {isCollapsed ? (
+                                      <LabChevronRightIcon size={11} />
+                                    ) : (
+                                      <LabChevronDownIcon size={11} />
+                                    )}
                                   </span>
                                   <span className="terminal-rail-folder-name">
                                     {group.folder}
@@ -2610,7 +2653,7 @@ export default function TerminalWorkspace({
                                   <div className="terminal-rail-folder-items">
                                     {group.items.length === 0 ? (
                                       <div className="terminal-rail-empty-hint">
-                                        暂无归档代码文件
+                                        暂无归档文件
                                       </div>
                                     ) : (
                                       group.items.map((file) => {
@@ -2644,7 +2687,7 @@ export default function TerminalWorkspace({
                                                 {file.title}
                                               </span>
                                               <span className="terminal-rail-file-cells">
-                                                {file.cells.length}格
+                                                {file.cells.length}
                                               </span>
                                             </button>
                                             <button
@@ -2662,8 +2705,16 @@ export default function TerminalWorkspace({
                                                   ? '取消收藏'
                                                   : '收藏代码文件'
                                               }
+                                              aria-label={
+                                                file.starred
+                                                  ? '取消收藏'
+                                                  : '收藏代码文件'
+                                              }
                                             >
-                                              {file.starred ? '★' : '☆'}
+                                              <LabStarIcon
+                                                size={11}
+                                                filled={file.starred}
+                                              />
                                             </button>
                                             <button
                                               type="button"
@@ -2674,8 +2725,9 @@ export default function TerminalWorkspace({
                                                 )
                                               }
                                               title="从收集库移除"
+                                              aria-label="从收集库移除"
                                             >
-                                              ×
+                                              <LabCloseIcon size={11} />
                                             </button>
                                           </div>
                                         );
@@ -2714,7 +2766,8 @@ export default function TerminalWorkspace({
                                   handleInsertSnippetToLab(snip, false)
                                 }
                               >
-                                + 插入格
+                                <LabPlusIcon size={11} />
+                                <span>插入格</span>
                               </button>
                               <button
                                 type="button"
@@ -2723,7 +2776,8 @@ export default function TerminalWorkspace({
                                   handleInsertSnippetToLab(snip, true)
                                 }
                               >
-                                ▶ 插入并运行
+                                <LabPlayIcon size={11} />
+                                <span>运行</span>
                               </button>
                             </div>
                           </div>

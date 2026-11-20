@@ -79,6 +79,9 @@ describe('stylesheet structure', () => {
     ...readdirSync(new URL('app/', sourceDirectory))
       .filter((name) => name.endsWith('.css'))
       .map((name) => `app/${name}`),
+    ...readdirSync(new URL('terminal/', sourceDirectory))
+      .filter((name) => name.endsWith('.css'))
+      .map((name) => `terminal/${name}`),
   ];
 
   it('finds the stylesheets', () => {
@@ -86,6 +89,7 @@ describe('stylesheet structure', () => {
     expect(stylesheets).toContain('ebook/ebook-workspace.css');
     expect(stylesheets).toContain('workbench/workbench.css');
     expect(stylesheets).toContain('player/player-workspace.css');
+    expect(stylesheets).toContain('terminal/terminal-workspace.css');
   });
 
   for (const name of stylesheets) {

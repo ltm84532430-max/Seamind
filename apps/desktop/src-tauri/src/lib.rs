@@ -1084,6 +1084,8 @@ async fn agent_completion(
         "library_read_document",
         "mindmap_propose_node_edit",
         "mindmap_propose_node_branch",
+        "mindmap_propose_code_block",
+        "mindmap_run_code_block",
         "player_search_youtube",
         "learning_path_list",
         "learning_path_get",

@@ -15592,3 +15592,1229 @@ select option {
   background: rgba(147, 183, 161, 0.14);
   color: #93b7a1;
 }
+
+/* ==========================================================================
+   Mindmap Institutional Code Block Cards, Literature Scrollbar & Fullscreen
+   Strictly flat CSS rules (zero nested rules inside rules).
+   ========================================================================== */
+
+.app-shell[data-map-style]
+  .markmap-node
+  > foreignObject
+  > div
+  > div:has(> .seamind-mm-code-card) {
+  max-width: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.seamind-code-panel.seamind-mm-code-card {
+  width: 520px;
+  min-width: 340px;
+  max-width: min(64vw, 660px);
+  padding: 0;
+  border: 1px solid #d7dfe4;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #1f2933;
+  box-shadow: 0 1px 2px rgba(15, 23, 32, 0.04);
+  overflow: visible;
+  text-align: left;
+}
+
+.seamind-mm-code-card.is-collapsed {
+  width: 360px;
+  min-width: 260px;
+}
+
+.seamind-mm-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 30px;
+  padding: 3px 8px;
+  border-bottom: 1px solid #e6ecef;
+  background: #f6f8fa;
+  border-radius: 3px 3px 0 0;
+  user-select: none;
+}
+
+.seamind-mm-code-card.is-collapsed .seamind-mm-code-head {
+  border-bottom: 0;
+  border-radius: 3px;
+}
+
+.seamind-mm-code-head-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.seamind-mm-code-lang {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border: 1px solid #d5dee4;
+  border-radius: 2px;
+  background: #ffffff;
+  color: #36454f;
+  font: 600 10px/1 var(--mono, 'Cascadia Code', Consolas, monospace);
+  letter-spacing: 0.06em;
+}
+
+.seamind-mm-code-lang.is-python {
+  border-color: rgba(184, 86, 56, 0.32);
+  background: rgba(184, 86, 56, 0.07);
+  color: #9f442a;
+}
+
+.seamind-mm-code-lang.is-c,
+.seamind-mm-code-lang.is-cpp {
+  border-color: rgba(45, 108, 162, 0.32);
+  background: rgba(45, 108, 162, 0.07);
+  color: #255a8a;
+}
+
+.seamind-mm-code-lang.is-shell {
+  border-color: rgba(46, 125, 86, 0.32);
+  background: rgba(46, 125, 86, 0.07);
+  color: #236946;
+}
+
+.seamind-mm-code-lines-meta {
+  color: #7c8a93;
+  font: 500 10px/1 var(--mono, 'Cascadia Code', Consolas, monospace);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.seamind-mm-code-runtime {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border: 1px solid #d5dee4;
+  border-radius: 2px;
+  background: #ffffff;
+  color: #5b6b75;
+  font: 500 10px/1 var(--mono, 'Cascadia Code', Consolas, monospace);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.seamind-mm-code-runtime:hover {
+  border-color: #aebcc4;
+  color: #1f2933;
+}
+
+.seamind-mm-code-runtime.is-local {
+  border-color: rgba(22, 138, 86, 0.38);
+  background: rgba(22, 138, 86, 0.08);
+  color: #157146;
+}
+
+.seamind-mm-code-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.seamind-mm-code-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid #d4dde3;
+  border-radius: 3px;
+  background: #ffffff;
+  color: #2d3c45;
+  font: 600 10.5px/1 var(--ui-font, sans-serif);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.seamind-mm-code-btn.is-run {
+  border-color: rgba(184, 86, 56, 0.42);
+  background: rgba(184, 86, 56, 0.06);
+  color: #9e452b;
+}
+
+.seamind-mm-code-btn.is-run:hover {
+  border-color: #b85638;
+  background: rgba(184, 86, 56, 0.13);
+}
+
+.seamind-mm-code-btn.is-running {
+  border-color: rgba(201, 59, 43, 0.48);
+  background: rgba(201, 59, 43, 0.09);
+  color: #b83224;
+}
+
+.seamind-mm-code-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: #677781;
+  cursor: pointer;
+}
+
+.seamind-mm-code-icon-btn:hover {
+  border-color: #d8e1e6;
+  background: #ffffff;
+  color: #1f2933;
+}
+
+.seamind-mm-code-icon-btn.is-agent:hover {
+  border-color: rgba(184, 86, 56, 0.35);
+  color: #b85638;
+}
+
+.seamind-mm-code-icon-btn.is-copied {
+  color: #15803d;
+}
+
+/* Code viewport with Literature-style flat matte 8px scrollbar */
+.seamind-mm-code-viewport {
+  max-height: 240px;
+  overflow: auto;
+  background: #ffffff;
+  overscroll-behavior: contain;
+}
+
+.seamind-mm-code-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  min-width: 100%;
+  width: max-content;
+}
+
+.seamind-mm-code-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 8px 8px 10px;
+  border-right: 1px solid #edf1f4;
+  background: #fafbfc;
+  color: #9aa7b1;
+  font: 400 11px/1.6 var(--mono, 'Cascadia Code', Consolas, monospace);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  user-select: none;
+}
+
+.seamind-mm-code-pre {
+  margin: 0;
+  padding: 8px 12px;
+  color: #243038;
+  font: 400 11.5px/1.6 var(--mono, 'Cascadia Code', Consolas, monospace);
+  white-space: pre;
+  tab-size: 4;
+  user-select: text;
+}
+
+.seamind-mm-code-line {
+  min-height: 1.6em;
+}
+
+/* Syntax token colors (Light default) */
+.seamind-mm-code-pre .cl-tok-kw {
+  color: #a6432b;
+  font-weight: 550;
+}
+
+.seamind-mm-code-pre .cl-tok-str {
+  color: #2c704c;
+}
+
+.seamind-mm-code-pre .cl-tok-num {
+  color: #235c9c;
+}
+
+.seamind-mm-code-pre .cl-tok-com {
+  color: #8b99a3;
+  font-style: italic;
+}
+
+.seamind-mm-code-pre .cl-tok-fn {
+  color: #1f5c8f;
+}
+
+.seamind-mm-code-pre .cl-tok-type {
+  color: #7c4d9c;
+}
+
+/* Embedded Note-Style Output Strip (directly beneath the code block) */
+.seamind-code-note-output {
+  margin: 0;
+  padding: 6px 10px 8px 11px;
+  border-top: 1px solid #e7edf1;
+  border-left: 2.5px solid #c9cacc;
+  background: #f9fafb;
+  color: #414f58;
+  border-radius: 0 0 3px 3px;
+}
+
+.seamind-code-note-output.is-running {
+  border-left-color: #d97706;
+}
+
+.seamind-code-note-output.is-success {
+  border-left-color: #15803d;
+}
+
+.seamind-code-note-output.is-error {
+  border-left-color: #c93b2b;
+  background: #fff9f8;
+}
+
+.seamind-code-note-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  user-select: none;
+}
+
+.seamind-code-note-meta {
+  color: #6b7b85;
+  font: 600 10px/1.2 var(--mono, 'Cascadia Code', Consolas, monospace);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.seamind-code-note-output.is-success .seamind-code-note-meta {
+  color: #166534;
+}
+
+.seamind-code-note-output.is-error .seamind-code-note-meta {
+  color: #b42318;
+}
+
+.seamind-code-note-output.is-running .seamind-code-note-meta {
+  color: #b45309;
+}
+
+.seamind-code-note-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.seamind-code-note-btn {
+  height: 19px;
+  padding: 0 6px;
+  border: 1px solid #d8e1e6;
+  border-radius: 2px;
+  background: #ffffff;
+  color: #5b6b75;
+  font: 500 10px/1 var(--ui-font, sans-serif);
+  cursor: pointer;
+}
+
+.seamind-code-note-btn:hover {
+  border-color: #b8c6ce;
+  color: #1f2933;
+}
+
+.seamind-code-note-btn.is-diagnose {
+  border-color: rgba(201, 59, 43, 0.45);
+  background: rgba(201, 59, 43, 0.08);
+  color: #b42318;
+  font-weight: 600;
+}
+
+.seamind-code-note-btn.is-diagnose:hover {
+  border-color: #c93b2b;
+  background: rgba(201, 59, 43, 0.14);
+}
+
+.seamind-code-note-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 19px;
+  height: 19px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  color: #7c8b94;
+  cursor: pointer;
+}
+
+.seamind-code-note-icon-btn:hover {
+  border-color: #d8e1e6;
+  background: #ffffff;
+  color: #c93b2b;
+}
+
+.seamind-code-note-body {
+  max-height: 180px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  font: 400 11px/1.5 var(--mono, 'Cascadia Code', Consolas, monospace);
+  user-select: text;
+}
+
+.seamind-code-note-stream pre,
+.seamind-code-note-error {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+
+.seamind-code-note-stream.is-stderr pre {
+  color: #9a5b13;
+}
+
+.seamind-code-note-error {
+  color: #b42318;
+}
+
+.seamind-code-note-empty {
+  color: #7e8c95;
+  font-style: italic;
+}
+
+.seamind-code-note-hint-row {
+  margin-top: 6px;
+}
+
+.seamind-code-note-inline-btn {
+  margin-top: 4px;
+  padding: 2px 7px;
+  border: 1px solid #d4dde3;
+  border-radius: 2px;
+  background: #ffffff;
+  color: #4f606a;
+  font: 500 10px/1.3 var(--ui-font, sans-serif);
+  cursor: pointer;
+}
+
+.seamind-code-note-inline-btn.is-accent {
+  border-color: rgba(22, 138, 86, 0.45);
+  background: rgba(22, 138, 86, 0.09);
+  color: #157146;
+  font-weight: 600;
+}
+
+.seamind-code-note-figure {
+  margin-top: 6px;
+}
+
+.seamind-code-note-figure img,
+.seamind-code-note-figure svg {
+  display: block;
+  max-width: 100%;
+  max-height: 165px;
+  height: auto;
+  border: 1px solid #e2e8ec;
+  background: #ffffff;
+  cursor: zoom-in;
+}
+
+.seamind-code-note-html-frame {
+  display: block;
+  width: 100%;
+  height: 145px;
+  margin-top: 6px;
+  border: 1px solid #e2e8ec;
+  background: #ffffff;
+}
+
+.seamind-code-note-latex {
+  margin-top: 4px;
+  padding: 4px 2px;
+  overflow-x: auto;
+}
+
+/* ==========================================================================
+   Literature-Style Flat Matte Rectangular Scrollbars (滑轨)
+   Matches Literature Workspace scrollbar: 8px, no arrows, transparent track,
+   flat crisp rectangular thumb.
+   ========================================================================== */
+
+.seamind-mm-code-viewport::-webkit-scrollbar,
+.seamind-code-note-body::-webkit-scrollbar,
+.mm-code-modal-cm-host .cm-scroller::-webkit-scrollbar,
+.mm-code-output-scroll::-webkit-scrollbar,
+.mm-code-insert-textarea::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.seamind-mm-code-viewport::-webkit-scrollbar-track,
+.seamind-code-note-body::-webkit-scrollbar-track,
+.mm-code-modal-cm-host .cm-scroller::-webkit-scrollbar-track,
+.mm-code-output-scroll::-webkit-scrollbar-track,
+.mm-code-insert-textarea::-webkit-scrollbar-track,
+.seamind-mm-code-viewport::-webkit-scrollbar-corner,
+.seamind-code-note-body::-webkit-scrollbar-corner,
+.mm-code-modal-cm-host .cm-scroller::-webkit-scrollbar-corner,
+.mm-code-output-scroll::-webkit-scrollbar-corner,
+.mm-code-insert-textarea::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.seamind-mm-code-viewport::-webkit-scrollbar-button,
+.seamind-code-note-body::-webkit-scrollbar-button,
+.mm-code-modal-cm-host .cm-scroller::-webkit-scrollbar-button,
+.mm-code-output-scroll::-webkit-scrollbar-button,
+.mm-code-insert-textarea::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.seamind-mm-code-viewport::-webkit-scrollbar-thumb,
+.seamind-code-note-body::-webkit-scrollbar-thumb,
+.mm-code-modal-cm-host .cm-scroller::-webkit-scrollbar-thumb,
+.mm-code-output-scroll::-webkit-scrollbar-thumb,
+.mm-code-insert-textarea::-webkit-scrollbar-thumb {
+  min-width: 24px;
+  min-height: 24px;
+  border-radius: 0;
+  background: var(--scrollbar-slider, rgba(100, 110, 120, 0.34));
+}
+
+.seamind-mm-code-viewport::-webkit-scrollbar-thumb:hover,
+.seamind-code-note-body::-webkit-scrollbar-thumb:hover,
+.mm-code-modal-cm-host .cm-scroller::-webkit-scrollbar-thumb:hover,
+.mm-code-output-scroll::-webkit-scrollbar-thumb:hover,
+.mm-code-insert-textarea::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-slider-hover, rgba(80, 90, 100, 0.52));
+}
+
+.seamind-mm-code-viewport::-webkit-scrollbar-thumb:active,
+.seamind-code-note-body::-webkit-scrollbar-thumb:active,
+.mm-code-modal-cm-host .cm-scroller::-webkit-scrollbar-thumb:active,
+.mm-code-output-scroll::-webkit-scrollbar-thumb:active,
+.mm-code-insert-textarea::-webkit-scrollbar-thumb:active {
+  background: var(--scrollbar-slider-active, rgba(60, 70, 80, 0.68));
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  .seamind-mm-code-viewport,
+  .seamind-code-note-body,
+  .mm-code-modal-cm-host .cm-scroller,
+  .mm-code-output-scroll,
+  .mm-code-insert-textarea {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-slider, rgba(100, 110, 120, 0.34))
+      transparent;
+  }
+}
+
+/* Dark / Navy / Purple Theme Calibration for Mindmap Code Cards */
+.app-shell[data-theme='dark'] .seamind-code-panel.seamind-mm-code-card,
+.app-shell[data-theme='navy'] .seamind-code-panel.seamind-mm-code-card,
+.app-shell[data-theme='purple'] .seamind-code-panel.seamind-mm-code-card {
+  border-color: #2f3a44;
+  background: #141a20;
+  color: #dce4eb;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.28);
+}
+
+.app-shell[data-theme='navy'] .seamind-code-panel.seamind-mm-code-card {
+  border-color: #1e334e;
+  background: #0a1526;
+}
+
+.app-shell[data-theme='purple'] .seamind-code-panel.seamind-mm-code-card {
+  border-color: #30224a;
+  background: #130c22;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-code-head,
+.app-shell[data-theme='navy'] .seamind-mm-code-head,
+.app-shell[data-theme='purple'] .seamind-mm-code-head {
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-code-lang,
+.app-shell[data-theme='navy'] .seamind-mm-code-lang,
+.app-shell[data-theme='purple'] .seamind-mm-code-lang {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  color: #d0dae2;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-code-lang.is-python,
+.app-shell[data-theme='navy'] .seamind-mm-code-lang.is-python,
+.app-shell[data-theme='purple'] .seamind-mm-code-lang.is-python {
+  border-color: rgba(229, 138, 98, 0.42);
+  background: rgba(229, 138, 98, 0.14);
+  color: #f2a885;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-code-runtime,
+.app-shell[data-theme='navy'] .seamind-mm-code-runtime,
+.app-shell[data-theme='purple'] .seamind-mm-code-runtime {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  color: #a9b6c0;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-code-runtime.is-local,
+.app-shell[data-theme='navy'] .seamind-mm-code-runtime.is-local,
+.app-shell[data-theme='purple'] .seamind-mm-code-runtime.is-local {
+  border-color: rgba(52, 211, 153, 0.38);
+  background: rgba(52, 211, 153, 0.12);
+  color: #6ee7b7;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-code-btn,
+.app-shell[data-theme='navy'] .seamind-mm-code-btn,
+.app-shell[data-theme='purple'] .seamind-mm-code-btn {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  color: #d8e1e8;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-code-btn.is-run,
+.app-shell[data-theme='navy'] .seamind-mm-code-btn.is-run,
+.app-shell[data-theme='purple'] .seamind-mm-code-btn.is-run {
+  border-color: rgba(229, 138, 98, 0.46);
+  background: rgba(229, 138, 98, 0.14);
+  color: #f4af8d;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-code-icon-btn,
+.app-shell[data-theme='navy'] .seamind-mm-code-icon-btn,
+.app-shell[data-theme='purple'] .seamind-mm-code-icon-btn {
+  color: #93a3ae;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-code-icon-btn:hover,
+.app-shell[data-theme='navy'] .seamind-mm-code-icon-btn:hover,
+.app-shell[data-theme='purple'] .seamind-mm-code-icon-btn:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.08);
+  color: #eef3f7;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-code-viewport,
+.app-shell[data-theme='navy'] .seamind-mm-code-viewport,
+.app-shell[data-theme='purple'] .seamind-mm-code-viewport {
+  background: transparent;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-code-gutter,
+.app-shell[data-theme='navy'] .seamind-mm-code-gutter,
+.app-shell[data-theme='purple'] .seamind-mm-code-gutter {
+  border-right-color: rgba(255, 255, 255, 0.07);
+  background: rgba(0, 0, 0, 0.18);
+  color: #62727e;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-code-pre,
+.app-shell[data-theme='navy'] .seamind-mm-code-pre,
+.app-shell[data-theme='purple'] .seamind-mm-code-pre {
+  color: #d8e2ea;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-code-pre .cl-tok-kw,
+.app-shell[data-theme='navy'] .seamind-mm-code-pre .cl-tok-kw,
+.app-shell[data-theme='purple'] .seamind-mm-code-pre .cl-tok-kw {
+  color: #f09b78;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-code-pre .cl-tok-str,
+.app-shell[data-theme='navy'] .seamind-mm-code-pre .cl-tok-str,
+.app-shell[data-theme='purple'] .seamind-mm-code-pre .cl-tok-str {
+  color: #84d0a0;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-code-pre .cl-tok-num,
+.app-shell[data-theme='navy'] .seamind-mm-code-pre .cl-tok-num,
+.app-shell[data-theme='purple'] .seamind-mm-code-pre .cl-tok-num {
+  color: #7cc0f7;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-code-pre .cl-tok-com,
+.app-shell[data-theme='navy'] .seamind-mm-code-pre .cl-tok-com,
+.app-shell[data-theme='purple'] .seamind-mm-code-pre .cl-tok-com {
+  color: #6c7d89;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-code-pre .cl-tok-fn,
+.app-shell[data-theme='navy'] .seamind-mm-code-pre .cl-tok-fn,
+.app-shell[data-theme='purple'] .seamind-mm-code-pre .cl-tok-fn {
+  color: #82b8f5;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-code-pre .cl-tok-type,
+.app-shell[data-theme='navy'] .seamind-mm-code-pre .cl-tok-type,
+.app-shell[data-theme='purple'] .seamind-mm-code-pre .cl-tok-type {
+  color: #cfa3f5;
+}
+
+.app-shell[data-theme='dark'] .seamind-code-note-output,
+.app-shell[data-theme='navy'] .seamind-code-note-output,
+.app-shell[data-theme='purple'] .seamind-code-note-output {
+  border-top-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: #c8d4dc;
+}
+
+.app-shell[data-theme='dark'] .seamind-code-note-output.is-success,
+.app-shell[data-theme='navy'] .seamind-code-note-output.is-success,
+.app-shell[data-theme='purple'] .seamind-code-note-output.is-success {
+  border-left-color: #34d399;
+}
+
+.app-shell[data-theme='dark']
+  .seamind-code-note-output.is-success
+  .seamind-code-note-meta,
+.app-shell[data-theme='navy']
+  .seamind-code-note-output.is-success
+  .seamind-code-note-meta,
+.app-shell[data-theme='purple']
+  .seamind-code-note-output.is-success
+  .seamind-code-note-meta {
+  color: #6ee7b7;
+}
+
+.app-shell[data-theme='dark'] .seamind-code-note-output.is-error,
+.app-shell[data-theme='navy'] .seamind-code-note-output.is-error,
+.app-shell[data-theme='purple'] .seamind-code-note-output.is-error {
+  border-left-color: #f87171;
+  background: rgba(248, 113, 113, 0.08);
+}
+
+.app-shell[data-theme='dark']
+  .seamind-code-note-output.is-error
+  .seamind-code-note-meta,
+.app-shell[data-theme='dark'] .seamind-code-note-error,
+.app-shell[data-theme='navy']
+  .seamind-code-note-output.is-error
+  .seamind-code-note-meta,
+.app-shell[data-theme='navy'] .seamind-code-note-error,
+.app-shell[data-theme='purple']
+  .seamind-code-note-output.is-error
+  .seamind-code-note-meta,
+.app-shell[data-theme='purple'] .seamind-code-note-error {
+  color: #fca5a5;
+}
+
+.app-shell[data-theme='dark'] .seamind-code-note-btn,
+.app-shell[data-theme='navy'] .seamind-code-note-btn,
+.app-shell[data-theme='purple'] .seamind-code-note-btn {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  color: #b7c4ce;
+}
+
+/* ==========================================================================
+   Fullscreen Code Workbench Modal (Portal) & Insert Dialog
+   ========================================================================== */
+
+.mm-code-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 21000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(15, 23, 32, 0.56);
+  --mm-bg: #ffffff;
+  --mm-surface: #f7f8fa;
+  --mm-border: #dde3e8;
+  --mm-ink: #1f2933;
+  --mm-muted: #687782;
+  --mm-accent: #b85638;
+  --mm-accent-soft: rgba(184, 86, 56, 0.09);
+}
+
+.mm-code-modal-backdrop[data-theme='dark'] {
+  --mm-bg: #11161b;
+  --mm-surface: #171e24;
+  --mm-border: #2a343d;
+  --mm-ink: #dce4eb;
+  --mm-muted: #8a99a4;
+  --mm-accent: #e58a62;
+  --mm-accent-soft: rgba(229, 138, 98, 0.14);
+}
+
+.mm-code-modal-backdrop[data-theme='navy'] {
+  --mm-bg: #081120;
+  --mm-surface: #0d1a2e;
+  --mm-border: #1e334f;
+  --mm-ink: #dce8f5;
+  --mm-muted: #7b96b4;
+  --mm-accent: #68a0e0;
+  --mm-accent-soft: rgba(104, 160, 224, 0.14);
+}
+
+.mm-code-modal-backdrop[data-theme='purple'] {
+  --mm-bg: #0f091c;
+  --mm-surface: #160e29;
+  --mm-border: #31234c;
+  --mm-ink: #ede2fa;
+  --mm-muted: #9883b3;
+  --mm-accent: #b680f0;
+  --mm-accent-soft: rgba(182, 128, 240, 0.15);
+}
+
+.mm-code-modal-shell {
+  display: flex;
+  flex-direction: column;
+  width: min(1320px, 95vw);
+  height: min(860px, 90vh);
+  border: 1px solid var(--mm-border);
+  border-radius: 5px;
+  background: var(--mm-bg);
+  color: var(--mm-ink);
+  box-shadow: 0 20px 56px rgba(0, 0, 0, 0.32);
+  overflow: hidden;
+}
+
+.mm-code-modal-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  height: 40px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--mm-border);
+  background: var(--mm-surface);
+  user-select: none;
+}
+
+.mm-code-modal-bar-left,
+.mm-code-modal-bar-center,
+.mm-code-modal-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mm-code-modal-kicker {
+  font: 700 10px/1 var(--mono, 'Cascadia Code', Consolas, monospace);
+  letter-spacing: 0.08em;
+  color: var(--mm-muted);
+}
+
+.mm-code-modal-meta {
+  font: 500 10.5px/1 var(--mono, 'Cascadia Code', Consolas, monospace);
+  font-variant-numeric: tabular-nums;
+  color: var(--mm-muted);
+}
+
+.mm-code-modal-notice {
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--mm-accent) 35%, var(--mm-border));
+  border-radius: 2px;
+  background: var(--mm-accent-soft);
+  color: var(--mm-accent);
+  font-size: 11px;
+}
+
+.mm-code-bar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--mm-border);
+  border-radius: 3px;
+  background: var(--mm-bg);
+  color: var(--mm-ink);
+  font: 500 11.5px/1 var(--ui-font, sans-serif);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mm-code-bar-btn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--mm-ink) 28%, var(--mm-border));
+}
+
+.mm-code-bar-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.mm-code-bar-btn.is-primary {
+  border-color: var(--mm-accent);
+  background: var(--mm-accent);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.mm-code-bar-btn.is-danger {
+  border-color: #c93b2b;
+  background: rgba(201, 59, 43, 0.12);
+  color: #c93b2b;
+  font-weight: 600;
+}
+
+.mm-code-bar-btn.is-active,
+.mm-code-bar-btn.is-agent:hover {
+  border-color: color-mix(in srgb, var(--mm-accent) 45%, var(--mm-border));
+  background: var(--mm-accent-soft);
+  color: var(--mm-accent);
+}
+
+.mm-code-rt-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #64748b;
+}
+
+.mm-code-rt-dot.is-local {
+  background: #16a34a;
+}
+
+.mm-code-icon-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--mm-muted);
+  cursor: pointer;
+}
+
+.mm-code-icon-close:hover {
+  border-color: var(--mm-border);
+  background: var(--mm-bg);
+  color: var(--mm-ink);
+}
+
+.mm-code-popover-wrap {
+  position: relative;
+}
+
+.mm-code-popover-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 40;
+  min-width: 152px;
+  max-height: 300px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--mm-border);
+  border-radius: 4px;
+  background: var(--mm-bg);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+}
+
+.mm-code-popover-menu.is-wide {
+  min-width: 230px;
+}
+
+.mm-code-popover-menu.is-right {
+  left: auto;
+  right: 0;
+  min-width: 210px;
+}
+
+.mm-code-popover-head {
+  padding: 4px 8px;
+  color: var(--mm-muted);
+  font: 600 10px/1.2 var(--mono, monospace);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.mm-code-popover-sep {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--mm-border);
+}
+
+.mm-code-popover-menu button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--mm-ink);
+  font: 500 11.5px/1.3 var(--ui-font, sans-serif);
+  text-align: left;
+  cursor: pointer;
+}
+
+.mm-code-popover-menu button:hover {
+  background: var(--mm-surface);
+}
+
+.mm-code-popover-menu button.is-active {
+  background: var(--mm-accent-soft);
+  color: var(--mm-accent);
+  font-weight: 600;
+}
+
+.mm-code-modal-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.38fr) minmax(320px, 1fr);
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.mm-code-modal-editor-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--mm-border);
+}
+
+.mm-code-modal-cm-host {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.mm-code-modal-output-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--mm-surface);
+}
+
+.mm-code-output-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 32px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--mm-border);
+}
+
+.mm-code-output-title {
+  font: 600 10.5px/1 var(--mono, 'Cascadia Code', Consolas, monospace);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.05em;
+  color: var(--mm-muted);
+}
+
+.mm-code-output-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mm-code-mini-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 21px;
+  padding: 0 7px;
+  border: 1px solid var(--mm-border);
+  border-radius: 3px;
+  background: var(--mm-bg);
+  color: var(--mm-ink);
+  font: 500 10.5px/1 var(--ui-font, sans-serif);
+  cursor: pointer;
+}
+
+.mm-code-mini-btn.is-accent {
+  border-color: rgba(22, 138, 86, 0.45);
+  background: rgba(22, 138, 86, 0.12);
+  color: #15803d;
+  font-weight: 600;
+}
+
+.mm-code-mini-btn.is-agent {
+  border-color: color-mix(in srgb, var(--mm-accent) 45%, var(--mm-border));
+  background: var(--mm-accent-soft);
+  color: var(--mm-accent);
+  font-weight: 600;
+}
+
+.mm-code-stdin-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--mm-border);
+}
+
+.mm-code-stdin-box label {
+  font-size: 10.5px;
+  color: var(--mm-muted);
+}
+
+.mm-code-stdin-box textarea {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--mm-border);
+  border-radius: 3px;
+  background: var(--mm-bg);
+  color: var(--mm-ink);
+  font: 400 11.5px/1.5 var(--mono, monospace);
+  resize: vertical;
+}
+
+.mm-code-output-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.mm-code-output-empty {
+  color: var(--mm-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.mm-code-output-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-left: 10px;
+  border-left: 2px solid var(--mm-border);
+}
+
+.mm-code-output-stream.is-success {
+  border-left-color: #16a34a;
+}
+
+.mm-code-output-stream.is-error {
+  border-left-color: #dc2626;
+}
+
+.mm-code-out-text pre,
+.mm-code-out-error pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 400 12px/1.55 var(--mono, 'Cascadia Code', Consolas, monospace);
+}
+
+.mm-code-out-text.is-stderr pre {
+  color: #b45309;
+}
+
+.mm-code-out-error pre {
+  color: #c93b2b;
+}
+
+.mm-code-modal-backdrop[data-theme='dark'] .mm-code-out-error pre,
+.mm-code-modal-backdrop[data-theme='navy'] .mm-code-out-error pre,
+.mm-code-modal-backdrop[data-theme='purple'] .mm-code-out-error pre {
+  color: #fca5a5;
+}
+
+.mm-code-out-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.mm-code-out-figure img {
+  display: block;
+  max-width: 100%;
+  border: 1px solid var(--mm-border);
+  background: #ffffff;
+  cursor: zoom-in;
+}
+
+.mm-code-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 22000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  background: rgba(10, 14, 18, 0.78);
+  cursor: zoom-out;
+}
+
+.mm-code-lightbox img {
+  max-width: 92vw;
+  max-height: 88vh;
+  background: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+/* Insert Code Block Dialog */
+.mm-code-insert-dialog {
+  width: min(680px, 94vw);
+}
+
+.mm-code-insert-lang-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+
+.mm-code-insert-lang-pill {
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--line, #d7dfe4);
+  border-radius: 3px;
+  background: var(--panel, #ffffff);
+  color: var(--muted, #5e6d77);
+  font: 500 11px/1 var(--mono, monospace);
+  cursor: pointer;
+}
+
+.mm-code-insert-lang-pill.is-active {
+  border-color: var(--accent, #b85638);
+  background: color-mix(in srgb, var(--accent, #b85638) 10%, transparent);
+  color: var(--accent, #b85638);
+  font-weight: 600;
+}
+
+.mm-code-insert-textarea {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--line, #d7dfe4);
+  border-radius: 3px;
+  background: var(--panel, #ffffff);
+  color: var(--ink, #1f2933);
+  font: 400 12px/1.55 var(--mono, 'Cascadia Code', Consolas, monospace);
+  white-space: pre;
+  overflow: auto;
+  resize: vertical;
+}
+
+@media (max-width: 900px) {
+  .mm-code-modal-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1.2fr) minmax(220px, 1fr);
+  }
+  .mm-code-modal-editor-pane {
+    border-right: 0;
+    border-bottom: 1px solid var(--mm-border);
+  }
+}

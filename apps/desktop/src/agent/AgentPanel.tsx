@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { AgentAnalysisMode } from './types';
 import type { AgentCapabilities } from './capabilities';
@@ -39,6 +39,12 @@ interface AgentPanelProps {
   mapBrief: Omit<MindmapTurnBrief, 'target'>;
   mapMarkdown: string;
   currentRevision: number;
+  externalPromptRequest?: {
+    id: number;
+    prompt: string;
+    autoSend?: boolean;
+  } | null;
+  onExternalPromptConsumed?: (id: number) => void;
   onApplyProposal(proposal: NodeEditProposal): Promise<number | null>;
   onUndoProposal(
     proposal: NodeEditProposal,
@@ -536,6 +542,8 @@ export default function AgentPanel({
   mapBrief,
   mapMarkdown,
   currentRevision,
+  externalPromptRequest,
+  onExternalPromptConsumed,
   onApplyProposal,
   onUndoProposal,
 }: AgentPanelProps) {
@@ -557,9 +565,8 @@ export default function AgentPanel({
     }));
   };
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    const prompt = input.trim();
+  const sendPromptText = async (rawPrompt: string) => {
+    const prompt = rawPrompt.trim();
     if (!prompt || busy || conversation.proposal || !target) return;
     const requestScope = scopeKey;
     const startedAt = Date.now();
@@ -685,6 +692,22 @@ export default function AgentPanel({
       setBusy(false);
     }
   };
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    await sendPromptText(input);
+  };
+
+  useEffect(() => {
+    if (!externalPromptRequest || !target) return;
+    const { id, prompt, autoSend } = externalPromptRequest;
+    onExternalPromptConsumed?.(id);
+    if (autoSend && !busy && !conversation.proposal) {
+      void sendPromptText(prompt);
+    } else {
+      setInput(prompt);
+    }
+  }, [externalPromptRequest, target]);
 
   const applyProposal = async () => {
     const proposal = conversation.proposal;
@@ -889,17 +912,23 @@ export default function AgentPanel({
       {conversation.proposal && (
         <section className="agent-proposal" aria-label="待确认的导图分支">
           <div className="agent-proposal-heading">
-            <strong>待确认分支</strong>
+            <strong>
+              {conversation.proposal.operation === 'update_code_block'
+                ? '待确认代码块更新'
+                : conversation.proposal.operation === 'add_code_block'
+                  ? '待确认代码块插入'
+                  : '待确认分支'}
+            </strong>
             <span>
               版本 {conversation.proposal.baseRevision} · 尚未写入当前导图
             </span>
           </div>
           <p>
-            在「{conversation.proposal.previousLabel}」下插入
-            {conversation.proposal.analysisMode === 'visualization'
-              ? '可视化'
-              : '下探'}
-            分支「{conversation.proposal.nextLabel}」
+            {conversation.proposal.operation === 'update_code_block'
+              ? `更新代码块「${conversation.proposal.nextLabel}」`
+              : conversation.proposal.operation === 'add_code_block'
+                ? `在「${conversation.proposal.previousLabel}」下插入代码块「${conversation.proposal.nextLabel}」`
+                : `在「${conversation.proposal.previousLabel}」下插入${conversation.proposal.analysisMode === 'visualization' ? '可视化' : '下探'}分支「${conversation.proposal.nextLabel}」`}
           </p>
           {conversation.proposal.rationale && (
             <small>{conversation.proposal.rationale}</small>

@@ -15,8 +15,18 @@ import {
 } from './math-surface-3d';
 import type { Theme } from '../app/app-storage';
 import { parseSafeSvgElement, preparePastedSvg } from '../app/svg-sanitize';
+import {
+  detectCodeLanguageFromSource,
+  isDiagramCodeLanguage,
+} from './code-execution-service';
+import {
+  createMindmapCodeCard,
+  type MindmapCodeBlockAgentRequest,
+  type MindmapCodeBlockFullscreenRequest,
+} from './mindmap-code-card';
 
 export { preparePastedSvg };
+export type { MindmapCodeBlockAgentRequest, MindmapCodeBlockFullscreenRequest };
 
 type AppTheme = Theme;
 
@@ -96,6 +106,14 @@ export interface CodeBlockHandlers {
     onResult: (output: string) => void,
   ) => void;
   onRunInTerminal?: (language: string, source: string, title?: string) => void;
+  onOpenInCodeLab?: (
+    language: 'python' | 'c' | 'cpp',
+    source: string,
+    title?: string,
+  ) => void;
+  onOpenCodeFullscreen?: (request: MindmapCodeBlockFullscreenRequest) => void;
+  onAskAgentAboutCode?: (request: MindmapCodeBlockAgentRequest) => void;
+  onZoomImage?: (dataUrl: string) => void;
 }
 
 export interface CodeBlockSourceRange {
@@ -105,6 +123,7 @@ export interface CodeBlockSourceRange {
 
 export interface CodeBlockHydrationOptions {
   mode?: 'mindmap' | 'markdown-preview';
+  cwd?: string | null;
 }
 
 function normalizeFenceSource(source: string): string {
@@ -1455,18 +1474,52 @@ export async function hydrateCodeBlocks(
   };
   signal.addEventListener('abort', cleanup, { once: true });
 
+  const isMindmapMode = options.mode !== 'markdown-preview';
   const codeNodes = Array.from(
-    container.querySelectorAll<HTMLElement>('pre > code[class*="language-"]'),
+    container.querySelectorAll<HTMLElement>(
+      isMindmapMode ? 'pre > code' : 'pre > code[class*="language-"]',
+    ),
   );
   for (const code of codeNodes) {
     if (signal.aborted || cleaned) break;
     const pre = code.parentElement;
-    if (!(pre instanceof HTMLElement) || pre.dataset.seamindHydrated) continue;
-    const language = Array.from(code.classList)
-      .find((name) => name.startsWith('language-'))
-      ?.slice('language-'.length)
-      .toLowerCase();
+    if (
+      !(pre instanceof HTMLElement) ||
+      pre.dataset.seamindHydrated ||
+      pre.closest('.seamind-code-panel, .seamind-node-note')
+    ) {
+      continue;
+    }
+    const rawLanguage =
+      Array.from(code.classList)
+        .find((name) => name.startsWith('language-'))
+        ?.slice('language-'.length)
+        .toLowerCase() ?? '';
     const source = code.textContent ?? '';
+
+    if (
+      isMindmapMode &&
+      (!rawLanguage || !isDiagramCodeLanguage(rawLanguage))
+    ) {
+      const effectiveLanguage =
+        rawLanguage ||
+        (source.includes('\n') ? detectCodeLanguageFromSource(source) : 'text');
+      const panel = createMindmapCodeCard({
+        pre,
+        source,
+        rawLanguage,
+        language: effectiveLanguage,
+        theme,
+        signal,
+        dispose,
+        handlers,
+        cwd: options.cwd,
+      });
+      replacePre(pre, panel, source, effectiveLanguage, dispose);
+      continue;
+    }
+
+    const language = rawLanguage;
     if (
       !language ||
       ![

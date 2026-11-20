@@ -24,7 +24,10 @@ export interface ProposeNodeEditInput {
   baseRevision: number;
   nodeId?: string;
   nodePath?: string;
-  operation: Exclude<NodeEditOperation, 'add_branch'>;
+  operation: Exclude<
+    NodeEditOperation,
+    'add_branch' | 'add_code_block' | 'update_code_block'
+  >;
   text: string;
   rationale: string;
 }
@@ -36,6 +39,28 @@ export interface ProposeNodeBranchInput {
   analysisMode: AgentAnalysisMode;
   branchMarkdown: string;
   rationale: string;
+}
+
+export interface ProposeCodeBlockInput {
+  baseRevision: number;
+  mode: 'add_child' | 'replace';
+  nodeId?: string;
+  nodePath?: string;
+  language: string;
+  title?: string;
+  code: string;
+  blockIndex?: number;
+  startLine?: number;
+  endLine?: number;
+  rationale: string;
+}
+
+export interface RunMindmapCodeBlockInput {
+  language?: 'python' | 'c' | 'cpp';
+  code?: string;
+  blockIndex?: number;
+  stdinInput?: string;
+  runtime?: 'pyodide' | 'local';
 }
 
 export interface ProposeLearningPathRawNode {
@@ -155,6 +180,10 @@ export interface AgentCapabilities {
   readDocument(relativePath: string): Promise<OpenedDocument>;
   proposeNodeEdit(input: ProposeNodeEditInput): NodeEditProposal;
   proposeNodeBranch(input: ProposeNodeBranchInput): NodeEditProposal;
+  proposeCodeBlock?(input: ProposeCodeBlockInput): NodeEditProposal;
+  runMindmapCodeBlock?(
+    input: RunMindmapCodeBlockInput,
+  ): Promise<Record<string, unknown>>;
   searchYouTubeVideos?(query: string, limit?: number): Promise<VideoInput[]>;
   listLearningPaths?(): Promise<LearningPathSummary[]>;
   getLearningPath?(pathId: string): Promise<LearningPathDetail | null>;

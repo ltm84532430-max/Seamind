@@ -182,6 +182,8 @@ export function selectTerminalAgentToolNames(
         'library_read_document',
         'mindmap_propose_node_edit',
         'mindmap_propose_node_branch',
+        'mindmap_propose_code_block',
+        'mindmap_run_code_block',
         'knowledge_get_book_note',
         'knowledge_update_book_note',
         'cli_delegate',

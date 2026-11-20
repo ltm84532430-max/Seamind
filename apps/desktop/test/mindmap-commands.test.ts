@@ -4,12 +4,27 @@ import { pluginFrontmatter, pluginSourceLines } from 'markmap-lib/plugins';
 import { errorMessage } from '../src/mindmap/app-mindmap-utils';
 import { normalizeMindmapPureTree } from '../src/library/app-tree-utils';
 import {
+  applyConvertNodeToCodeBlockCommand,
+  applyInsertCodeBlockCommand,
   applyMarkdownNodeBranch,
   applyMarkdownNodeCommand,
+  applyReplaceCodeBlockCommand,
   buildMarkdownNodeSourceMap,
+  extractMarkdownCodeFences,
   findSourcePathForLine,
   markdownForMindmap,
 } from '../src/mindmap/commands';
+import {
+  computeCodeBlockResultKey,
+  detectCodeLanguageFromSource,
+  getCachedCodeBlockResult,
+  looksLikeMultiLineCodeSnippet,
+  setCachedCodeBlockResult,
+  subscribeCodeBlockResult,
+  tokenizeUniversalCodeLine,
+} from '../src/workbench/code-execution-service';
+import { executeAgentTool } from '../src/agent/capabilities';
+import { createFallbackTerminalCapabilities } from '../src/agent/tools/terminal-bridge';
 
 const transformer = new Transformer([pluginFrontmatter, pluginSourceLines]);
 
@@ -239,5 +254,171 @@ describe('mindmap deep hierarchy & node commands', () => {
     expect(() =>
       applyMarkdownNodeCommand(md, okNode![1], 'rename', '   '),
     ).toThrow('节点文本不能为空');
+  });
+
+  it('inserts, extracts, converts, and replaces fenced code blocks cleanly across depths', () => {
+    const base = [
+      '# 量化系统',
+      '## API Client',
+      '### import json&#10;import requests&#10;def fetch():&#10;    return requests.get("https://example.com")',
+    ].join('\n');
+
+    // 1. Insert titled Python code block under heading
+    let parsed = buildSources(base);
+    const apiNode = findSourceByLabel(parsed.sources, 'API Client');
+    expect(apiNode).toBeDefined();
+    const inserted = applyInsertCodeBlockCommand(base, apiNode![1], {
+      language: 'python',
+      title: 'K线拉取',
+      code: 'import math\nprint(math.pi)',
+    });
+    expect(inserted.markdown).toContain('### K线拉取 <!-- seamind:id=');
+    expect(inserted.markdown).toContain(
+      '```python\nimport math\nprint(math.pi)\n```',
+    );
+
+    // 2. Convert legacy multi-line &#10; plain node into a proper fenced code block
+    parsed = buildSources(inserted.markdown);
+    const legacyNode = [...parsed.sources.values()].find((s) =>
+      s.label.includes('import json'),
+    );
+    expect(legacyNode).toBeDefined();
+    const converted = applyConvertNodeToCodeBlockCommand(
+      inserted.markdown,
+      legacyNode!,
+    );
+    const fences = extractMarkdownCodeFences(converted.markdown);
+    expect(fences.length).toBe(2);
+    expect(fences[0].language).toBe('python');
+    expect(fences[0].source).toContain('def fetch():');
+    expect(fences[1].source).toContain('print(math.pi)');
+
+    // 3. Replace code block by blockIndex and change language
+    const replaced = applyReplaceCodeBlockCommand(converted.markdown, {
+      blockIndex: 1,
+      language: 'cpp',
+      code: 'int x = 42;\ncout << x << endl;',
+    });
+    const nextFences = extractMarkdownCodeFences(replaced.markdown);
+    expect(nextFences[1].language).toBe('cpp');
+    expect(nextFences[1].source).toBe('int x = 42;\ncout << x << endl;');
+  });
+
+  it('detects languages, tokenizes code lines, and broadcasts cached execution results', () => {
+    expect(
+      detectCodeLanguageFromSource('import requests\ndef run():\n    pass'),
+    ).toBe('python');
+    expect(
+      detectCodeLanguageFromSource('#include <iostream>\nstd::cout << 1;'),
+    ).toBe('cpp');
+    expect(
+      detectCodeLanguageFromSource(
+        'SELECT symbol, close FROM klines WHERE close > 1;',
+      ),
+    ).toBe('sql');
+    expect(
+      looksLikeMultiLineCodeSnippet(
+        'import json\nimport sqlite3\ndef run():\n    return 1',
+      ),
+    ).toBe(true);
+    expect(looksLikeMultiLineCodeSnippet('普通笔记文本')).toBe(false);
+
+    const tokens = tokenizeUniversalCodeLine('def fetch(x): # ok', 'python');
+    expect(tokens.some((t) => t.kind === 'kw' && t.text === 'def')).toBe(true);
+    expect(tokens.some((t) => t.kind === 'fn' && t.text === 'fetch')).toBe(
+      true,
+    );
+    expect(
+      tokens.some((t) => t.kind === 'com' && t.text.includes('# ok')),
+    ).toBe(true);
+
+    const key = computeCodeBlockResultKey('python', 'print(1)', {
+      lineIndex: 2,
+      endLineIndex: 5,
+    });
+    const received: boolean[] = [];
+    const unsub = subscribeCodeBlockResult(key, (res) => {
+      received.push(Boolean(res?.ok));
+    });
+    setCachedCodeBlockResult(key, {
+      ok: true,
+      language: 'python',
+      runtimeLabel: 'Pyodide WASM',
+      outputs: [{ kind: 'stream', name: 'stdout', text: '1\n' }],
+      durationMs: 12,
+      plainSummary: '1',
+      errorText: '',
+      timestamp: Date.now(),
+    });
+    expect(getCachedCodeBlockResult(key)?.plainSummary).toBe('1');
+    expect(received).toEqual([true]);
+    setCachedCodeBlockResult(key, null);
+    unsub();
+  });
+
+  it('executes mindmap_propose_code_block and mindmap_run_code_block via agent tool router', async () => {
+    const caps = {
+      ...createFallbackTerminalCapabilities('量化系统'),
+      proposeCodeBlock: (input: {
+        baseRevision: number;
+        mode: 'add_child' | 'replace';
+        language: string;
+        title?: string;
+        code: string;
+        rationale: string;
+      }) => ({
+        baseRevision: input.baseRevision,
+        baseRelativePath: 'quant.md',
+        baseMarkdown: '# 量化系统',
+        baseTitle: '量化系统',
+        markdown: `# 量化系统\n\n## ${input.title || '脚本'}\n\`\`\`${input.language}\n${input.code}\n\`\`\``,
+        title: '量化系统',
+        nodeId: 'n1',
+        nodePath: '1',
+        operation:
+          input.mode === 'replace'
+            ? ('update_code_block' as const)
+            : ('add_code_block' as const),
+        previousLabel: '量化系统',
+        nextLabel: input.title || '脚本',
+        rationale: input.rationale,
+      }),
+      runMindmapCodeBlock: async () => ({
+        ok: true,
+        language: 'python',
+        runtimeLabel: 'Pyodide WASM',
+        durationMs: 15,
+        output: '42',
+        error: '',
+      }),
+    };
+
+    const proposeRes = await executeAgentTool(
+      'mindmap_propose_code_block',
+      JSON.stringify({
+        baseRevision: 3,
+        mode: 'add_child',
+        nodeId: 'n1',
+        language: 'python',
+        title: '计算收益',
+        code: 'print(42)',
+        rationale: '补充验证脚本',
+      }),
+      caps,
+    );
+    expect(proposeRes.permission).toBe('user_approval');
+    expect(proposeRes.proposal?.operation).toBe('add_code_block');
+
+    const runRes = await executeAgentTool(
+      'mindmap_run_code_block',
+      JSON.stringify({
+        language: 'python',
+        code: 'print(42)',
+      }),
+      caps,
+    );
+    expect(runRes.permission).toBe('read');
+    expect(runRes.result.ok).toBe(true);
+    expect(runRes.result.output).toBe('42');
   });
 });

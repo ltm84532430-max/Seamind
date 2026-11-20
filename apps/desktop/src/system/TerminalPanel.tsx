@@ -717,8 +717,8 @@ export default function TerminalPanel({
                 dock === 'right'
                   ? '将终端移回底部'
                   : canDockRight
-                    ? '将终端停靠到阅读区右侧'
-                    : '请在宽屏阅读区或订阅页使用侧边停靠'
+                    ? '将终端停靠到右侧与面板并行'
+                    : '请在宽屏工作区使用侧边停靠'
               }
             >
               {dock === 'right' ? '移到底部' : '收至侧边'}

@@ -31,7 +31,24 @@ import {
   updateMarkdownCodeFence,
   updateMarkdownCodeFenceAtRange,
 } from './workbench/code-blocks';
-import type { CodeBlockSourceRange } from './workbench/code-blocks';
+import type {
+  CodeBlockSourceRange,
+  MindmapCodeBlockAgentRequest,
+  MindmapCodeBlockFullscreenRequest,
+} from './workbench/code-blocks';
+import {
+  computeCodeBlockResultKey,
+  detectMindmapPythonEnvs,
+  executeMindmapCCode,
+  executeMindmapPythonCode,
+  normalizeCodeBlockLanguage,
+  setCachedCodeBlockResult,
+} from './workbench/code-execution-service';
+import {
+  MindmapCodeInsertDialog,
+  MindmapCodeWorkbenchModal,
+} from './mindmap/MindmapCodeWorkbenchModal';
+import type { TerminalCodeLabLanguage } from './terminal/terminal-types';
 import MarkdownEditor from './workbench/MarkdownEditor';
 import type {
   MarkdownEditorHandle,
@@ -114,8 +131,10 @@ import {
 import type { PendingCliProposal } from './agent/pending-proposal';
 import type {
   AgentCapabilities,
+  ProposeCodeBlockInput,
   ProposeLearningPathInput,
   ProposeNodeEditInput,
+  RunMindmapCodeBlockInput,
 } from './agent/capabilities';
 import type {
   ActiveMindmapSnapshot,
@@ -124,6 +143,7 @@ import type {
   LearningPathProposal,
 } from './agent/types';
 import {
+  buildAgentCodeBlockProposal,
   buildAgentNodeBranchProposal,
   buildAgentNodeEditProposal,
   buildLearningPathProposal,
@@ -144,8 +164,12 @@ import {
 } from './player/transcript/export';
 
 import {
+  applyConvertNodeToCodeBlockCommand,
+  applyInsertCodeBlockCommand,
   applyMarkdownNodeCommand,
+  applyReplaceCodeBlockCommand,
   buildMarkdownNodeSourceMap,
+  extractMarkdownCodeFences,
   findSourcePathForLine,
   getMarkdownNodeNote,
   MAX_MARKDOWN_NODE_NOTE_CHARS,
@@ -462,8 +486,14 @@ function AppContent() {
     }
   });
   useEffect(() => {
-    // 订阅页默认把终端停靠到阅读区右侧；用户仍可在终端中手动移回底部。
-    if (activeWorkspace === 'feed') setTerminalDock('right');
+    // 订阅页与知识库/思维导图页默认把终端停靠到右侧（与 LLM 并行）；用户仍可在终端中手动移回底部。
+    if (
+      activeWorkspace === 'feed' ||
+      activeWorkspace === 'mindmap' ||
+      activeWorkspace === 'knowledge'
+    ) {
+      setTerminalDock('right');
+    }
   }, [activeWorkspace]);
   const [terminalWidth, setTerminalWidth] = useState(() => {
     try {
@@ -552,17 +582,22 @@ function AppContent() {
     activeWorkspace === 'reader' && readerSplitOpen && Boolean(epubReader);
   const readerKnowledgeActive =
     activeWorkspace === 'reader' && readerKnowledgeOpen && Boolean(epubReader);
+  const isKnowledgeSurface =
+    activeWorkspace === 'mindmap' || activeWorkspace === 'knowledge';
   const canDockTerminalRight =
     (activeWorkspace === 'reader' && viewportWidth >= 1250) ||
     ((activeWorkspace === 'feed' || activeWorkspace === 'player') &&
-      viewportWidth >= 1400);
+      viewportWidth >= 1400) ||
+    (isKnowledgeSurface && viewportWidth >= 1080);
   const isTerminalDrawerOpen = terminalOpen || runnerTerminalOpen;
   const terminalRightActive =
     isTerminalDrawerOpen && terminalDock === 'right' && canDockTerminalRight;
   const terminalSideWidth =
     readerSplitActive || readerKnowledgeActive
       ? Math.min(terminalWidth, Math.max(300, viewportWidth - 880))
-      : terminalWidth;
+      : isKnowledgeSurface
+        ? Math.min(terminalWidth, Math.max(320, viewportWidth - 680))
+        : terminalWidth;
   const readerSplitActiveRef = useRef(readerSplitActive);
   readerSplitActiveRef.current = readerSplitActive;
   const epubReaderRef = useRef(epubReader);
@@ -598,6 +633,26 @@ function AppContent() {
   const [plantUmlSession, setPlantUmlSession] =
     useState<PlantUmlCanvasSession | null>(null);
   const plantUmlSessionRef = useRef<PlantUmlCanvasSession | null>(null);
+  const [codeBlockInsertDialog, setCodeBlockInsertDialog] = useState<{
+    nodePath: string;
+    nodeLabel: string;
+    error: string;
+  } | null>(null);
+  const [codeWorkbenchModal, setCodeWorkbenchModal] =
+    useState<MindmapCodeBlockFullscreenRequest | null>(null);
+  const [codeZoomImageSrc, setCodeZoomImageSrc] = useState<string | null>(null);
+  const [externalAgentPrompt, setExternalAgentPrompt] = useState<{
+    id: number;
+    mode: AgentAnalysisMode;
+    prompt: string;
+    autoSend?: boolean;
+  } | null>(null);
+  const [externalCodeLabPush, setExternalCodeLabPush] = useState<{
+    id: number;
+    language: TerminalCodeLabLanguage;
+    source: string;
+    autoRun?: boolean;
+  } | null>(null);
   const isStandalonePlantUml = plantUmlSession?.request.saveTarget === 'file';
   // The library file open in the PlantUML canvas; its cache key is "file:<relative path>".
   const openPlantUmlPath =
@@ -1294,6 +1349,139 @@ function AppContent() {
     });
   };
 
+  const openCodeBlockInsertDialog = (overridePath?: string) => {
+    const targetPath = overridePath ?? activeMapPath;
+    if (!targetPath) return;
+    if (markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown) {
+      syncMarkdownNodeSourcesImmediate(draftRef.current.markdown);
+    }
+    const source = markdownNodeSourcesRef.current.get(targetPath);
+    if (!source || source.kind === 'block') return;
+    setCanvasNodeContextMenu(null);
+    setCodeBlockInsertDialog({
+      nodePath: targetPath,
+      nodeLabel: source.label,
+      error: '',
+    });
+  };
+
+  const handleConfirmInsertCodeBlock = (payload: {
+    language: string;
+    title: string;
+    code: string;
+  }) => {
+    const dialog = codeBlockInsertDialog;
+    if (!dialog) return;
+    if (markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown) {
+      syncMarkdownNodeSourcesImmediate(draftRef.current.markdown);
+    }
+    const source = markdownNodeSourcesRef.current.get(dialog.nodePath);
+    if (!source || source.kind === 'block') {
+      setCodeBlockInsertDialog((curr) =>
+        curr ? { ...curr, error: '找不到目标节点，请关闭后重新选择。' } : curr,
+      );
+      return;
+    }
+    try {
+      const command = applyInsertCodeBlockCommand(
+        draftRef.current.markdown,
+        source,
+        {
+          language: payload.language,
+          title: payload.title,
+          code: payload.code,
+        },
+      );
+      applyMarkdownFromCanvas(command.markdown, {
+        lineIndex: command.lineIndex,
+        focus: false,
+      });
+      setCodeBlockInsertDialog(null);
+    } catch (error) {
+      setCodeBlockInsertDialog((curr) =>
+        curr
+          ? { ...curr, error: errorMessage(error, '无法插入代码块。') }
+          : curr,
+      );
+    }
+  };
+
+  const handleConvertNodeToCodeBlock = (nodePath: string) => {
+    setCanvasNodeContextMenu(null);
+    if (markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown) {
+      syncMarkdownNodeSourcesImmediate(draftRef.current.markdown);
+    }
+    const source = markdownNodeSourcesRef.current.get(nodePath);
+    if (!source || source.kind === 'block') return;
+    try {
+      const command = applyConvertNodeToCodeBlockCommand(
+        draftRef.current.markdown,
+        source,
+      );
+      setLibraryError('');
+      applyMarkdownFromCanvas(command.markdown, {
+        lineIndex: command.lineIndex,
+        focus: false,
+      });
+      setSaveMessage('已将该节点转换为可运行代码块');
+    } catch (error) {
+      setLibraryError(errorMessage(error, '无法将该节点转为代码块。'));
+    }
+  };
+
+  const handleOpenCodeInCodeLab = useCallback(
+    (language: TerminalCodeLabLanguage, source: string) => {
+      setTerminalWorkspaceOpened(true);
+      setExternalCodeLabPush({
+        id: Date.now(),
+        language,
+        source,
+        autoRun: false,
+      });
+      setActiveWorkspace('terminal');
+    },
+    [],
+  );
+
+  const handleAskAgentAboutMindmapCode = useCallback(
+    (req: MindmapCodeBlockAgentRequest) => {
+      setAiCollapsed(false);
+      setAiMode('visualization');
+      if (req.nodePath) {
+        setActiveMapPath(req.nodePath);
+      }
+      const rangeNote = req.sourceRange
+        ? `（Markdown 第 ${req.sourceRange.lineIndex + 1}–${req.sourceRange.endLineIndex} 行）`
+        : '';
+      const intentHeader =
+        req.intent === 'diagnose'
+          ? `请帮我诊断并修复这段思维导图中的 ${req.language.toUpperCase()} 代码块${rangeNote}，修复前可先用 mindmap_run_code_block 试跑验证，再调用 mindmap_propose_code_block(mode="replace") 生成可确认的修改提案：`
+          : req.intent === 'refactor'
+            ? `请帮我重构优化这段思维导图中的 ${req.language.toUpperCase()} 代码块${rangeNote}，并用 mindmap_propose_code_block(mode="replace") 生成待确认提案：`
+            : `请逐段解释这段思维导图中的 ${req.language.toUpperCase()} 代码块${rangeNote} 的核心逻辑、关键参数与潜在风险：`;
+      const parts = [
+        intentHeader,
+        `\`\`\`${req.language}\n${req.source.trimEnd()}\n\`\`\``,
+      ];
+      if (req.errorText) {
+        parts.push(
+          `最近一次运行报错：\n\`\`\`text\n${req.errorText.slice(0, 2000)}\n\`\`\``,
+        );
+      } else if (req.outputSummary) {
+        parts.push(
+          `最近一次运行输出：\n\`\`\`text\n${req.outputSummary.slice(0, 1200)}\n\`\`\``,
+        );
+      }
+      setExternalAgentPrompt({
+        id: Date.now(),
+        mode: 'visualization',
+        prompt: parts.join('\n\n'),
+        autoSend: req.intent === 'diagnose',
+      });
+    },
+    [],
+  );
+
   const insertVideoEmbedChild = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const dialog = videoEmbedDialog;
@@ -1457,6 +1645,84 @@ function AppContent() {
       ensureAiMathRenderable,
     });
 
+  const proposeAgentCodeBlock = (
+    input: ProposeCodeBlockInput,
+  ): NodeEditProposal =>
+    buildAgentCodeBlockProposal({
+      draft: draftRef.current,
+      transformer,
+      input,
+    });
+
+  const runAgentMindmapCodeBlock = async (
+    input: RunMindmapCodeBlockInput,
+  ): Promise<Record<string, unknown>> => {
+    const cwd = librarySnapshotRef.current?.rootPath ?? null;
+    let language = input.language;
+    let source = input.code ?? '';
+    let cacheKey: string | null = null;
+
+    if (input.blockIndex !== undefined) {
+      const fences = extractMarkdownCodeFences(draftRef.current.markdown);
+      const fence = fences[input.blockIndex];
+      if (!fence) {
+        throw new Error(`找不到索引为 ${input.blockIndex} 的代码块。`);
+      }
+      source = fence.source;
+      const norm = normalizeCodeBlockLanguage(fence.language);
+      if (norm !== 'python' && norm !== 'c' && norm !== 'cpp') {
+        throw new Error(
+          `代码块 #${input.blockIndex} 的语言 (${fence.language}) 暂不支持直接执行。`,
+        );
+      }
+      language = norm;
+      cacheKey = computeCodeBlockResultKey(norm, fence.source, {
+        lineIndex: fence.startLine,
+        endLineIndex: fence.endLine,
+      });
+    }
+
+    const effectiveLang = language ?? 'python';
+    let execRes;
+    if (effectiveLang === 'python') {
+      let runtime: string | undefined;
+      if (input.runtime === 'pyodide') {
+        runtime = 'pyodide';
+      } else if (input.runtime === 'local') {
+        const envs = await detectMindmapPythonEnvs(cwd);
+        runtime = envs[0]?.pythonPath ?? 'pyodide';
+      }
+      execRes = await executeMindmapPythonCode({ source, runtime, cwd });
+    } else {
+      execRes = await executeMindmapCCode({
+        source,
+        isCpp: effectiveLang === 'cpp',
+        stdinInput: input.stdinInput,
+      });
+    }
+
+    if (cacheKey) {
+      setCachedCodeBlockResult(cacheKey, execRes);
+    }
+
+    return {
+      ok: execRes.ok,
+      language: execRes.language,
+      runtimeLabel: execRes.runtimeLabel,
+      durationMs: execRes.durationMs,
+      exitCode: execRes.exitCode ?? null,
+      output: execRes.plainSummary.slice(0, 6000),
+      error: execRes.errorText ? execRes.errorText.slice(0, 3000) : '',
+      richOutputCount: execRes.outputs.filter(
+        (o) =>
+          o.kind === 'image/png' ||
+          o.kind === 'image/svg+xml' ||
+          o.kind === 'text/html' ||
+          o.kind === 'text/latex',
+      ).length,
+    };
+  };
+
   const proposeLearningPath = (
     input: ProposeLearningPathInput,
   ): Promise<LearningPathProposal> =>
@@ -1556,6 +1822,8 @@ function AppContent() {
       readDocument: (relativePath) => libraryApi.openDocument({ relativePath }),
       proposeNodeEdit: proposeAgentNodeEdit,
       proposeNodeBranch: proposeAgentNodeBranch,
+      proposeCodeBlock: proposeAgentCodeBlock,
+      runMindmapCodeBlock: runAgentMindmapCodeBlock,
     },
     player: {
       rememberYouTubeVideo: (video) => {
@@ -2105,6 +2373,17 @@ function AppContent() {
           isCpp,
         });
 
+        if (
+          (activeWorkspace === 'mindmap' || activeWorkspace === 'knowledge') &&
+          viewportWidth >= 1080
+        ) {
+          setTerminalDock('right');
+          try {
+            localStorage.setItem('seamind:terminal-dock:v1', 'right');
+          } catch {
+            /* Keep the preference in memory. */
+          }
+        }
         setRunnerTerminalOpen(true);
         setPendingRunnerRawInput({
           id: `run-c-${Date.now()}`,
@@ -2117,7 +2396,7 @@ function AppContent() {
         );
       }
     },
-    [librarySnapshot?.rootPath],
+    [activeWorkspace, librarySnapshot?.rootPath, viewportWidth],
   );
 
   const onSplitDividerPointerDown = useCallback(
@@ -4901,7 +5180,7 @@ function AppContent() {
       event.preventDefault();
       setActiveMapPath(path);
       const menuWidth = 228;
-      const menuHeight = 42;
+      const menuHeight = 112;
       setCanvasNodeContextMenu({
         path,
         left: Math.min(event.clientX, window.innerWidth - menuWidth - 8),
@@ -5149,6 +5428,14 @@ function AppContent() {
             setTerminalCommandConfirmation({ id, language, source });
           },
           onRunInTerminal: handleRunCodeInTerminal,
+          onOpenInCodeLab: handleOpenCodeInCodeLab,
+          onOpenCodeFullscreen: (req) => setCodeWorkbenchModal(req),
+          onAskAgentAboutCode: handleAskAgentAboutMindmapCode,
+          onZoomImage: (dataUrl) => setCodeZoomImageSrc(dataUrl),
+        },
+        {
+          mode: 'mindmap',
+          cwd: librarySnapshotRef.current?.rootPath ?? null,
         },
       );
       if (codeBlocksAbort.signal.aborted) cleanupCodeBlocks();
@@ -5531,7 +5818,9 @@ function AppContent() {
     const viewportMax = window.innerWidth * 0.62;
     const splitMax = readerSplitActive
       ? Math.min(viewportMax, window.innerWidth - 900)
-      : viewportMax;
+      : isKnowledgeSurface
+        ? Math.min(viewportMax, Math.max(360, window.innerWidth - 680))
+        : viewportMax;
     return Math.round(Math.max(320, Math.min(splitMax, width)));
   };
   const onTerminalWidthPointerDown = (
@@ -5766,8 +6055,8 @@ function AppContent() {
               onClick={() => {
                 if (
                   !terminalOpen &&
-                  activeWorkspace === 'player' &&
-                  viewportWidth >= 1400
+                  ((activeWorkspace === 'player' && viewportWidth >= 1400) ||
+                    (isKnowledgeSurface && viewportWidth >= 1080))
                 ) {
                   setTerminalDockAndStore('right');
                 }
@@ -6317,6 +6606,16 @@ function AppContent() {
                   >
                     视频
                   </button>
+                  <button
+                    type="button"
+                    className="canvas-node-action"
+                    title="为所选节点插入可滚动、可全屏、可运行的代码块"
+                    aria-label="为所选节点插入代码块"
+                    disabled={!canAddSelectedNode}
+                    onClick={() => openCodeBlockInsertDialog()}
+                  >
+                    代码块
+                  </button>
                   <span className="tool-divider" aria-hidden="true" />
                   <button
                     type="button"
@@ -6589,6 +6888,24 @@ function AppContent() {
                 >
                   以此节点聚焦
                 </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() =>
+                    openCodeBlockInsertDialog(canvasNodeContextMenu.path)
+                  }
+                >
+                  插入子代码块
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() =>
+                    handleConvertNodeToCodeBlock(canvasNodeContextMenu.path)
+                  }
+                >
+                  转为代码块
+                </button>
               </div>
             )}
             {plantUmlSession ? (
@@ -6822,6 +7139,16 @@ function AppContent() {
                 mapBrief={mindmapTurnBrief}
                 mapMarkdown={editorDraft.markdown}
                 currentRevision={editorDraft.revision}
+                externalPromptRequest={
+                  externalAgentPrompt?.mode === 'drilldown'
+                    ? externalAgentPrompt
+                    : null
+                }
+                onExternalPromptConsumed={(id) =>
+                  setExternalAgentPrompt((curr) =>
+                    curr?.id === id ? null : curr,
+                  )
+                }
                 onApplyProposal={applyAgentProposal}
                 onUndoProposal={undoAgentProposal}
               />
@@ -6839,6 +7166,16 @@ function AppContent() {
                 mapBrief={mindmapTurnBrief}
                 mapMarkdown={editorDraft.markdown}
                 currentRevision={editorDraft.revision}
+                externalPromptRequest={
+                  externalAgentPrompt?.mode === 'visualization'
+                    ? externalAgentPrompt
+                    : null
+                }
+                onExternalPromptConsumed={(id) =>
+                  setExternalAgentPrompt((curr) =>
+                    curr?.id === id ? null : curr,
+                  )
+                }
                 onApplyProposal={applyAgentProposal}
                 onUndoProposal={undoAgentProposal}
               />
@@ -7097,6 +7434,12 @@ function AppContent() {
               theme={theme}
               books={librarySnapshot?.books ?? []}
               onOpenBook={(book) => void openLibraryEpub(book)}
+              externalCodeLabPush={externalCodeLabPush}
+              onExternalCodeLabPushConsumed={(id) =>
+                setExternalCodeLabPush((curr) =>
+                  curr?.id === id ? null : curr,
+                )
+              }
               bridge={{
                 provider: providerSettings,
                 capabilities: agentCapabilities,
@@ -8533,6 +8876,93 @@ function AppContent() {
               </button>
             </div>
           </section>
+        </div>
+      )}
+
+      {codeBlockInsertDialog && (
+        <MindmapCodeInsertDialog
+          nodeLabel={codeBlockInsertDialog.nodeLabel}
+          theme={theme}
+          error={codeBlockInsertDialog.error}
+          onCancel={() => setCodeBlockInsertDialog(null)}
+          onConfirm={handleConfirmInsertCodeBlock}
+        />
+      )}
+
+      {codeWorkbenchModal && (
+        <MindmapCodeWorkbenchModal
+          request={codeWorkbenchModal}
+          theme={theme}
+          cwd={librarySnapshot?.rootPath ?? null}
+          onClose={() => setCodeWorkbenchModal(null)}
+          onSaveCode={(nextLang, nextCode) => {
+            const currentMd = draftRef.current.markdown;
+            try {
+              if (codeWorkbenchModal.sourceRange) {
+                const replaced = applyReplaceCodeBlockCommand(currentMd, {
+                  language: nextLang,
+                  code: nextCode,
+                  startLine: codeWorkbenchModal.sourceRange.lineIndex,
+                  endLine: codeWorkbenchModal.sourceRange.endLineIndex,
+                });
+                if (replaced.markdown !== currentMd) {
+                  applyMarkdownFromCanvas(replaced.markdown, {
+                    lineIndex: replaced.lineIndex,
+                    endLineIndex: replaced.endLineIndex,
+                    focus: false,
+                  });
+                  setCodeWorkbenchModal((curr) =>
+                    curr
+                      ? {
+                          ...curr,
+                          language: nextLang,
+                          rawLanguage: nextLang,
+                          source: nextCode,
+                          sourceRange: {
+                            lineIndex: replaced.lineIndex,
+                            endLineIndex: replaced.endLineIndex,
+                          },
+                        }
+                      : curr,
+                  );
+                  return true;
+                }
+              }
+            } catch {
+              // fallback to content match below
+            }
+            const updated = codeBlockEditHandlerRef.current(
+              codeWorkbenchModal.rawLanguage || codeWorkbenchModal.language,
+              codeWorkbenchModal.source,
+              nextCode,
+              codeWorkbenchModal.sourceRange,
+            );
+            if (updated) {
+              setCodeWorkbenchModal((curr) =>
+                curr ? { ...curr, source: nextCode } : curr,
+              );
+            }
+            return Boolean(updated);
+          }}
+          onOpenInCodeLab={handleOpenCodeInCodeLab}
+          onTerminalCommand={(language, source, onResult) => {
+            const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            terminalCommandResultsRef.current.set(id, onResult);
+            setTerminalCommandConfirmation({ id, language, source });
+          }}
+          onAskAgent={handleAskAgentAboutMindmapCode}
+        />
+      )}
+
+      {codeZoomImageSrc && (
+        <div
+          className="mm-code-lightbox"
+          onClick={() => setCodeZoomImageSrc(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="代码块图表放大预览"
+        >
+          <img src={codeZoomImageSrc} alt="代码块运行图表放大预览" />
         </div>
       )}
     </main>

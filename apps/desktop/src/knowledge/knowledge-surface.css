@@ -23,6 +23,10 @@
   grid-row: 4;
 }
 .app-shell.is-knowledge-surface.is-terminal-right {
+  grid-template-columns: minmax(0, 1fr) 3px minmax(
+      320px,
+      var(--terminal-side-width, 440px)
+    );
   grid-template-rows: 52px minmax(0, 1fr) 29px;
 }
 .app-shell.is-knowledge-surface.is-terminal-right > .workspace,
@@ -33,9 +37,169 @@
 .app-shell.is-knowledge-surface.is-terminal-right > .workspace,
 .app-shell.is-knowledge-surface.is-terminal-right > .knowledge-workspace-stage {
   grid-column: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 .app-shell.is-knowledge-surface.is-terminal-right > .statusbar {
   grid-row: 3;
+}
+.app-shell.is-knowledge-surface.is-terminal-right
+  .workspace.is-knowledge-map:not(.is-source-collapsed) {
+  --col-source: minmax(240px, 24%);
+}
+.app-shell.is-knowledge-surface.is-terminal-right > .seamind-terminal-drawer {
+  grid-column: 2 / 4;
+  grid-row: 2;
+  grid-template-columns: 3px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  border-top: 0;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+}
+.app-shell.is-knowledge-surface.is-terminal-right
+  .terminal-drawer-resize-handle {
+  min-width: 3px;
+  width: 3px;
+  height: 100%;
+  background: transparent;
+  cursor: col-resize;
+}
+.app-shell.is-knowledge-surface.is-terminal-right
+  .terminal-drawer-resize-handle::after {
+  opacity: 0;
+  background: var(--accent);
+}
+.app-shell.is-knowledge-surface.is-terminal-right
+  .terminal-drawer-resize-handle:hover,
+.app-shell.is-knowledge-surface.is-terminal-right
+  .terminal-drawer-resize-handle:focus-visible {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.app-shell.is-knowledge-surface.is-terminal-right
+  .terminal-drawer-resize-handle:hover::after,
+.app-shell.is-knowledge-surface.is-terminal-right
+  .terminal-drawer-resize-handle:focus-visible::after {
+  opacity: 1;
+}
+.app-shell.is-knowledge-surface.is-terminal-right #seamind-terminal-panel,
+.app-shell.is-knowledge-surface.is-terminal-right .seamind-terminal,
+.app-shell.is-knowledge-surface.is-terminal-right .seamind-terminal-loading {
+  border-color: var(--line);
+  color: var(--ink);
+}
+.app-shell.is-knowledge-surface.is-terminal-right:is(
+    [data-theme='navy'],
+    [data-theme='purple']
+  )
+  #seamind-terminal-panel,
+.app-shell.is-knowledge-surface.is-terminal-right:is(
+    [data-theme='navy'],
+    [data-theme='purple']
+  )
+  .seamind-terminal,
+.app-shell.is-knowledge-surface.is-terminal-right:is(
+    [data-theme='navy'],
+    [data-theme='purple']
+  )
+  .seamind-terminal-loading,
+.app-shell.is-knowledge-surface.is-terminal-right:is(
+    [data-theme='navy'],
+    [data-theme='purple']
+  )
+  .seamind-terminal-host {
+  color: var(--ink);
+  background: var(--bg);
+}
+.app-shell.is-knowledge-surface.is-terminal-right .seamind-terminal-heading {
+  height: 76px;
+  min-height: 76px;
+  max-height: 76px;
+  box-sizing: border-box;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 0;
+  padding: 0;
+  border-bottom: 0;
+  background: var(--panel);
+}
+.app-shell.is-knowledge-surface.is-terminal-right
+  .seamind-terminal-heading
+  > div:first-child {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  height: 36px;
+  min-height: 36px;
+  gap: 8px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--line);
+}
+.app-shell.is-knowledge-surface.is-terminal-right
+  .seamind-terminal-heading
+  strong {
+  flex: 0 0 auto;
+  color: var(--ink);
+}
+.app-shell.is-knowledge-surface.is-terminal-right
+  .seamind-terminal-heading
+  .seamind-terminal-badge {
+  flex: 0 0 auto;
+  max-width: none;
+}
+.app-shell.is-knowledge-surface.is-terminal-right
+  .seamind-terminal-heading
+  > div:first-child
+  > span:not(.seamind-terminal-badge) {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+  color: var(--muted);
+}
+.app-shell.is-knowledge-surface.is-terminal-right .seamind-terminal-actions {
+  box-sizing: border-box;
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  min-height: 40px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.app-shell.is-knowledge-surface.is-terminal-right
+  .seamind-terminal-actions::-webkit-scrollbar {
+  display: none;
+}
+.app-shell.is-knowledge-surface.is-terminal-right
+  .seamind-terminal-actions
+  button {
+  flex: 0 0 auto;
+  height: 22px;
+  padding: 0 6px;
+  border-color: var(--line);
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+.app-shell.is-knowledge-surface.is-terminal-right
+  .seamind-terminal-actions
+  button:hover {
+  border-color: var(--accent);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel) 92%, var(--accent) 8%);
+}
+.app-shell.is-knowledge-surface.is-terminal-right .seamind-terminal-note {
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  background: var(--panel);
 }
 .app-shell.is-knowledge-surface .workspace.is-knowledge-map {
   --col-library: var(--knowledge-sidebar-column, 264px);
@@ -277,6 +441,12 @@
 .app-shell.is-knowledge-surface .library-search-input-wrap {
   border-radius: 0;
   box-shadow: none;
+}
+@media (max-width: 1560px) {
+  .app-shell.is-knowledge-surface.is-terminal-right
+    .workspace.is-knowledge-map:not(.is-ai-collapsed) {
+    --col-ai: 300px;
+  }
 }
 @media (max-width: 1100px) {
   .app-shell.is-knowledge-surface
