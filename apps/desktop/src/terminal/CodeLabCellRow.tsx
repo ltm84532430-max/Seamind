@@ -45,6 +45,12 @@ const LANG_FULL: Record<TerminalCodeLabLanguage, string> = {
   cpp: 'C++ (G++)',
 };
 
+const LEGACY_STARTER_NOTES = new Set([
+  '### Python Euporie 交互笔记本\n状态变量在格间持久化保存；按 `Shift+Enter` 运行并跳至下一格，`Esc` 切换命令模式（`j/k` 移动、`a/b` 插格、`dd` 删格）。',
+  '### C 语言步进实验格\n上方可展开「共享头文件 / 辅助函数前置格」。每个代码格可独立输入测试 `stdin`，或一键发送给右侧 GDB / 终端交互运行。',
+  '### C++ 交互实验本\n支持省略 `int main()` 直接写算法语句段，也可完整编写类与 STL 容器代码并通过 G++ 实时编译运行。',
+]);
+
 const GuardedTextOutput = memo(function GuardedTextOutput({
   text,
   className,
@@ -309,6 +315,7 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
   const hasErr = cell.outputs.some((o) => o.kind === 'error');
   const isMarkdown = cell.kind === 'markdown';
   const isMarkdownPreview = isMarkdown && !isEditing;
+  const isLegacyStarterNote = LEGACY_STARTER_NOTES.has(cell.source);
   const durationText = formatDurationCompact(cell.durationMs);
   const execLabel = isMarkdown
     ? 'MD'
@@ -533,7 +540,17 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
             className="codelab-md-preview"
             onDoubleClick={() => onStartMarkdownEdit(cell.id)}
           >
-            <BookProseView content={cell.source || '*双击编辑研究笔记…*'} />
+            {isLegacyStarterNote ? (
+              <details
+                className="codelab-legacy-help"
+                onDoubleClick={(event) => event.stopPropagation()}
+              >
+                <summary>旧版上手说明 · 展开查看</summary>
+                <BookProseView content={cell.source} />
+              </details>
+            ) : (
+              <BookProseView content={cell.source || '*双击编辑研究笔记…*'} />
+            )}
           </div>
         ) : (
           <CodeLabEditor

@@ -5733,6 +5733,22 @@
   max-width: 82ch;
 }
 
+.codelab-legacy-help > summary {
+  color: var(--term-muted);
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.codelab-legacy-help > summary::-webkit-details-marker {
+  display: none;
+}
+
+.codelab-legacy-help[open] > summary {
+  margin-bottom: 10px;
+  color: var(--term-ink);
+}
+
 .codelab-outputs {
   border-top-style: solid;
 }
