@@ -16,7 +16,10 @@ import type {
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
-import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import {
+  open as openDialog,
+  save as saveDialog,
+} from '@tauri-apps/plugin-dialog';
 import InstallerComponentSetup from './system/InstallerComponentSetup';
 import UpdateManager from './system/UpdateManager';
 import katex from 'katex';
@@ -48,6 +51,15 @@ import {
   MindmapCodeInsertDialog,
   MindmapCodeWorkbenchModal,
 } from './mindmap/MindmapCodeWorkbenchModal';
+import {
+  MindmapExcelImportDialog,
+  type ExcelImportConfirmPayload,
+} from './mindmap/MindmapExcelImportDialog';
+import { MindmapExportHtmlDialog } from './mindmap/MindmapExportHtmlDialog';
+import {
+  generateOfflineMindmapHtml,
+  type OfflineExportOptions,
+} from './mindmap/offline-export';
 import type { TerminalCodeLabLanguage } from './terminal/terminal-types';
 import MarkdownEditor from './workbench/MarkdownEditor';
 import type {
@@ -166,6 +178,9 @@ import {
 import {
   applyConvertNodeToCodeBlockCommand,
   applyInsertCodeBlockCommand,
+  applyInsertExcelTableCommand,
+  applyInsertImagesCommand,
+  applyMarkdownNodeBranch,
   applyMarkdownNodeCommand,
   applyReplaceCodeBlockCommand,
   buildMarkdownNodeSourceMap,
@@ -178,6 +193,31 @@ import {
   normalizeMindmapText,
   type MarkdownNodeSource,
 } from './mindmap/commands';
+import {
+  buildExcelTreeBranchMarkdown,
+  buildExternalExcelFence,
+  isExcelFilePath,
+  shouldExternalizeExcelTable,
+  type ParsedExcelWorkbook,
+  type StoredExcelTablePayload,
+} from './mindmap/mindmap-excel';
+import {
+  formatTablePasteForMarkdownEditor,
+  parseNodeTableInput,
+} from './mindmap/mindmap-table-paste';
+import {
+  extractClipboardImageCandidate,
+  formatImagePasteForMarkdownEditor,
+} from './mindmap/mindmap-image-paste';
+import {
+  htmlToKnowledgeMarkdown,
+  imageMarkdown,
+} from './knowledge/knowledge-paste';
+import {
+  importDocumentMedia,
+  importDocumentMediaFromFile,
+} from './knowledge/document-media';
+import { createPasteTransaction } from './workbench/markdown-editor-paste';
 const TerminalPanel = lazy(() => import('./system/TerminalPanel'));
 const EpubReader = lazy(() => import('./ebook/EpubReader'));
 const EbookWorkspace = lazy(() => import('./ebook/EbookWorkspace'));
@@ -220,10 +260,14 @@ import {
   themeStorageKey,
   mindmapStyleStorageKey,
   nodeSpacingStorageKey,
+  mindmapMediaBoundsStorageKey,
   aiCollapsedStorageKey,
   defaultNodeSpacing,
+  defaultMindmapMediaBounds,
   DEFAULT_READER_SPLIT_LAYOUT,
   mindmapStyles,
+  mindmapMediaPresets,
+  normalizeMindmapMediaBounds,
   readTerminalHeight,
   readActiveWorkspace,
   readerSplitLayoutKey,
@@ -233,6 +277,7 @@ import {
   readTheme,
   readMindmapStyle,
   readNodeSpacing,
+  readMindmapMediaBounds,
   readAiCollapsed,
   isEpubPath,
   normalizeLibraryPath,
@@ -243,6 +288,7 @@ import {
   createDraft,
   type ActiveWorkspace,
   type EditorDraft,
+  type MindmapMediaBounds,
   type MindmapStyle,
   type NodeSpacing,
   type ProviderSettings,
@@ -446,6 +492,9 @@ function AppContent() {
       ? nodeSpacing
       : readNodeSpacing();
   const [mindmapStyleMenuOpen, setMindmapStyleMenuOpen] = useState(false);
+  const [mindmapMediaBounds, setMindmapMediaBounds] =
+    useState<MindmapMediaBounds>(readMindmapMediaBounds);
+  const [mediaBoundsMenuOpen, setMediaBoundsMenuOpen] = useState(false);
   const [sourceCollapsed, setSourceCollapsed] = useState(false);
   const [markdownPaneMode, setMarkdownPaneMode] = useState<'edit' | 'preview'>(
     'edit',
@@ -638,6 +687,21 @@ function AppContent() {
     nodeLabel: string;
     error: string;
   } | null>(null);
+  const [imageImportLoading, setImageImportLoading] = useState(false);
+  const [excelImportLoading, setExcelImportLoading] = useState(false);
+  const [excelImportSubmitting, setExcelImportSubmitting] = useState(false);
+  const [excelImportDialog, setExcelImportDialog] = useState<{
+    nodePath: string;
+    nodeLabel: string;
+    workbook: ParsedExcelWorkbook;
+    error: string;
+  } | null>(null);
+  const [htmlExportDialog, setHtmlExportDialog] = useState<{
+    busy: boolean;
+    error: string;
+    exportedPath: string | null;
+    exportedBytes: number;
+  } | null>(null);
   const [codeWorkbenchModal, setCodeWorkbenchModal] =
     useState<MindmapCodeBlockFullscreenRequest | null>(null);
   const [codeZoomImageSrc, setCodeZoomImageSrc] = useState<string | null>(null);
@@ -735,6 +799,7 @@ function AppContent() {
   const codeBlocksAbortRef = useRef<AbortController | null>(null);
   const codeBlocksCleanupRef = useRef<(() => void) | null>(null);
   const mindmapStylePickerRef = useRef<HTMLDivElement>(null);
+  const mediaBoundsPickerRef = useRef<HTMLDivElement>(null);
   const modelPickerRef = useRef<HTMLDivElement>(null);
   const markmapRef = useRef<MarkmapInstance | null>(null);
   // Fit only after a new document is rendered; ordinary edits keep the viewport.
@@ -743,6 +808,7 @@ function AppContent() {
     new Map(),
   );
   const draftRef = useRef(editorDraft);
+  const saveDraftRef = useRef<() => Promise<boolean>>(async () => false);
   const agentCapabilitiesRef = useRef<AgentCapabilities | null>(null);
   const librarySnapshotRef = useRef<LibrarySnapshot | null>(null);
   const historyLoadRequestRef = useRef(0);
@@ -1406,6 +1472,372 @@ function AppContent() {
     }
   };
 
+  const resolveExcelTargetNode = (overridePath?: string) => {
+    if (markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown) {
+      syncMarkdownNodeSourcesImmediate(draftRef.current.markdown);
+    }
+    const candidatePath = overridePath ?? activeMapPath;
+    if (candidatePath) {
+      const direct = markdownNodeSourcesRef.current.get(candidatePath);
+      if (direct && direct.kind !== 'block') {
+        return { nodePath: candidatePath, source: direct };
+      }
+    }
+    for (const [path, source] of markdownNodeSourcesRef.current.entries()) {
+      if (source.kind !== 'block') {
+        return { nodePath: path, source };
+      }
+    }
+    return null;
+  };
+
+  const openImageInsertFlow = async (overridePath?: string) => {
+    const target = resolveExcelTargetNode(overridePath);
+    if (!target) {
+      setLibraryError('请先选择一个思维导图标题或列表节点，再插入图片。');
+      return;
+    }
+    setCanvasNodeContextMenu(null);
+    try {
+      const selected = await openDialog({
+        directory: false,
+        multiple: true,
+        title: '选择要插入思维导图的图片',
+        filters: [
+          {
+            name: '图片文件',
+            extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif'],
+          },
+        ],
+      });
+      const filePaths = (selected ?? []).filter(
+        (item): item is string =>
+          typeof item === 'string' && item.trim().length > 0,
+      );
+      if (filePaths.length === 0) return;
+
+      setImageImportLoading(true);
+      setLibraryError('');
+      setSaveMessage(
+        filePaths.length > 1
+          ? `正在导入 ${filePaths.length} 张本地图片…`
+          : '正在导入本地图片…',
+      );
+
+      let targetRelativePath = draftRef.current.relativePath;
+      if (!targetRelativePath) {
+        const savedDraft = await saveDraft(true);
+        targetRelativePath = draftRef.current.relativePath;
+        if (!savedDraft || !targetRelativePath) {
+          throw new Error('请先选择文件库后再插入本地图片。');
+        }
+      }
+
+      const importedItems: Array<{ markdown: string }> = [];
+      for (const filePath of filePaths) {
+        const imported = await importDocumentMediaFromFile(
+          targetRelativePath,
+          filePath,
+        );
+        const fileName =
+          filePath
+            .split(/[\\/]/)
+            .pop()
+            ?.replace(/\.[^.]+$/, '')
+            .trim() || '图片';
+        importedItems.push({
+          markdown: imageMarkdown(fileName, imported.mediaId),
+        });
+      }
+
+      if (
+        markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown
+      ) {
+        syncMarkdownNodeSourcesImmediate(draftRef.current.markdown);
+      }
+      const latestSource =
+        markdownNodeSourcesRef.current.get(target.nodePath) ?? target.source;
+      const command = applyInsertImagesCommand(
+        draftRef.current.markdown,
+        latestSource,
+        importedItems,
+      );
+      applyMarkdownFromCanvas(command.markdown, {
+        lineIndex: command.lineIndex,
+        focus: false,
+      });
+      setSaveMessage(
+        importedItems.length > 1
+          ? `已插入 ${importedItems.length} 张图片`
+          : '已插入本地图片',
+      );
+    } catch (error) {
+      setLibraryError(errorMessage(error, '导入本地图片失败，请重试。'));
+    } finally {
+      setImageImportLoading(false);
+    }
+  };
+
+  const openExcelImportFlow = async (
+    overridePath?: string,
+    presetFilePath?: string,
+  ) => {
+    const target = resolveExcelTargetNode(overridePath);
+    if (!target) {
+      setLibraryError('请先选择一个思维导图标题或列表节点，再导入 Excel。');
+      return;
+    }
+    setCanvasNodeContextMenu(null);
+    let filePath = presetFilePath?.trim() ?? '';
+    try {
+      if (!filePath) {
+        const selected = await openDialog({
+          directory: false,
+          multiple: false,
+          title: '选择 Excel 或 CSV 表格文件',
+          filters: [
+            {
+              name: 'Excel 与数据表',
+              extensions: ['xlsx', 'xlsm', 'csv', 'tsv'],
+            },
+          ],
+        });
+        if (typeof selected !== 'string' || !selected.trim()) return;
+        filePath = selected;
+      }
+      setExcelImportLoading(true);
+      setLibraryError('');
+      const workbook = await libraryApi.parseExcelWorkbook({ filePath });
+      setExcelImportDialog({
+        nodePath: target.nodePath,
+        nodeLabel: target.source.label,
+        workbook,
+        error: '',
+      });
+    } catch (error) {
+      setLibraryError(errorMessage(error, '读取 Excel 表格失败。'));
+    } finally {
+      setExcelImportLoading(false);
+    }
+  };
+
+  const handleConfirmExcelImport = async (
+    payload: ExcelImportConfirmPayload,
+  ) => {
+    const dialog = excelImportDialog;
+    if (!dialog) return;
+    if (markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown) {
+      syncMarkdownNodeSourcesImmediate(draftRef.current.markdown);
+    }
+    const source = markdownNodeSourcesRef.current.get(dialog.nodePath);
+    if (!source || source.kind === 'block') {
+      setExcelImportDialog((curr) =>
+        curr
+          ? { ...curr, error: '目标节点已发生变化，请关闭后重新选择节点。' }
+          : curr,
+      );
+      return;
+    }
+    setExcelImportSubmitting(true);
+    setExcelImportDialog((curr) => (curr ? { ...curr, error: '' } : curr));
+    try {
+      if (payload.mode === 'tree') {
+        const branch = buildExcelTreeBranchMarkdown({
+          rootTitle: payload.nodeTitle || payload.sheetName || payload.fileName,
+          headers: payload.headers,
+          rows: payload.rows,
+          labelColIndex: payload.labelColIndex,
+          groupColIndex: payload.groupColIndex,
+        });
+        const command = applyMarkdownNodeBranch(
+          draftRef.current.markdown,
+          source,
+          branch.markdown,
+        );
+        applyMarkdownFromCanvas(command.markdown, {
+          lineIndex: command.lineIndex,
+          focus: false,
+        });
+        setSaveMessage(
+          branch.omittedRowCount > 0
+            ? `已导入前 ${branch.importedRowCount} 条节点（跳过超出上限的 ${branch.omittedRowCount} 行）`
+            : `已将 ${branch.importedRowCount} 行 Excel 数据拆分为导图分支`,
+        );
+        setExcelImportDialog(null);
+        return;
+      }
+
+      const storagePlan = shouldExternalizeExcelTable({
+        headers: payload.headers,
+        rows: payload.rows,
+        rowCount: payload.rows.length,
+        colCount: payload.colCount,
+      });
+
+      if (!storagePlan.externalize) {
+        const command = applyInsertExcelTableCommand(
+          draftRef.current.markdown,
+          source,
+          {
+            title: payload.nodeTitle,
+            tableMarkdown: storagePlan.markdownTable,
+          },
+        );
+        applyMarkdownFromCanvas(command.markdown, {
+          lineIndex: command.lineIndex,
+          focus: false,
+        });
+        setSaveMessage(`已插入表格卡片（${payload.rows.length} 行）`);
+        setExcelImportDialog(null);
+        return;
+      }
+
+      let targetRelativePath = draftRef.current.relativePath;
+      if (!targetRelativePath) {
+        const savedDraft = await saveDraft(true);
+        targetRelativePath = draftRef.current.relativePath;
+        if (!savedDraft || !targetRelativePath) {
+          throw new Error(
+            '大型 Excel 表格需要保存为工作区资源文件，请先选择文件库后再导入。',
+          );
+        }
+      }
+
+      const tablePayload: StoredExcelTablePayload = {
+        title: payload.nodeTitle || payload.sheetName,
+        fileName: payload.fileName,
+        sheetName: payload.sheetName,
+        headers: payload.headers,
+        rows: payload.rows,
+        rowCount: payload.rows.length,
+        colCount: payload.colCount,
+      };
+      const savedAsset = await libraryApi.saveMindmapTableAsset({
+        documentRelativePath: targetRelativePath,
+        tableJson: JSON.stringify(tablePayload),
+      });
+      const excelFence = buildExternalExcelFence({
+        assetId: savedAsset.assetId,
+        title: tablePayload.title,
+        fileName: payload.fileName,
+        sheetName: payload.sheetName,
+        rowCount: payload.rows.length,
+        colCount: payload.colCount,
+        headers: payload.headers,
+        previewRows: payload.rows.slice(0, 5),
+      });
+      const command = applyInsertExcelTableCommand(
+        draftRef.current.markdown,
+        source,
+        {
+          title: payload.nodeTitle,
+          excelFence,
+        },
+      );
+      applyMarkdownFromCanvas(command.markdown, {
+        lineIndex: command.lineIndex,
+        focus: false,
+      });
+      setSaveMessage(
+        `已外链保存 ${payload.rows.length} 行 Excel 表格到当前思维导图`,
+      );
+      setExcelImportDialog(null);
+    } catch (error) {
+      setExcelImportDialog((curr) =>
+        curr
+          ? { ...curr, error: errorMessage(error, '写入 Excel 数据失败。') }
+          : curr,
+      );
+    } finally {
+      setExcelImportSubmitting(false);
+    }
+  };
+
+  const openHtmlExportDialog = () => {
+    setHtmlExportDialog({
+      busy: false,
+      error: '',
+      exportedPath: null,
+      exportedBytes: 0,
+    });
+  };
+
+  const handleConfirmHtmlExport = async (
+    exportOptions: OfflineExportOptions,
+  ) => {
+    const fullRoot = fullMindmapRootRef.current;
+    if (!fullRoot) {
+      setHtmlExportDialog((curr) =>
+        curr ? { ...curr, error: '当前没有可导出的思维导图内容。' } : curr,
+      );
+      return;
+    }
+    const focusedRoot =
+      focusedMapPath && exportOptions.scope === 'focused'
+        ? findPureNodeBySourcePath(fullRoot, focusedMapPath)
+        : null;
+    const targetRoot = focusedRoot ?? fullRoot;
+    const baseTitle =
+      markdownTitle(draftRef.current.markdown) ||
+      draftRef.current.title ||
+      '思维导图';
+    const sanitizedName =
+      baseTitle.replace(/[\\/:*?"<>|]+/g, '_').trim() || 'mindmap';
+
+    setHtmlExportDialog((curr) =>
+      curr ? { ...curr, busy: true, error: '' } : curr,
+    );
+    try {
+      const selectedPath = await saveDialog({
+        title: '保存离线可交互 HTML 思维导图',
+        defaultPath: `${sanitizedName}.html`,
+        filters: [{ name: 'HTML 离线网页', extensions: ['html', 'htm'] }],
+      });
+      if (typeof selectedPath !== 'string' || !selectedPath.trim()) {
+        setHtmlExportDialog((curr) => (curr ? { ...curr, busy: false } : curr));
+        return;
+      }
+
+      const direction =
+        mindmapStyles.find((s) => s.id === mindmapStyle)?.direction || 'both';
+      const { html } = await generateOfflineMindmapHtml({
+        title: baseTitle,
+        documentId: draftRef.current.id,
+        documentRelativePath: draftRef.current.relativePath,
+        targetRoot,
+        liveMarkmap: markmapRef.current,
+        svg: svgRef.current,
+        style: mindmapStyle,
+        theme,
+        direction,
+        spacing: activeNodeSpacing,
+        mediaBounds: mindmapMediaBounds,
+        options: exportOptions,
+      });
+      const writtenBytes = await libraryApi.writeExportedMindmapHtml({
+        filePath: selectedPath,
+        html,
+      });
+      setSaveMessage('已导出离线可交互 HTML');
+      setHtmlExportDialog({
+        busy: false,
+        error: '',
+        exportedPath: selectedPath,
+        exportedBytes: writtenBytes,
+      });
+    } catch (error) {
+      setHtmlExportDialog((curr) =>
+        curr
+          ? {
+              ...curr,
+              busy: false,
+              error: errorMessage(error, '导出离线 HTML 失败，请重试。'),
+            }
+          : curr,
+      );
+    }
+  };
+
   const handleConvertNodeToCodeBlock = (nodePath: string) => {
     setCanvasNodeContextMenu(null);
     if (markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown) {
@@ -1560,16 +1992,19 @@ function AppContent() {
     }
   };
 
-  const openSelectedNodeNote = () => {
-    if (!activeMapPath) return;
-    if (markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown)
-      return;
-    const source = markdownNodeSourcesRef.current.get(activeMapPath);
-    if (!source) return;
+  const openSelectedNodeNote = (overridePath?: string) => {
+    const targetPath = overridePath ?? activeMapPath;
+    if (!targetPath) return;
+    if (markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown) {
+      syncMarkdownNodeSourcesImmediate(draftRef.current.markdown);
+    }
+    const source = markdownNodeSourcesRef.current.get(targetPath);
+    if (!source || source.kind === 'block') return;
+    setCanvasNodeContextMenu(null);
     const current = draftRef.current.markdown;
     setNodeNoteDialog({
       nodeId: source.id || null,
-      nodePath: activeMapPath,
+      nodePath: targetPath,
       label: source.label,
       markdown: source.id ? getMarkdownNodeNote(current, source.id) : '',
       error: '',
@@ -2701,6 +3136,7 @@ function AppContent() {
     }
     return saved;
   };
+  saveDraftRef.current = () => saveDraft();
 
   const leavePlantUmlSession = () => {
     const current = plantUmlSessionRef.current;
@@ -3051,6 +3487,16 @@ function AppContent() {
   };
 
   epubDropHandlerRef.current = (paths) => {
+    const excelPath = paths.find(isExcelFilePath);
+    if (
+      excelPath &&
+      activeWorkspace === 'mindmap' &&
+      !plantUmlSessionRef.current &&
+      !paths.some(isEpubPath)
+    ) {
+      void openExcelImportFlow(undefined, excelPath);
+      return;
+    }
     void importDroppedEpubs(paths);
   };
 
@@ -4794,6 +5240,38 @@ function AppContent() {
   }, [aiCollapsed]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem(
+        mindmapMediaBoundsStorageKey,
+        JSON.stringify(mindmapMediaBounds),
+      );
+    } catch {
+      // Keep the selected image bounds for this session when storage is unavailable.
+    }
+  }, [mindmapMediaBounds]);
+
+  useEffect(() => {
+    if (!mediaBoundsMenuOpen) return;
+    const closeOnPointerDown = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !mediaBoundsPickerRef.current?.contains(event.target)
+      ) {
+        setMediaBoundsMenuOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMediaBoundsMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnPointerDown);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnPointerDown);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [mediaBoundsMenuOpen]);
+
+  useEffect(() => {
     if (!mindmapStyleMenuOpen) return;
     const closeOnPointerDown = (event: PointerEvent) => {
       if (
@@ -4947,13 +5425,22 @@ function AppContent() {
       if (!(target instanceof Element)) return;
       if (
         target.closest(
-          '.seamind-code-panel, button, input, textarea, .cm-editor',
+          '.seamind-code-panel, .seamind-mm-table-card, .seamind-mm-media-card, button, input, textarea, .cm-editor',
         )
       )
         return;
       const nodeGroup = target.closest<SVGGElement>('g.markmap-node');
       if (!nodeGroup) return;
       const sourcePath = nodeGroup.getAttribute('data-path');
+      if (target.closest('.seamind-node-note')) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (sourcePath) {
+          setActiveMapPath(sourcePath);
+          openSelectedNodeNote(sourcePath);
+        }
+        return;
+      }
       if (
         markdownNodeSourcesMarkdownRef.current !== draftRef.current.markdown
       ) {
@@ -4980,6 +5467,8 @@ function AppContent() {
         editor.textContent = originalText;
       }
       let finished = false;
+      let importingMedia = false;
+      let overrideNextText: string | null = null;
       editor.contentEditable = 'true';
       editor.setAttribute('role', 'textbox');
       editor.setAttribute(
@@ -4993,11 +5482,13 @@ function AppContent() {
         if (finished) return;
         finished = true;
         editor.removeEventListener('keydown', handleKeyDown);
+        editor.removeEventListener('paste', handlePaste);
         editor.removeEventListener('blur', handleBlur);
         const nextText =
           action === 'cancel'
             ? originalText
-            : editor.innerText || editor.textContent || '';
+            : (overrideNextText ??
+              (editor.innerText || editor.textContent || ''));
         editor.contentEditable = 'false';
         editor.removeAttribute('role');
         editor.removeAttribute('aria-label');
@@ -5070,8 +5561,112 @@ function AppContent() {
           finish('child');
         }
       };
-      const handleBlur = () => finish();
+      const handlePaste = (pasteEvent: ClipboardEvent) => {
+        const imageCandidate = extractClipboardImageCandidate(
+          pasteEvent.clipboardData,
+        );
+        if (imageCandidate && 'error' in imageCandidate) {
+          pasteEvent.preventDefault();
+          pasteEvent.stopPropagation();
+          setLibraryError(imageCandidate.error);
+          return;
+        }
+        if (imageCandidate) {
+          pasteEvent.preventDefault();
+          pasteEvent.stopPropagation();
+          let remainingText = (
+            editor.innerText ||
+            editor.textContent ||
+            ''
+          ).trim();
+          const currentSel = window.getSelection();
+          if (
+            currentSel &&
+            currentSel.rangeCount > 0 &&
+            editor.contains(currentSel.anchorNode)
+          ) {
+            const selText = currentSel.toString().trim();
+            if (selText === remainingText || remainingText === '新主题') {
+              remainingText = '';
+            } else if (selText) {
+              currentSel.getRangeAt(0).deleteContents();
+              remainingText = (
+                editor.innerText ||
+                editor.textContent ||
+                ''
+              ).trim();
+            }
+          } else if (remainingText === '新主题') {
+            remainingText = '';
+          }
+
+          importingMedia = true;
+          editor.textContent = '正在导入截图…';
+          setSaveMessage('正在导入本地截图…');
+          void (async () => {
+            try {
+              let targetRelativePath = draftRef.current.relativePath;
+              if (!targetRelativePath) {
+                const saved = await saveDraftRef.current();
+                targetRelativePath = draftRef.current.relativePath;
+                if (!saved || !targetRelativePath) {
+                  throw new Error('请先选择文件库后再粘贴本地截图。');
+                }
+              }
+              const imported = await importDocumentMedia(
+                targetRelativePath,
+                imageCandidate,
+              );
+              const mdImage = imageMarkdown(
+                imageCandidate.label,
+                imported.mediaId,
+              );
+              overrideNextText = remainingText
+                ? `${remainingText}\n\n${mdImage}`
+                : mdImage;
+              importingMedia = false;
+              setSaveMessage('已导入本地截图');
+              finish();
+            } catch (error) {
+              importingMedia = false;
+              setLibraryError(
+                errorMessage(error, '导入剪贴板本地截图失败，请重试。'),
+              );
+              finish('cancel');
+            }
+          })();
+          return;
+        }
+
+        const plain = pasteEvent.clipboardData?.getData('text/plain') ?? '';
+        const htmlSource = pasteEvent.clipboardData?.getData('text/html');
+        const hasRawGfmTable = /^\s*\|.+\|\s*\r?\n\s*\|[\s:|-]+\|/m.test(plain);
+        const htmlMd =
+          !hasRawGfmTable && htmlSource && /<table\b/i.test(htmlSource)
+            ? htmlToKnowledgeMarkdown(
+                new DOMParser().parseFromString(htmlSource, 'text/html'),
+              )
+            : undefined;
+        const candidate = htmlMd?.trim() ? htmlMd : plain;
+        const tableInput = parseNodeTableInput(candidate);
+        if (!tableInput) return;
+        pasteEvent.preventDefault();
+        pasteEvent.stopPropagation();
+        overrideNextText = [
+          tableInput.prefixText,
+          tableInput.tableMarkdown,
+          tableInput.suffixText,
+        ]
+          .filter(Boolean)
+          .join('\n\n');
+        finish();
+      };
+      const handleBlur = () => {
+        if (importingMedia) return;
+        finish();
+      };
       editor.addEventListener('keydown', handleKeyDown);
+      editor.addEventListener('paste', handlePaste);
       editor.addEventListener('blur', handleBlur);
       editor.focus();
       const selection = window.getSelection();
@@ -5125,6 +5720,11 @@ function AppContent() {
         target.closest(
           'button, input, textarea, select, .cm-editor, [contenteditable="true"]',
         )
+      )
+        return;
+      if (
+        target.closest('.seamind-mm-table-card, .seamind-node-note') &&
+        window.getSelection()?.toString().trim()
       )
         return;
       if (
@@ -5346,7 +5946,9 @@ function AppContent() {
       const embeddingApplied = { value: false };
       const safeRoot = normalizeMindmapPureTree(
         prepareHtmlCardNodes(
-          prepareYouTubeCards(sanitizeNode(root)),
+          prepareYouTubeCards(
+            sanitizeNode(root, { allowMarkdownImages: true }),
+          ),
           embedding,
           embeddingApplied,
         ),
@@ -5432,10 +6034,12 @@ function AppContent() {
           onOpenCodeFullscreen: (req) => setCodeWorkbenchModal(req),
           onAskAgentAboutCode: handleAskAgentAboutMindmapCode,
           onZoomImage: (dataUrl) => setCodeZoomImageSrc(dataUrl),
+          onEditNodeNote: (nodePath) => openSelectedNodeNote(nodePath),
         },
         {
           mode: 'mindmap',
           cwd: librarySnapshotRef.current?.rootPath ?? null,
+          documentRelativePath: editorDraft.relativePath ?? undefined,
         },
       );
       if (codeBlocksAbort.signal.aborted) cleanupCodeBlocks();
@@ -5885,6 +6489,9 @@ function AppContent() {
       className={`app-shell${activeWorkspace === 'terminal' ? ' is-terminal-workspace' : ''}${readerSplitActive ? ' is-reader-split' : ''}${readerKnowledgeActive ? ' is-reader-knowledge' : ''}${readerKnowledgeActive && galaxyViewActive ? ' is-reader-knowledge-wide' : ''}${isTerminalDrawerOpen ? ' is-terminal-open' : ''}${terminalRightActive ? ' is-terminal-right' : ''}${activeWorkspace === 'knowledge' || activeWorkspace === 'mindmap' ? ' is-knowledge-surface' : ''}`}
       data-theme={theme}
       data-map-style={mindmapStyle}
+      data-sync-preview-media={
+        mindmapMediaBounds.syncToPreview ? 'true' : undefined
+      }
       style={
         {
           ...readerSplitStyle,
@@ -5892,6 +6499,9 @@ function AppContent() {
           '--terminal-width': `${terminalWidth}px`,
           '--terminal-side-width': `${terminalSideWidth}px`,
           '--knowledge-sidebar-column': `${activeWorkspace === 'mindmap' ? (libraryCollapsed ? 42 : knowledgeSidebarWidth) : knowledgeSidebarCollapsed ? 42 : knowledgeSidebarWidth}px`,
+          '--seamind-media-min-w': `${mindmapMediaBounds.minWidth}px`,
+          '--seamind-media-max-w': `${mindmapMediaBounds.maxWidth}px`,
+          '--seamind-media-max-h': `${mindmapMediaBounds.maxHeight}px`,
         } as CSSProperties
       }
     >
@@ -6481,6 +7091,97 @@ function AppContent() {
                 readOnly={isDocumentMapPreview}
                 onChange={handleMarkdownEditorChange}
                 onSelectionChange={handleMarkdownSelectionChange}
+                onPaste={(pasteEvent, editorView) => {
+                  const plain =
+                    pasteEvent.clipboardData?.getData('text/plain') ?? '';
+                  const htmlSource =
+                    pasteEvent.clipboardData?.getData('text/html');
+                  const hasRawGfmTable =
+                    /^\s*\|.+\|\s*\r?\n\s*\|[\s:|-]+\|/m.test(plain);
+                  const htmlMd =
+                    !hasRawGfmTable &&
+                    htmlSource &&
+                    /<table\b/i.test(htmlSource)
+                      ? htmlToKnowledgeMarkdown(
+                          new DOMParser().parseFromString(
+                            htmlSource,
+                            'text/html',
+                          ),
+                        )
+                      : undefined;
+                  const sel = editorView.state.selection.main;
+                  const tablePaste = formatTablePasteForMarkdownEditor(
+                    editorView.state.doc.toString(),
+                    sel.from,
+                    sel.to,
+                    plain,
+                    htmlMd,
+                  );
+                  if (tablePaste) {
+                    pasteEvent.preventDefault();
+                    editorView.dispatch(
+                      createPasteTransaction(
+                        editorView.state,
+                        tablePaste.replaceFrom,
+                        tablePaste.replaceTo,
+                        tablePaste.text,
+                      ),
+                    );
+                    return true;
+                  }
+                  const imageCandidate = extractClipboardImageCandidate(
+                    pasteEvent.clipboardData,
+                  );
+                  if (!imageCandidate) return false;
+                  pasteEvent.preventDefault();
+                  if ('error' in imageCandidate) {
+                    setLibraryError(imageCandidate.error);
+                    return true;
+                  }
+                  setSaveMessage('正在导入本地截图…');
+                  void (async () => {
+                    try {
+                      let targetRelativePath = draftRef.current.relativePath;
+                      if (!targetRelativePath) {
+                        const saved = await saveDraftRef.current();
+                        targetRelativePath = draftRef.current.relativePath;
+                        if (!saved || !targetRelativePath) {
+                          throw new Error('请先选择文件库后再粘贴本地截图。');
+                        }
+                      }
+                      const imported = await importDocumentMedia(
+                        targetRelativePath,
+                        imageCandidate,
+                      );
+                      if (!editorView.dom.isConnected) return;
+                      const currentSel = editorView.state.selection.main;
+                      const mdImage = imageMarkdown(
+                        imageCandidate.label,
+                        imported.mediaId,
+                      );
+                      const imageEdit = formatImagePasteForMarkdownEditor(
+                        editorView.state.doc.toString(),
+                        currentSel.from,
+                        currentSel.to,
+                        mdImage,
+                      );
+                      editorView.dispatch(
+                        createPasteTransaction(
+                          editorView.state,
+                          imageEdit.replaceFrom,
+                          imageEdit.replaceTo,
+                          imageEdit.text,
+                        ),
+                      );
+                      setSaveMessage('已导入本地截图');
+                    } catch (error) {
+                      setLibraryError(
+                        errorMessage(error, '导入剪贴板本地截图失败，请重试。'),
+                      );
+                    }
+                  })();
+                  return true;
+                }}
               />
             </div>
             {markdownPaneMode === 'preview' && (
@@ -6592,9 +7293,19 @@ function AppContent() {
                     title="编辑所选节点的 Markdown 备注"
                     aria-label="编辑节点备注"
                     disabled={!canEditSelectedNodeNote}
-                    onClick={openSelectedNodeNote}
+                    onClick={() => openSelectedNodeNote()}
                   >
                     备注
+                  </button>
+                  <button
+                    type="button"
+                    className="canvas-node-action"
+                    title="打开系统文件管理器选择本地图片插入到所选节点（支持多选）"
+                    aria-label="插入本地图片"
+                    disabled={!canAddSelectedNode || imageImportLoading}
+                    onClick={() => void openImageInsertFlow()}
+                  >
+                    {imageImportLoading ? '导入中…' : '图片'}
                   </button>
                   <button
                     type="button"
@@ -6615,6 +7326,16 @@ function AppContent() {
                     onClick={() => openCodeBlockInsertDialog()}
                   >
                     代码块
+                  </button>
+                  <button
+                    type="button"
+                    className="canvas-node-action"
+                    title="导入本地 Excel 或 CSV 表格 (.xlsx/.xlsm/.csv/.tsv) 到所选节点"
+                    aria-label="导入 Excel 表格"
+                    disabled={!canAddSelectedNode || excelImportLoading}
+                    onClick={() => void openExcelImportFlow()}
+                  >
+                    {excelImportLoading ? '读取中…' : 'Excel'}
                   </button>
                   <span className="tool-divider" aria-hidden="true" />
                   <button
@@ -6838,6 +7559,218 @@ function AppContent() {
                       </div>
                     )}
                   </div>
+                  <div
+                    className="canvas-media-picker"
+                    ref={mediaBoundsPickerRef}
+                  >
+                    <button
+                      type="button"
+                      className={`canvas-media-trigger${mediaBoundsMenuOpen ? ' is-open' : ''}`}
+                      aria-haspopup="dialog"
+                      aria-expanded={mediaBoundsMenuOpen}
+                      aria-label={`导入图片大小范围：宽 ${mindmapMediaBounds.minWidth} 至 ${mindmapMediaBounds.maxWidth} 像素`}
+                      title="自由设定导图与文档中导入图片的宽高范围"
+                      onClick={() => setMediaBoundsMenuOpen((open) => !open)}
+                    >
+                      <span>图片大小</span>
+                      <span className="canvas-media-pill">
+                        {mindmapMediaBounds.minWidth}–
+                        {mindmapMediaBounds.maxWidth}
+                      </span>
+                    </button>
+                    {mediaBoundsMenuOpen && (
+                      <div
+                        className="canvas-media-popover"
+                        role="dialog"
+                        aria-label="自定义导入图片大小范围"
+                      >
+                        <div className="canvas-media-popover-head">
+                          <strong>图片尺寸范围</strong>
+                          <button
+                            type="button"
+                            className="canvas-media-reset-btn"
+                            onClick={() =>
+                              setMindmapMediaBounds(defaultMindmapMediaBounds)
+                            }
+                          >
+                            恢复默认
+                          </button>
+                        </div>
+                        <div
+                          className="canvas-media-presets"
+                          role="group"
+                          aria-label="快捷尺寸档位"
+                        >
+                          {mindmapMediaPresets.map((preset) => {
+                            const active =
+                              mindmapMediaBounds.minWidth === preset.minWidth &&
+                              mindmapMediaBounds.maxWidth === preset.maxWidth &&
+                              mindmapMediaBounds.maxHeight === preset.maxHeight;
+                            return (
+                              <button
+                                key={preset.id}
+                                type="button"
+                                className={`canvas-media-preset-btn${active ? ' is-active' : ''}`}
+                                onClick={() =>
+                                  setMindmapMediaBounds((curr) => ({
+                                    ...curr,
+                                    minWidth: preset.minWidth,
+                                    maxWidth: preset.maxWidth,
+                                    maxHeight: preset.maxHeight,
+                                  }))
+                                }
+                              >
+                                {preset.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <label className="canvas-media-row">
+                          <span>最小宽度</span>
+                          <input
+                            type="range"
+                            min={80}
+                            max={480}
+                            step={10}
+                            value={mindmapMediaBounds.minWidth}
+                            onChange={(event) => {
+                              const nextMin = Number(event.target.value);
+                              setMindmapMediaBounds((curr) =>
+                                normalizeMindmapMediaBounds({
+                                  ...curr,
+                                  minWidth: nextMin,
+                                  maxWidth: Math.max(curr.maxWidth, nextMin),
+                                }),
+                              );
+                            }}
+                          />
+                          <input
+                            type="number"
+                            min={80}
+                            max={480}
+                            step={10}
+                            aria-label="最小宽度像素"
+                            value={mindmapMediaBounds.minWidth}
+                            onChange={(event) => {
+                              const nextMin = Number(event.target.value);
+                              if (!Number.isFinite(nextMin)) return;
+                              setMindmapMediaBounds((curr) =>
+                                normalizeMindmapMediaBounds({
+                                  ...curr,
+                                  minWidth: nextMin,
+                                  maxWidth: Math.max(curr.maxWidth, nextMin),
+                                }),
+                              );
+                            }}
+                          />
+                          <em>px</em>
+                        </label>
+                        <label className="canvas-media-row">
+                          <span>最大宽度</span>
+                          <input
+                            type="range"
+                            min={160}
+                            max={1200}
+                            step={10}
+                            value={mindmapMediaBounds.maxWidth}
+                            onChange={(event) => {
+                              const nextMax = Number(event.target.value);
+                              setMindmapMediaBounds((curr) =>
+                                normalizeMindmapMediaBounds({
+                                  ...curr,
+                                  minWidth: Math.min(curr.minWidth, nextMax),
+                                  maxWidth: nextMax,
+                                }),
+                              );
+                            }}
+                          />
+                          <input
+                            type="number"
+                            min={160}
+                            max={1200}
+                            step={10}
+                            aria-label="最大宽度像素"
+                            value={mindmapMediaBounds.maxWidth}
+                            onChange={(event) => {
+                              const nextMax = Number(event.target.value);
+                              if (!Number.isFinite(nextMax)) return;
+                              setMindmapMediaBounds((curr) =>
+                                normalizeMindmapMediaBounds({
+                                  ...curr,
+                                  minWidth: Math.min(curr.minWidth, nextMax),
+                                  maxWidth: nextMax,
+                                }),
+                              );
+                            }}
+                          />
+                          <em>px</em>
+                        </label>
+                        <label className="canvas-media-row">
+                          <span>最大高度</span>
+                          <input
+                            type="range"
+                            min={120}
+                            max={900}
+                            step={10}
+                            value={mindmapMediaBounds.maxHeight}
+                            onChange={(event) => {
+                              const nextHeight = Number(event.target.value);
+                              setMindmapMediaBounds((curr) =>
+                                normalizeMindmapMediaBounds({
+                                  ...curr,
+                                  maxHeight: nextHeight,
+                                }),
+                              );
+                            }}
+                          />
+                          <input
+                            type="number"
+                            min={120}
+                            max={900}
+                            step={10}
+                            aria-label="最大高度像素"
+                            value={mindmapMediaBounds.maxHeight}
+                            onChange={(event) => {
+                              const nextHeight = Number(event.target.value);
+                              if (!Number.isFinite(nextHeight)) return;
+                              setMindmapMediaBounds((curr) =>
+                                normalizeMindmapMediaBounds({
+                                  ...curr,
+                                  maxHeight: nextHeight,
+                                }),
+                              );
+                            }}
+                          />
+                          <em>px</em>
+                        </label>
+                        <label className="canvas-media-sync-row">
+                          <input
+                            type="checkbox"
+                            checked={mindmapMediaBounds.syncToPreview}
+                            onChange={(event) =>
+                              setMindmapMediaBounds((curr) => ({
+                                ...curr,
+                                syncToPreview: event.target.checked,
+                              }))
+                            }
+                          />
+                          <span>同步约束 Markdown 预览区图片</span>
+                        </label>
+                        <p className="canvas-media-hint">
+                          鼠标悬停导图内单张图片并拖动右下角，可单独微调尺寸；点击右上角「重置」恢复遵循范围。
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="canvas-export-trigger"
+                    title="导出可离线分享的交互式 HTML 网页（保留折叠状态、备注、图片与 Excel 数据）"
+                    aria-label="导出离线 HTML"
+                    onClick={openHtmlExportDialog}
+                  >
+                    <span>导出 HTML</span>
+                  </button>
                 </div>
               </div>
             )}
@@ -6892,10 +7825,37 @@ function AppContent() {
                   type="button"
                   role="menuitem"
                   onClick={() =>
+                    openSelectedNodeNote(canvasNodeContextMenu.path)
+                  }
+                >
+                  编辑备注
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() =>
+                    void openImageInsertFlow(canvasNodeContextMenu.path)
+                  }
+                >
+                  插入本地图片
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() =>
                     openCodeBlockInsertDialog(canvasNodeContextMenu.path)
                   }
                 >
                   插入子代码块
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() =>
+                    void openExcelImportFlow(canvasNodeContextMenu.path)
+                  }
+                >
+                  导入 Excel
                 </button>
                 <button
                   type="button"
@@ -8886,6 +9846,70 @@ function AppContent() {
           error={codeBlockInsertDialog.error}
           onCancel={() => setCodeBlockInsertDialog(null)}
           onConfirm={handleConfirmInsertCodeBlock}
+        />
+      )}
+
+      {excelImportDialog && (
+        <MindmapExcelImportDialog
+          workbook={excelImportDialog.workbook}
+          nodeLabel={excelImportDialog.nodeLabel}
+          theme={theme}
+          busy={excelImportSubmitting}
+          error={excelImportDialog.error}
+          onChooseAnotherFile={() => {
+            const targetPath = excelImportDialog.nodePath;
+            void openExcelImportFlow(targetPath);
+          }}
+          onCancel={() => {
+            if (!excelImportSubmitting) setExcelImportDialog(null);
+          }}
+          onConfirm={(payload) => void handleConfirmExcelImport(payload)}
+        />
+      )}
+
+      {htmlExportDialog && (
+        <MindmapExportHtmlDialog
+          title={
+            markdownTitle(draftRef.current.markdown) ||
+            draftRef.current.title ||
+            '思维导图'
+          }
+          fullRoot={fullMindmapRootRef.current}
+          focusedRoot={
+            focusedMapPath && fullMindmapRootRef.current
+              ? findPureNodeBySourcePath(
+                  fullMindmapRootRef.current,
+                  focusedMapPath,
+                )
+              : null
+          }
+          hasFocusedBranch={Boolean(focusedMapPath)}
+          theme={theme}
+          busy={htmlExportDialog.busy}
+          error={htmlExportDialog.error}
+          exportedPath={htmlExportDialog.exportedPath}
+          exportedBytes={htmlExportDialog.exportedBytes}
+          onCancel={() => {
+            if (!htmlExportDialog.busy) setHtmlExportDialog(null);
+          }}
+          onOpenInBrowser={(filePath) => {
+            void libraryApi
+              .openExportedHtmlInBrowser({ filePath })
+              .catch((error) =>
+                setHtmlExportDialog((curr) =>
+                  curr
+                    ? {
+                        ...curr,
+                        error: errorMessage(
+                          error,
+                          '无法在浏览器中打开该文件。',
+                        ),
+                      }
+                    : curr,
+                ),
+              );
+          }}
+          onConfirm={(opts) => void handleConfirmHtmlExport(opts)}
         />
       )}
 

@@ -1214,6 +1214,16 @@ export class Markmap {
       .catch(noop);
   }
 
+  getTransform(): { k: number; x: number; y: number } {
+    const t = zoomTransform(this.svg.node()!);
+    return { k: t.k, x: t.x, y: t.y };
+  }
+
+  setTransform(k: number, x: number, y: number): void {
+    const next = zoomIdentity.translate(x, y).scale(k);
+    this.svg.call(this.zoom.transform, next);
+  }
+
   destroy() {
     this.svg.on('.zoom', null);
     this.svg.html(null);

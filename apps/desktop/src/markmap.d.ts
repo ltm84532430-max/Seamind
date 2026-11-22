@@ -63,15 +63,31 @@ declare module 'markmap-view' {
 
   export class Markmap {
     options: IMarkmapOptions;
+    state?: {
+      data?: any;
+      id?: string;
+      rect?: { x1: number; y1: number; x2: number; y2: number };
+    };
+    svg?: any;
     static create(svg: SVGElement, options?: Record<string, unknown>): Markmap;
     setData(
       data?: PureNode | null,
       options?: Record<string, unknown>,
     ): Promise<void>;
     setOptions(options?: Record<string, unknown>): void;
+    renderData(originData?: any): Promise<void>;
     fit(): Promise<void>;
     rescale(scale: number): Promise<void>;
+    centerNode(node: any, padding?: Record<string, number>): Promise<void>;
+    getTransform(): { k: number; x: number; y: number };
+    setTransform(k: number, x: number, y: number): void;
     setViewAnchorPath(path?: string): void;
     destroy(): void;
   }
+}
+
+declare module 'virtual:seamind-offline-viewer' {
+  export const viewerScript: string;
+  export const viewerCss: string;
+  export const katexCss: string;
 }

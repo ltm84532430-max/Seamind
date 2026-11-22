@@ -401,6 +401,12 @@
     min-height: 26px;
   }
 }
+@container canvas-pane (max-width: 1220px) {
+  .workspace.is-knowledge-map > .preview-pane > .pane-heading {
+    height: auto;
+    min-height: 70px;
+  }
+}
 @container canvas-pane (max-width: 1040px) {
   .workspace.is-knowledge-map > .preview-pane > .pane-heading {
     height: auto;

@@ -17,10 +17,10 @@ import {
   getPreferredMindmapPythonRuntime,
   interruptMindmapCodeExecution,
   normalizeCodeBlockLanguage,
+  renderCodeLinesInto,
   setCachedCodeBlockResult,
   setPreferredMindmapPythonRuntime,
   subscribeCodeBlockResult,
-  tokenizeUniversalCodeLine,
   type CodeExecutionResult,
 } from './code-execution-service';
 import type { CodeBlockSourceRange } from './code-blocks';
@@ -70,6 +70,16 @@ export interface MindmapCodeCardHandlers {
 
 const collapsedCardKeys = new Set<string>();
 const collapsedOutputKeys = new Set<string>();
+
+export function getCodeCardStateSnapshot(): {
+  collapsedCodeCards: string[];
+  collapsedCodeOutputs: string[];
+} {
+  return {
+    collapsedCodeCards: [...collapsedCardKeys],
+    collapsedCodeOutputs: [...collapsedOutputKeys],
+  };
+}
 
 function createSvgIcon(paths: string, size = 12): SVGSVGElement {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -145,43 +155,6 @@ function buildSandboxedTableSrcDoc(html: string, theme: Theme): string {
     thead th { background: ${palette.headBg}; font-weight: 600; }
     tbody tr:nth-child(even) { background: ${palette.zebra}; }
   </style></head><body>${html}</body></html>`;
-}
-
-function renderCodeLines(
-  codeEl: HTMLElement,
-  gutterEl: HTMLElement,
-  source: string,
-  language: string,
-): number {
-  const normalized = source.replace(/\r\n?/g, '\n').replace(/\n$/, '');
-  const lines = normalized.split('\n');
-  const gutterFrag = document.createDocumentFragment();
-  const codeFrag = document.createDocumentFragment();
-
-  for (let idx = 0; idx < lines.length; idx += 1) {
-    const lineNo = document.createElement('span');
-    lineNo.textContent = String(idx + 1);
-    gutterFrag.append(lineNo);
-
-    const row = document.createElement('div');
-    row.className = 'seamind-mm-code-line';
-    const tokens = tokenizeUniversalCodeLine(lines[idx] ?? '', language);
-    for (const tok of tokens) {
-      if (tok.kind === 'plain') {
-        row.append(document.createTextNode(tok.text));
-      } else {
-        const span = document.createElement('span');
-        span.className = `cl-tok-${tok.kind}`;
-        span.textContent = tok.text;
-        row.append(span);
-      }
-    }
-    codeFrag.append(row);
-  }
-
-  gutterEl.replaceChildren(gutterFrag);
-  codeEl.replaceChildren(codeFrag);
-  return lines.length;
 }
 
 function renderOutputItemsInto(
@@ -504,7 +477,7 @@ export function createMindmapCodeCard(args: {
   const codePre = document.createElement('pre');
   codePre.className = 'seamind-mm-code-pre';
 
-  const totalLines = renderCodeLines(codePre, gutter, source, normLang);
+  const totalLines = renderCodeLinesInto(codePre, gutter, source, normLang);
   lineCountLabel.textContent = `${totalLines} 行`;
 
   codeGrid.append(gutter, codePre);

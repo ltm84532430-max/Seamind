@@ -6,6 +6,7 @@ import { normalizeMindmapPureTree } from '../src/library/app-tree-utils';
 import {
   applyConvertNodeToCodeBlockCommand,
   applyInsertCodeBlockCommand,
+  applyInsertImagesCommand,
   applyMarkdownNodeBranch,
   applyMarkdownNodeCommand,
   applyReplaceCodeBlockCommand,
@@ -420,5 +421,28 @@ describe('mindmap deep hierarchy & node commands', () => {
     expect(runRes.permission).toBe('read');
     expect(runRes.result.ok).toBe(true);
     expect(runRes.result.output).toBe('42');
+  });
+
+  it('inserts images directly into placeholder 新主题 nodes and as children under populated nodes', () => {
+    const base = ['# 数据获取', '## 免费版', '- 新主题'].join('\n');
+    const parsed = buildSources(base);
+
+    const placeholder = findSourceByLabel(parsed.sources, '新主题');
+    expect(placeholder).toBeDefined();
+    const replaced = applyInsertImagesCommand(base, placeholder![1], [
+      { markdown: '![架构图](seamind-media:abc123)' },
+    ]);
+    expect(replaced.markdown).toContain('- ![架构图](seamind-media:abc123)');
+    expect(replaced.markdown).not.toContain('新主题');
+
+    const parsedAfter = buildSources(replaced.markdown);
+    const heading = findSourceByLabel(parsedAfter.sources, '免费版');
+    expect(heading).toBeDefined();
+    const appended = applyInsertImagesCommand(replaced.markdown, heading![1], [
+      { markdown: '![图1](seamind-media:img1)' },
+      { markdown: '![图2](seamind-media:img2)' },
+    ]);
+    expect(appended.markdown).toContain('### ![图1](seamind-media:img1)');
+    expect(appended.markdown).toContain('### ![图2](seamind-media:img2)');
   });
 });

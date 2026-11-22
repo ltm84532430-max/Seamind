@@ -8983,7 +8983,7 @@ select option {
   color: #f4a28c;
 }
 
-/* Node notes render as a compact Notion-like quote card under the node title. */
+/* Node notes render as an expandable, non-truncated card under the node title. */
 .app-shell[data-map-style]
   .markmap-node
   > foreignObject
@@ -8992,8 +8992,8 @@ select option {
   display: block;
   box-sizing: border-box;
   width: fit-content;
-  min-width: min(9em, 100%);
-  max-width: min(260px, 42vw);
+  min-width: min(14em, 100%);
+  max-width: min(var(--markmap-max-width, 380px), 46vw);
   min-height: 0;
   padding: 8px 13px;
   border: 1px solid #e7e7e7;
@@ -9018,21 +9018,109 @@ select option {
 .markmap-node .seamind-node-note {
   display: block;
   max-width: 100%;
-  margin-top: 5px;
-  padding-left: 8px;
-  border-left: 2px solid #c9cacc;
-  color: #858a8f;
-  font-size: 0.82em;
+  margin-top: 7px;
+  padding-top: 6px;
+  padding-left: 9px;
+  border-top: 1px dashed rgba(130, 145, 158, 0.28);
+  border-left: 2px solid #b8c2cc;
+  color: #55616d;
+  font-size: 0.85em;
   font-weight: 400;
-  line-height: 1.4;
+  line-height: 1.5;
   text-align: left;
   overflow-wrap: anywhere;
+  cursor: text;
+  user-select: text;
+}
+.markmap-node .seamind-node-note-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  user-select: none;
+}
+.markmap-node .seamind-node-note-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.markmap-node .seamind-node-note-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 5px;
+  border: 1px solid #d5dee4;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #5a6773;
+  font: 600 9.5px/1 var(--ui-font, sans-serif);
+  letter-spacing: 0.04em;
+  flex: 0 0 auto;
+}
+.markmap-node .seamind-node-note-collapsed-hint {
+  display: none;
+  color: #7c8792;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+.markmap-node .seamind-node-note.is-collapsed .seamind-node-note-bar {
+  margin-bottom: 0;
+}
+.markmap-node
+  .seamind-node-note.is-collapsed
+  .seamind-node-note-collapsed-hint {
+  display: inline;
+}
+.markmap-node .seamind-node-note-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.markmap-node .seamind-node-note-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 18px;
+  padding: 0 6px;
+  border: 1px solid #d5dee4;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.8);
+  color: #53606c;
+  font: 500 10px/1 var(--ui-font, sans-serif);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.markmap-node .seamind-node-note-btn.is-icon {
+  width: 18px;
+  padding: 0;
+}
+.markmap-node .seamind-node-note-btn:hover {
+  border-color: var(--accent, #d9573b);
+  color: var(--accent, #d9573b);
 }
 .markmap-node .seamind-node-note-content {
   position: relative;
   display: block;
-  max-height: 2.8em;
-  overflow: hidden;
+  max-height: 260px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+.markmap-node .seamind-node-note.is-expanded .seamind-node-note-content {
+  max-height: none;
+  overflow-y: visible;
+  padding-right: 0;
+}
+.markmap-node .seamind-node-note.is-collapsed .seamind-node-note-content {
+  display: none;
 }
 .markmap-node .seamind-node-note-content > :first-child {
   margin-top: 0;
@@ -9040,19 +9128,31 @@ select option {
 .markmap-node .seamind-node-note-content > :last-child {
   margin-bottom: 0;
 }
-.markmap-node .seamind-node-note-content p {
-  margin: 0;
+.markmap-node .seamind-node-note-content p,
+.markmap-node .seamind-node-note-content ul,
+.markmap-node .seamind-node-note-content ol {
+  margin: 0 0 4px;
 }
-.markmap-node .seamind-node-note-ellipsis {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  padding-left: 4px;
-  background: #f1f1f1;
+.markmap-node .seamind-node-note-content ul,
+.markmap-node .seamind-node-note-content ol {
+  padding-left: 16px;
 }
-.app-shell[data-theme='dark'] .markmap-node .seamind-node-note {
+.markmap-node .seamind-node-note-content code {
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: rgba(15, 23, 32, 0.06);
+  font: 500 0.9em/1.3 var(--mono, monospace);
+}
+.markmap-node .seamind-node-note-content a {
+  color: var(--accent, #c44a2f);
+  text-decoration: underline;
+}
+.app-shell[data-theme='dark'] .markmap-node .seamind-node-note,
+.app-shell[data-theme='navy'] .markmap-node .seamind-node-note,
+.app-shell[data-theme='purple'] .markmap-node .seamind-node-note {
+  border-top-color: rgba(255, 255, 255, 0.1);
   border-left-color: #667078;
-  color: #aeb7bd;
+  color: #c5cfd6;
 }
 .app-shell[data-theme='dark'][data-map-style]
   .markmap-node
@@ -9063,8 +9163,38 @@ select option {
   color: #e1e5e8;
   background: #252c31;
 }
-.app-shell[data-theme='dark'] .markmap-node .seamind-node-note-ellipsis {
-  background: #252c31;
+.app-shell[data-theme='navy'][data-map-style]
+  .markmap-node
+  > foreignObject
+  > div
+  > div:has(> .seamind-node-note) {
+  border-color: #1e334e;
+  color: #dce8f5;
+  background: #0d1a2e;
+}
+.app-shell[data-theme='purple'][data-map-style]
+  .markmap-node
+  > foreignObject
+  > div
+  > div:has(> .seamind-node-note) {
+  border-color: #30224a;
+  color: #ede2fa;
+  background: #171029;
+}
+.app-shell[data-theme='dark'] .markmap-node .seamind-node-note-badge,
+.app-shell[data-theme='navy'] .markmap-node .seamind-node-note-badge,
+.app-shell[data-theme='purple'] .markmap-node .seamind-node-note-badge,
+.app-shell[data-theme='dark'] .markmap-node .seamind-node-note-btn,
+.app-shell[data-theme='navy'] .markmap-node .seamind-node-note-btn,
+.app-shell[data-theme='purple'] .markmap-node .seamind-node-note-btn {
+  border-color: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.06);
+  color: #cbd5de;
+}
+.app-shell[data-theme='dark'] .markmap-node .seamind-node-note-content code,
+.app-shell[data-theme='navy'] .markmap-node .seamind-node-note-content code,
+.app-shell[data-theme='purple'] .markmap-node .seamind-node-note-content code {
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .app-shell[data-theme='dark'] .app-shell[data-theme='dark'] /* The LLM work area is a squared, single-column panel aligned to its header. */
@@ -9950,6 +10080,41 @@ select option {
   color: #aeb9c0;
 }
 
+@container canvas-pane (max-width: 1220px) {
+  .preview-heading {
+    height: auto;
+    min-height: 78px;
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    align-items: center;
+    column-gap: 12px;
+    row-gap: 6px;
+    padding: 8px 12px;
+  }
+  .preview-title {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .canvas-tools {
+    display: contents;
+  }
+  .canvas-tool-actions {
+    grid-column: 2;
+    grid-row: 1;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+  .canvas-tool-view {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    padding-top: 6px;
+    border-top: 1px solid var(--line);
+  }
+}
+
 @container canvas-pane (max-width: 1040px) {
   .preview-heading {
     height: auto;
@@ -10066,6 +10231,7 @@ select option {
       .seamind-html-card-node,
       .seamind-html-canvas-node,
       .seamind-code-panel,
+      .seamind-node-note,
       .katex,
       svg,
       table,
@@ -10087,7 +10253,9 @@ select option {
   .markmap-node
   > foreignObject
   > div
-  > div:has(.katex) {
+  > div:has(.katex):not(
+    :has(table, .seamind-mm-table-card, .seamind-mm-code-card)
+  ) {
   box-sizing: border-box;
   display: block;
   width: max-content !important;
@@ -16052,7 +16220,9 @@ select option {
    ========================================================================== */
 
 .seamind-mm-code-viewport::-webkit-scrollbar,
+.seamind-mm-table-scroll::-webkit-scrollbar,
 .seamind-code-note-body::-webkit-scrollbar,
+.seamind-node-note-content::-webkit-scrollbar,
 .mm-code-modal-cm-host .cm-scroller::-webkit-scrollbar,
 .mm-code-output-scroll::-webkit-scrollbar,
 .mm-code-insert-textarea::-webkit-scrollbar {
@@ -16061,12 +16231,16 @@ select option {
 }
 
 .seamind-mm-code-viewport::-webkit-scrollbar-track,
+.seamind-mm-table-scroll::-webkit-scrollbar-track,
 .seamind-code-note-body::-webkit-scrollbar-track,
+.seamind-node-note-content::-webkit-scrollbar-track,
 .mm-code-modal-cm-host .cm-scroller::-webkit-scrollbar-track,
 .mm-code-output-scroll::-webkit-scrollbar-track,
 .mm-code-insert-textarea::-webkit-scrollbar-track,
 .seamind-mm-code-viewport::-webkit-scrollbar-corner,
+.seamind-mm-table-scroll::-webkit-scrollbar-corner,
 .seamind-code-note-body::-webkit-scrollbar-corner,
+.seamind-node-note-content::-webkit-scrollbar-corner,
 .mm-code-modal-cm-host .cm-scroller::-webkit-scrollbar-corner,
 .mm-code-output-scroll::-webkit-scrollbar-corner,
 .mm-code-insert-textarea::-webkit-scrollbar-corner {
@@ -16074,7 +16248,9 @@ select option {
 }
 
 .seamind-mm-code-viewport::-webkit-scrollbar-button,
+.seamind-mm-table-scroll::-webkit-scrollbar-button,
 .seamind-code-note-body::-webkit-scrollbar-button,
+.seamind-node-note-content::-webkit-scrollbar-button,
 .mm-code-modal-cm-host .cm-scroller::-webkit-scrollbar-button,
 .mm-code-output-scroll::-webkit-scrollbar-button,
 .mm-code-insert-textarea::-webkit-scrollbar-button {
@@ -16084,7 +16260,9 @@ select option {
 }
 
 .seamind-mm-code-viewport::-webkit-scrollbar-thumb,
+.seamind-mm-table-scroll::-webkit-scrollbar-thumb,
 .seamind-code-note-body::-webkit-scrollbar-thumb,
+.seamind-node-note-content::-webkit-scrollbar-thumb,
 .mm-code-modal-cm-host .cm-scroller::-webkit-scrollbar-thumb,
 .mm-code-output-scroll::-webkit-scrollbar-thumb,
 .mm-code-insert-textarea::-webkit-scrollbar-thumb {
@@ -16095,7 +16273,9 @@ select option {
 }
 
 .seamind-mm-code-viewport::-webkit-scrollbar-thumb:hover,
+.seamind-mm-table-scroll::-webkit-scrollbar-thumb:hover,
 .seamind-code-note-body::-webkit-scrollbar-thumb:hover,
+.seamind-node-note-content::-webkit-scrollbar-thumb:hover,
 .mm-code-modal-cm-host .cm-scroller::-webkit-scrollbar-thumb:hover,
 .mm-code-output-scroll::-webkit-scrollbar-thumb:hover,
 .mm-code-insert-textarea::-webkit-scrollbar-thumb:hover {
@@ -16103,7 +16283,9 @@ select option {
 }
 
 .seamind-mm-code-viewport::-webkit-scrollbar-thumb:active,
+.seamind-mm-table-scroll::-webkit-scrollbar-thumb:active,
 .seamind-code-note-body::-webkit-scrollbar-thumb:active,
+.seamind-node-note-content::-webkit-scrollbar-thumb:active,
 .mm-code-modal-cm-host .cm-scroller::-webkit-scrollbar-thumb:active,
 .mm-code-output-scroll::-webkit-scrollbar-thumb:active,
 .mm-code-insert-textarea::-webkit-scrollbar-thumb:active {
@@ -16112,7 +16294,9 @@ select option {
 
 @supports not selector(::-webkit-scrollbar) {
   .seamind-mm-code-viewport,
+  .seamind-mm-table-scroll,
   .seamind-code-note-body,
+  .seamind-node-note-content,
   .mm-code-modal-cm-host .cm-scroller,
   .mm-code-output-scroll,
   .mm-code-insert-textarea {
@@ -16816,5 +17000,1430 @@ select option {
   .mm-code-modal-editor-pane {
     border-right: 0;
     border-bottom: 1px solid var(--mm-border);
+  }
+}
+
+/* ==========================================================================
+   Mindmap Institutional Table Cards & Adaptive Typography
+   Strictly flat CSS rules (zero nested rules inside rules).
+   ========================================================================== */
+
+.app-shell[data-map-style]
+  .markmap-node
+  > foreignObject
+  > div
+  > div:has(> table),
+.app-shell[data-map-style]
+  .markmap-node
+  > foreignObject
+  > div
+  > div:has(> .seamind-mm-table-card) {
+  display: block !important;
+  width: max-content !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  text-align: left;
+  cursor: default;
+}
+
+.app-shell[data-map-style]
+  .markmap-node[data-active='true']
+  > foreignObject
+  > div
+  > div:has(> .seamind-mm-table-card) {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.app-shell[data-map-style]
+  .markmap-node[data-active='true']
+  .seamind-mm-table-card {
+  border-color: var(--accent, #d9573b);
+  box-shadow: 0 0 0 2px rgba(217, 87, 59, 0.22);
+}
+
+.seamind-mm-table-card {
+  width: max-content;
+  min-width: 240px;
+  max-width: min(80vw, 960px);
+  border: 1px solid #d7dfe4;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #1f2933;
+  box-shadow: 0 1px 3px rgba(15, 23, 32, 0.05);
+  overflow: hidden;
+  text-align: left;
+  cursor: default;
+}
+
+.seamind-mm-table-card.is-collapsed {
+  width: 280px;
+  min-width: 220px;
+}
+
+.seamind-mm-table-card.is-collapsed .seamind-mm-table-scroll {
+  display: none;
+}
+
+.seamind-mm-table-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 30px;
+  padding: 3px 8px;
+  border-bottom: 1px solid #e6ecef;
+  background: #f6f8fa;
+  border-radius: 3px 3px 0 0;
+  user-select: none;
+}
+
+.seamind-mm-table-head svg {
+  fill: none;
+  flex: 0 0 auto;
+}
+
+.seamind-mm-table-card.is-collapsed .seamind-mm-table-head {
+  border-bottom: 0;
+  border-radius: 3px;
+}
+
+.seamind-mm-table-head-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.seamind-mm-table-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border: 1px solid #d5dee4;
+  border-radius: 2px;
+  background: #ffffff;
+  color: #36454f;
+  font: 600 10px/1 var(--mono, 'Cascadia Code', Consolas, monospace);
+  letter-spacing: 0.06em;
+}
+
+.seamind-mm-table-meta {
+  color: #71808a;
+  font: 500 10px/1 var(--mono, 'Cascadia Code', Consolas, monospace);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.seamind-mm-table-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.seamind-mm-table-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid #d4dde3;
+  border-radius: 3px;
+  background: #ffffff;
+  color: #3e4d57;
+  font: 500 10.5px/1 var(--ui-font, sans-serif);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.seamind-mm-table-btn:hover {
+  border-color: #aebcc4;
+  color: #1f2933;
+  background: #fafcfd;
+}
+
+.seamind-mm-table-btn.is-copied {
+  border-color: rgba(21, 128, 61, 0.36);
+  color: #15803d;
+  background: rgba(21, 128, 61, 0.06);
+}
+
+.seamind-mm-table-scroll {
+  max-height: 360px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: #ffffff;
+  user-select: text;
+}
+
+.markmap-node .seamind-mm-table {
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  border: 0 !important;
+  border-collapse: separate !important;
+  border-spacing: 0;
+  font: 400 12px/1.55 var(--ui-font, sans-serif);
+  font-variant-numeric: tabular-nums;
+  color: #243038;
+}
+
+.markmap-node .seamind-mm-table th,
+.markmap-node .seamind-mm-table td {
+  padding: 6px 11px;
+  border: 0 !important;
+  border-right: 1px solid #e8edf1 !important;
+  border-bottom: 1px solid #e8edf1 !important;
+  text-align: left;
+  vertical-align: top;
+}
+
+.markmap-node .seamind-mm-table th:last-child,
+.markmap-node .seamind-mm-table td:last-child {
+  border-right: 0 !important;
+}
+
+.markmap-node .seamind-mm-table tbody tr:last-child td {
+  border-bottom: 0 !important;
+}
+
+.markmap-node .seamind-mm-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 7px 11px;
+  border-bottom: 1px solid #d5dee4 !important;
+  background: #f3f6f8;
+  color: #1f2933;
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.markmap-node .seamind-mm-table tbody tr:nth-child(even) td {
+  background: #fafcfd;
+}
+
+.markmap-node .seamind-mm-table tbody tr:hover td {
+  background: #f2f6fa;
+}
+
+.seamind-mm-cell {
+  width: max-content;
+  min-width: 0;
+  max-width: 340px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.seamind-mm-cell.is-head {
+  max-width: 260px;
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+
+.seamind-mm-cell.is-head.is-compact {
+  white-space: nowrap;
+}
+
+.markmap-node .seamind-mm-table code {
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: #f0f4f7;
+  color: #243440;
+  font: 500 11px/1.4 var(--mono, 'Cascadia Code', Consolas, monospace);
+}
+
+.markmap-node .seamind-mm-table a {
+  color: var(--accent, #b85638);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Dark / Navy / Purple Theme Calibration for Mindmap Table Cards */
+.app-shell[data-theme='dark'] .seamind-mm-table-card,
+.app-shell[data-theme='navy'] .seamind-mm-table-card,
+.app-shell[data-theme='purple'] .seamind-mm-table-card {
+  border-color: #2f3a44;
+  background: #141a20;
+  color: #dce4eb;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.28);
+}
+
+.app-shell[data-theme='navy'] .seamind-mm-table-card {
+  border-color: #1e334e;
+  background: #0a1526;
+}
+
+.app-shell[data-theme='purple'] .seamind-mm-table-card {
+  border-color: #30224a;
+  background: #130c22;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-table-head,
+.app-shell[data-theme='navy'] .seamind-mm-table-head,
+.app-shell[data-theme='purple'] .seamind-mm-table-head {
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-table-badge,
+.app-shell[data-theme='navy'] .seamind-mm-table-badge,
+.app-shell[data-theme='purple'] .seamind-mm-table-badge {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  color: #d0dae2;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-table-meta,
+.app-shell[data-theme='navy'] .seamind-mm-table-meta,
+.app-shell[data-theme='purple'] .seamind-mm-table-meta {
+  color: #8b9aa6;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-table-btn,
+.app-shell[data-theme='navy'] .seamind-mm-table-btn,
+.app-shell[data-theme='purple'] .seamind-mm-table-btn {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  color: #cdd8e0;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-table-btn:hover,
+.app-shell[data-theme='navy'] .seamind-mm-table-btn:hover,
+.app-shell[data-theme='purple'] .seamind-mm-table-btn:hover {
+  border-color: rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.1);
+  color: #f0f5f8;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-table-btn.is-copied,
+.app-shell[data-theme='navy'] .seamind-mm-table-btn.is-copied,
+.app-shell[data-theme='purple'] .seamind-mm-table-btn.is-copied {
+  border-color: rgba(52, 211, 153, 0.42);
+  color: #6ee7b7;
+  background: rgba(52, 211, 153, 0.12);
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-table-scroll,
+.app-shell[data-theme='navy'] .seamind-mm-table-scroll,
+.app-shell[data-theme='purple'] .seamind-mm-table-scroll {
+  background: transparent;
+}
+
+.app-shell[data-theme='dark'] .markmap-node .seamind-mm-table,
+.app-shell[data-theme='navy'] .markmap-node .seamind-mm-table,
+.app-shell[data-theme='purple'] .markmap-node .seamind-mm-table {
+  color: #d4dfe7;
+}
+
+.app-shell[data-theme='dark'] .markmap-node .seamind-mm-table th,
+.app-shell[data-theme='dark'] .markmap-node .seamind-mm-table td {
+  border-right-color: rgba(255, 255, 255, 0.07) !important;
+  border-bottom-color: rgba(255, 255, 255, 0.07) !important;
+}
+
+.app-shell[data-theme='navy'] .markmap-node .seamind-mm-table th,
+.app-shell[data-theme='navy'] .markmap-node .seamind-mm-table td {
+  border-right-color: rgba(125, 211, 252, 0.12) !important;
+  border-bottom-color: rgba(125, 211, 252, 0.12) !important;
+}
+
+.app-shell[data-theme='purple'] .markmap-node .seamind-mm-table th,
+.app-shell[data-theme='purple'] .markmap-node .seamind-mm-table td {
+  border-right-color: rgba(192, 132, 252, 0.14) !important;
+  border-bottom-color: rgba(192, 132, 252, 0.14) !important;
+}
+
+.app-shell[data-theme='dark'] .markmap-node .seamind-mm-table thead th {
+  border-bottom-color: rgba(255, 255, 255, 0.12) !important;
+  background: #1b232b;
+  color: #e6edf2;
+}
+
+.app-shell[data-theme='navy'] .markmap-node .seamind-mm-table thead th {
+  border-bottom-color: rgba(125, 211, 252, 0.2) !important;
+  background: #102038;
+  color: #e6f0fa;
+}
+
+.app-shell[data-theme='purple'] .markmap-node .seamind-mm-table thead th {
+  border-bottom-color: rgba(192, 132, 252, 0.22) !important;
+  background: #1d1333;
+  color: #f3ecfc;
+}
+
+.app-shell[data-theme='dark']
+  .markmap-node
+  .seamind-mm-table
+  tbody
+  tr:nth-child(even)
+  td,
+.app-shell[data-theme='navy']
+  .markmap-node
+  .seamind-mm-table
+  tbody
+  tr:nth-child(even)
+  td,
+.app-shell[data-theme='purple']
+  .markmap-node
+  .seamind-mm-table
+  tbody
+  tr:nth-child(even)
+  td {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.app-shell[data-theme='dark'] .markmap-node .seamind-mm-table tbody tr:hover td,
+.app-shell[data-theme='navy'] .markmap-node .seamind-mm-table tbody tr:hover td,
+.app-shell[data-theme='purple']
+  .markmap-node
+  .seamind-mm-table
+  tbody
+  tr:hover
+  td {
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.app-shell[data-theme='dark'] .markmap-node .seamind-mm-table code,
+.app-shell[data-theme='navy'] .markmap-node .seamind-mm-table code,
+.app-shell[data-theme='purple'] .markmap-node .seamind-mm-table code {
+  background: rgba(255, 255, 255, 0.08);
+  color: #e2eaf0;
+}
+
+.app-shell[data-theme='dark']
+  .markmap-node[data-active='true']
+  .seamind-mm-table-card,
+.app-shell[data-theme='navy']
+  .markmap-node[data-active='true']
+  .seamind-mm-table-card,
+.app-shell[data-theme='purple']
+  .markmap-node[data-active='true']
+  .seamind-mm-table-card {
+  border-color: var(--accent, #e07a5f);
+  box-shadow: 0 0 0 2px rgba(224, 122, 95, 0.28);
+}
+
+/* ==========================================================================
+   Mindmap Imported Image & SVG Size Range Controls
+   Strictly flat CSS rules (zero nested rules inside rules).
+   ========================================================================== */
+
+.app-shell[data-map-style]
+  .markmap-node
+  > foreignObject
+  > div
+  > div:has(.seamind-mm-media-card, img, svg):not(
+    :has(
+      .katex,
+      .seamind-code-panel,
+      .seamind-mm-table-card,
+      .seamind-youtube-card,
+      .seamind-html-card-node,
+      .seamind-html-canvas-node
+    )
+  ) {
+  display: inline-flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  gap: 8px;
+  width: max-content !important;
+  min-width: 0 !important;
+  max-width: max(
+    26em,
+    calc(var(--seamind-media-max-w, 420px) + 32px)
+  ) !important;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+}
+
+.app-shell[data-map-style]
+  .markmap-node
+  > foreignObject
+  > div
+  > div:has(.seamind-mm-media-card.is-custom-sized) {
+  max-width: none !important;
+}
+
+.seamind-mm-media-card {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  width: max-content;
+  border: 1px solid #d7dfe4;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #1f2933;
+  box-shadow: 0 1px 3px rgba(15, 23, 32, 0.05);
+  overflow: hidden;
+  cursor: default;
+}
+
+.seamind-mm-media-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 26px;
+  padding: 2px 6px;
+  border-bottom: 1px solid #e6ecef;
+  background: #f6f8fa;
+  user-select: none;
+}
+
+.seamind-mm-media-head svg {
+  fill: none;
+  flex: 0 0 auto;
+}
+
+.seamind-mm-media-head-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.seamind-mm-media-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 5px;
+  border: 1px solid #d5dee4;
+  border-radius: 2px;
+  background: #ffffff;
+  color: #36454f;
+  font: 600 9.5px/1 var(--mono, 'Cascadia Code', Consolas, monospace);
+  letter-spacing: 0.06em;
+}
+
+.seamind-mm-media-size {
+  color: #71808a;
+  font: 500 10px/1 var(--mono, 'Cascadia Code', Consolas, monospace);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.seamind-mm-media-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.seamind-mm-media-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid #d4dde3;
+  border-radius: 3px;
+  background: #ffffff;
+  color: #3e4d57;
+  font: 500 10px/1 var(--ui-font, sans-serif);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.seamind-mm-media-btn:hover:not(:disabled) {
+  border-color: #aebcc4;
+  color: #1f2933;
+  background: #fafcfd;
+}
+
+.seamind-mm-media-btn[hidden] {
+  display: none;
+}
+
+.seamind-mm-media-stage {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  background: #ffffff;
+}
+
+.seamind-mm-media-stage img.seamind-mm-media-img,
+.seamind-mm-media-stage svg.seamind-mm-media-svg {
+  display: block;
+  min-width: var(--seamind-media-min-w, 160px);
+  max-width: var(--seamind-media-max-w, 420px);
+  max-height: var(--seamind-media-max-h, 320px);
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 2px;
+}
+
+.seamind-mm-media-stage img.seamind-mm-media-img {
+  cursor: zoom-in;
+}
+
+.seamind-mm-media-card.is-custom-sized
+  .seamind-mm-media-stage
+  img.seamind-mm-media-img,
+.seamind-mm-media-card.is-custom-sized
+  .seamind-mm-media-stage
+  svg.seamind-mm-media-svg {
+  min-width: 0;
+  width: var(--seamind-media-custom-w, 420px);
+  max-width: var(--seamind-media-custom-w, 420px);
+  max-height: none;
+  height: auto;
+}
+
+.seamind-mm-media-resize {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  z-index: 3;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  touch-action: none;
+  opacity: 0.45;
+  background: linear-gradient(
+    135deg,
+    transparent 45%,
+    #94a3b8 45%,
+    #94a3b8 55%,
+    transparent 55%,
+    transparent 70%,
+    #94a3b8 70%,
+    #94a3b8 80%,
+    transparent 80%
+  );
+  transition: opacity 0.14s ease;
+}
+
+.seamind-mm-media-card:hover .seamind-mm-media-resize,
+.seamind-mm-media-resize:hover {
+  opacity: 1;
+}
+
+.app-shell[data-sync-preview-media='true']
+  .markdown-rendered-preview
+  img:not(.seamind-image-lightbox-img) {
+  min-width: min(var(--seamind-media-min-w, 160px), 100%);
+  max-width: min(var(--seamind-media-max-w, 420px), 100%);
+  max-height: var(--seamind-media-max-h, 320px);
+  width: auto;
+  height: auto;
+  object-fit: contain;
+}
+
+/* Toolbar Image Size Range Picker */
+.canvas-media-picker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.canvas-tools .canvas-media-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: auto;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--line, #dfe3e6);
+  border-radius: 3px;
+  background: var(--panel, #ffffff);
+  color: var(--ink, #1f2933);
+  font: 500 11.5px/1 var(--ui-font, sans-serif);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.canvas-media-trigger:hover,
+.canvas-media-trigger.is-open {
+  border-color: var(--accent, #d9573b);
+}
+
+.canvas-media-pill {
+  padding: 1px 5px;
+  border-radius: 2px;
+  background: rgba(100, 116, 139, 0.1);
+  color: var(--muted, #64748b);
+  font: 500 10px/1.2 var(--mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+.canvas-media-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  width: 288px;
+  padding: 10px 12px;
+  border: 1px solid var(--line, #dfe3e6);
+  background: var(--panel, #ffffff);
+  color: var(--ink, #1f2933);
+  box-shadow: 0 8px 24px rgba(15, 23, 32, 0.12);
+}
+
+.canvas-media-popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.canvas-media-popover-head strong {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.canvas-media-reset-btn {
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid var(--line, #d4dde3);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--muted, #64748b);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.canvas-media-reset-btn:hover {
+  border-color: var(--accent, #d9573b);
+  color: var(--accent, #d9573b);
+}
+
+.canvas-media-presets {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+  margin-bottom: 10px;
+}
+
+.canvas-media-preset-btn {
+  height: 24px;
+  padding: 0 4px;
+  border: 1px solid var(--line, #d7dfe4);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--ink, #334155);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.canvas-media-preset-btn.is-active {
+  border-color: var(--accent, #d9573b);
+  background: color-mix(in srgb, var(--accent, #d9573b) 10%, transparent);
+  color: var(--accent, #d9573b);
+  font-weight: 600;
+}
+
+.canvas-media-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) 54px 16px;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 7px;
+  font-size: 11px;
+}
+
+.canvas-media-row span {
+  color: var(--muted, #64748b);
+}
+
+.canvas-media-row input[type='range'] {
+  width: 100%;
+  min-width: 0;
+  accent-color: var(--accent, #d9573b);
+  cursor: pointer;
+}
+
+.canvas-media-row input[type='number'] {
+  width: 100%;
+  height: 22px;
+  padding: 0 4px;
+  border: 1px solid var(--line, #d4dde3);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--ink, #1f2933);
+  font: 500 11px/1 var(--mono, monospace);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.canvas-media-row em {
+  font-style: normal;
+  font-size: 10px;
+  color: var(--muted, #858d97);
+}
+
+.canvas-media-sync-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line, #e6ecef);
+  font-size: 11px;
+  color: var(--ink, #334155);
+  cursor: pointer;
+}
+
+.canvas-media-sync-row input[type='checkbox'] {
+  accent-color: var(--accent, #d9573b);
+}
+
+.canvas-media-hint {
+  margin: 6px 0 0;
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--muted, #78848e);
+}
+
+/* Dark / Navy / Purple Calibration for Media Cards */
+.app-shell[data-theme='dark'] .seamind-mm-media-card,
+.app-shell[data-theme='navy'] .seamind-mm-media-card,
+.app-shell[data-theme='purple'] .seamind-mm-media-card {
+  border-color: #2f3a44;
+  background: #141a20;
+  color: #dce4eb;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.28);
+}
+
+.app-shell[data-theme='navy'] .seamind-mm-media-card {
+  border-color: #1e334e;
+  background: #0a1526;
+}
+
+.app-shell[data-theme='purple'] .seamind-mm-media-card {
+  border-color: #30224a;
+  background: #130c22;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-media-head,
+.app-shell[data-theme='navy'] .seamind-mm-media-head,
+.app-shell[data-theme='purple'] .seamind-mm-media-head {
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-media-badge,
+.app-shell[data-theme='navy'] .seamind-mm-media-badge,
+.app-shell[data-theme='purple'] .seamind-mm-media-badge {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  color: #d0dae2;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-media-size,
+.app-shell[data-theme='navy'] .seamind-mm-media-size,
+.app-shell[data-theme='purple'] .seamind-mm-media-size {
+  color: #8b9aa6;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-media-btn,
+.app-shell[data-theme='navy'] .seamind-mm-media-btn,
+.app-shell[data-theme='purple'] .seamind-mm-media-btn {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  color: #cdd8e0;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-media-stage,
+.app-shell[data-theme='navy'] .seamind-mm-media-stage,
+.app-shell[data-theme='purple'] .seamind-mm-media-stage {
+  background: transparent;
+}
+
+/* ==========================================================================
+   Mindmap Excel Import Dialog & External Table Card Pagination
+   Strictly flat CSS rules (zero nested rules inside rules).
+   ========================================================================== */
+
+.seamind-mm-excel-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 10px;
+  border-top: 1px solid #e6ecef;
+  background: #f6f8fa;
+  color: #657480;
+  font: 500 10.5px/1 var(--mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+.seamind-mm-table-card.is-collapsed .seamind-mm-excel-pager {
+  display: none !important;
+}
+
+.seamind-mm-excel-pager-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mm-excel-dialog {
+  width: min(860px, 95vw);
+  max-height: min(88vh, 820px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.mm-excel-head-meta {
+  min-width: 0;
+}
+
+.mm-excel-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mm-excel-file-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--line, #dfe4e8);
+  border-radius: 3px;
+  background: color-mix(
+    in srgb,
+    var(--panel, #ffffff) 96%,
+    var(--ink, #1f2933)
+  );
+}
+
+.mm-excel-file-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mm-excel-file-name strong {
+  color: var(--ink, #1f2933);
+  font: 600 12px/1.3 var(--ui-font, sans-serif);
+}
+
+.mm-excel-file-name span {
+  color: var(--muted, #64748b);
+  font-size: 11px;
+}
+
+.mm-excel-file-stats {
+  flex: 0 0 auto;
+  color: var(--muted, #64748b);
+  font: 500 10.5px/1 var(--mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+.mm-excel-sheet-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mm-excel-sheet-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--line, #d7dfe4);
+  border-radius: 3px;
+  background: var(--panel, #ffffff);
+  color: var(--ink, #334155);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.mm-excel-sheet-tab em {
+  font-style: normal;
+  font: 500 10px/1 var(--mono, monospace);
+  color: var(--muted, #78848e);
+}
+
+.mm-excel-sheet-tab.is-active {
+  border-color: var(--accent, #b85638);
+  background: color-mix(
+    in srgb,
+    var(--accent, #b85638) 10%,
+    var(--panel, #ffffff)
+  );
+  color: var(--accent, #b85638);
+  font-weight: 600;
+}
+
+.mm-excel-controls-grid {
+  display: grid;
+  grid-template-columns: minmax(210px, 1fr) minmax(300px, 1.35fr);
+  gap: 10px;
+  align-items: end;
+}
+
+.mm-excel-title-field {
+  margin: 0;
+}
+
+.mm-excel-range-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mm-excel-range-label {
+  color: var(--muted, #64748b);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.mm-excel-range-inputs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+}
+
+.mm-excel-range-inputs label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--ink, #334155);
+}
+
+.mm-excel-range-inputs input[type='number'] {
+  width: 58px;
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--line, #d7dfe4);
+  border-radius: 3px;
+  background: var(--panel, #ffffff);
+  color: var(--ink, #1f2933);
+  font: 500 11px/1 var(--mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+.mm-excel-header-check {
+  margin-left: 2px;
+  cursor: pointer;
+}
+
+.mm-excel-header-check input {
+  accent-color: var(--accent, #b85638);
+}
+
+.mm-excel-reset-range {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--line, #d7dfe4);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--ink, #334155);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.mm-excel-reset-range:hover {
+  border-color: var(--accent, #b85638);
+}
+
+.mm-excel-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mm-excel-mode-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 9px 11px;
+  border: 1px solid var(--line, #d7dfe4);
+  border-radius: 4px;
+  background: var(--panel, #ffffff);
+  color: var(--ink, #1f2933);
+  text-align: left;
+  cursor: pointer;
+}
+
+.mm-excel-mode-card strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mm-excel-mode-card span {
+  color: var(--muted, #64748b);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.mm-excel-mode-card.is-selected {
+  border-color: var(--accent, #b85638);
+  background: color-mix(
+    in srgb,
+    var(--accent, #b85638) 7%,
+    var(--panel, #ffffff)
+  );
+}
+
+.mm-excel-tree-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line, #dfe4e8);
+  border-radius: 3px;
+  background: color-mix(
+    in srgb,
+    var(--panel, #ffffff) 96%,
+    var(--ink, #1f2933)
+  );
+}
+
+.mm-excel-tree-options label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--ink, #334155);
+}
+
+.mm-excel-tree-options select {
+  height: 26px;
+  max-width: 190px;
+  padding: 0 6px;
+  border: 1px solid var(--line, #d7dfe4);
+  border-radius: 3px;
+  background: var(--panel, #ffffff);
+  color: var(--ink, #1f2933);
+  font-size: 11.5px;
+}
+
+.mm-excel-tree-count {
+  margin-left: auto;
+  color: var(--muted, #64748b);
+  font: 500 11px/1 var(--mono, monospace);
+}
+
+.mm-excel-storage-note {
+  margin: 0;
+  color: var(--muted, #64748b);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.mm-excel-preview-wrap {
+  flex: 1 1 auto;
+  min-height: 150px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line, #d7dfe4);
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--panel, #ffffff);
+}
+
+.mm-excel-preview-bar {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line, #e6ecef);
+  background: color-mix(
+    in srgb,
+    var(--panel, #ffffff) 95%,
+    var(--ink, #1f2933)
+  );
+  color: var(--muted, #64748b);
+  font: 500 10.5px/1 var(--mono, monospace);
+}
+
+.mm-excel-preview-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.mm-excel-preview-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.mm-excel-preview-table th,
+.mm-excel-preview-table td {
+  max-width: 240px;
+  padding: 5px 9px;
+  border-right: 1px solid var(--line, #e6ecef);
+  border-bottom: 1px solid var(--line, #e6ecef);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.mm-excel-preview-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #f5f7f9;
+  color: var(--ink, #1f2933);
+  font-weight: 600;
+}
+
+.mm-excel-row-num {
+  width: 40px;
+  min-width: 40px;
+  color: var(--muted, #78848e);
+  font: 500 10.5px/1.3 var(--mono, monospace);
+  text-align: right;
+  user-select: none;
+}
+
+.mm-excel-preview-empty {
+  padding: 28px;
+  text-align: center;
+  color: var(--muted, #78848e);
+  font-size: 12px;
+}
+
+.settings-backdrop[data-theme='dark'] .mm-excel-preview-table thead th,
+.settings-backdrop[data-theme='navy'] .mm-excel-preview-table thead th,
+.settings-backdrop[data-theme='purple'] .mm-excel-preview-table thead th {
+  background: #1b222a;
+}
+
+.app-shell[data-theme='dark'] .seamind-mm-excel-pager,
+.app-shell[data-theme='navy'] .seamind-mm-excel-pager,
+.app-shell[data-theme='purple'] .seamind-mm-excel-pager {
+  border-top-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.035);
+  color: #93a3b0;
+}
+
+@media (max-width: 720px) {
+  .mm-excel-controls-grid,
+  .mm-excel-mode-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ==========================================================================
+   Offline HTML Share Button & Export Dialog
+   Strictly flat CSS rules (zero nested rules inside rules).
+   ========================================================================== */
+
+.canvas-tools .canvas-export-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: auto;
+  min-width: 0;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--line, #dfe3e6);
+  border-radius: 3px;
+  background: var(--panel, #ffffff);
+  color: var(--ink, #1f2933);
+  font: 500 11.5px/1 var(--ui-font, sans-serif);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.canvas-tools .canvas-export-trigger:hover:not(:disabled) {
+  border-color: var(--accent, #d9573b);
+  color: var(--accent, #d9573b);
+}
+
+.mm-export-dialog {
+  width: min(620px, 94vw);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mm-export-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mm-export-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 8px 6px;
+  border: 1px solid var(--line, #dfe4e8);
+  border-radius: 4px;
+  background: color-mix(
+    in srgb,
+    var(--panel, #ffffff) 96%,
+    var(--ink, #1f2933)
+  );
+}
+
+.mm-export-stat strong {
+  color: var(--ink, #1f2933);
+  font: 600 15px/1.2 var(--mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+.mm-export-stat span {
+  color: var(--muted, #64748b);
+  font-size: 10.5px;
+}
+
+.mm-export-scope-row {
+  display: flex;
+  gap: 8px;
+}
+
+.mm-export-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mm-export-options label {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 1px solid var(--line, #d7dfe4);
+  border-radius: 4px;
+  background: var(--panel, #ffffff);
+  cursor: pointer;
+}
+
+.mm-export-options label:hover {
+  border-color: var(--accent, #b85638);
+}
+
+.mm-export-options input[type='checkbox'] {
+  margin-top: 2px;
+  accent-color: var(--accent, #b85638);
+}
+
+.mm-export-options strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink, #1f2933);
+}
+
+.mm-export-options span {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted, #64748b);
+}
+
+.mm-export-success {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(22, 163, 74, 0.35);
+  border-radius: 4px;
+  background: rgba(22, 163, 74, 0.08);
+}
+
+.mm-export-success strong {
+  display: block;
+  font-size: 12px;
+  color: #15803d;
+}
+
+.mm-export-success span {
+  display: block;
+  font-size: 11px;
+  color: var(--muted, #64748b);
+  word-break: break-all;
+}
+
+.app-shell[data-theme='dark'] .mm-export-success strong,
+.app-shell[data-theme='navy'] .mm-export-success strong,
+.app-shell[data-theme='purple'] .mm-export-success strong,
+.settings-backdrop[data-theme='dark'] .mm-export-success strong,
+.settings-backdrop[data-theme='navy'] .mm-export-success strong,
+.settings-backdrop[data-theme='purple'] .mm-export-success strong {
+  color: #4ade80;
+}
+
+.settings-backdrop[data-theme='dark'] {
+  color-scheme: dark;
+  --panel: #1c2227;
+  --line: #30383f;
+  --ink: #e6ebef;
+  --muted: #9aa6ae;
+  --accent: #df735b;
+  background: rgba(5, 8, 11, 0.72);
+}
+
+.settings-backdrop[data-theme='navy'] {
+  color-scheme: dark;
+  --panel: #0b172a;
+  --line: #162a47;
+  --ink: #e0f0fe;
+  --muted: #7293b8;
+  --accent: #38bdf8;
+  background: rgba(4, 10, 20, 0.76);
+}
+
+.settings-backdrop[data-theme='purple'] {
+  color-scheme: dark;
+  --panel: #181029;
+  --line: #2d1f4d;
+  --ink: #ece6fa;
+  --muted: #9886c2;
+  --accent: #c084fc;
+  background: rgba(9, 5, 18, 0.76);
+}
+
+.settings-backdrop[data-theme='dark'] .settings-dialog,
+.settings-backdrop[data-theme='navy'] .settings-dialog,
+.settings-backdrop[data-theme='purple'] .settings-dialog {
+  border-color: var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+}
+
+.settings-backdrop[data-theme='dark'] .settings-note,
+.settings-backdrop[data-theme='navy'] .settings-note,
+.settings-backdrop[data-theme='purple'] .settings-note {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
+}
+
+.settings-backdrop[data-theme='dark'] .mm-export-options label,
+.settings-backdrop[data-theme='navy'] .mm-export-options label,
+.settings-backdrop[data-theme='purple'] .mm-export-options label {
+  background: color-mix(in srgb, var(--panel) 92%, #ffffff);
+}
+
+@media (max-width: 600px) {
+  .mm-export-stats-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }

@@ -1,4 +1,6 @@
 import type { EditorView as CodeMirrorEditorView } from 'codemirror';
+import { libraryApi } from '../library/library-api';
+import type { StoredExcelTablePayload } from '../mindmap/mindmap-excel';
 import { plantUmlApi } from '../mindmap/plantuml-api';
 import { systemApi } from '../system/system-api';
 import {
@@ -24,6 +26,12 @@ import {
   type MindmapCodeBlockAgentRequest,
   type MindmapCodeBlockFullscreenRequest,
 } from './mindmap-code-card';
+import {
+  buildMindmapExcelCard,
+  hydrateMindmapTables,
+} from './mindmap-table-card';
+import { hydrateMindmapMedia } from './mindmap-media-card';
+import { hydrateMindmapNoteCards } from './mindmap-note-card';
 
 export { preparePastedSvg };
 export type { MindmapCodeBlockAgentRequest, MindmapCodeBlockFullscreenRequest };
@@ -114,6 +122,7 @@ export interface CodeBlockHandlers {
   onOpenCodeFullscreen?: (request: MindmapCodeBlockFullscreenRequest) => void;
   onAskAgentAboutCode?: (request: MindmapCodeBlockAgentRequest) => void;
   onZoomImage?: (dataUrl: string) => void;
+  onEditNodeNote?: (nodePath: string) => void;
 }
 
 export interface CodeBlockSourceRange {
@@ -124,6 +133,7 @@ export interface CodeBlockSourceRange {
 export interface CodeBlockHydrationOptions {
   mode?: 'mindmap' | 'markdown-preview';
   cwd?: string | null;
+  documentRelativePath?: string;
 }
 
 function normalizeFenceSource(source: string): string {
@@ -285,6 +295,9 @@ function replacePre(
   pre.dataset.seamindHydrated = 'true';
   panel.dataset.language = language;
   panel.dataset.sourceLength = String(source.length);
+  if (isDiagramCodeLanguage(language)) {
+    panel.dataset.seamindSource = source;
+  }
   pre.replaceWith(panel);
   dispose(() => {
     // Markmap can reuse this foreignObject, so restore the source for the next hydration pass.
@@ -1475,6 +1488,13 @@ export async function hydrateCodeBlocks(
   signal.addEventListener('abort', cleanup, { once: true });
 
   const isMindmapMode = options.mode !== 'markdown-preview';
+  if (isMindmapMode && !signal.aborted && !cleaned) {
+    hydrateMindmapTables(container, dispose);
+    hydrateMindmapNoteCards(container, {
+      onEditNote: handlers.onEditNodeNote,
+      dispose,
+    });
+  }
   const codeNodes = Array.from(
     container.querySelectorAll<HTMLElement>(
       isMindmapMode ? 'pre > code' : 'pre > code[class*="language-"]',
@@ -1496,6 +1516,32 @@ export async function hydrateCodeBlocks(
         ?.slice('language-'.length)
         .toLowerCase() ?? '';
     const source = code.textContent ?? '';
+
+    if (rawLanguage === 'seamind-excel') {
+      const nodePath =
+        pre.closest<SVGGElement>('g.markmap-node')?.getAttribute('data-path') ??
+        undefined;
+      const docRelativePath = options.documentRelativePath?.trim();
+      const excelCard = buildMindmapExcelCard({
+        source,
+        nodePath,
+        loadDataset: docRelativePath
+          ? async (assetId) => {
+              const rawJson = await libraryApi.readMindmapTableAsset({
+                documentRelativePath: docRelativePath,
+                assetId,
+              });
+              return JSON.parse(rawJson) as StoredExcelTablePayload;
+            }
+          : undefined,
+        signal,
+        dispose,
+      });
+      if (excelCard) {
+        replacePre(pre, excelCard, source, 'seamind-excel', dispose);
+        continue;
+      }
+    }
 
     if (
       isMindmapMode &&
@@ -1734,6 +1780,13 @@ export async function hydrateCodeBlocks(
           );
       }
     }
+  }
+  if (isMindmapMode && !signal.aborted && !cleaned) {
+    hydrateMindmapMedia(container, dispose, {
+      signal,
+      documentRelativePath: options.documentRelativePath,
+      onZoomImage: handlers.onZoomImage,
+    });
   }
   if (signal.aborted) cleanup();
   return cleanup;

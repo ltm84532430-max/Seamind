@@ -163,6 +163,7 @@ pub struct ImportedHtmlAsset {
 pub struct DocumentMediaInput {
     pub bytes_base64: Option<String>,
     pub remote_url: Option<String>,
+    pub local_path: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1831,8 +1832,8 @@ pub async fn import_document_media(
     input: DocumentMediaInput,
 ) -> Result<DocumentMediaAsset, String> {
     let (root, media_relative) = document_media_directory(&app, &document_relative_path)?;
-    let (bytes, source_url) = match (input.bytes_base64, input.remote_url) {
-        (Some(encoded), None) => {
+    let (bytes, source_url) = match (input.bytes_base64, input.remote_url, input.local_path) {
+        (Some(encoded), None, None) => {
             if encoded.len() > (MAX_DOCUMENT_MEDIA_BYTES * 4 / 3 + 8) {
                 return Err("图片超过 10 MB。".to_string());
             }
@@ -1841,11 +1842,29 @@ pub async fn import_document_media(
                 .map_err(|_| "粘贴图片数据无效。".to_string())?;
             (bytes, None)
         }
-        (None, Some(url)) => {
+        (None, Some(url), None) => {
             let (bytes, url) = download_document_media(&url).await?;
             (bytes, Some(url))
         }
-        _ => return Err("请提供一张剪贴板图片或一个 HTTPS 图片地址。".to_string()),
+        (None, None, Some(raw_path)) => {
+            let trimmed = raw_path.trim();
+            if trimmed.is_empty() {
+                return Err("请选择有效的本地图片文件。".to_string());
+            }
+            let file_path = Path::new(trimmed);
+            let metadata = fs::metadata(file_path)
+                .map_err(|error| format!("无法读取本地图片文件：{error}"))?;
+            if !metadata.is_file() {
+                return Err("所选路径不是普通图片文件。".to_string());
+            }
+            if metadata.len() == 0 || metadata.len() > MAX_DOCUMENT_MEDIA_BYTES as u64 {
+                return Err("图片为空或超过 10 MB。".to_string());
+            }
+            let bytes = fs::read(file_path)
+                .map_err(|error| format!("无法读取本地图片内容：{error}"))?;
+            (bytes, None)
+        }
+        _ => return Err("请提供一张本地图片、剪贴板图片或 HTTPS 图片地址。".to_string()),
     };
     if bytes.is_empty() || bytes.len() > MAX_DOCUMENT_MEDIA_BYTES {
         return Err("图片为空或超过 10 MB。".to_string());
@@ -1899,17 +1918,98 @@ fn persist_document_media(
     })
 }
 
+const MAX_DOCUMENT_TABLE_JSON_BYTES: usize = 12 * 1024 * 1024;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentTableAsset {
+    pub asset_id: String,
+    pub byte_length: usize,
+    pub reused: bool,
+}
+
+fn document_tables_directory(
+    app: &AppHandle,
+    document_relative_path: &str,
+) -> Result<(PathBuf, PathBuf), String> {
+    let (root, media_relative) = document_media_directory(app, document_relative_path)?;
+    let owner_dir = media_relative
+        .parent()
+        .ok_or_else(|| "无法定位文档资源目录。".to_string())?;
+    Ok((root, owner_dir.join("tables")))
+}
+
 #[tauri::command]
-pub fn resolve_document_media(
+pub fn save_mindmap_table_asset(
     app: AppHandle,
     document_relative_path: String,
-    media_id: String,
+    table_json: String,
+) -> Result<DocumentTableAsset, String> {
+    let bytes = table_json.as_bytes();
+    if bytes.is_empty() || bytes.len() > MAX_DOCUMENT_TABLE_JSON_BYTES {
+        return Err("表格数据为空或超过 12 MB 上限。".to_string());
+    }
+    let (root, tables_relative) = document_tables_directory(&app, &document_relative_path)?;
+    let digest = Sha256::digest(bytes);
+    let asset_id = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let directory = create_directory_inside_root(&root, &tables_relative)?;
+    let path = directory.join(format!("{asset_id}.json"));
+    let reused = path.exists();
+    if reused {
+        let existing = ensure_existing_inside_root(&root, &path)?;
+        if !existing.is_file() {
+            return Err("同名表格资源不是普通文件。".to_string());
+        }
+    } else {
+        write_atomically(&path, bytes)?;
+    }
+    Ok(DocumentTableAsset {
+        asset_id,
+        byte_length: bytes.len(),
+        reused,
+    })
+}
+
+#[tauri::command]
+pub fn read_mindmap_table_asset(
+    app: AppHandle,
+    document_relative_path: String,
+    asset_id: String,
 ) -> Result<String, String> {
+    if asset_id.len() != 64 || !asset_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("表格资源编号无效。".to_string());
+    }
+    let (root, tables_relative) = document_tables_directory(&app, &document_relative_path)?;
+    let path = root.join(&tables_relative).join(format!("{asset_id}.json"));
+    if !path.exists() {
+        return Err("找不到该 Excel 表格的本地数据文件。".to_string());
+    }
+    let path = ensure_existing_inside_root(&root, &path)?;
+    if !path.is_file() {
+        return Err("表格资源不是普通文件。".to_string());
+    }
+    fs::read_to_string(&path).map_err(|error| format!("读取表格资源失败：{error}"))
+}
+
+fn locate_document_media_file(
+    app: &AppHandle,
+    document_relative_path: &str,
+    media_id: &str,
+) -> Result<(PathBuf, &'static str), String> {
     if media_id.len() != 64 || !media_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err("图片资源编号无效。".to_string());
     }
-    let (root, media_relative) = document_media_directory(&app, &document_relative_path)?;
-    for extension in ["png", "jpg", "gif", "webp", "avif"] {
+    let (root, media_relative) = document_media_directory(app, document_relative_path)?;
+    for (extension, mime_type) in [
+        ("png", "image/png"),
+        ("jpg", "image/jpeg"),
+        ("gif", "image/gif"),
+        ("webp", "image/webp"),
+        ("avif", "image/avif"),
+    ] {
         let path = root
             .join(&media_relative)
             .join(format!("{media_id}.{extension}"));
@@ -1920,12 +2020,36 @@ pub fn resolve_document_media(
         if !path.is_file() {
             return Err("图片资源不是普通文件。".to_string());
         }
-        app.asset_protocol_scope()
-            .allow_file(&path)
-            .map_err(|error| format!("无法授权读取图片：{error}"))?;
-        return Ok(path.to_string_lossy().into_owned());
+        return Ok((path, mime_type));
     }
     Err("找不到这张图片的本地资源。".to_string())
+}
+
+#[tauri::command]
+pub fn resolve_document_media(
+    app: AppHandle,
+    document_relative_path: String,
+    media_id: String,
+) -> Result<String, String> {
+    let (path, _) = locate_document_media_file(&app, &document_relative_path, &media_id)?;
+    app.asset_protocol_scope()
+        .allow_file(&path)
+        .map_err(|error| format!("无法授权读取图片：{error}"))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub fn read_document_media_data_url(
+    app: AppHandle,
+    document_relative_path: String,
+    media_id: String,
+) -> Result<String, String> {
+    let (path, mime_type) = locate_document_media_file(&app, &document_relative_path, &media_id)?;
+    let bytes = fs::read(&path).map_err(|error| format!("无法读取图片字节：{error}"))?;
+    if bytes.is_empty() || bytes.len() > MAX_DOCUMENT_MEDIA_BYTES {
+        return Err("图片超过 10 MB 导出限制。".to_string());
+    }
+    Ok(format!("data:{mime_type};base64,{}", BASE64.encode(&bytes)))
 }
 
 #[tauri::command]

@@ -29,7 +29,9 @@ export function prepareMindmapTree(
       navigation: {
         path,
         label:
-          sources.get(path)?.label || normalizeMindmapText(node.content) || '',
+          sources.get(path)?.label ||
+          normalizeMindmapText(node.content) ||
+          (/<img\b/i.test(node.content) ? '图片' : ''),
         children: children.map((child) => child.navigation),
       },
     };

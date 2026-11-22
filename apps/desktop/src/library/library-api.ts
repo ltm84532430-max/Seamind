@@ -2,6 +2,10 @@ import { invoke } from '@tauri-apps/api/core';
 import type { GeneratedHtmlAsset } from '../agent/types';
 import type { ImportedDocumentMedia } from '../knowledge/document-media';
 import type {
+  DocumentTableAsset,
+  ParsedExcelWorkbook,
+} from '../mindmap/mindmap-excel';
+import type {
   DocumentVersion,
   DocumentVersionSnapshot,
   EpubBookDocument,
@@ -83,12 +87,30 @@ export const libraryApi = {
   }) => invoke<string>('resolve_html_asset', args),
   importDocumentMedia: (args: {
     documentRelativePath: string;
-    input: { remoteUrl?: string; bytesBase64?: string };
+    input: { remoteUrl?: string; bytesBase64?: string; localPath?: string };
   }) => invoke<ImportedDocumentMedia>('import_document_media', args),
   resolveDocumentMedia: (args: {
     documentRelativePath: string;
     mediaId: string;
   }) => invoke<string>('resolve_document_media', args),
+  readDocumentMediaDataUrl: (args: {
+    documentRelativePath: string;
+    mediaId: string;
+  }) => invoke<string>('read_document_media_data_url', args),
+  writeExportedMindmapHtml: (args: { filePath: string; html: string }) =>
+    invoke<number>('write_exported_mindmap_html', args),
+  openExportedHtmlInBrowser: (args: { filePath: string }) =>
+    invoke<void>('open_exported_html_in_browser', args),
+  parseExcelWorkbook: (args: { filePath: string }) =>
+    invoke<ParsedExcelWorkbook>('parse_excel_workbook', args),
+  saveMindmapTableAsset: (args: {
+    documentRelativePath: string;
+    tableJson: string;
+  }) => invoke<DocumentTableAsset>('save_mindmap_table_asset', args),
+  readMindmapTableAsset: (args: {
+    documentRelativePath: string;
+    assetId: string;
+  }) => invoke<string>('read_mindmap_table_asset', args),
   openTextDocument: (args: { relativePath: string }) =>
     invoke<OpenedTextDocument>('open_text_document', args),
   saveTextDocument: (args: {

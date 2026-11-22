@@ -25,6 +25,7 @@ export const settingsStorageKey = 'markmap.desktop.provider-settings.v1';
 export const themeStorageKey = 'seamind.theme.v1';
 export const mindmapStyleStorageKey = 'seamind.map-style.v1';
 export const nodeSpacingStorageKey = 'seamind.node-spacing.v1';
+export const mindmapMediaBoundsStorageKey = 'seamind.mindmap-media-bounds:v1';
 export const aiCollapsedStorageKey = 'seamind.ai-collapsed.v1';
 
 export interface NodeSpacing {
@@ -33,6 +34,47 @@ export interface NodeSpacing {
 }
 
 export const defaultNodeSpacing: NodeSpacing = { horizontal: 56, vertical: 14 };
+
+export interface MindmapMediaBounds {
+  minWidth: number;
+  maxWidth: number;
+  maxHeight: number;
+  syncToPreview: boolean;
+}
+
+export const defaultMindmapMediaBounds: MindmapMediaBounds = {
+  minWidth: 160,
+  maxWidth: 420,
+  maxHeight: 320,
+  syncToPreview: true,
+};
+
+export interface MindmapMediaPreset {
+  id: 'compact' | 'balanced' | 'large' | 'wide';
+  label: string;
+  minWidth: number;
+  maxWidth: number;
+  maxHeight: number;
+}
+
+export const mindmapMediaPresets: readonly MindmapMediaPreset[] = [
+  {
+    id: 'compact',
+    label: '紧凑',
+    minWidth: 120,
+    maxWidth: 280,
+    maxHeight: 200,
+  },
+  {
+    id: 'balanced',
+    label: '适中',
+    minWidth: 160,
+    maxWidth: 420,
+    maxHeight: 320,
+  },
+  { id: 'large', label: '大图', minWidth: 240, maxWidth: 680, maxHeight: 520 },
+  { id: 'wide', label: '原幅', minWidth: 160, maxWidth: 1000, maxHeight: 760 },
+];
 
 export interface ReaderSplitLayout {
   wideRatio: number;
@@ -424,5 +466,55 @@ export function readAiCollapsed(): boolean {
     return localStorage.getItem(aiCollapsedStorageKey) === 'true';
   } catch {
     return false;
+  }
+}
+
+function clampBoundedInt(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.round(Math.min(max, Math.max(min, value)));
+}
+
+export function normalizeMindmapMediaBounds(
+  raw: Partial<MindmapMediaBounds> | null | undefined,
+): MindmapMediaBounds {
+  const minWidth = clampBoundedInt(
+    raw?.minWidth,
+    defaultMindmapMediaBounds.minWidth,
+    80,
+    480,
+  );
+  const maxWidth = clampBoundedInt(
+    raw?.maxWidth,
+    defaultMindmapMediaBounds.maxWidth,
+    Math.max(160, minWidth),
+    1200,
+  );
+  const maxHeight = clampBoundedInt(
+    raw?.maxHeight,
+    defaultMindmapMediaBounds.maxHeight,
+    120,
+    900,
+  );
+  const syncToPreview =
+    typeof raw?.syncToPreview === 'boolean'
+      ? raw.syncToPreview
+      : defaultMindmapMediaBounds.syncToPreview;
+  return { minWidth, maxWidth, maxHeight, syncToPreview };
+}
+
+export function readMindmapMediaBounds(): MindmapMediaBounds {
+  try {
+    const saved = localStorage.getItem(mindmapMediaBoundsStorageKey);
+    if (!saved) return defaultMindmapMediaBounds;
+    return normalizeMindmapMediaBounds(
+      JSON.parse(saved) as Partial<MindmapMediaBounds>,
+    );
+  } catch {
+    return defaultMindmapMediaBounds;
   }
 }

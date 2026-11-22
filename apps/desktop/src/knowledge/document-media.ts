@@ -36,6 +36,16 @@ export async function importDocumentMedia(
   return libraryApi.importDocumentMedia({ documentRelativePath, input });
 }
 
+export async function importDocumentMediaFromFile(
+  documentRelativePath: string,
+  localPath: string,
+): Promise<ImportedDocumentMedia> {
+  return libraryApi.importDocumentMedia({
+    documentRelativePath,
+    input: { localPath },
+  });
+}
+
 export async function resolveDocumentMedia(
   documentRelativePath: string,
   mediaId: string,

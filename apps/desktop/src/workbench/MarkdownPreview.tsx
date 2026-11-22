@@ -167,7 +167,10 @@ export default function MarkdownPreview({
         onRunInTerminal: (...args) =>
           handlersRef.current.onRunInTerminal?.(...args),
       },
-      { mode: 'markdown-preview' },
+      {
+        mode: 'markdown-preview',
+        documentRelativePath: mediaDocumentPath,
+      },
     ).then((release) => {
       if (disposed) release();
       else cleanup = release;
@@ -178,7 +181,7 @@ export default function MarkdownPreview({
       cleanup();
       minimap?.destroy();
     };
-  }, [markup, source, theme, hideMinimap]);
+  }, [markup, source, theme, hideMinimap, mediaDocumentPath]);
 
   const scrollAndFlashElement = useCallback((el: Element | null) => {
     const scroller = rootRef.current;

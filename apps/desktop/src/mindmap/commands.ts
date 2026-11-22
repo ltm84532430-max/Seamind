@@ -5,6 +5,8 @@ import {
   detectCodeLanguageFromSource,
   normalizeCodeBlockLanguage,
 } from '../workbench/code-execution-service';
+import { parseNodeTableInput } from './mindmap-table-paste';
+import { parseNodeImageMarkdownInput } from './mindmap-image-paste';
 
 export const MAX_MARKDOWN_NODE_NOTE_CHARS = 8_000;
 export const MAX_AGENT_BRANCH_CHARS = 40_000;
@@ -97,6 +99,7 @@ export function normalizeMindmapText(value: string): string {
   return decoded.value
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/<img\b[^>]*\balt=(["'])([^"']*)\1[^>]*>/gi, ' $2 ')
     .replace(/<[^>]*>/g, ' ')
     .replace(/(\*\*|__)(.*?)\1/g, '$2')
     .replace(/[\\`*_~]/g, '')
@@ -217,13 +220,15 @@ export function buildMarkdownNodeSourceMap(
           candidateId && !usedNodeIds.has(candidateId)
             ? candidateId
             : undefined;
+        const rawLabel = normalizeMindmapText(node.content);
+        const label = rawLabel || (/<img\b/i.test(node.content) ? '图片' : '');
         result.set(path, {
           kind: 'block',
           ...(blockId ? { id: blockId } : {}),
           lineIndex,
           endLineIndex,
           prefix: '',
-          label: normalizeMindmapText(node.content),
+          label,
         });
         if (blockId) usedNodeIds.add(blockId);
       }
@@ -585,6 +590,92 @@ export function applyMarkdownNodeCommand(
   if (operation === 'rename') {
     if (currentSource.kind === 'block')
       throw new Error('目前只能改写标题或列表节点。');
+    const tableInput = parseNodeTableInput(text);
+    if (tableInput) {
+      const insertLines: string[] = [];
+      if (
+        currentSource.lineIndex > 0 &&
+        lines[currentSource.lineIndex - 1]?.trim() !== ''
+      ) {
+        insertLines.push('');
+      }
+      if (tableInput.prefixText) {
+        insertLines.push(
+          withNodeMarker(
+            `${currentSource.prefix}${encodeNodeLineBreaks(tableInput.prefixText)}`,
+            ensured.nodeId,
+            currentSource.epubHref,
+          ),
+        );
+        insertLines.push('');
+        insertLines.push(...tableInput.tableMarkdown.split('\n'));
+      } else {
+        insertLines.push(`<!-- seamind:id=${ensured.nodeId} -->`);
+        insertLines.push(...tableInput.tableMarkdown.split('\n'));
+      }
+      if (tableInput.suffixText) {
+        insertLines.push('', tableInput.suffixText);
+      }
+      const nextLineAfterTarget = lines[currentSource.lineIndex + 1];
+      if (
+        nextLineAfterTarget !== undefined &&
+        nextLineAfterTarget.trim() !== ''
+      ) {
+        insertLines.push('');
+      }
+      const tableStartOffset = tableInput.prefixText
+        ? insertLines.findIndex((line) => line.trimStart().startsWith('|'))
+        : insertLines.findIndex((line) => line.trimStart().startsWith('|'));
+      lines.splice(currentSource.lineIndex, 1, ...insertLines);
+      return {
+        markdown: lines.join('\n'),
+        lineIndex: currentSource.lineIndex + Math.max(0, tableStartOffset),
+        nodeId: ensured.nodeId,
+      };
+    }
+    const imageInput = parseNodeImageMarkdownInput(text);
+    if (imageInput) {
+      const insertLines: string[] = [];
+      if (
+        currentSource.lineIndex > 0 &&
+        lines[currentSource.lineIndex - 1]?.trim() !== ''
+      ) {
+        insertLines.push('');
+      }
+      if (imageInput.prefixText) {
+        insertLines.push(
+          withNodeMarker(
+            `${currentSource.prefix}${encodeNodeLineBreaks(imageInput.prefixText)}`,
+            ensured.nodeId,
+            currentSource.epubHref,
+          ),
+          '',
+          imageInput.imageMarkdown,
+        );
+      } else {
+        insertLines.push(
+          `<!-- seamind:id=${ensured.nodeId} -->`,
+          imageInput.imageMarkdown,
+        );
+      }
+      if (imageInput.suffixText) {
+        insertLines.push('', imageInput.suffixText);
+      }
+      const nextLineAfterTarget = lines[currentSource.lineIndex + 1];
+      if (
+        nextLineAfterTarget !== undefined &&
+        nextLineAfterTarget.trim() !== ''
+      ) {
+        insertLines.push('');
+      }
+      const imageOffset = insertLines.indexOf(imageInput.imageMarkdown);
+      lines.splice(currentSource.lineIndex, 1, ...insertLines);
+      return {
+        markdown: lines.join('\n'),
+        lineIndex: currentSource.lineIndex + Math.max(0, imageOffset),
+        nodeId: ensured.nodeId,
+      };
+    }
     const encodedLabel = encodeNodeLineBreaks(text);
     if (!encodedLabel.trim()) {
       throw new Error('节点文本不能为空；如需移除该节点请点击「删除」。');
@@ -605,6 +696,73 @@ export function applyMarkdownNodeCommand(
     ensured.markdown,
     currentSource,
   );
+  const tableInput = parseNodeTableInput(text);
+  if (tableInput) {
+    const newNodeId = createNodeId();
+    const insertLines: string[] = [];
+    if (insertionIndex > 0 && lines[insertionIndex - 1]?.trim() !== '') {
+      insertLines.push('');
+    }
+    if (tableInput.prefixText) {
+      insertLines.push(
+        formatNewNode(currentSource, operation, tableInput.prefixText),
+        '',
+      );
+    } else {
+      insertLines.push(`<!-- seamind:id=${newNodeId} -->`);
+    }
+    const tableLines = tableInput.tableMarkdown.split('\n');
+    const tableLineOffset = insertLines.length;
+    insertLines.push(...tableLines);
+    if (tableInput.suffixText) {
+      insertLines.push('', tableInput.suffixText);
+    }
+    if (
+      lines[insertionIndex] !== undefined &&
+      lines[insertionIndex].trim() !== ''
+    ) {
+      insertLines.push('');
+    }
+    lines.splice(insertionIndex, 0, ...insertLines);
+    return {
+      markdown: lines.join('\n'),
+      lineIndex: insertionIndex + tableLineOffset,
+      nodeId: ensured.nodeId,
+    };
+  }
+  const imageInput = parseNodeImageMarkdownInput(text);
+  if (imageInput) {
+    const newNodeId = createNodeId();
+    const insertLines: string[] = [];
+    if (insertionIndex > 0 && lines[insertionIndex - 1]?.trim() !== '') {
+      insertLines.push('');
+    }
+    if (imageInput.prefixText) {
+      insertLines.push(
+        formatNewNode(currentSource, operation, imageInput.prefixText),
+        '',
+      );
+    } else {
+      insertLines.push(`<!-- seamind:id=${newNodeId} -->`);
+    }
+    const imageOffset = insertLines.length;
+    insertLines.push(imageInput.imageMarkdown);
+    if (imageInput.suffixText) {
+      insertLines.push('', imageInput.suffixText);
+    }
+    if (
+      lines[insertionIndex] !== undefined &&
+      lines[insertionIndex].trim() !== ''
+    ) {
+      insertLines.push('');
+    }
+    lines.splice(insertionIndex, 0, ...insertLines);
+    return {
+      markdown: lines.join('\n'),
+      lineIndex: insertionIndex + imageOffset,
+      nodeId: ensured.nodeId,
+    };
+  }
   lines.splice(
     insertionIndex,
     0,
@@ -851,6 +1009,81 @@ export interface InsertCodeBlockOptions {
   title?: string;
 }
 
+function buildChildBlockInsertion(
+  markdown: string,
+  source: MarkdownNodeSource,
+  options: {
+    title: string;
+    fallbackTitle: string;
+    buildBodyLines: (indent: string) => string[];
+    omitHeadingWhenLevelFits?: boolean;
+  },
+): MarkdownCommandResult {
+  const ensured = ensureMarkdownNodeId(markdown, source);
+  const currentSource: MarkdownNodeSource = {
+    ...source,
+    id: ensured.nodeId,
+    lineIndex: ensured.lineIndex,
+  };
+  const lines = ensured.markdown.split(/\r?\n/);
+  const insertionIndex = markdownNodeInsertionIndex(
+    ensured.markdown,
+    currentSource,
+  );
+  const cleanTitle = options.title
+    .replace(/\r\n?/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const childNodeId = createNodeId();
+  const blockLines: string[] = [];
+
+  if (currentSource.kind === 'heading' && currentSource.level !== undefined) {
+    const childLevel = currentSource.level + 1;
+    if (cleanTitle) {
+      if (childLevel > 6) {
+        blockLines.push(`- ${cleanTitle}${nodeMarker(childNodeId)}`);
+        blockLines.push(...options.buildBodyLines('  '));
+      } else {
+        blockLines.push(
+          `${'#'.repeat(childLevel)} ${cleanTitle}${nodeMarker(childNodeId)}`,
+        );
+        blockLines.push(...options.buildBodyLines(''));
+      }
+    } else if (childLevel > 6) {
+      blockLines.push(`- ${options.fallbackTitle}${nodeMarker(childNodeId)}`);
+      blockLines.push(...options.buildBodyLines('  '));
+    } else if (options.omitHeadingWhenLevelFits) {
+      blockLines.push(...options.buildBodyLines(''));
+    } else {
+      blockLines.push(
+        `${'#'.repeat(childLevel)} ${options.fallbackTitle}${nodeMarker(childNodeId)}`,
+      );
+      blockLines.push(...options.buildBodyLines(''));
+    }
+  } else {
+    const stepIndent = ' '.repeat(
+      Math.max(2, (currentSource.marker?.length ?? 1) + 1),
+    );
+    const childIndent = `${currentSource.indent || ''}${stepIndent}`;
+    const label = cleanTitle || options.fallbackTitle;
+    blockLines.push(`${childIndent}- ${label}${nodeMarker(childNodeId)}`);
+    blockLines.push(...options.buildBodyLines(`${childIndent}  `));
+  }
+
+  const needsBlankBefore =
+    currentSource.kind === 'heading' &&
+    insertionIndex > 0 &&
+    Boolean(lines[insertionIndex - 1]?.trim());
+  const inserted = needsBlankBefore ? ['', ...blockLines] : blockLines;
+  const lineIndex = insertionIndex + (needsBlankBefore ? 1 : 0);
+  lines.splice(insertionIndex, 0, ...inserted);
+  return {
+    markdown: lines.join('\n'),
+    lineIndex,
+    nodeId: childNodeId,
+  };
+}
+
 export function applyInsertCodeBlockCommand(
   markdown: string,
   source: MarkdownNodeSource,
@@ -870,6 +1103,72 @@ export function applyInsertCodeBlockCommand(
       `代码块不能超过 ${MAX_MINDMAP_CODE_BLOCK_CHARS.toLocaleString()} 个字符。`,
     );
   }
+  return buildChildBlockInsertion(markdown, source, {
+    title: options.title ?? '',
+    fallbackTitle: `${codeLanguageDisplayName(options.language)} 代码块`,
+    omitHeadingWhenLevelFits: true,
+    buildBodyLines: (indent) =>
+      buildFencedCodeLines(options.language, cleanCode, indent),
+  });
+}
+
+export interface InsertExcelTableOptions {
+  title?: string;
+  tableMarkdown?: string;
+  excelFence?: string;
+}
+
+export function applyInsertExcelTableCommand(
+  markdown: string,
+  source: MarkdownNodeSource,
+  options: InsertExcelTableOptions,
+): MarkdownCommandResult {
+  if (source.kind === 'block') {
+    throw new Error(
+      '不能在代码块、表格或媒体节点下继续挂载 Excel 表格，请选择标题或列表节点。',
+    );
+  }
+  const rawPayload = (options.excelFence ?? options.tableMarkdown ?? '')
+    .replace(/\r\n?/g, '\n')
+    .trim();
+  if (!rawPayload) {
+    throw new Error('Excel 表格内容不能为空。');
+  }
+  return buildChildBlockInsertion(markdown, source, {
+    title: options.title ?? '',
+    fallbackTitle: 'Excel 表格',
+    omitHeadingWhenLevelFits: true,
+    buildBodyLines: (indent) => {
+      const payloadLines = rawPayload
+        .split('\n')
+        .map((line) => (indent && line.length > 0 ? `${indent}${line}` : line));
+      // Blank line separation ensures Markdown list item wrapping does not swallow the GFM table.
+      return indent ? ['', ...payloadLines] : payloadLines;
+    },
+  });
+}
+
+export interface InsertImageItem {
+  markdown: string;
+}
+
+export function applyInsertImagesCommand(
+  markdown: string,
+  source: MarkdownNodeSource,
+  images: InsertImageItem[],
+): MarkdownCommandResult {
+  if (source.kind === 'block') {
+    throw new Error(
+      '不能在代码块、表格或媒体节点下继续插入图片，请选择标题或列表节点。',
+    );
+  }
+  const cleanImages = images
+    .map((item) => item.markdown.replace(/\r\n?/g, ' ').trim())
+    .filter(Boolean);
+  if (cleanImages.length === 0) {
+    throw new Error('请至少选择一张有效图片。');
+  }
+
   const ensured = ensureMarkdownNodeId(markdown, source);
   const currentSource: MarkdownNodeSource = {
     ...source,
@@ -877,67 +1176,69 @@ export function applyInsertCodeBlockCommand(
     lineIndex: ensured.lineIndex,
   };
   const lines = ensured.markdown.split(/\r?\n/);
+  const normalizedLabel = source.label.trim();
+
+  // If the selected node is a freshly created placeholder ("新主题" / empty)
+  // and only one image was chosen, place the image directly inside that node.
+  if (
+    cleanImages.length === 1 &&
+    (!normalizedLabel || normalizedLabel === '新主题')
+  ) {
+    const rawLine = lines[currentSource.lineIndex] ?? '';
+    const markerMatch = rawLine.match(nodeIdInlinePattern);
+    const markerText = markerMatch
+      ? markerMatch[0]
+      : nodeMarker(ensured.nodeId);
+    const prefix =
+      currentSource.kind === 'heading' && currentSource.level !== undefined
+        ? `${'#'.repeat(currentSource.level)} `
+        : `${currentSource.indent || ''}${currentSource.marker || '-'} `;
+    lines[currentSource.lineIndex] = `${prefix}${cleanImages[0]}${markerText}`;
+    return {
+      markdown: lines.join('\n'),
+      lineIndex: currentSource.lineIndex,
+      nodeId: ensured.nodeId,
+    };
+  }
+
   const insertionIndex = markdownNodeInsertionIndex(
     ensured.markdown,
     currentSource,
   );
-  const cleanTitle = (options.title ?? '')
-    .replace(/\r\n?/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  const childNodeId = createNodeId();
-  const blockLines: string[] = [];
+  const insertedLines: string[] = [];
+  let firstChildId = '';
 
   if (currentSource.kind === 'heading' && currentSource.level !== undefined) {
     const childLevel = currentSource.level + 1;
-    if (cleanTitle) {
-      if (childLevel > 6) {
-        blockLines.push(`- ${cleanTitle}${nodeMarker(childNodeId)}`);
-        blockLines.push(
-          ...buildFencedCodeLines(options.language, cleanCode, '  '),
-        );
-      } else {
-        blockLines.push(
-          `${'#'.repeat(childLevel)} ${cleanTitle}${nodeMarker(childNodeId)}`,
-        );
-        blockLines.push(
-          ...buildFencedCodeLines(options.language, cleanCode, ''),
-        );
-      }
-    } else if (childLevel > 6) {
-      blockLines.push(
-        `- ${codeLanguageDisplayName(options.language)} 代码块${nodeMarker(childNodeId)}`,
-      );
-      blockLines.push(
-        ...buildFencedCodeLines(options.language, cleanCode, '  '),
-      );
-    } else {
-      blockLines.push(...buildFencedCodeLines(options.language, cleanCode, ''));
+    const prefix = childLevel > 6 ? '- ' : `${'#'.repeat(childLevel)} `;
+    for (const imgMd of cleanImages) {
+      const id = createNodeId();
+      if (!firstChildId) firstChildId = id;
+      insertedLines.push(`${prefix}${imgMd}${nodeMarker(id)}`);
     }
   } else {
     const stepIndent = ' '.repeat(
       Math.max(2, (currentSource.marker?.length ?? 1) + 1),
     );
     const childIndent = `${currentSource.indent || ''}${stepIndent}`;
-    const label =
-      cleanTitle || `${codeLanguageDisplayName(options.language)} 代码块`;
-    blockLines.push(`${childIndent}- ${label}${nodeMarker(childNodeId)}`);
-    blockLines.push(
-      ...buildFencedCodeLines(options.language, cleanCode, `${childIndent}  `),
-    );
+    for (const imgMd of cleanImages) {
+      const id = createNodeId();
+      if (!firstChildId) firstChildId = id;
+      insertedLines.push(`${childIndent}- ${imgMd}${nodeMarker(id)}`);
+    }
   }
 
   const needsBlankBefore =
     currentSource.kind === 'heading' &&
     insertionIndex > 0 &&
     Boolean(lines[insertionIndex - 1]?.trim());
-  const inserted = needsBlankBefore ? ['', ...blockLines] : blockLines;
+  const finalLines = needsBlankBefore ? ['', ...insertedLines] : insertedLines;
   const lineIndex = insertionIndex + (needsBlankBefore ? 1 : 0);
-  lines.splice(insertionIndex, 0, ...inserted);
+  lines.splice(insertionIndex, 0, ...finalLines);
   return {
     markdown: lines.join('\n'),
     lineIndex,
-    nodeId: childNodeId,
+    nodeId: firstChildId,
   };
 }
 

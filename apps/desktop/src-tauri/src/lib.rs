@@ -46,6 +46,10 @@ mod literature_store;
 #[path = "literature/paper_translation.rs"]
 mod paper_translation;
 
+#[path = "mindmap/excel.rs"]
+mod excel;
+#[path = "mindmap/export.rs"]
+mod mindmap_export;
 #[path = "mindmap/java_runtime.rs"]
 mod java_runtime;
 #[path = "mindmap/plantuml.rs"]
@@ -119,6 +123,9 @@ pub fn run() {
             save_provider_api_key,
             list_provider_models,
             generate_mindmap,
+            excel::parse_excel_workbook,
+            mindmap_export::write_exported_mindmap_html,
+            mindmap_export::open_exported_html_in_browser,
             plantuml::render_plantuml,
             java_runtime::plantuml_install_java_runtime,
             installer_components::installer_get_pending_components,
@@ -164,6 +171,9 @@ pub fn run() {
             library::resolve_html_asset,
             library::import_document_media,
             library::resolve_document_media,
+            library::read_document_media_data_url,
+            library::save_mindmap_table_asset,
+            library::read_mindmap_table_asset,
             library::delete_document,
             library::delete_epub_book,
             library::delete_plantuml_document,
