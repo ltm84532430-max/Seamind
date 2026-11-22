@@ -49,7 +49,6 @@ import {
   LabCloseIcon,
   LabPlayIcon,
   LabPlusIcon,
-  LabSaveIcon,
   LabStarIcon,
 } from './CodeLabIcons';
 import {
@@ -2056,32 +2055,46 @@ export default function TerminalWorkspace({
             <span className="terminal-topbar-notice">{windowNotice}</span>
           )}
 
-          <div
-            className="terminal-layout-icons"
-            role="group"
-            aria-label="多窗格分屏交互"
-          >
-            {(
-              [
-                ['single', '单窗格'],
-                ['vertical', '左右并排双开（自动新建右窗）'],
-                ['horizontal', '上下双开（自动新建下窗）'],
-                ['tri', '三窗格布局（左主 + 右上下）'],
-                ['quad', '四宫格多开（最多 4 窗同时运行 CLI）'],
-              ] as const
-            ).map(([mode, title]) => (
-              <button
-                key={mode}
-                type="button"
-                className={`terminal-icon-btn${!isStageZoomed && splitMode === mode ? ' is-active' : ''}`}
-                onClick={() => switchLayoutMode(mode)}
-                title={title}
-                aria-label={title}
-              >
-                <LayoutIcon mode={mode} />
-              </button>
-            ))}
-          </div>
+          <details className="terminal-layout-menu">
+            <summary title="选择窗格布局" aria-label="选择窗格布局">
+              <LayoutIcon mode={splitMode} />
+              <span>布局</span>
+            </summary>
+            <div
+              className="terminal-layout-options"
+              role="group"
+              aria-label="多窗格分屏交互"
+            >
+              {(
+                [
+                  ['single', '单窗格'],
+                  ['vertical', '左右并排双开（自动新建右窗）'],
+                  ['horizontal', '上下双开（自动新建下窗）'],
+                  ['tri', '三窗格布局（左主 + 右上下）'],
+                  ['quad', '四宫格多开（最多 4 窗同时运行 CLI）'],
+                ] as const
+              ).map(([mode, title]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={
+                    !isStageZoomed && splitMode === mode ? 'is-active' : ''
+                  }
+                  onClick={(event) => {
+                    switchLayoutMode(mode);
+                    event.currentTarget
+                      .closest('details')
+                      ?.removeAttribute('open');
+                  }}
+                  title={title}
+                  aria-label={title}
+                >
+                  <LayoutIcon mode={mode} />
+                  <span>{title}</span>
+                </button>
+              ))}
+            </div>
+          </details>
 
           {visibleCount > 1 && (
             <button
@@ -2341,7 +2354,7 @@ export default function TerminalWorkspace({
       {/* Center Multi-Pane Stage + Left Modular Rail + Optional Right Drawer */}
       <div className="terminal-workspace-body">
         <aside
-          className={`terminal-left-rail${leftRailCollapsed ? ' is-collapsed' : ''}`}
+          className={`terminal-left-rail${railModule === 'lab' ? ' is-lab-rail' : ''}${leftRailCollapsed ? ' is-collapsed' : ''}`}
           aria-label="终端模块切换与代码文件收集侧边栏"
         >
           {leftRailCollapsed ? (
@@ -2411,7 +2424,7 @@ export default function TerminalWorkspace({
               <div className="terminal-rail-top">
                 <div className="terminal-rail-brand-row">
                   <span className="terminal-rail-brand-title">
-                    终端与代码实验室
+                    {railModule === 'lab' ? '实验本' : '终端与代码实验室'}
                   </span>
                   <button
                     type="button"
@@ -2494,125 +2507,83 @@ export default function TerminalWorkspace({
                       </button>
                     </div>
 
-                    <div className="terminal-rail-view-row">
-                      <span className="terminal-rail-view-label">视图</span>
-                      <div className="terminal-rail-view-pills">
-                        <button
-                          type="button"
-                          className={
-                            activeLabInfo.viewMode === 'notebook'
-                              ? 'is-active'
-                              : ''
-                          }
-                          onClick={() =>
-                            withActiveLabHandle(activeLabInfo.language, (h) =>
-                              h.setCanvasViewMode('notebook'),
-                            )
-                          }
-                        >
-                          单元格
-                        </button>
-                        <button
-                          type="button"
-                          className={
-                            activeLabInfo.viewMode === 'script'
-                              ? 'is-active'
-                              : ''
-                          }
-                          onClick={() =>
-                            withActiveLabHandle(activeLabInfo.language, (h) =>
-                              h.setCanvasViewMode('script'),
-                            )
-                          }
-                        >
-                          完整源码
-                        </button>
-                      </div>
-                    </div>
-
                     {labRailSubTab === 'files' ? (
                       <>
-                        <div className="terminal-rail-action-grid">
-                          <button
-                            type="button"
-                            className="terminal-rail-mini-btn"
-                            onClick={() =>
-                              withActiveLabHandle('python', (h) =>
-                                h.createNewNotebook('python', '书籍伴读验证'),
-                              )
-                            }
-                          >
-                            <LabPlusIcon size={11} />
-                            <span>PY</span>
-                          </button>
-                          <button
-                            type="button"
-                            className="terminal-rail-mini-btn"
-                            onClick={() =>
-                              withActiveLabHandle('c', (h) =>
-                                h.createNewNotebook('c', '系统与网络实验'),
-                              )
-                            }
-                          >
-                            <LabPlusIcon size={11} />
-                            <span>C</span>
-                          </button>
-                          <button
-                            type="button"
-                            className="terminal-rail-mini-btn"
-                            onClick={() =>
-                              withActiveLabHandle('cpp', (h) =>
-                                h.createNewNotebook('cpp', '算法与数据结构'),
-                              )
-                            }
-                          >
-                            <LabPlusIcon size={11} />
-                            <span>C++</span>
-                          </button>
-                          <button
-                            type="button"
-                            className="terminal-rail-mini-btn is-accent"
-                            onClick={() =>
-                              withActiveLabHandle(activeLabInfo.language, (h) =>
-                                h.saveCurrentToCollection(false),
-                              )
-                            }
-                            title="归档当前实验本至代码库"
-                          >
-                            <LabSaveIcon size={11} />
-                            <span>归档</span>
-                          </button>
-                        </div>
+                        <details className="terminal-rail-new-details">
+                          <summary>
+                            <LabPlusIcon size={13} />
+                            新建实验本
+                          </summary>
+                          <div className="terminal-rail-new-options">
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.currentTarget
+                                  .closest('details')
+                                  ?.removeAttribute('open');
+                                withActiveLabHandle('python', (h) =>
+                                  h.createNewNotebook('python', '书籍伴读验证'),
+                                );
+                              }}
+                            >
+                              Python 实验本
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.currentTarget
+                                  .closest('details')
+                                  ?.removeAttribute('open');
+                                withActiveLabHandle('c', (h) =>
+                                  h.createNewNotebook('c', '系统与网络实验'),
+                                );
+                              }}
+                            >
+                              C 实验本
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.currentTarget
+                                  .closest('details')
+                                  ?.removeAttribute('open');
+                                withActiveLabHandle('cpp', (h) =>
+                                  h.createNewNotebook('cpp', '算法与数据结构'),
+                                );
+                              }}
+                            >
+                              C++ 实验本
+                            </button>
+                          </div>
+                        </details>
 
                         <input
                           type="search"
                           className="terminal-rail-search"
                           value={codeLabSearch}
                           onChange={(e) => setCodeLabSearch(e.target.value)}
-                          placeholder="筛选文件名、标签或函数…"
+                          placeholder="搜索实验本、标签或函数…"
                           aria-label="搜索收集的代码文件"
                         />
 
-                        <div className="terminal-rail-filter-pills">
-                          {(
-                            [
-                              ['all', '全部'],
-                              ['python', 'PY'],
-                              ['c', 'C'],
-                              ['cpp', 'C++'],
-                              ['starred', '收藏'],
-                            ] as const
-                          ).map(([key, label]) => (
-                            <button
-                              key={key}
-                              type="button"
-                              className={`terminal-rail-pill${codeLabFilter === key ? ' is-active' : ''}`}
-                              onClick={() => setCodeLabFilter(key)}
-                            >
-                              {label}
-                            </button>
-                          ))}
-                        </div>
+                        <label className="terminal-rail-filter-row">
+                          <span>筛选</span>
+                          <select
+                            value={codeLabFilter}
+                            onChange={(event) =>
+                              setCodeLabFilter(
+                                event.target.value as
+                                  'all' | TerminalCodeLabLanguage | 'starred',
+                              )
+                            }
+                          >
+                            <option value="all">全部实验本</option>
+                            <option value="python">Python</option>
+                            <option value="c">C</option>
+                            <option value="cpp">C++</option>
+                            <option value="starred">已收藏</option>
+                          </select>
+                        </label>
 
                         <div className="terminal-rail-folders">
                           {groupedCodeLabFiles.map((group) => {
@@ -3923,8 +3894,7 @@ export default function TerminalWorkspace({
               </>
             )}
 
-          {activeTab?.kind &&
-            activeTab.kind !== 'shell' &&
+          {activeTab?.kind === 'agent' &&
             activeFooterHints.map((hint) => (
               <span
                 key={`${hint.keys}-${hint.label}`}

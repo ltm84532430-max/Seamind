@@ -175,7 +175,7 @@ describe('terminal agent /## protocol', () => {
 
     const pyScript = assembleFullScriptSource(files[0].cells, 'python');
     expect(pyScript).toContain('import math');
-    expect(pyScript).toContain('# --- [代码格 #2] ---');
+    expect(pyScript).toContain('# --- [代码格 #1] ---');
 
     const cScript = assembleFullScriptSource(
       files[1].cells,

@@ -327,8 +327,11 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
         <div className="codelab-cell-progress" aria-hidden="true" />
       )}
 
-      {/* Left 44px Precision Execution Rail */}
+      {/* Stable execution rail */}
       <div className="codelab-cell-gutter">
+        <span className="codelab-cell-idx">
+          {String(index + 1).padStart(2, '0')}
+        </span>
         {!isMarkdown ? (
           <button
             type="button"
@@ -341,22 +344,19 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
             title="运行此格 (Ctrl+Enter)"
             aria-label={`运行第 ${index + 1} 格`}
           >
-            <span className="codelab-cell-prompt">{execLabel}</span>
-            <span className="codelab-gutter-play-glyph">
-              <LabPlayIcon size={11} />
-            </span>
+            <LabPlayIcon size={13} />
           </button>
         ) : (
-          <span className="codelab-cell-prompt is-md">{execLabel}</span>
+          <span className="codelab-cell-prompt is-md">MD</span>
         )}
-        <span className="codelab-cell-idx">
-          {String(index + 1).padStart(2, '0')}
-        </span>
+        {!isMarkdown && (
+          <span className="codelab-cell-prompt">{execLabel}</span>
+        )}
       </div>
 
       {/* Main Paper-Stream Content */}
       <div className="codelab-cell-body">
-        {/* Hover/Focus Floating Precision Action Strip (Zero permanent gray header chrome) */}
+        {/* Cell actions stay above the editor, without covering code */}
         <div
           className={`codelab-cell-float-bar${langMenuOpen ? ' is-pinned' : ''}`}
           role="toolbar"
@@ -402,6 +402,21 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
             </div>
           ) : (
             <span className="codelab-float-tag">NOTE</span>
+          )}
+
+          {!isMarkdown && (
+            <span
+              className={`codelab-cell-state is-${cell.status}`}
+              role="status"
+            >
+              {cell.status === 'running'
+                ? '运行中'
+                : cell.status === 'success'
+                  ? '已运行'
+                  : cell.status === 'error'
+                    ? '运行失败'
+                    : '待运行'}
+            </span>
           )}
 
           {durationText && !isMarkdown && (

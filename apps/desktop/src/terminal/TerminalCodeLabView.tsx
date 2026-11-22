@@ -177,7 +177,7 @@ export const TerminalCodeLabView = forwardRef<
     'edit',
   );
   const [editingCellId, setEditingCellId] = useState<string | null>(
-    () => cells[1]?.id ?? null,
+    () => cells.find((cell) => cell.kind === 'code')?.id ?? null,
   );
   const [hydratedCellIds, setHydratedCellIds] = useState<string[]>(() => {
     const firstCode = cells.find((c) => c.kind === 'code') ?? cells[0];
@@ -193,6 +193,7 @@ export const TerminalCodeLabView = forwardRef<
   const [showKernelMenu, setShowKernelMenu] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [showVars, setShowVars] = useState(false);
+  const [replOpen, setReplOpen] = useState(false);
   const [varFilter, setVarFilter] = useState('');
   const [expandedVarName, setExpandedVarName] = useState<string | null>(null);
   const [zoomedImageSrc, setZoomedImageSrc] = useState<string | null>(null);
@@ -1471,13 +1472,13 @@ export const TerminalCodeLabView = forwardRef<
     }
     if (selectedPyRuntime === 'pyodide') {
       return {
-        tag: 'PY',
-        label: 'Pyodide WASM',
+        tag: 'Python',
+        label: 'Pyodide',
         tone: isAnyRunning ? 'busy' : 'ready',
       };
     }
     return {
-      tag: 'PY',
+      tag: 'Python',
       label: activeEnvObj?.label || 'Local Python',
       tone: isAnyRunning ? 'busy' : localKernelId ? 'ready' : 'idle',
     };
@@ -1499,9 +1500,9 @@ export const TerminalCodeLabView = forwardRef<
       onMouseDown={() => onFocusPane?.()}
       onKeyDown={handleContainerKeyDown}
     >
-      {/* Institutional Single-Row 36px Telemetry Command Bar */}
+      {/* Notebook title and primary actions */}
       <header className="codelab-toolbar" aria-label="代码实验室控制栏">
-        {/* Left: Breadcrumb (Folder / Inline Filename) + Archive Trigger */}
+        {/* File location, title and save state */}
         <div className="codelab-toolbar-left">
           <div className="codelab-popover-wrap" ref={folderMenuRef}>
             <button
@@ -1586,11 +1587,14 @@ export const TerminalCodeLabView = forwardRef<
             aria-label="保存当前实验到代码库"
           >
             <LabSaveIcon size={12} />
-            {dirty && <span className="codelab-dirty-dot" aria-hidden="true" />}
+            <span>保存</span>
           </button>
+          <span className="codelab-save-state" role="status">
+            {activeFileId ? (dirty ? '未保存' : '已保存') : '未归档'}
+          </span>
         </div>
 
-        {/* Center: Primary Execution & Cell Operations */}
+        {/* Primary execution and notebook view */}
         <div className="codelab-toolbar-center">
           <button
             type="button"
@@ -1600,7 +1604,7 @@ export const TerminalCodeLabView = forwardRef<
             title="运行当前选中格 (Ctrl+Enter)"
           >
             <LabPlayIcon size={12} />
-            <span>运行</span>
+            <span>运行当前格</span>
           </button>
           <button
             type="button"
@@ -1610,7 +1614,7 @@ export const TerminalCodeLabView = forwardRef<
             title="从上到下依次运行全部代码格"
           >
             <LabPlayAllIcon size={12} />
-            <span>全部</span>
+            <span>运行全部</span>
           </button>
           {isAnyRunning && (
             <button
@@ -1626,26 +1630,40 @@ export const TerminalCodeLabView = forwardRef<
 
           <span className="codelab-tool-sep" aria-hidden="true" />
 
-          <button
-            type="button"
-            className="codelab-tool-btn"
-            onClick={() => insertCell('below', 'code')}
-            title="在下方插入代码格 (命令模式 b)"
-          >
-            <LabPlusIcon size={12} />
-            <span>代码</span>
-          </button>
-          <button
-            type="button"
-            className="codelab-tool-btn"
-            onClick={() => insertCell('below', 'markdown')}
-            title="在下方插入 Markdown 笔记格"
-          >
-            <LabNoteIcon size={12} />
-            <span>笔记</span>
-          </button>
-
-          <span className="codelab-tool-sep" aria-hidden="true" />
+          <details className="codelab-insert-menu">
+            <summary
+              className="codelab-tool-btn"
+              title="在当前格下方添加单元格"
+            >
+              <LabPlusIcon size={12} />
+              <span>添加单元格</span>
+              <LabChevronDownIcon size={10} />
+            </summary>
+            <div className="codelab-insert-options">
+              <button
+                type="button"
+                onClick={(event) => {
+                  insertCell('below', 'code');
+                  event.currentTarget
+                    .closest('details')
+                    ?.removeAttribute('open');
+                }}
+              >
+                <LabCodeIcon size={13} /> 代码单元格
+              </button>
+              <button
+                type="button"
+                onClick={(event) => {
+                  insertCell('below', 'markdown');
+                  event.currentTarget
+                    .closest('details')
+                    ?.removeAttribute('open');
+                }}
+              >
+                <LabNoteIcon size={13} /> Markdown 笔记
+              </button>
+            </div>
+          </details>
 
           <button
             type="button"
@@ -1667,7 +1685,7 @@ export const TerminalCodeLabView = forwardRef<
             {canvasViewMode === 'notebook' ? (
               <>
                 <LabCodeIcon size={12} />
-                <span>源码</span>
+                <span>完整源码</span>
               </>
             ) : (
               <>
@@ -1678,7 +1696,7 @@ export const TerminalCodeLabView = forwardRef<
           </button>
         </div>
 
-        {/* Right: Custom Kernel Popover + Variable Inspector + Overflow */}
+        {/* Runtime, optional inspector and file actions */}
         <div className="codelab-toolbar-right">
           <div className="codelab-popover-wrap" ref={kernelMenuRef}>
             <button
@@ -1687,7 +1705,8 @@ export const TerminalCodeLabView = forwardRef<
               onClick={() => setShowKernelMenu((v) => !v)}
               aria-expanded={showKernelMenu}
               aria-haspopup="menu"
-              title="切换语言与计算内核环境"
+              title={`切换语言与计算内核环境 · ${kernelSummary.tone === 'busy' ? '运行中' : kernelSummary.tone === 'warn' ? '不可用' : kernelSummary.tone === 'idle' ? '未启动' : '就绪'}`}
+              aria-label={`${kernelSummary.tag} ${kernelSummary.label}，切换内核`}
             >
               <span
                 className={`codelab-kernel-dot is-${kernelSummary.tone}`}
@@ -1695,6 +1714,15 @@ export const TerminalCodeLabView = forwardRef<
               />
               <span className="codelab-kernel-lang">{kernelSummary.tag}</span>
               <span className="codelab-kernel-name">{kernelSummary.label}</span>
+              <span className="codelab-kernel-state">
+                {kernelSummary.tone === 'busy'
+                  ? '运行中'
+                  : kernelSummary.tone === 'warn'
+                    ? '不可用'
+                    : kernelSummary.tone === 'idle'
+                      ? '未启动'
+                      : '就绪'}
+              </span>
               <LabChevronDownIcon size={10} />
             </button>
 
@@ -1828,10 +1856,14 @@ export const TerminalCodeLabView = forwardRef<
               type="button"
               className={`codelab-tool-btn is-tabular${showVars ? ' is-active' : ''}`}
               onClick={() => setShowVars((v) => !v)}
-              title="打开 / 收起 Python 变量监视表"
+              title="打开 / 收起 Python 变量面板"
+              aria-expanded={showVars}
             >
               <LabVarsIcon size={12} />
-              <span>VAR {variables.length}</span>
+              <span>变量</span>
+              {variables.length > 0 && (
+                <span className="codelab-vars-badge">{variables.length}</span>
+              )}
             </button>
           ) : (
             <button
@@ -1929,6 +1961,32 @@ export const TerminalCodeLabView = forwardRef<
               </div>
             )}
           </div>
+
+          <details className="codelab-help-menu">
+            <summary
+              className="codelab-icon-only-btn"
+              aria-label="实验本快捷键帮助"
+              title="实验本快捷键帮助"
+            >
+              ?
+            </summary>
+            <div className="codelab-help-content">
+              <strong>快捷键</strong>
+              <span>
+                <kbd>Shift+Enter</kbd> 运行并跳到下一格
+              </span>
+              <span>
+                <kbd>Ctrl+Enter</kbd> 运行当前格
+              </span>
+              <span>
+                <kbd>Esc</kbd> 命令模式 · <kbd>Enter</kbd> 编辑模式
+              </span>
+              <span>
+                <kbd>J / K</kbd> 移动 · <kbd>A / B</kbd> 插格 · <kbd>DD</kbd>{' '}
+                删除
+              </span>
+            </div>
+          </details>
 
           <input
             ref={fileInputRef}
@@ -2149,7 +2207,7 @@ export const TerminalCodeLabView = forwardRef<
           >
             <div className="codelab-vars-header">
               <div className="codelab-vars-title">
-                <span>VARIABLES</span>
+                <span>变量</span>
                 <span className="codelab-vars-count">{variables.length}</span>
               </div>
               <div className="codelab-vars-head-actions">
@@ -2203,11 +2261,23 @@ export const TerminalCodeLabView = forwardRef<
                     <div
                       key={v.name}
                       className={`codelab-var-row${isExpanded ? ' is-expanded' : ''}`}
+                      role="button"
+                      tabIndex={0}
+                      aria-expanded={isExpanded}
+                      aria-label={`查看变量 ${v.name} 的详情`}
                       onClick={() =>
                         setExpandedVarName((curr) =>
                           curr === v.name ? null : v.name,
                         )
                       }
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          setExpandedVarName((curr) =>
+                            curr === v.name ? null : v.name,
+                          );
+                        }
+                      }}
                     >
                       <div className="codelab-var-grid">
                         <strong className="codelab-var-name" title={v.name}>
@@ -2232,7 +2302,10 @@ export const TerminalCodeLabView = forwardRef<
                               className="codelab-float-btn"
                               onClick={() => {
                                 setReplInput(`print(repr(${v.name}))`);
-                                replInputRef.current?.focus();
+                                setReplOpen(true);
+                                requestAnimationFrame(() =>
+                                  replInputRef.current?.focus(),
+                                );
                               }}
                             >
                               在控制台查看
@@ -2262,100 +2335,124 @@ export const TerminalCodeLabView = forwardRef<
         )}
       </div>
 
-      {/* Compact Institutional Bottom Quick Console REPL */}
+      {/* Optional quick console, sharing the active notebook kernel */}
       <div className="codelab-repl-dock">
-        {replHistory.length > 0 && !replLogCollapsed && (
-          <div className="codelab-repl-log">
-            {replHistory.slice(-6).map((entry) => (
-              <div
-                key={entry.id}
-                className={`codelab-repl-entry${entry.ok ? '' : ' is-err'}`}
-              >
-                <div className="codelab-repl-in">
-                  <code>
-                    {entry.language === 'python'
-                      ? '>>> '
-                      : `${entry.language}> `}
-                    {entry.code}
-                  </code>
-                  {entry.durationMs !== undefined && (
-                    <span>{formatDurationCompact(entry.durationMs)}</span>
-                  )}
-                </div>
-                <pre className="codelab-repl-out">{entry.text}</pre>
-                {entry.images?.map((src, idx) => (
-                  <img
-                    key={idx}
-                    src={src}
-                    alt="REPL 绘图"
-                    className="codelab-repl-img"
-                    onClick={() => setZoomedImageSrc(src)}
-                  />
+        <button
+          type="button"
+          className="codelab-console-toggle"
+          aria-expanded={replOpen}
+          aria-controls={`codelab-console-${tab.id}`}
+          onClick={() => {
+            setReplOpen((open) => !open);
+            if (!replOpen) {
+              requestAnimationFrame(() => replInputRef.current?.focus());
+            }
+          }}
+        >
+          <span>
+            控制台{' '}
+            {replHistory.length > 0 ? `· ${replHistory.length} 条记录` : ''}
+          </span>
+          <span className={`codelab-mode-telemetry is-${interactionMode}`}>
+            {interactionMode === 'edit' ? '编辑模式' : '命令模式'}
+          </span>
+          <span aria-hidden="true">{replOpen ? '⌄' : '⌃'}</span>
+        </button>
+        {replOpen && (
+          <div
+            id={`codelab-console-${tab.id}`}
+            className={`codelab-console-content${replHistory.length === 0 ? ' is-empty' : ''}`}
+          >
+            {replHistory.length > 0 && !replLogCollapsed && (
+              <div className="codelab-repl-log">
+                {replHistory.slice(-6).map((entry) => (
+                  <div
+                    key={entry.id}
+                    className={`codelab-repl-entry${entry.ok ? '' : ' is-err'}`}
+                  >
+                    <div className="codelab-repl-in">
+                      <code>
+                        {entry.language === 'python'
+                          ? '>>> '
+                          : `${entry.language}> `}
+                        {entry.code}
+                      </code>
+                      {entry.durationMs !== undefined && (
+                        <span>{formatDurationCompact(entry.durationMs)}</span>
+                      )}
+                    </div>
+                    <pre className="codelab-repl-out">{entry.text}</pre>
+                    {entry.images?.map((src, idx) => (
+                      <img
+                        key={idx}
+                        src={src}
+                        alt="REPL 绘图"
+                        className="codelab-repl-img"
+                        onClick={() => setZoomedImageSrc(src)}
+                      />
+                    ))}
+                  </div>
                 ))}
               </div>
-            ))}
+            )}
+
+            <div className="codelab-repl-input-row">
+              <span className="codelab-repl-prompt">
+                {language === 'python' ? '>>>' : `${language}>`}
+              </span>
+              <input
+                ref={replInputRef}
+                type="text"
+                className="codelab-repl-input"
+                value={replInput}
+                onChange={(e) => setReplInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    void handleRunQuickRepl();
+                  }
+                }}
+                placeholder={
+                  language === 'python'
+                    ? '快速求值控制台（共享上方内核变量）· Enter 执行'
+                    : `快速执行单行 ${language.toUpperCase()} 语句（共享头文件前置）· Enter 执行`
+                }
+              />
+              {replHistory.length > 0 && (
+                <>
+                  <button
+                    type="button"
+                    className="codelab-repl-action-btn"
+                    onClick={() => setReplLogCollapsed((c) => !c)}
+                    title={
+                      replLogCollapsed ? '展开控制台记录' : '收起控制台记录'
+                    }
+                  >
+                    {replLogCollapsed ? `记录 (${replHistory.length})` : '收起'}
+                  </button>
+                  <button
+                    type="button"
+                    className="codelab-ghost-icon-btn"
+                    onClick={() => setReplHistory([])}
+                    title="清空控制台记录"
+                  >
+                    <LabTrashIcon size={11} />
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                className="codelab-repl-exec-btn"
+                disabled={replBusy || !replInput.trim()}
+                onClick={() => void handleRunQuickRepl()}
+                title="执行控制台表达式 (Enter)"
+              >
+                <LabPlayIcon size={11} />
+                <span>{replBusy ? '运行中' : '求值'}</span>
+              </button>
+            </div>
           </div>
         )}
-
-        <div className="codelab-repl-input-row">
-          <span className="codelab-repl-prompt">
-            {language === 'python' ? '>>>' : `${language}>`}
-          </span>
-          <input
-            ref={replInputRef}
-            type="text"
-            className="codelab-repl-input"
-            value={replInput}
-            onChange={(e) => setReplInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                void handleRunQuickRepl();
-              }
-            }}
-            placeholder={
-              language === 'python'
-                ? '快速求值控制台（共享上方内核变量）· Enter 执行'
-                : `快速执行单行 ${language.toUpperCase()} 语句（共享头文件前置）· Enter 执行`
-            }
-          />
-          <span
-            className={`codelab-mode-telemetry is-${interactionMode}`}
-            title="Esc 切换命令模式 (j/k 导航, a/b 插入, dd 删除) · Enter 返回编辑"
-          >
-            {interactionMode === 'edit' ? 'EDIT' : 'CMD'}
-          </span>
-          {replHistory.length > 0 && (
-            <>
-              <button
-                type="button"
-                className="codelab-repl-action-btn"
-                onClick={() => setReplLogCollapsed((c) => !c)}
-                title={replLogCollapsed ? '展开控制台记录' : '收起控制台记录'}
-              >
-                {replLogCollapsed ? `记录 (${replHistory.length})` : '收起'}
-              </button>
-              <button
-                type="button"
-                className="codelab-ghost-icon-btn"
-                onClick={() => setReplHistory([])}
-                title="清空控制台记录"
-              >
-                <LabTrashIcon size={11} />
-              </button>
-            </>
-          )}
-          <button
-            type="button"
-            className="codelab-repl-exec-btn"
-            disabled={replBusy || !replInput.trim()}
-            onClick={() => void handleRunQuickRepl()}
-            title="执行控制台表达式 (Enter)"
-          >
-            <LabPlayIcon size={11} />
-            <span>{replBusy ? '运行中' : '求值'}</span>
-          </button>
-        </div>
       </div>
 
       {/* Institutional Chart Lightbox */}

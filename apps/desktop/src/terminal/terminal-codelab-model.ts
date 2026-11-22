@@ -52,17 +52,6 @@ export function createStarterCodeLabCells(
     return [
       {
         id: makeCodeLabCellId(),
-        kind: 'markdown',
-        language: 'c',
-        source:
-          '### C 语言步进实验格\n上方可展开「共享头文件 / 辅助函数前置格」。每个代码格可独立输入测试 `stdin`，或一键发送给右侧 GDB / 终端交互运行。',
-        stdinInput: '',
-        executionCount: null,
-        status: 'idle',
-        outputs: [],
-      },
-      {
-        id: makeCodeLabCellId(),
         kind: 'code',
         language: 'c',
         source: `int n = 6;
@@ -83,17 +72,6 @@ printf("平方和 (1..%d) = %d\\n", n, sum);`,
     return [
       {
         id: makeCodeLabCellId(),
-        kind: 'markdown',
-        language: 'cpp',
-        source:
-          '### C++ 交互实验本\n支持省略 `int main()` 直接写算法语句段，也可完整编写类与 STL 容器代码并通过 G++ 实时编译运行。',
-        stdinInput: '',
-        executionCount: null,
-        status: 'idle',
-        outputs: [],
-      },
-      {
-        id: makeCodeLabCellId(),
         kind: 'code',
         language: 'cpp',
         source: `vector<int> nums = {5, 2, 9, 1, 7};
@@ -109,17 +87,6 @@ cout << endl;`,
   }
 
   return [
-    {
-      id: makeCodeLabCellId(),
-      kind: 'markdown',
-      language: 'python',
-      source:
-        '### Python Euporie 交互笔记本\n状态变量在格间持久化保存；按 `Shift+Enter` 运行并跳至下一格，`Esc` 切换命令模式（`j/k` 移动、`a/b` 插格、`dd` 删格）。',
-      stdinInput: '',
-      executionCount: null,
-      status: 'idle',
-      outputs: [],
-    },
     {
       id: makeCodeLabCellId(),
       kind: 'code',

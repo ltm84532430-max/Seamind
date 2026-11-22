@@ -258,8 +258,8 @@ function getInstitutionalCmTheme(theme: Theme): Extension {
       '&': {
         backgroundColor: palette.bg,
         color: palette.fg,
-        fontSize: '12.5px',
-        lineHeight: '1.62',
+        fontSize: '13.5px',
+        lineHeight: '1.6',
         fontFamily:
           'var(--mono, "JetBrains Mono", "Cascadia Mono", Consolas, monospace)',
       },
@@ -270,10 +270,10 @@ function getInstitutionalCmTheme(theme: Theme): Extension {
       },
       '.cm-content': {
         caretColor: palette.caret,
-        padding: '9px 0',
+        padding: '12px 0',
       },
       '.cm-line': {
-        padding: '0 14px 0 10px',
+        padding: '0 18px 0 12px',
       },
       '.cm-gutters': {
         backgroundColor: palette.gutterBg,
