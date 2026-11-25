@@ -48,7 +48,17 @@ import {
   terminalApi,
   type CliAgentStreamEvent,
   type CliEngineStatus,
+  type CliModelOption,
+  type CliModelsCatalog,
 } from './terminal-api';
+import { getCodeLabLiveBridge } from './codelab-live-bridge';
+import {
+  loadCustomEnvPaths,
+  loadDataLabBaseProfile,
+  loadDataLabConnections,
+  loadDataLabFiles,
+  readCodeLabNotebookSnapshot,
+} from './terminal-codelab-model';
 import { BookProseView } from './TerminalRichContent';
 import type {
   TerminalAgentEngineMode,
@@ -133,6 +143,131 @@ interface LocalEngineConfig {
   baseUrl: string;
   model: string;
   noToolsMode: boolean;
+}
+
+const CLI_MODELS_STORAGE_KEY = 'seamind:terminal-cli-models:v1';
+
+type CliEngineId = 'agy' | 'gemini' | 'claude' | 'codex';
+
+interface ModelFamilyGroup {
+  family: string;
+  variants: CliModelOption[];
+  defaultVariant: CliModelOption;
+}
+
+const TIER_SORT_WEIGHT: Record<string, number> = {
+  low: 10,
+  lite: 15,
+  medium: 20,
+  high: 30,
+  xhigh: 40,
+  argon: 12,
+  carbon: 22,
+  neon: 32,
+  thinking: 35,
+  preview: 45,
+  latest: 50,
+};
+
+function tierSortWeight(tier?: string | null): number {
+  if (!tier) return 0;
+  return TIER_SORT_WEIGHT[tier.trim().toLowerCase()] ?? 60;
+}
+
+function splitFallbackModelLabel(raw: string): CliModelOption {
+  const trimmed = raw.trim();
+  const openIdx = trimmed.lastIndexOf('(');
+  if (trimmed.endsWith(')') && openIdx > 0) {
+    const family = trimmed.slice(0, openIdx).trim();
+    const tier = trimmed.slice(openIdx + 1, -1).trim();
+    if (family && tier) {
+      return { id: trimmed, label: trimmed, family, tier };
+    }
+  }
+  return { id: trimmed, label: trimmed, family: trimmed, tier: null };
+}
+
+function matchModelOption(opt: CliModelOption, value?: string | null): boolean {
+  const needle = (value ?? '').trim().toLowerCase();
+  if (!needle) return false;
+  return (
+    opt.id.trim().toLowerCase() === needle ||
+    opt.label.trim().toLowerCase() === needle
+  );
+}
+
+function groupCliModelOptions(
+  catalog?: CliModelsCatalog | null,
+): ModelFamilyGroup[] {
+  const rawOptions: CliModelOption[] =
+    catalog?.options && catalog.options.length > 0
+      ? catalog.options
+      : (catalog?.models ?? []).map(splitFallbackModelLabel);
+
+  const byFamily = new Map<string, CliModelOption[]>();
+  for (const opt of rawOptions) {
+    const key = opt.family.trim() || opt.label.trim() || opt.id.trim();
+    if (!key) continue;
+    const list = byFamily.get(key) ?? [];
+    if (
+      !list.some(
+        (existing) => existing.id.toLowerCase() === opt.id.toLowerCase(),
+      )
+    ) {
+      list.push(opt);
+      byFamily.set(key, list);
+    }
+  }
+
+  const groups: ModelFamilyGroup[] = [];
+  for (const [family, variants] of byFamily.entries()) {
+    const sorted = [...variants].sort(
+      (a, b) => tierSortWeight(a.tier) - tierSortWeight(b.tier),
+    );
+    const preferred =
+      sorted.find((v) => v.tier?.toLowerCase() === 'high') ??
+      sorted.find((v) => v.tier?.toLowerCase() === 'medium') ??
+      sorted.find((v) => v.tier?.toLowerCase() === 'neon') ??
+      sorted[0];
+    groups.push({
+      family,
+      variants: sorted,
+      defaultVariant: preferred,
+    });
+  }
+  return groups;
+}
+
+function loadSavedCliModels(): Record<CliEngineId, string> {
+  const defaults: Record<CliEngineId, string> = {
+    agy: '',
+    gemini: '',
+    claude: '',
+    codex: '',
+  };
+  if (typeof localStorage === 'undefined') return defaults;
+  try {
+    const raw = localStorage.getItem(CLI_MODELS_STORAGE_KEY);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw) as Partial<Record<CliEngineId, string>>;
+    return {
+      agy: typeof parsed.agy === 'string' ? parsed.agy : '',
+      gemini: typeof parsed.gemini === 'string' ? parsed.gemini : '',
+      claude: typeof parsed.claude === 'string' ? parsed.claude : '',
+      codex: typeof parsed.codex === 'string' ? parsed.codex : '',
+    };
+  } catch {
+    return defaults;
+  }
+}
+
+function saveCliModels(models: Record<CliEngineId, string>): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(CLI_MODELS_STORAGE_KEY, JSON.stringify(models));
+  } catch {
+    // ignore storage errors
+  }
 }
 
 const CONTEXT_WINDOW_SOFT_CAP = 32_000;
@@ -304,7 +439,116 @@ export const TerminalAgentView = forwardRef<
   }, [bridge?.provider?.baseUrl, bridge?.provider?.model]);
 
   const [cliEngines, setCliEngines] = useState<CliEngineStatus[]>([]);
+  const [cliModelsByEngine, setCliModelsByEngine] = useState<
+    Record<CliEngineId, string>
+  >(() => loadSavedCliModels());
+  const [cliCatalogByEngine, setCliCatalogByEngine] = useState<
+    Partial<Record<CliEngineId, CliModelsCatalog>>
+  >({});
+  const [cliModelsLoading, setCliModelsLoading] = useState(false);
   const [modelModalOpen, setModelModalOpen] = useState(false);
+  const [modelPopoverOpen, setModelPopoverOpen] = useState(false);
+  const [hoveredFamily, setHoveredFamily] = useState<string | null>(null);
+  const [hoveredFooterPanel, setHoveredFooterPanel] = useState(false);
+
+  const activeCliEngine: CliEngineId | null = engineConfig.mode.startsWith(
+    'cli:',
+  )
+    ? (engineConfig.mode.slice(4) as CliEngineId)
+    : null;
+
+  const setSelectedCliModel = useCallback(
+    (engine: CliEngineId, model: string) => {
+      setCliModelsByEngine((prev) => {
+        const next = { ...prev, [engine]: model };
+        saveCliModels(next);
+        return next;
+      });
+    },
+    [],
+  );
+
+  const refreshCliModels = useCallback((engine: CliEngineId) => {
+    setCliModelsLoading(true);
+    terminalApi
+      .listCliAgentModels({ engine })
+      .then((catalog) => {
+        setCliCatalogByEngine((prev) => ({ ...prev, [engine]: catalog }));
+      })
+      .catch(() => {
+        // ignore detection failures
+      })
+      .finally(() => {
+        setCliModelsLoading(false);
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!active || !activeCliEngine) return;
+    if (cliCatalogByEngine[activeCliEngine]) return;
+    refreshCliModels(activeCliEngine);
+  }, [active, activeCliEngine, cliCatalogByEngine, refreshCliModels]);
+
+  const activeCliCatalog = activeCliEngine
+    ? cliCatalogByEngine[activeCliEngine]
+    : undefined;
+
+  const cliFamilyGroups = useMemo(
+    () => groupCliModelOptions(activeCliCatalog),
+    [activeCliCatalog],
+  );
+
+  const activeEffectiveModelId = activeCliEngine
+    ? cliModelsByEngine[activeCliEngine]?.trim() ||
+      activeCliCatalog?.currentDefault?.trim() ||
+      ''
+    : engineConfig.model;
+
+  const activeModelDisplay = useMemo(() => {
+    if (!activeCliEngine) {
+      return {
+        family: engineConfig.model || '未配置模型',
+        tier: engineConfig.mode === 'hybrid' ? 'Hybrid' : 'API',
+        id: engineConfig.model,
+      };
+    }
+    const allOptions = activeCliCatalog?.options ?? [];
+    const matched = allOptions.find((opt) =>
+      matchModelOption(opt, activeEffectiveModelId),
+    );
+    if (matched) {
+      return {
+        family: matched.family,
+        tier: matched.tier ?? '',
+        id: matched.id,
+      };
+    }
+    if (activeEffectiveModelId) {
+      const parsed = splitFallbackModelLabel(activeEffectiveModelId);
+      return {
+        family: parsed.family,
+        tier: parsed.tier ?? '',
+        id: parsed.id,
+      };
+    }
+    return {
+      family: `${activeCliEngine.toUpperCase()} CLI`,
+      tier: 'Default',
+      id: '',
+    };
+  }, [
+    activeCliCatalog?.options,
+    activeCliEngine,
+    activeEffectiveModelId,
+    engineConfig.mode,
+    engineConfig.model,
+  ]);
+
+  const engineShortBadge = activeCliEngine
+    ? activeCliEngine.toUpperCase()
+    : engineConfig.mode === 'hybrid'
+      ? 'HYBRID'
+      : 'API';
   const [providerApiKeyDraft, setProviderApiKeyDraft] = useState('');
   const [hasCustomProviderKey, setHasCustomProviderKey] = useState(false);
   const [keyStatusMsg, setKeyStatusMsg] = useState('');
@@ -321,7 +565,9 @@ export const TerminalAgentView = forwardRef<
 
   // OpenCode/Zed-style Collapsible Session Inspector (hidden by default)
   const [showHud, setShowHud] = useState(false);
-  const [isNarrowContainer, setIsNarrowContainer] = useState(false);
+  const [containerWidth, setContainerWidth] = useState(900);
+  const isNarrowContainer = containerWidth < 720;
+  const canShowFlyout = containerWidth >= 490;
   const [expandedTraceIds, setExpandedTraceIds] = useState<
     Record<string, boolean>
   >({});
@@ -332,6 +578,7 @@ export const TerminalAgentView = forwardRef<
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const scrollHostRef = useRef<HTMLDivElement>(null);
+  const modelPopoverRef = useRef<HTMLDivElement>(null);
   const turnsRef = useRef(turns);
   turnsRef.current = turns;
   const apiHistoryRef = useRef(apiHistory);
@@ -342,13 +589,41 @@ export const TerminalAgentView = forwardRef<
     onStatusChange?.('ready', 'Agent 就绪');
   }, [onStatusChange]);
 
+  // Dismiss floating model switcher on outside click or Escape
+  useEffect(() => {
+    if (!modelPopoverOpen) {
+      setHoveredFamily(null);
+      setHoveredFooterPanel(false);
+      return;
+    }
+    const handlePointerDown = (event: MouseEvent) => {
+      if (
+        modelPopoverRef.current &&
+        !modelPopoverRef.current.contains(event.target as Node)
+      ) {
+        setModelPopoverOpen(false);
+      }
+    };
+    const handleEsc = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setModelPopoverOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleEsc);
+    };
+  }, [modelPopoverOpen]);
+
   // Responsive container width observer: hides right HUD automatically in tight multi-pane splits
   useEffect(() => {
     const el = rootRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
     const obs = new ResizeObserver((entries) => {
       const width = entries[0]?.contentRect.width ?? 900;
-      setIsNarrowContainer(width < 720);
+      setContainerWidth(width);
     });
     obs.observe(el);
     return () => obs.disconnect();
@@ -510,7 +785,78 @@ export const TerminalAgentView = forwardRef<
       const summaryLabels: string[] = [];
 
       for (const m of mentions) {
-        if (m.tag === '#last-error') {
+        if (m.tag === '#data') {
+          const files = loadDataLabFiles();
+          const conns = loadDataLabConnections();
+          const bus = await terminalApi
+            .getDataBusInfo({ sessionId: 'default' })
+            .catch(() => null);
+          const fileLines = files.map(
+            (f) =>
+              `- 文件别名 \`${f.alias}\` (${f.format.toUpperCase()}, ${f.rowCount ?? '?'} 行): \`${f.path}\` | 字段: ${(f.columns ?? []).map((c) => `${c.name}:${c.dataType}`).join(', ') || '未解析'}`,
+          );
+          const connLines = conns.map(
+            (c) =>
+              `- 数据库 \`${c.name}\` (id=${c.id}, ${c.dbType.toUpperCase()}): 表 ${(c.tables ?? []).map((t) => `${t.name}(${t.columns.length}列)`).join(', ') || '未加载'}`,
+          );
+          const busLines = (bus?.tables ?? []).map(
+            (t) =>
+              `- 共享总线表 \`${t.name}\` (${t.format.toUpperCase()}): \`${t.path}\`（SQL 可直查，Py/R 可 \`sm_load("${t.name}")\`）`,
+          );
+          contextLines.push(
+            `[#data 数据实验室已挂载数据源与共享总线]\n${[...fileLines, ...connLines, ...busLines].join('\n') || '当前暂未挂载文件或数据库连接'}`,
+          );
+          summaryLabels.push('#data');
+        } else if (m.tag === '#env') {
+          const baseProfile = loadDataLabBaseProfile();
+          const custom = loadCustomEnvPaths();
+          const baseHeader = [
+            `- 永久指定 Python 基座: \`${baseProfile.pythonPath || '未指定'}\``,
+            `- 永久指定 R 基座: \`${baseProfile.rscriptPath || '未指定'}\``,
+            `- 默认 SQL 数据源: \`${baseProfile.defaultConnectionId || '本地挂载文件 + 会话总线 (DuckDB)'}\``,
+            `- 基座稳定库基线: Python=[${baseProfile.preferredPythonLibs.join(', ')}] | R=[${baseProfile.preferredRLibs.join(', ')}]`,
+            `- 跨语言共享函数: \`sm_load(name)\` / \`sm_save(name, df)\` / \`sm_tables()\` / \`sm_sql(query)\`（Python/R 已预注入中文字体与共享 Parquet 总线）`,
+          ].join('\n');
+          const [pyRes, rRes] = await Promise.allSettled([
+            terminalApi.detectPythonEnvs({ extraPaths: custom.pythonPaths }),
+            terminalApi.detectREnvs({ extraPaths: custom.rPaths }),
+          ]);
+          const pyLines =
+            pyRes.status === 'fulfilled'
+              ? pyRes.value.map(
+                  (e) =>
+                    `- ${e.label} (${e.version ?? '?'}) \`${e.pythonPath}\` [${[e.hasPandas && 'pandas', e.hasDuckdb && 'duckdb', e.hasPyarrow && 'pyarrow', e.hasPolars && 'polars', e.hasNumpy && 'numpy', e.hasMatplotlib && 'matplotlib', e.hasSqlalchemy && 'sqlalchemy'].filter(Boolean).join(', ')}]`,
+                )
+              : [];
+          const rLines =
+            rRes.status === 'fulfilled'
+              ? rRes.value.map(
+                  (e) =>
+                    `- ${e.label} (${e.version ?? '?'}) \`${e.rscriptPath}\` [${[e.hasTidyverse && 'tidyverse', e.hasGgplot2 && 'ggplot2', e.hasDataTable && 'data.table', e.hasArrow && 'arrow', e.hasDuckdb && 'duckdb'].filter(Boolean).join(', ')}]`,
+                )
+              : [];
+          contextLines.push(
+            `[#env 永久指定基座与本机运行环境]\n${baseHeader}\n已检出 Python:\n${pyLines.join('\n') || '无'}\n已检出 R:\n${rLines.join('\n') || '无'}`,
+          );
+          summaryLabels.push('#env');
+        } else if (m.tag === '#lab') {
+          const liveBridge = getCodeLabLiveBridge();
+          const snap =
+            (liveBridge ? await liveBridge.readNotebook() : null) ??
+            readCodeLabNotebookSnapshot();
+          if (snap) {
+            const cellSummary = snap.cells
+              .map(
+                (c) =>
+                  `### Cell #${c.index} (cellId=${c.cellId}${c.groupId ? `, groupId=${c.groupId}${c.groupTitle ? ` "${c.groupTitle}"` : ''}` : ''}) [${c.kind === 'markdown' ? 'MD' : c.language.toUpperCase()} · ${c.status}]\n\`\`\`${c.kind === 'markdown' ? 'markdown' : c.language}\n${c.source}\n\`\`\`${c.outputs.length > 0 ? `\n输出:\n${c.outputs.join('\n')}` : ''}`,
+              )
+              .join('\n\n');
+            contextLines.push(
+              `[#lab 当前实验本: ${snap.title} (${snap.cells.length} 格 · ${snap.source === 'live' ? '实时窗口' : snap.source})]\n${cellSummary.slice(0, 6000)}`,
+            );
+            summaryLabels.push('#lab');
+          }
+        } else if (m.tag === '#last-error') {
           const errText = paneAccessor?.readLastError() || '';
           if (errText) {
             contextLines.push(
@@ -656,6 +1002,33 @@ export const TerminalAgentView = forwardRef<
         appendLocalSystemTurn(rawText, buildHelpMarkdown());
         return;
       }
+      if (parsed.slashCommand === '/mcp') {
+        try {
+          const st = await agentApi.getBridgeStatus();
+          const toolList = st.toolNames.map((t) => `\`${t}\``).join(' · ');
+          appendLocalSystemTurn(
+            rawText,
+            [
+              '### Seamind 本地 MCP 接入通道状态',
+              '',
+              `- **服务状态**：${st.ready ? '已就绪 (HTTP MCP 监听中)' : '未就绪'}`,
+              `- **本地端点**：\`${st.endpoint ?? 'N/A'}\``,
+              `- **已注册工具数**：**${st.toolCount}** 个（自动随当前工作区同步）`,
+              `- **当前可用工具**：${toolList || '暂无'}`,
+              '',
+              '> **自动接入说明**：',
+              '> 1. **内置 Seamind Agent**：直接输入 `/data`、`/code` 或附带 `#data` / `#env` / `#lab`，即可读写当前窗口实验本、执行 SQL / Anaconda Python / R 并将表格单元格推回窗口。',
+              '> 2. **CLI 代理（Claude / Codex / AGY）**：在「终端」或「多开窗」启动 `claude` / `codex` / `agy`，或通过 Hybrid 模式的 `cli_delegate` 委派时，Seamind 会自动下发一次性认证的 `seamind` MCP 配置，CLI 可直接调用全部已注册工具（含 `datalab_read_notebook`、`datalab_update_cell`、`datalab_push_cell`、`datalab_run_cell`、`datalab_delete_cell`、`datalab_query_sql`、`code_run_python`、`datalab_run_r` 及知识库/导图/电子书/论文/播放器工具）。',
+            ].join('\n'),
+          );
+        } catch (err) {
+          appendLocalSystemTurn(
+            rawText,
+            `读取 MCP 通道状态失败：${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        return;
+      }
       if (parsed.slashCommand === '/compact') {
         const beforeTokens = estimateTokenCount(
           JSON.stringify(apiHistoryRef.current),
@@ -674,11 +1047,34 @@ export const TerminalAgentView = forwardRef<
         return;
       }
       if (parsed.slashCommand === '/model') {
-        const arg = parsed.argsText.trim().toLowerCase();
-        if (!arg) {
+        const rawArg = parsed.argsText.trim();
+        if (!rawArg) {
           setModelModalOpen(true);
           return;
         }
+        // Support `/model agy:Gemini 3.1 Flash` or `/model gemini:gemini-2.5-pro`
+        const colonIdx = rawArg.indexOf(':');
+        if (colonIdx > 0) {
+          const prefix = rawArg.slice(0, colonIdx).trim().toLowerCase();
+          const modelName = rawArg.slice(colonIdx + 1).trim();
+          if (
+            (prefix === 'agy' ||
+              prefix === 'gemini' ||
+              prefix === 'claude' ||
+              prefix === 'codex') &&
+            modelName
+          ) {
+            const cliMode = `cli:${prefix}` as TerminalAgentEngineMode;
+            setEngineConfig((prev) => ({ ...prev, mode: cliMode }));
+            setSelectedCliModel(prefix, modelName);
+            appendLocalSystemTurn(
+              rawText,
+              `已切换至 **${prefix.toUpperCase()} CLI** 并指定模型 \`${modelName}\`。`,
+            );
+            return;
+          }
+        }
+        const arg = rawArg.toLowerCase();
         const mapped: Record<string, TerminalAgentEngineMode> = {
           hybrid: 'hybrid',
           api: 'api',
@@ -688,6 +1084,8 @@ export const TerminalAgentView = forwardRef<
           'cli:codex': 'cli:codex',
           agy: 'cli:agy',
           'cli:agy': 'cli:agy',
+          gemini: 'cli:gemini',
+          'cli:gemini': 'cli:gemini',
         };
         if (mapped[arg]) {
           const nextMode = mapped[arg];
@@ -696,11 +1094,17 @@ export const TerminalAgentView = forwardRef<
             rawText,
             `已切换运行引擎为 **${TERMINAL_ENGINE_SPECS.find((s) => s.id === nextMode)?.label ?? nextMode}**。`,
           );
+        } else if (activeCliEngine) {
+          setSelectedCliModel(activeCliEngine, rawArg);
+          appendLocalSystemTurn(
+            rawText,
+            `已将当前 **${activeCliEngine.toUpperCase()} CLI** 模型切换为 \`${rawArg}\`。`,
+          );
         } else {
           setModelModalOpen(true);
           appendLocalSystemTurn(
             rawText,
-            `未识别引擎 \`${parsed.argsText}\`。可选：\`hybrid\` / \`api\` / \`claude\` / \`codex\` / \`agy\`，已弹出切换窗口。`,
+            `未识别引擎 \`${parsed.argsText}\`。可选：\`hybrid\` / \`api\` / \`agy\` / \`gemini\` / \`claude\` / \`codex\`，或 \`agy:<模型名>\`，已弹出切换窗口。`,
           );
         }
         return;
@@ -711,13 +1115,18 @@ export const TerminalAgentView = forwardRef<
       const turnStartedAt = Date.now();
       const turnId = `turn-${turnStartedAt}-${Math.random().toString(36).slice(2, 6)}`;
       const cliEngine = engineConfig.mode.startsWith('cli:')
-        ? (engineConfig.mode.slice(4) as 'claude' | 'codex' | 'agy')
+        ? (engineConfig.mode.slice(4) as CliEngineId)
         : null;
+      const selectedCliModel = cliEngine
+        ? cliModelsByEngine[cliEngine]?.trim() || ''
+        : '';
       const runId = cliEngine ? `cli-${turnStartedAt}` : undefined;
       if (runId) activeCliRunIdRef.current = runId;
 
       const engineLabel = cliEngine
-        ? `CLI · ${cliEngine.toUpperCase()}`
+        ? selectedCliModel
+          ? `CLI · ${cliEngine.toUpperCase()} · ${selectedCliModel}`
+          : `CLI · ${cliEngine.toUpperCase()}`
         : engineConfig.mode === 'hybrid'
           ? `HYBRID · ${engineConfig.model}`
           : `API · ${engineConfig.model}`;
@@ -779,6 +1188,7 @@ export const TerminalAgentView = forwardRef<
             prompt: cliPrompt,
             cwd: tab.cwd || null,
             attachMcp: true,
+            model: selectedCliModel || null,
           });
           activeCliRunIdRef.current = null;
 
@@ -996,15 +1406,18 @@ export const TerminalAgentView = forwardRef<
       }
     },
     [
+      activeCliEngine,
       appendLocalSystemTurn,
       bridge,
       cliEngines,
+      cliModelsByEngine,
       engineConfig,
       inputText,
       isBusy,
       onStatusChange,
       paneAccessor,
       resolveMentionEnvelopes,
+      setSelectedCliModel,
       tab.cwd,
     ],
   );
@@ -1156,13 +1569,27 @@ export const TerminalAgentView = forwardRef<
           <span className="t-agent-top-sep" aria-hidden="true">
             ·
           </span>
-          <span className="t-agent-top-cwd">
-            {engineConfig.mode === 'hybrid'
-              ? 'API × CLI 协同内核'
-              : engineConfig.mode === 'api'
-                ? '直连 API 推理'
-                : '本机无头 CLI 内核'}
-          </span>
+          {activeCliEngine ? (
+            <button
+              type="button"
+              className="t-agent-top-model-btn"
+              onClick={() => setModelPopoverOpen((v) => !v)}
+              title="点击切换当前模型与推理档位"
+            >
+              <span>{activeModelDisplay.family}</span>
+              {activeModelDisplay.tier && (
+                <span className="t-agent-top-model-tier">
+                  {activeModelDisplay.tier}
+                </span>
+              )}
+            </button>
+          ) : (
+            <span className="t-agent-top-cwd">
+              {engineConfig.mode === 'hybrid'
+                ? 'API × CLI 协同内核'
+                : '直连 API 推理'}
+            </span>
+          )}
         </div>
 
         <div className="t-agent-top-actions">
@@ -1699,6 +2126,30 @@ export const TerminalAgentView = forwardRef<
               <button
                 type="button"
                 className="t-agent-ctx-chip"
+                onClick={() => insertTokenIntoComposer('#data')}
+                title="附带左侧「数据」面板已挂载的 CSV/Parquet 文件路径、字段与数据库连接"
+              >
+                + #data 数据
+              </button>
+              <button
+                type="button"
+                className="t-agent-ctx-chip"
+                onClick={() => insertTokenIntoComposer('#lab')}
+                title="附带当前打开实验本的代码格、SQL 与结果表格"
+              >
+                + #lab 实验本
+              </button>
+              <button
+                type="button"
+                className="t-agent-ctx-chip"
+                onClick={() => insertTokenIntoComposer('#env')}
+                title="附带本机检测到的 Anaconda/Python 与 R 环境"
+              >
+                + #env 环境
+              </button>
+              <button
+                type="button"
+                className="t-agent-ctx-chip"
                 onClick={() => insertTokenIntoComposer('#chapter')}
               >
                 + #chapter 当前章
@@ -1820,14 +2271,635 @@ export const TerminalAgentView = forwardRef<
                 }}
                 placeholder="输入指令…  ( / 调度 · # 挂载 · Enter 发送 · Shift+Enter 换行 )"
               />
-              <button
-                type="button"
-                className="t-agent-send-btn"
-                disabled={isBusy || !inputText.trim()}
-                onClick={() => void handleSubmit()}
-              >
-                {isBusy ? '执行中' : '发送'}
-              </button>
+            </div>
+
+            {/* Antigravity-style Composer Bottom Bar with Floating Model Switcher */}
+            <div className="t-agent-composer-footer">
+              <div className="t-agent-composer-footer-left">
+                <button
+                  type="button"
+                  className="t-agent-composer-plus-btn"
+                  title="挂载上下文资源 (#data / #lab / #chapter / #kb)"
+                  aria-label="插入 # 上下文引用"
+                  onClick={() => {
+                    setInputText((prev) => {
+                      const spacer = prev && !/\s$/.test(prev) ? ' ' : '';
+                      const next = `${prev}${spacer}#`;
+                      setCaretPos(next.length);
+                      return next;
+                    });
+                    requestAnimationFrame(() => {
+                      const el = inputRef.current;
+                      if (el) {
+                        el.focus();
+                        el.setSelectionRange(el.value.length, el.value.length);
+                      }
+                    });
+                  }}
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M8 3.25V12.75M3.25 8H12.75"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                </button>
+
+                <div className="t-agent-model-anchor" ref={modelPopoverRef}>
+                  <button
+                    type="button"
+                    className={`t-agent-model-trigger${modelPopoverOpen ? ' is-open' : ''}`}
+                    aria-haspopup="menu"
+                    aria-expanded={modelPopoverOpen}
+                    onClick={() => {
+                      setModelPopoverOpen((open) => {
+                        const next = !open;
+                        if (next && activeCliEngine) {
+                          if (!cliCatalogByEngine[activeCliEngine]) {
+                            refreshCliModels(activeCliEngine);
+                          }
+                        }
+                        return next;
+                      });
+                    }}
+                    title="随时切换当前模型、推理档位或运行内核"
+                  >
+                    <span className="t-agent-model-trigger-name">
+                      {activeModelDisplay.family}
+                    </span>
+                    {activeModelDisplay.tier && (
+                      <span className="t-agent-model-trigger-tier">
+                        {activeModelDisplay.tier}
+                      </span>
+                    )}
+                    <svg
+                      className="t-agent-model-trigger-caret"
+                      width="12"
+                      height="12"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M4.25 6.25L8 10L11.75 6.25"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </button>
+
+                  {modelPopoverOpen && (
+                    <div
+                      className="t-agent-model-popover"
+                      role="menu"
+                      aria-label="模型与内核快速切换"
+                      onMouseLeave={() => {
+                        setHoveredFamily(null);
+                        setHoveredFooterPanel(false);
+                      }}
+                    >
+                      <div className="t-agent-model-popover-head">
+                        <span className="t-agent-model-popover-title">
+                          Model
+                        </span>
+                        <div className="t-agent-model-popover-tools">
+                          <span className="t-agent-model-engine-pill">
+                            {engineShortBadge}
+                          </span>
+                          {activeCliEngine && (
+                            <button
+                              type="button"
+                              className={`t-agent-model-refresh-btn${cliModelsLoading ? ' is-spinning' : ''}`}
+                              disabled={cliModelsLoading}
+                              onClick={() => refreshCliModels(activeCliEngine)}
+                              title={`重新拉取 ${activeCliEngine.toUpperCase()} 可用模型`}
+                              aria-label="刷新模型列表"
+                            >
+                              <svg
+                                width="12"
+                                height="12"
+                                viewBox="0 0 16 16"
+                                fill="none"
+                                aria-hidden="true"
+                              >
+                                <path
+                                  d="M13.25 8A5.25 5.25 0 1 1 11.7 4.3M13.25 2.75V5.5H10.5"
+                                  stroke="currentColor"
+                                  strokeWidth="1.4"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="t-agent-model-list">
+                        {activeCliEngine ? (
+                          cliFamilyGroups.length === 0 ? (
+                            <div className="t-agent-model-empty">
+                              {cliModelsLoading
+                                ? '正在扫描可用模型…'
+                                : '未扫描到可用模型，请点击右上角刷新'}
+                            </div>
+                          ) : (
+                            cliFamilyGroups.map((group) => {
+                              const activeVariant = group.variants.find((v) =>
+                                matchModelOption(v, activeEffectiveModelId),
+                              );
+                              const isActiveGroup = Boolean(activeVariant);
+                              const isCliDefaultGroup = group.variants.some(
+                                (v) =>
+                                  matchModelOption(
+                                    v,
+                                    activeCliCatalog?.currentDefault,
+                                  ),
+                              );
+                              const displayTier =
+                                activeVariant?.tier ??
+                                group.defaultVariant.tier ??
+                                '';
+                              const hasMultiTiers = group.variants.length > 1;
+                              const isHovered = hoveredFamily === group.family;
+
+                              return (
+                                <div
+                                  key={group.family}
+                                  className="t-agent-model-row-wrap"
+                                  onMouseEnter={() => {
+                                    setHoveredFamily(
+                                      hasMultiTiers ? group.family : null,
+                                    );
+                                    setHoveredFooterPanel(false);
+                                  }}
+                                >
+                                  <button
+                                    type="button"
+                                    role="menuitemradio"
+                                    aria-checked={isActiveGroup}
+                                    className={`t-agent-model-row${isActiveGroup ? ' is-active' : ''}${isHovered ? ' is-hovered' : ''}`}
+                                    onClick={() => {
+                                      const target =
+                                        activeVariant ?? group.defaultVariant;
+                                      setSelectedCliModel(
+                                        activeCliEngine,
+                                        target.id,
+                                      );
+                                      setModelPopoverOpen(false);
+                                    }}
+                                  >
+                                    <span className="t-agent-model-row-main">
+                                      <span className="t-agent-model-row-name">
+                                        {group.family}
+                                      </span>
+                                      {displayTier && (
+                                        <span className="t-agent-model-row-tier">
+                                          {displayTier}
+                                        </span>
+                                      )}
+                                      {isCliDefaultGroup && (
+                                        <span className="t-agent-model-tag">
+                                          Default
+                                        </span>
+                                      )}
+                                    </span>
+                                    <span className="t-agent-model-row-right">
+                                      {isActiveGroup && (
+                                        <svg
+                                          className="t-agent-model-check"
+                                          width="14"
+                                          height="14"
+                                          viewBox="0 0 16 16"
+                                          fill="none"
+                                          aria-hidden="true"
+                                        >
+                                          <path
+                                            d="M3.5 8.5L6.5 11.5L12.75 4.75"
+                                            stroke="currentColor"
+                                            strokeWidth="1.6"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                          />
+                                        </svg>
+                                      )}
+                                      {hasMultiTiers && (
+                                        <svg
+                                          className="t-agent-model-chevron"
+                                          width="12"
+                                          height="12"
+                                          viewBox="0 0 16 16"
+                                          fill="none"
+                                          aria-hidden="true"
+                                        >
+                                          <path
+                                            d="M6.25 4.25L10 8L6.25 11.75"
+                                            stroke="currentColor"
+                                            strokeWidth="1.4"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                          />
+                                        </svg>
+                                      )}
+                                    </span>
+                                  </button>
+
+                                  {!canShowFlyout &&
+                                    hasMultiTiers &&
+                                    (isActiveGroup || isHovered) && (
+                                      <div className="t-agent-model-inline-tiers">
+                                        {group.variants.map((variant) => {
+                                          const isVarActive = matchModelOption(
+                                            variant,
+                                            activeEffectiveModelId,
+                                          );
+                                          return (
+                                            <button
+                                              key={variant.id}
+                                              type="button"
+                                              className={`t-agent-model-tier-chip${isVarActive ? ' is-active' : ''}`}
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setSelectedCliModel(
+                                                  activeCliEngine,
+                                                  variant.id,
+                                                );
+                                                setModelPopoverOpen(false);
+                                              }}
+                                            >
+                                              {variant.tier ?? variant.label}
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+                                </div>
+                              );
+                            })
+                          )
+                        ) : (
+                          TERMINAL_API_PRESETS.map((preset) => {
+                            const isSelectedPreset =
+                              engineConfig.presetId === preset.id;
+                            const presetModelLabel =
+                              preset.id === 'custom'
+                                ? defaultModel
+                                : preset.defaultModel;
+                            return (
+                              <button
+                                key={preset.id}
+                                type="button"
+                                role="menuitemradio"
+                                aria-checked={isSelectedPreset}
+                                className={`t-agent-model-row${isSelectedPreset ? ' is-active' : ''}`}
+                                onMouseEnter={() => {
+                                  setHoveredFamily(null);
+                                  setHoveredFooterPanel(false);
+                                }}
+                                onClick={() => {
+                                  if (preset.id === 'custom') {
+                                    setEngineConfig((prev) => ({
+                                      ...prev,
+                                      presetId: 'custom',
+                                      baseUrl: defaultBaseUrl,
+                                      model: defaultModel,
+                                    }));
+                                  } else {
+                                    setEngineConfig((prev) => ({
+                                      ...prev,
+                                      presetId: preset.id,
+                                      baseUrl: preset.baseUrl,
+                                      model: preset.defaultModel,
+                                    }));
+                                  }
+                                  setModelPopoverOpen(false);
+                                }}
+                              >
+                                <span className="t-agent-model-row-main">
+                                  <span className="t-agent-model-row-name">
+                                    {preset.label}
+                                  </span>
+                                  <span className="t-agent-model-row-tier">
+                                    {presetModelLabel}
+                                  </span>
+                                </span>
+                                <span className="t-agent-model-row-right">
+                                  {isSelectedPreset && (
+                                    <svg
+                                      className="t-agent-model-check"
+                                      width="14"
+                                      height="14"
+                                      viewBox="0 0 16 16"
+                                      fill="none"
+                                      aria-hidden="true"
+                                    >
+                                      <path
+                                        d="M3.5 8.5L6.5 11.5L12.75 4.75"
+                                        stroke="currentColor"
+                                        strokeWidth="1.6"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      />
+                                    </svg>
+                                  )}
+                                </span>
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+
+                      <div className="t-agent-model-divider" />
+
+                      <button
+                        type="button"
+                        className={`t-agent-model-footer-row${hoveredFooterPanel ? ' is-hovered' : ''}`}
+                        onMouseEnter={() => {
+                          setHoveredFooterPanel(true);
+                          setHoveredFamily(null);
+                        }}
+                        onClick={() => {
+                          if (!canShowFlyout) {
+                            setHoveredFooterPanel((v) => !v);
+                          } else {
+                            setModelPopoverOpen(false);
+                            setModelModalOpen(true);
+                          }
+                        }}
+                      >
+                        <span className="t-agent-model-footer-left">
+                          <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            aria-hidden="true"
+                          >
+                            <path
+                              d="M3 10.5A5.25 5.25 0 1 1 13 10.5M8 8.5L10.75 5.75"
+                              stroke="currentColor"
+                              strokeWidth="1.4"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                            <circle
+                              cx="8"
+                              cy="8.75"
+                              r="1"
+                              fill="currentColor"
+                            />
+                          </svg>
+                          <span>切换内核 / 引擎</span>
+                        </span>
+                        <span className="t-agent-model-row-right">
+                          <svg
+                            className="t-agent-model-chevron"
+                            width="12"
+                            height="12"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            aria-hidden="true"
+                          >
+                            <path
+                              d="M6.25 4.25L10 8L6.25 11.75"
+                              stroke="currentColor"
+                              strokeWidth="1.4"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          </svg>
+                        </span>
+                      </button>
+
+                      {!canShowFlyout && hoveredFooterPanel && (
+                        <div className="t-agent-model-inline-engines">
+                          {TERMINAL_ENGINE_SPECS.map((spec) => {
+                            const isSelected = engineConfig.mode === spec.id;
+                            return (
+                              <button
+                                key={spec.id}
+                                type="button"
+                                className={`t-agent-model-tier-chip${isSelected ? ' is-active' : ''}`}
+                                onClick={() => {
+                                  setEngineConfig((prev) => ({
+                                    ...prev,
+                                    mode: spec.id,
+                                  }));
+                                  setHoveredFooterPanel(false);
+                                }}
+                              >
+                                {spec.badge}
+                              </button>
+                            );
+                          })}
+                          <button
+                            type="button"
+                            className="t-agent-model-tier-chip"
+                            onClick={() => {
+                              setModelPopoverOpen(false);
+                              setModelModalOpen(true);
+                            }}
+                          >
+                            高级配置…
+                          </button>
+                        </div>
+                      )}
+
+                      {canShowFlyout &&
+                        activeCliEngine &&
+                        hoveredFamily &&
+                        (() => {
+                          const targetGroup = cliFamilyGroups.find(
+                            (g) => g.family === hoveredFamily,
+                          );
+                          if (
+                            !targetGroup ||
+                            targetGroup.variants.length <= 1
+                          ) {
+                            return null;
+                          }
+                          return (
+                            <div
+                              className="t-agent-model-flyout"
+                              role="menu"
+                              aria-label={`${targetGroup.family} 档位选择`}
+                            >
+                              <div className="t-agent-model-flyout-head">
+                                <span>{targetGroup.family}</span>
+                                <span className="t-agent-model-flyout-sub">
+                                  Reasoning / Tier
+                                </span>
+                              </div>
+                              <div className="t-agent-model-flyout-list">
+                                {targetGroup.variants.map((variant) => {
+                                  const isVarActive = matchModelOption(
+                                    variant,
+                                    activeEffectiveModelId,
+                                  );
+                                  const isDef = matchModelOption(
+                                    variant,
+                                    activeCliCatalog?.currentDefault,
+                                  );
+                                  return (
+                                    <button
+                                      key={variant.id}
+                                      type="button"
+                                      role="menuitemradio"
+                                      aria-checked={isVarActive}
+                                      className={`t-agent-model-flyout-row${isVarActive ? ' is-active' : ''}`}
+                                      onClick={() => {
+                                        setSelectedCliModel(
+                                          activeCliEngine,
+                                          variant.id,
+                                        );
+                                        setModelPopoverOpen(false);
+                                      }}
+                                      title={variant.id}
+                                    >
+                                      <span className="t-agent-model-row-main">
+                                        <span className="t-agent-model-row-name">
+                                          {variant.tier ?? variant.label}
+                                        </span>
+                                        {isDef && (
+                                          <span className="t-agent-model-tag">
+                                            Default
+                                          </span>
+                                        )}
+                                      </span>
+                                      {isVarActive && (
+                                        <svg
+                                          className="t-agent-model-check"
+                                          width="14"
+                                          height="14"
+                                          viewBox="0 0 16 16"
+                                          fill="none"
+                                          aria-hidden="true"
+                                        >
+                                          <path
+                                            d="M3.5 8.5L6.5 11.5L12.75 4.75"
+                                            stroke="currentColor"
+                                            strokeWidth="1.6"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                          />
+                                        </svg>
+                                      )}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })()}
+
+                      {canShowFlyout && hoveredFooterPanel && (
+                        <div
+                          className="t-agent-model-flyout is-engines"
+                          role="menu"
+                          aria-label="运行内核切换"
+                        >
+                          <div className="t-agent-model-flyout-head">
+                            <span>运行内核</span>
+                            <span className="t-agent-model-flyout-sub">
+                              CLI / API / Hybrid
+                            </span>
+                          </div>
+                          <div className="t-agent-model-flyout-list">
+                            {TERMINAL_ENGINE_SPECS.map((spec) => {
+                              const cliId = spec.id.startsWith('cli:')
+                                ? spec.id.slice(4)
+                                : null;
+                              const cliStatus = cliId
+                                ? cliEngines.find((c) => c.id === cliId)
+                                : null;
+                              const isSelected = engineConfig.mode === spec.id;
+                              return (
+                                <button
+                                  key={spec.id}
+                                  type="button"
+                                  role="menuitemradio"
+                                  aria-checked={isSelected}
+                                  className={`t-agent-model-flyout-row${isSelected ? ' is-active' : ''}`}
+                                  onClick={() => {
+                                    setEngineConfig((prev) => ({
+                                      ...prev,
+                                      mode: spec.id,
+                                    }));
+                                    setHoveredFooterPanel(false);
+                                  }}
+                                >
+                                  <span className="t-agent-model-row-main">
+                                    {cliStatus && (
+                                      <span
+                                        className={`t-agent-model-status-dot${cliStatus.available ? ' is-ok' : ''}`}
+                                      />
+                                    )}
+                                    <span className="t-agent-model-row-name">
+                                      {spec.label}
+                                    </span>
+                                  </span>
+                                  {isSelected && (
+                                    <svg
+                                      className="t-agent-model-check"
+                                      width="14"
+                                      height="14"
+                                      viewBox="0 0 16 16"
+                                      fill="none"
+                                      aria-hidden="true"
+                                    >
+                                      <path
+                                        d="M3.5 8.5L6.5 11.5L12.75 4.75"
+                                        stroke="currentColor"
+                                        strokeWidth="1.6"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                      />
+                                    </svg>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <div className="t-agent-model-divider" />
+                          <button
+                            type="button"
+                            className="t-agent-model-flyout-row"
+                            onClick={() => {
+                              setModelPopoverOpen(false);
+                              setModelModalOpen(true);
+                            }}
+                          >
+                            <span className="t-agent-model-row-tier">
+                              高级配置 / 自定义模型 (Ctrl+M)
+                            </span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="t-agent-composer-footer-right">
+                <button
+                  type="button"
+                  className="t-agent-send-btn"
+                  disabled={isBusy || !inputText.trim()}
+                  onClick={() => void handleSubmit()}
+                >
+                  {isBusy ? '执行中' : '发送'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -2026,6 +3098,91 @@ export const TerminalAgentView = forwardRef<
                 );
               })}
             </div>
+
+            {activeCliEngine && (
+              <div className="t-agent-api-config">
+                <div className="t-agent-preset-row">
+                  <span>
+                    {activeCliEngine.toUpperCase()}{' '}
+                    模型家族与档位（输入框左下角也可随时切换）：
+                  </span>
+                  <button
+                    type="button"
+                    className={`filter-chip${!cliModelsByEngine[activeCliEngine] ? ' is-active' : ''}`}
+                    onClick={() => setSelectedCliModel(activeCliEngine, '')}
+                  >
+                    跟随 CLI 默认
+                    {activeCliCatalog?.currentDefault
+                      ? ` (${activeCliCatalog.currentDefault})`
+                      : ''}
+                  </button>
+                  <button
+                    type="button"
+                    className="filter-chip"
+                    disabled={cliModelsLoading}
+                    onClick={() => refreshCliModels(activeCliEngine)}
+                  >
+                    {cliModelsLoading ? '扫描中…' : '刷新模型列表'}
+                  </button>
+                </div>
+
+                {cliFamilyGroups.length > 0 && (
+                  <div className="t-agent-modal-family-list">
+                    {cliFamilyGroups.map((group) => {
+                      const isActiveGroup = group.variants.some((v) =>
+                        matchModelOption(v, activeEffectiveModelId),
+                      );
+                      return (
+                        <div
+                          key={group.family}
+                          className={`t-agent-modal-family-row${isActiveGroup ? ' is-active' : ''}`}
+                        >
+                          <span className="t-agent-modal-family-name">
+                            {group.family}
+                          </span>
+                          <div className="t-agent-modal-family-tiers">
+                            {group.variants.map((variant) => {
+                              const isVarActive = matchModelOption(
+                                variant,
+                                activeEffectiveModelId,
+                              );
+                              return (
+                                <button
+                                  key={variant.id}
+                                  type="button"
+                                  className={`filter-chip${isVarActive ? ' is-active' : ''}`}
+                                  onClick={() =>
+                                    setSelectedCliModel(
+                                      activeCliEngine,
+                                      variant.id,
+                                    )
+                                  }
+                                  title={variant.id}
+                                >
+                                  {variant.tier ?? 'Standard'}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div className="t-agent-api-inputs">
+                  <input
+                    type="text"
+                    value={cliModelsByEngine[activeCliEngine] ?? ''}
+                    onChange={(e) =>
+                      setSelectedCliModel(activeCliEngine, e.target.value)
+                    }
+                    placeholder={`自定义 ${activeCliEngine.toUpperCase()} 模型 ID（留空则使用 CLI 默认模型）`}
+                    aria-label={`${activeCliEngine} 模型名称`}
+                  />
+                </div>
+              </div>
+            )}
 
             {(engineConfig.mode === 'api' ||
               engineConfig.mode === 'hybrid') && (

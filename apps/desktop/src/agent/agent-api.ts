@@ -7,7 +7,15 @@ type BridgeResolution = {
   error?: string | null;
 };
 
+export interface AgentBridgeStatus {
+  ready: boolean;
+  endpoint: string | null;
+  toolCount: number;
+  toolNames: string[];
+}
+
 export const agentApi = {
+  getBridgeStatus: () => invoke<AgentBridgeStatus>('agent_bridge_status'),
   setBridgeTools: (args: { tools: unknown[] }) =>
     invoke<void>('agent_bridge_set_tools', args),
   resolveBridge: (args: BridgeResolution) =>

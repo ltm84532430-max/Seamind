@@ -124,7 +124,15 @@ export const TERMINAL_ENGINE_SPECS: Array<{
     id: 'cli:agy',
     badge: 'AGY',
     label: 'Antigravity CLI 内核',
-    description: '直接无头调用本机 agy CLI 并注入 Seamind 插件规则包。',
+    description:
+      '调用本机 agy CLI，支持自由切换谷歌/多厂商模型并自动挂载 Seamind Data Lab MCP。',
+  },
+  {
+    id: 'cli:gemini',
+    badge: 'GEMINI',
+    label: 'Google Gemini CLI 内核',
+    description:
+      '调用本机 gemini CLI，支持切换 Gemini 2.5 / 3 系列模型并自动挂载 Seamind MCP。',
   },
 ];
 
@@ -241,6 +249,23 @@ export const TERMINAL_SLASH_COMMANDS: TerminalSlashCommandSpec[] = [
     hint: '/rss 提炼当前 RSS 文章核心观点',
   },
   {
+    id: 'data',
+    command: '/data',
+    title: '数据分析 · SQL / CSV / Parquet / Anaconda / R',
+    description:
+      '自动读取当前挂载的数据文件、数据库连接、Anaconda/R 环境与实验本内容，执行分析并直接生成表格/单元格',
+    hint: '/data 读取当前挂载的数据文件并做分组汇总表',
+  },
+  {
+    id: 'mcp',
+    command: '/mcp',
+    title: '查看 Seamind MCP 接入通道状态',
+    description:
+      '查看当前已注册给内置 Agent 与 Claude/Codex/AGY CLI 的 MCP 工具清单与连接地址',
+    hint: '/mcp',
+    directLocal: true,
+  },
+  {
     id: 'code',
     command: '/code',
     title: '推送/运行 Python 或 C/C++ 实验',
@@ -346,6 +371,28 @@ export const TERMINAL_RESOURCE_MENTIONS: TerminalMentionSpec[] = [
     label: 'RSS 订阅动态',
     description: '注入当前打开的 RSS 文章与频道列表',
     category: 'rss',
+  },
+  {
+    id: 'data',
+    token: '#data',
+    label: '当前挂载的数据文件与数据库连接',
+    description:
+      '注入左侧「数据」面板中的 CSV/Parquet/JSON 文件路径、字段 Schema 与 SQLite/DuckDB/PG/MySQL 连接',
+    category: 'pane',
+  },
+  {
+    id: 'env',
+    token: '#env',
+    label: '本地 Anaconda / Python 与 R 运行环境',
+    description: '注入已检测到的 Conda 环境、R 解释器路径及已安装数据科学包',
+    category: 'pane',
+  },
+  {
+    id: 'lab',
+    token: '#lab',
+    label: '当前打开的实验本全部单元格与表格输出',
+    description: '完整注入当前 Code Lab 窗口中的代码格、SQL 与运行结果表',
+    category: 'pane',
   },
   {
     id: 'last-error',
@@ -593,8 +640,8 @@ export function tokenizePromptEntities(input: string): PromptEntitySegment[] {
 
 export interface WorkspacePresetSlot {
   kind: 'shell' | 'agent' | 'lab';
-  labLanguage?: 'python' | 'c' | 'cpp';
-  cliPreset?: 'agy' | 'claude' | 'codex';
+  labLanguage?: 'python' | 'sql' | 'r' | 'c' | 'cpp';
+  cliPreset?: 'agy' | 'gemini' | 'claude' | 'codex';
   title: string;
 }
 
@@ -617,6 +664,18 @@ export const WORKSPACE_LAYOUT_PRESETS: WorkspacePresetSpec[] = [
     slots: [
       { kind: 'agent', title: 'Seamind Agent' },
       { kind: 'shell', title: 'PowerShell' },
+    ],
+  },
+  {
+    id: 'data-analysis',
+    title: '数据与统计分析台',
+    badge: '2P',
+    description:
+      '左栏 SQL / Python / R 数据实验本，右栏终端管理 Conda 环境与数据库',
+    splitMode: 'vertical',
+    slots: [
+      { kind: 'lab', labLanguage: 'sql', title: 'SQL 数据实验本' },
+      { kind: 'shell', title: 'Conda / Shell' },
     ],
   },
   {

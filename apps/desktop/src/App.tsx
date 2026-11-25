@@ -243,7 +243,23 @@ import {
   useIsVideoStageOffscreen,
 } from './media/global-media-store';
 import { TopbarMiniPlayer } from './media/TopbarMiniPlayer';
-const TerminalWorkspace = lazy(() => import('./terminal/TerminalWorkspace'));
+import { registerWorkspaceSplitCoordinator } from './terminal/workspace-cross-bus';
+import type { TerminalWorkspaceBridge } from './terminal/terminal-types';
+const LabWorkspace = lazy(() =>
+  import('./terminal/FocusedWorkspaces').then((m) => ({
+    default: m.LabWorkspace,
+  })),
+);
+const AgentWorkspace = lazy(() =>
+  import('./terminal/FocusedWorkspaces').then((m) => ({
+    default: m.AgentWorkspace,
+  })),
+);
+const ShellWorkspace = lazy(() =>
+  import('./terminal/FocusedWorkspaces').then((m) => ({
+    default: m.ShellWorkspace,
+  })),
+);
 import type {
   DocumentVersion,
   DocumentVersionSnapshot,
@@ -485,7 +501,13 @@ function AppContent() {
   const [readerOpened, setReaderOpened] = useState(
     () => activeWorkspace === 'reader',
   );
-  // 终端页首次打开后保持挂载，切换工作区时保留 PTY 会话与屏幕缓冲。
+  // 实验室、Agent、终端首次打开后保持挂载，切换工作区时保留 Python/R 内核、对话会话与 PTY 缓冲。
+  const [labWorkspaceOpened, setLabWorkspaceOpened] = useState(
+    () => activeWorkspace === 'lab',
+  );
+  const [agentWorkspaceOpened, setAgentWorkspaceOpened] = useState(
+    () => activeWorkspace === 'agent',
+  );
   const [terminalWorkspaceOpened, setTerminalWorkspaceOpened] = useState(
     () => activeWorkspace === 'terminal',
   );
@@ -518,6 +540,8 @@ function AppContent() {
           stored === 'player' ||
           stored === 'knowledge' ||
           stored === 'mindmap' ||
+          stored === 'lab' ||
+          stored === 'agent' ||
           stored === 'terminal' ||
           stored === 'tasks' ||
           stored === 'literature' ||
@@ -697,6 +721,9 @@ function AppContent() {
   const pickDistinctSecondaryWorkspace = useCallback(
     (primary: ActiveWorkspace, candidate: ActiveWorkspace): ActiveWorkspace => {
       if (candidate !== primary) return candidate;
+      if (primary === 'lab') return 'agent';
+      if (primary === 'agent') return 'lab';
+      if (primary === 'terminal') return 'lab';
       if (primary === 'reader') return 'player';
       if (primary === 'player') return 'knowledge';
       if (primary === 'knowledge') return 'reader';
@@ -751,6 +778,36 @@ function AppContent() {
       // ignore storage errors
     }
   }, []);
+
+  useEffect(() => {
+    return registerWorkspaceSplitCoordinator({
+      openSplitPair: (primary, secondary) => {
+        if (primary === 'lab' || secondary === 'lab')
+          setLabWorkspaceOpened(true);
+        if (primary === 'agent' || secondary === 'agent')
+          setAgentWorkspaceOpened(true);
+        if (primary === 'terminal' || secondary === 'terminal')
+          setTerminalWorkspaceOpened(true);
+        setActiveWorkspace(primary);
+        setSecondaryWorkspaceAndStore(secondary);
+        setUniversalSplitOpenAndStore(true);
+        setFocusedSplitSlot('secondary');
+      },
+      openInSecondaryPane: (target) => {
+        if (target === 'lab') setLabWorkspaceOpened(true);
+        if (target === 'agent') setAgentWorkspaceOpened(true);
+        if (target === 'terminal') setTerminalWorkspaceOpened(true);
+        if (isWorkspaceVisible(target)) return;
+        setSecondaryWorkspaceAndStore(target);
+        setUniversalSplitOpenAndStore(true);
+        setFocusedSplitSlot('secondary');
+      },
+    });
+  }, [
+    isWorkspaceVisible,
+    setSecondaryWorkspaceAndStore,
+    setUniversalSplitOpenAndStore,
+  ]);
   const toggleUniversalSplit = () => {
     if (universalSplitActive) {
       setUniversalSplitOpenAndStore(false);
@@ -1182,6 +1239,8 @@ function AppContent() {
     if (isWorkspaceVisible('feed')) setFeedOpened(true);
     if (isWorkspaceVisible('reader')) setReaderOpened(true);
     if (isWorkspaceVisible('knowledge')) setKnowledgeWorkspaceOpened(true);
+    if (isWorkspaceVisible('lab')) setLabWorkspaceOpened(true);
+    if (isWorkspaceVisible('agent')) setAgentWorkspaceOpened(true);
     if (isWorkspaceVisible('terminal')) setTerminalWorkspaceOpened(true);
     if (isWorkspaceVisible('tasks')) setTasksOpened(true);
     if (isWorkspaceVisible('literature')) setLiteratureOpened(true);
@@ -2112,7 +2171,7 @@ function AppContent() {
         locator: focusedMapPath ? `分支 ${focusedMapPath}` : '画布代码块',
         reference: draftRef.current.relativePath || 'mindmap:current',
       };
-      setTerminalWorkspaceOpened(true);
+      setLabWorkspaceOpened(true);
       setExternalCodeLabPush({
         id: Date.now(),
         language,
@@ -2121,11 +2180,11 @@ function AppContent() {
         origin: resolvedOrigin,
       });
       if (universalSplitActive) {
-        if (!isWorkspaceVisible('terminal')) {
-          setSecondaryWorkspaceAndStore('terminal');
+        if (!isWorkspaceVisible('lab')) {
+          setSecondaryWorkspaceAndStore('lab');
         }
       } else {
-        setActiveWorkspace('terminal');
+        setActiveWorkspace('lab');
       }
     },
     [
@@ -2534,7 +2593,12 @@ function AppContent() {
   agentCapabilitiesRef.current = agentCapabilities;
 
   useEffect(() => {
-    const tools = agentToolCatalogForWorkspace(activeWorkspace);
+    const isFullToolWs = (ws: ActiveWorkspace | null) =>
+      ws === 'lab' || ws === 'agent' || ws === 'terminal';
+    const tools =
+      isFullToolWs(activeWorkspace) || isFullToolWs(effectiveSecondaryWorkspace)
+        ? agentToolCatalogForWorkspace('terminal')
+        : agentToolCatalogForWorkspace(activeWorkspace);
     if (!tools) return;
     let cancelled = false;
     const specs = mcpToolSpecs(tools);
@@ -2558,7 +2622,7 @@ function AppContent() {
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspace]);
+  }, [activeWorkspace, effectiveSecondaryWorkspace]);
 
   useEffect(() => {
     let alive = true;
@@ -7226,7 +7290,7 @@ function AppContent() {
   return (
     <main
       ref={appShellRef}
-      className={`app-shell${isWorkspaceVisible('terminal') ? ' is-terminal-workspace' : ''}${universalSplitActive ? ' is-universal-split' : ''}${readerSplitActive ? ' is-reader-split' : ''}${readerKnowledgeActive ? ' is-reader-knowledge' : ''}${readerKnowledgeActive && galaxyViewActive ? ' is-reader-knowledge-wide' : ''}${isSplitDragging ? ' is-split-dragging' : ''}${isTerminalDrawerOpen ? ' is-terminal-open' : ''}${terminalRightActive ? ' is-terminal-right' : ''}${isKnowledgeSurface ? ' is-knowledge-surface' : ''}`}
+      className={`app-shell${isWorkspaceVisible('lab') || isWorkspaceVisible('agent') || isWorkspaceVisible('terminal') ? ' is-terminal-workspace' : ''}${universalSplitActive ? ' is-universal-split' : ''}${readerSplitActive ? ' is-reader-split' : ''}${readerKnowledgeActive ? ' is-reader-knowledge' : ''}${readerKnowledgeActive && galaxyViewActive ? ' is-reader-knowledge-wide' : ''}${isSplitDragging ? ' is-split-dragging' : ''}${isTerminalDrawerOpen ? ' is-terminal-open' : ''}${terminalRightActive ? ' is-terminal-right' : ''}${isKnowledgeSurface ? ' is-knowledge-surface' : ''}`}
       data-theme={theme}
       data-map-style={mindmapStyle}
       data-sync-preview-media={
@@ -7398,6 +7462,71 @@ function AppContent() {
             {universalSplitActive &&
               (effectiveSecondaryWorkspace === 'knowledge' ||
                 effectiveSecondaryWorkspace === 'mindmap') && (
+                <span className="workspace-split-tag is-right">右</span>
+              )}
+          </button>
+          <button
+            type="button"
+            className={
+              activeWorkspace === 'lab'
+                ? 'is-active'
+                : effectiveSecondaryWorkspace === 'lab'
+                  ? 'is-split-secondary'
+                  : ''
+            }
+            aria-pressed={isWorkspaceVisible('lab')}
+            onClick={(event) =>
+              selectWorkspaceFromTopbar(
+                'lab',
+                event.ctrlKey ||
+                  event.metaKey ||
+                  event.altKey ||
+                  event.shiftKey,
+              )
+            }
+            onContextMenu={(event) => {
+              event.preventDefault();
+              selectWorkspaceFromTopbar('lab', true);
+            }}
+          >
+            编辑器
+            {universalSplitActive && activeWorkspace === 'lab' && (
+              <span className="workspace-split-tag is-left">左</span>
+            )}
+            {universalSplitActive && effectiveSecondaryWorkspace === 'lab' && (
+              <span className="workspace-split-tag is-right">右</span>
+            )}
+          </button>
+          <button
+            type="button"
+            className={
+              activeWorkspace === 'agent'
+                ? 'is-active'
+                : effectiveSecondaryWorkspace === 'agent'
+                  ? 'is-split-secondary'
+                  : ''
+            }
+            aria-pressed={isWorkspaceVisible('agent')}
+            onClick={(event) =>
+              selectWorkspaceFromTopbar(
+                'agent',
+                event.ctrlKey ||
+                  event.metaKey ||
+                  event.altKey ||
+                  event.shiftKey,
+              )
+            }
+            onContextMenu={(event) => {
+              event.preventDefault();
+              selectWorkspaceFromTopbar('agent', true);
+            }}
+          >
+            Agent
+            {universalSplitActive && activeWorkspace === 'agent' && (
+              <span className="workspace-split-tag is-left">左</span>
+            )}
+            {universalSplitActive &&
+              effectiveSecondaryWorkspace === 'agent' && (
                 <span className="workspace-split-tag is-right">右</span>
               )}
           </button>
@@ -7592,6 +7721,8 @@ function AppContent() {
                     <option value="player">播放器</option>
                     <option value="knowledge">知识库·文档</option>
                     <option value="mindmap">知识库·导图</option>
+                    <option value="lab">编辑器</option>
+                    <option value="agent">Agent</option>
                     <option value="terminal">终端</option>
                     <option value="tasks">任务</option>
                     <option value="literature">论文</option>
@@ -7639,6 +7770,8 @@ function AppContent() {
                     <option value="player">播放器</option>
                     <option value="knowledge">知识库·文档</option>
                     <option value="mindmap">知识库·导图</option>
+                    <option value="lab">编辑器</option>
+                    <option value="agent">Agent</option>
                     <option value="terminal">终端</option>
                     <option value="tasks">任务</option>
                     <option value="literature">论文</option>
@@ -9495,94 +9628,160 @@ function AppContent() {
         )}
       </section>
 
-      <section
-        className={`terminal-workspace-stage${getWorkspaceSplitSlotClass('terminal')}${!isWorkspaceVisible('terminal') ? ' is-workspace-hidden' : ''}`}
-        aria-label="终端与系统实验工作区"
-        aria-hidden={!isWorkspaceVisible('terminal')}
-        onPointerDownCapture={() => focusSplitSlotForWorkspace('terminal')}
-      >
-        {terminalWorkspaceOpened && (
-          <Suspense
-            fallback={
-              <div className="terminal-workspace-loading">
-                正在载入终端实验室…
-              </div>
-            }
-          >
-            <TerminalWorkspace
-              active={isWorkspaceVisible('terminal')}
-              cwd={librarySnapshot?.rootPath ?? ''}
-              theme={theme}
-              books={librarySnapshot?.books ?? []}
-              onOpenBook={(book) => void openLibraryEpub(book)}
-              externalCodeLabPush={externalCodeLabPush}
-              onExternalCodeLabPushConsumed={(id) =>
-                setExternalCodeLabPush((curr) =>
-                  curr?.id === id ? null : curr,
-                )
+      {(() => {
+        const sharedTerminalBridge: TerminalWorkspaceBridge = {
+          provider: providerSettings,
+          capabilities: agentCapabilities,
+          books: librarySnapshot?.books ?? [],
+          documents: librarySnapshot?.documents ?? [],
+          activeDocument: effectiveActiveDoc
+            ? {
+                title: effectiveActiveDoc.title,
+                relativePath: effectiveActiveDoc.relativePath ?? null,
+                kind: effectiveActiveDoc.kind,
               }
-              bridge={{
-                provider: providerSettings,
-                capabilities: agentCapabilities,
-                books: librarySnapshot?.books ?? [],
-                documents: librarySnapshot?.documents ?? [],
-                activeDocument: effectiveActiveDoc
-                  ? {
-                      title: effectiveActiveDoc.title,
-                      relativePath: effectiveActiveDoc.relativePath ?? null,
-                      kind: effectiveActiveDoc.kind,
+            : null,
+          activeMindmapTitle: editorDraft.title,
+          onNavigateWorkspace: (ws) => setActiveWorkspace(ws),
+          onOpenBook: (book) => void openLibraryEpub(book),
+          onOpenYouTubeVideo: (videoId, startSeconds, title) =>
+            openYouTubeVideoInPlayer(videoId, startSeconds ?? 0, title),
+          onSaveMarkdownNote: async ({ title, category, source }) => {
+            try {
+              await libraryApi.createTextDocument({
+                kind: 'doc',
+                category: category || '代码实验',
+                title,
+                source,
+              });
+              await loadLibrary(false);
+              setSaveMessage(`已将「${title}」保存到知识库`);
+              return true;
+            } catch {
+              return false;
+            }
+          },
+          onAppendToMindmap: ({ title, markdown }) => {
+            try {
+              const currentMd = draftRef.current.markdown.trimEnd();
+              const branchLines = markdown
+                .trim()
+                .split(/\r?\n/)
+                .map((line) =>
+                  line.startsWith('## ')
+                    ? `## ${title || line.slice(3)}`
+                    : line,
+                );
+              const hasH2 = branchLines.some((line) => line.startsWith('## '));
+              const appendedBlock = hasH2
+                ? branchLines.join('\n')
+                : `## ${title || '代码实验结论'}\n\n${branchLines.join('\n')}`;
+              const nextMd = `${currentMd}\n\n${appendedBlock}\n`;
+              applyMarkdownFromCanvas(nextMd, { focus: false });
+              setSaveMessage(`已将「${title}」追加到当前思维导图`);
+              return true;
+            } catch {
+              return false;
+            }
+          },
+        };
+        const commonProps = {
+          cwd: librarySnapshot?.rootPath ?? '',
+          theme,
+          books: librarySnapshot?.books ?? [],
+          onOpenBook: (book: EpubBookDocument) => void openLibraryEpub(book),
+          bridge: sharedTerminalBridge,
+        };
+        return (
+          <>
+            <section
+              className={`lab-workspace-stage${getWorkspaceSplitSlotClass('lab')}${!isWorkspaceVisible('lab') ? ' is-workspace-hidden' : ''}`}
+              aria-label="代码与数据编辑器工作区"
+              aria-hidden={!isWorkspaceVisible('lab')}
+              onPointerDownCapture={() => focusSplitSlotForWorkspace('lab')}
+            >
+              {labWorkspaceOpened && (
+                <Suspense
+                  fallback={
+                    <div className="terminal-workspace-loading">
+                      正在载入编辑器…
+                    </div>
+                  }
+                >
+                  <LabWorkspace
+                    {...commonProps}
+                    active={isWorkspaceVisible('lab')}
+                    hideSidebar={
+                      universalSplitActive &&
+                      effectiveSecondaryWorkspace === 'lab'
                     }
-                  : null,
-                activeMindmapTitle: editorDraft.title,
-                onNavigateWorkspace: (ws) => setActiveWorkspace(ws),
-                onOpenBook: (book) => void openLibraryEpub(book),
-                onOpenYouTubeVideo: (videoId, startSeconds, title) =>
-                  openYouTubeVideoInPlayer(videoId, startSeconds ?? 0, title),
-                onSaveMarkdownNote: async ({ title, category, source }) => {
-                  try {
-                    await libraryApi.createTextDocument({
-                      kind: 'doc',
-                      category: category || '代码实验',
-                      title,
-                      source,
-                    });
-                    await loadLibrary(false);
-                    setSaveMessage(`已将「${title}」保存到知识库`);
-                    return true;
-                  } catch {
-                    return false;
+                    externalCodeLabPush={externalCodeLabPush}
+                    onExternalCodeLabPushConsumed={(id) =>
+                      setExternalCodeLabPush((curr) =>
+                        curr?.id === id ? null : curr,
+                      )
+                    }
+                  />
+                </Suspense>
+              )}
+            </section>
+
+            <section
+              className={`agent-workspace-stage${getWorkspaceSplitSlotClass('agent')}${!isWorkspaceVisible('agent') ? ' is-workspace-hidden' : ''}`}
+              aria-label="Agent 协同中枢工作区"
+              aria-hidden={!isWorkspaceVisible('agent')}
+              onPointerDownCapture={() => focusSplitSlotForWorkspace('agent')}
+            >
+              {agentWorkspaceOpened && (
+                <Suspense
+                  fallback={
+                    <div className="terminal-workspace-loading">
+                      正在载入 Seamind Agent…
+                    </div>
                   }
-                },
-                onAppendToMindmap: ({ title, markdown }) => {
-                  try {
-                    const currentMd = draftRef.current.markdown.trimEnd();
-                    const branchLines = markdown
-                      .trim()
-                      .split(/\r?\n/)
-                      .map((line) =>
-                        line.startsWith('## ')
-                          ? `## ${title || line.slice(3)}`
-                          : line,
-                      );
-                    const hasH2 = branchLines.some((line) =>
-                      line.startsWith('## '),
-                    );
-                    const appendedBlock = hasH2
-                      ? branchLines.join('\n')
-                      : `## ${title || '代码实验结论'}\n\n${branchLines.join('\n')}`;
-                    const nextMd = `${currentMd}\n\n${appendedBlock}\n`;
-                    applyMarkdownFromCanvas(nextMd, { focus: false });
-                    setSaveMessage(`已将「${title}」追加到当前思维导图`);
-                    return true;
-                  } catch {
-                    return false;
+                >
+                  <AgentWorkspace
+                    {...commonProps}
+                    active={isWorkspaceVisible('agent')}
+                    hideSidebar={
+                      universalSplitActive &&
+                      effectiveSecondaryWorkspace === 'agent'
+                    }
+                  />
+                </Suspense>
+              )}
+            </section>
+
+            <section
+              className={`terminal-workspace-stage${getWorkspaceSplitSlotClass('terminal')}${!isWorkspaceVisible('terminal') ? ' is-workspace-hidden' : ''}`}
+              aria-label="系统终端工作区"
+              aria-hidden={!isWorkspaceVisible('terminal')}
+              onPointerDownCapture={() =>
+                focusSplitSlotForWorkspace('terminal')
+              }
+            >
+              {terminalWorkspaceOpened && (
+                <Suspense
+                  fallback={
+                    <div className="terminal-workspace-loading">
+                      正在载入系统终端…
+                    </div>
                   }
-                },
-              }}
-            />
-          </Suspense>
-        )}
-      </section>
+                >
+                  <ShellWorkspace
+                    {...commonProps}
+                    active={isWorkspaceVisible('terminal')}
+                    hideSidebar={
+                      universalSplitActive &&
+                      effectiveSecondaryWorkspace === 'terminal'
+                    }
+                  />
+                </Suspense>
+              )}
+            </section>
+          </>
+        );
+      })()}
 
       <section
         className={`task-workspace-stage${getWorkspaceSplitSlotClass('tasks')}${!isWorkspaceVisible('tasks') ? ' is-workspace-hidden' : ''}`}

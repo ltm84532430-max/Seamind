@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useRef, type MutableRefObject } from 'react';
 import { cpp } from '@codemirror/lang-cpp';
 import { markdown } from '@codemirror/lang-markdown';
 import { python } from '@codemirror/lang-python';
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import {
   Annotation,
   Compartment,
@@ -9,14 +10,23 @@ import {
   Prec,
   type Extension,
 } from '@codemirror/state';
+import { tags } from '@lezer/highlight';
 import { basicSetup, EditorView } from 'codemirror';
 import type { Theme } from '../app/app-storage';
+import {
+  resolveCodeLabFontFamilyCss,
+  resolveCodeLabPalette,
+  useCodeLabAppearance,
+  type CodeLabEditorAppearance,
+} from './codelab-appearance';
 import type { TerminalCodeLabLanguage } from './terminal-types';
 
 const externalSyncAnnotation = Annotation.define<boolean>();
 const DEBOUNCE_COMMIT_MS = 140;
 const cellLanguageCompartment = new Compartment();
 const cellThemeCompartment = new Compartment();
+const cellWrapCompartment = new Compartment();
+const cellTabSizeCompartment = new Compartment();
 
 const PY_KEYWORDS = new Set([
   'False',
@@ -105,8 +115,95 @@ const C_KEYWORDS = new Set([
   'while',
 ]);
 
+const SQL_KEYWORDS = new Set([
+  'SELECT',
+  'FROM',
+  'WHERE',
+  'GROUP',
+  'BY',
+  'ORDER',
+  'HAVING',
+  'LIMIT',
+  'OFFSET',
+  'JOIN',
+  'LEFT',
+  'RIGHT',
+  'INNER',
+  'OUTER',
+  'FULL',
+  'CROSS',
+  'ON',
+  'AS',
+  'AND',
+  'OR',
+  'NOT',
+  'IN',
+  'IS',
+  'NULL',
+  'DISTINCT',
+  'CASE',
+  'WHEN',
+  'THEN',
+  'ELSE',
+  'END',
+  'UNION',
+  'ALL',
+  'WITH',
+  'CREATE',
+  'TABLE',
+  'VIEW',
+  'TEMP',
+  'INSERT',
+  'INTO',
+  'VALUES',
+  'UPDATE',
+  'SET',
+  'DELETE',
+  'DROP',
+  'DESC',
+  'ASC',
+  'COUNT',
+  'SUM',
+  'AVG',
+  'MIN',
+  'MAX',
+  'PRAGMA',
+  'DESCRIBE',
+  'SHOW',
+]);
+
+const R_KEYWORDS = new Set([
+  'function',
+  'if',
+  'else',
+  'for',
+  'in',
+  'while',
+  'repeat',
+  'next',
+  'break',
+  'return',
+  'TRUE',
+  'FALSE',
+  'NULL',
+  'NA',
+  'Inf',
+  'NaN',
+  'library',
+  'require',
+  'data.frame',
+  'summary',
+  'head',
+  'plot',
+  'ggplot',
+  'aes',
+  'c',
+  'list',
+  'lm',
+]);
+
 interface StaticToken {
-  kind: 'plain' | 'kw' | 'str' | 'num' | 'cmt';
+  kind: 'plain' | 'kw' | 'str' | 'num' | 'cmt' | 'fn';
   text: string;
 }
 
@@ -116,19 +213,36 @@ function tokenizeStaticCodeLine(
 ): StaticToken[] {
   if (!line) return [{ kind: 'plain', text: ' ' }];
   const tokens: StaticToken[] = [];
-  const isPy = language === 'python';
-  const keywords = isPy ? PY_KEYWORDS : C_KEYWORDS;
+  const isHashComment = language === 'python' || language === 'r';
+  const isSql = language === 'sql';
+  const keywords =
+    language === 'python'
+      ? PY_KEYWORDS
+      : language === 'sql'
+        ? SQL_KEYWORDS
+        : language === 'r'
+          ? R_KEYWORDS
+          : C_KEYWORDS;
   let i = 0;
 
   while (i < line.length) {
     const ch = line[i];
     // Comments
-    if ((isPy && ch === '#') || (!isPy && ch === '/' && line[i + 1] === '/')) {
+    if (
+      (isHashComment && ch === '#') ||
+      (isSql && ch === '-' && line[i + 1] === '-') ||
+      (!isHashComment && !isSql && ch === '/' && line[i + 1] === '/')
+    ) {
       tokens.push({ kind: 'cmt', text: line.slice(i) });
       break;
     }
     // Preprocessor directive in C/C++
-    if (!isPy && ch === '#' && line.slice(0, i).trim() === '') {
+    if (
+      !isHashComment &&
+      !isSql &&
+      ch === '#' &&
+      line.slice(0, i).trim() === ''
+    ) {
       const m = /^#[a-zA-Z_]+/.exec(line.slice(i));
       if (m) {
         tokens.push({ kind: 'kw', text: m[0] });
@@ -166,21 +280,31 @@ function tokenizeStaticCodeLine(
         continue;
       }
     }
-    // Identifiers / Keywords
+    // Identifiers / Keywords / Function calls
     if (/[a-zA-Z_]/.test(ch)) {
-      const m = /^[a-zA-Z_][a-zA-Z0-9_]*/.exec(line.slice(i));
+      const m = /^[a-zA-Z_][a-zA-Z0-9_.]*/.exec(line.slice(i));
       if (m) {
+        const matchedWord = m[0];
+        const isKw = isSql
+          ? keywords.has(matchedWord.toUpperCase())
+          : keywords.has(matchedWord);
+        const nextChar = line[i + matchedWord.length];
+        const kind: StaticToken['kind'] = isKw
+          ? 'kw'
+          : nextChar === '('
+            ? 'fn'
+            : 'plain';
         tokens.push({
-          kind: keywords.has(m[0]) ? 'kw' : 'plain',
-          text: m[0],
+          kind,
+          text: matchedWord,
         });
-        i += m[0].length;
+        i += matchedWord.length;
         continue;
       }
     }
     // Plain char run
     let j = i + 1;
-    while (j < line.length && !/[#"'0-9a-zA-Z_/]/.test(line[j])) {
+    while (j < line.length && !/[#"'0-9a-zA-Z_/-]/.test(line[j])) {
       j += 1;
     }
     tokens.push({ kind: 'plain', text: line.slice(i, j) });
@@ -195,73 +319,27 @@ function getLanguageExtension(
   language: TerminalCodeLabLanguage,
 ): Extension {
   if (kind === 'markdown') return markdown();
-  return language === 'python' ? python() : cpp();
+  if (language === 'python') return python();
+  if (language === 'c' || language === 'cpp') return cpp();
+  return [];
 }
 
-function getInstitutionalCmTheme(theme: Theme): Extension {
-  const isDark = theme !== 'light';
-  const palette =
-    theme === 'navy'
-      ? {
-          bg: 'transparent',
-          fg: '#dce8f5',
-          gutterBg: 'transparent',
-          gutterFg: '#547194',
-          gutterActiveFg: '#9dc5ec',
-          activeLine: 'rgba(100, 181, 246, 0.055)',
-          selection: 'rgba(100, 181, 246, 0.22)',
-          caret: '#64b5f6',
-          bracket: 'rgba(100, 181, 246, 0.24)',
-          border: '#172b47',
-        }
-      : theme === 'purple'
-        ? {
-            bg: 'transparent',
-            fg: '#efe6fb',
-            gutterBg: 'transparent',
-            gutterFg: '#775e96',
-            gutterActiveFg: '#cfb9ee',
-            activeLine: 'rgba(179, 152, 216, 0.06)',
-            selection: 'rgba(179, 152, 216, 0.24)',
-            caret: '#b398d8',
-            bracket: 'rgba(179, 152, 216, 0.26)',
-            border: '#2b1b42',
-          }
-        : theme === 'dark'
-          ? {
-              bg: 'transparent',
-              fg: '#d8dfe4',
-              gutterBg: 'transparent',
-              gutterFg: '#55606a',
-              gutterActiveFg: '#9aa8b3',
-              activeLine: 'rgba(255, 255, 255, 0.032)',
-              selection: 'rgba(127, 182, 158, 0.22)',
-              caret: '#7fb69e',
-              bracket: 'rgba(127, 182, 158, 0.24)',
-              border: '#222930',
-            }
-          : {
-              bg: 'transparent',
-              fg: '#1b2228',
-              gutterBg: 'transparent',
-              gutterFg: '#98a2ac',
-              gutterActiveFg: '#4c5761',
-              activeLine: 'rgba(15, 23, 42, 0.026)',
-              selection: 'rgba(44, 110, 88, 0.16)',
-              caret: '#2c6e58',
-              bracket: 'rgba(44, 110, 88, 0.16)',
-              border: '#e5e9ee',
-            };
+function buildCodeLabCmTheme(
+  theme: Theme,
+  appearance: CodeLabEditorAppearance,
+): Extension {
+  const palette = resolveCodeLabPalette(appearance.themePreset, theme);
+  const fontFamily = resolveCodeLabFontFamilyCss(appearance.fontFamily);
+  const lineNumberSize = `${Math.max(10, appearance.fontSize - 2.5)}px`;
 
-  return EditorView.theme(
+  const editorTheme = EditorView.theme(
     {
       '&': {
         backgroundColor: palette.bg,
         color: palette.fg,
-        fontSize: '13.5px',
-        lineHeight: '1.6',
-        fontFamily:
-          'var(--mono, "JetBrains Mono", "Cascadia Mono", Consolas, monospace)',
+        fontSize: `${appearance.fontSize}px`,
+        lineHeight: String(appearance.lineHeight),
+        fontFamily,
       },
       '.cm-scroller': {
         fontFamily: 'inherit',
@@ -278,13 +356,16 @@ function getInstitutionalCmTheme(theme: Theme): Extension {
       '.cm-gutters': {
         backgroundColor: palette.gutterBg,
         color: palette.gutterFg,
-        borderRight: `1px solid ${palette.border}`,
-        minWidth: '34px',
+        borderRight: appearance.showLineNumbers
+          ? `1px solid ${palette.border}`
+          : 'none',
+        minWidth: appearance.showLineNumbers ? '34px' : '0px',
+        display: appearance.showLineNumbers ? 'flex' : 'none',
         userSelect: 'none',
       },
       '.cm-lineNumbers .cm-gutterElement': {
         padding: '0 8px 0 6px',
-        fontSize: '11px',
+        fontSize: lineNumberSize,
         fontVariantNumeric: 'tabular-nums',
       },
       '.cm-foldGutter .cm-gutterElement': {
@@ -315,8 +396,63 @@ function getInstitutionalCmTheme(theme: Theme): Extension {
         outline: 'none',
       },
     },
-    { dark: isDark },
+    { dark: palette.isDark },
   );
+
+  const highlightStyle = HighlightStyle.define([
+    {
+      tag: [
+        tags.keyword,
+        tags.controlKeyword,
+        tags.definitionKeyword,
+        tags.moduleKeyword,
+        tags.operatorKeyword,
+        tags.modifier,
+      ],
+      color: palette.tokKw,
+      fontWeight: '500',
+    },
+    {
+      tag: [tags.string, tags.special(tags.string), tags.regexp, tags.escape],
+      color: palette.tokStr,
+    },
+    {
+      tag: [tags.number, tags.integer, tags.float, tags.bool, tags.atom],
+      color: palette.tokNum,
+    },
+    {
+      tag: [tags.comment, tags.lineComment, tags.blockComment, tags.docComment],
+      color: palette.tokCmt,
+      fontStyle: 'italic',
+    },
+    {
+      tag: [
+        tags.function(tags.variableName),
+        tags.function(tags.propertyName),
+        tags.definition(tags.variableName),
+      ],
+      color: palette.tokFn,
+    },
+    {
+      tag: [tags.typeName, tags.className, tags.namespace, tags.macroName],
+      color: palette.tokType,
+    },
+    {
+      tag: [tags.propertyName, tags.attributeName, tags.self],
+      color: palette.tokProp,
+    },
+    {
+      tag: [tags.operator, tags.compareOperator, tags.logicOperator],
+      color: palette.tokOp,
+    },
+    {
+      tag: [tags.heading],
+      color: palette.tokKw,
+      fontWeight: '600',
+    },
+  ]);
+
+  return [editorTheme, syntaxHighlighting(highlightStyle)];
 }
 
 export interface CodeLabEditorProps {
@@ -354,6 +490,7 @@ export const CodeLabEditor = memo(function CodeLabEditor({
   onRunInPlace,
   onEscapeToCommandMode,
 }: CodeLabEditorProps) {
+  const appearance = useCodeLabAppearance();
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const cachedStateRef = useRef<EditorState | null>(null);
@@ -410,7 +547,11 @@ export const CodeLabEditor = memo(function CodeLabEditor({
         extensions: [
           basicSetup,
           cellLanguageCompartment.of(getLanguageExtension(kind, language)),
-          cellThemeCompartment.of(getInstitutionalCmTheme(theme)),
+          cellThemeCompartment.of(buildCodeLabCmTheme(theme, appearance)),
+          cellWrapCompartment.of(
+            appearance.wordWrap ? EditorView.lineWrapping : [],
+          ),
+          cellTabSizeCompartment.of(EditorState.tabSize.of(appearance.tabSize)),
           Prec.highest(
             EditorView.domEventHandlers({
               keydown(event) {
@@ -473,7 +614,6 @@ export const CodeLabEditor = memo(function CodeLabEditor({
               );
             }, DEBOUNCE_COMMIT_MS);
           }),
-          EditorState.tabSize.of(4),
           EditorState.allowMultipleSelections.of(false),
         ],
       });
@@ -493,7 +633,15 @@ export const CodeLabEditor = memo(function CodeLabEditor({
           cellLanguageCompartment.reconfigure(
             getLanguageExtension(kind, language),
           ),
-          cellThemeCompartment.reconfigure(getInstitutionalCmTheme(theme)),
+          cellThemeCompartment.reconfigure(
+            buildCodeLabCmTheme(theme, appearance),
+          ),
+          cellWrapCompartment.reconfigure(
+            appearance.wordWrap ? EditorView.lineWrapping : [],
+          ),
+          cellTabSizeCompartment.reconfigure(
+            EditorState.tabSize.of(appearance.tabSize),
+          ),
         ],
       });
     }
@@ -544,14 +692,24 @@ export const CodeLabEditor = memo(function CodeLabEditor({
     });
   }, [kind, language]);
 
-  // Zero-rebuild theme reconfiguration via Compartment
+  // Zero-rebuild theme, typography, wrap & tabSize reconfiguration via Compartments
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
     view.dispatch({
-      effects: cellThemeCompartment.reconfigure(getInstitutionalCmTheme(theme)),
+      effects: [
+        cellThemeCompartment.reconfigure(
+          buildCodeLabCmTheme(theme, appearance),
+        ),
+        cellWrapCompartment.reconfigure(
+          appearance.wordWrap ? EditorView.lineWrapping : [],
+        ),
+        cellTabSizeCompartment.reconfigure(
+          EditorState.tabSize.of(appearance.tabSize),
+        ),
+      ],
     });
-  }, [theme]);
+  }, [theme, appearance]);
 
   // Sync external value changes (file switch / format / snippet insert) without clobbering fast local typing
   useEffect(() => {
@@ -592,7 +750,7 @@ export const CodeLabEditor = memo(function CodeLabEditor({
   if (!hydrated && staticLines) {
     return (
       <div
-        className="codelab-static-code"
+        className={`codelab-static-code${appearance.showLineNumbers ? '' : ' is-no-line-numbers'}${appearance.wordWrap ? ' is-word-wrap' : ''}`}
         role="textbox"
         aria-multiline="true"
         aria-label={`${kind === 'markdown' ? 'Markdown' : language} 代码格（点击进入编辑）`}
@@ -608,11 +766,13 @@ export const CodeLabEditor = memo(function CodeLabEditor({
           onRequestHydrate(cellId);
         }}
       >
-        <div className="codelab-static-gutter" aria-hidden="true">
-          {staticLines.map((_, idx) => (
-            <span key={idx}>{idx + 1}</span>
-          ))}
-        </div>
+        {appearance.showLineNumbers && (
+          <div className="codelab-static-gutter" aria-hidden="true">
+            {staticLines.map((_, idx) => (
+              <span key={idx}>{idx + 1}</span>
+            ))}
+          </div>
+        )}
         <pre className="codelab-static-pre">
           {staticLines.map((line, idx) => (
             <div key={idx} className="codelab-static-line">

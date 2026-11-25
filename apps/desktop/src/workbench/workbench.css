@@ -26,6 +26,7 @@
   min-width: 0;
   min-height: 0;
   flex-direction: column;
+  overflow: hidden;
   color: var(--ink);
   background: var(--panel);
 }
@@ -457,6 +458,7 @@
   display: flex;
   min-height: 0;
   flex: 1 1 0;
+  overflow: hidden;
 }
 .workbench-panes {
   display: flex;
@@ -596,11 +598,6 @@
   gap: 2px;
   overflow-y: auto;
   padding: 8px 6px 16px;
-  scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
-}
-.workbench-outline-list:hover {
-  scrollbar-color: var(--scrollbar-slider) transparent;
 }
 .workbench-outline-item {
   display: flex;

@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
   assembleCCellProgram,
+  assembleFullScriptSource,
+  createStarterCodeLabCells,
   duplicateCodeLabCell,
   exportCodeLabToMarkdown,
   formatCellStudyExportMarkdown,
   formatDurationCompact,
+  formatTableToCsv,
+  formatTableToMarkdown,
   hasCMainFunction,
   moveCodeLabCell,
   parseIpynbJson,
+  sanitizeDataAlias,
   serializeIpynbJson,
   stripHeavyOutputsForStorage,
   truncateOutputForDisplay,
@@ -246,5 +251,65 @@ describe('terminal code lab model', () => {
     );
     expect(md).toContain('```python\nx = 6 * 7\nprint(x)\n```');
     expect(md).toContain('```text\n42\n```');
+  });
+
+  it('supports SQL and R starter cells, script assembly, table export, and alias sanitization', () => {
+    const sqlStarter = createStarterCodeLabCells('sql');
+    expect(sqlStarter[0].language).toBe('sql');
+    expect(sqlStarter[0].source).toContain('SELECT');
+
+    const rStarter = createStarterCodeLabCells('r');
+    expect(rStarter[0].language).toBe('r');
+    expect(rStarter[0].source).toContain('data.frame');
+
+    expect(sanitizeDataAlias('2026-Sales Report (Final).parquet')).toBe(
+      't_2026_sales_report_final',
+    );
+    expect(sanitizeDataAlias('iris.csv')).toBe('iris');
+
+    const cols = [
+      { name: 'city', dataType: 'VARCHAR' },
+      { name: 'score', dataType: 'DOUBLE' },
+    ];
+    const rows = [
+      ['Shanghai, CN', 98.5],
+      ['Beijing', null],
+    ];
+    expect(formatTableToCsv(cols, rows)).toBe(
+      'city,score\n"Shanghai, CN",98.5\nBeijing,',
+    );
+    expect(formatTableToMarkdown(cols, rows)).toContain(
+      '| Shanghai, CN | 98.5 |',
+    );
+    expect(formatTableToMarkdown(cols, rows)).toContain('| Beijing | NULL |');
+
+    const sqlCell: CodeLabCell = {
+      id: 'sql-1',
+      kind: 'code',
+      language: 'sql',
+      source: 'SELECT city, score FROM sales LIMIT 2;',
+      stdinInput: '',
+      executionCount: 1,
+      status: 'success',
+      outputs: [
+        {
+          kind: 'table',
+          columns: cols,
+          rows: Array.from({ length: 50 }, () => ['SH', 1]),
+          engine: 'DuckDB',
+        },
+      ],
+    };
+    const stripped = stripHeavyOutputsForStorage([sqlCell]);
+    expect(stripped[0].outputs[0].kind).toBe('table');
+    if (stripped[0].outputs[0].kind === 'table') {
+      expect(stripped[0].outputs[0].rows.length).toBe(30);
+      expect(stripped[0].outputs[0].truncated).toBe(true);
+    }
+
+    const sqlScript = assembleFullScriptSource([sqlCell], 'sql');
+    expect(sqlScript).toContain('-- --- [代码格 #1] ---');
+    const rScript = assembleFullScriptSource(rStarter, 'r');
+    expect(rScript).toContain('# --- [代码格 #1] ---');
   });
 });

@@ -23,9 +23,13 @@ import {
 } from './CodeLabIcons';
 import {
   formatDurationCompact,
+  formatTableToCsv,
+  formatTableToMarkdown,
   truncateOutputForDisplay,
   type CodeLabCell,
   type CodeLabOutputItem,
+  type CodeLabTableOutput,
+  type DataLabDbConnection,
 } from './terminal-codelab-model';
 import {
   BookProseView,
@@ -37,15 +41,144 @@ import type { TerminalCodeLabLanguage } from './terminal-types';
 
 const LANG_LABEL: Record<TerminalCodeLabLanguage, string> = {
   python: 'PY',
+  sql: 'SQL',
+  r: 'R',
   c: 'C',
   cpp: 'C++',
 };
 
 const LANG_FULL: Record<TerminalCodeLabLanguage, string> = {
   python: 'Python',
+  sql: 'SQL (数据库/本地文件)',
+  r: 'R 语言',
   c: 'C (GCC)',
   cpp: 'C++ (G++)',
 };
+
+const DataTableOutput = memo(function DataTableOutput({
+  table,
+}: {
+  table: CodeLabTableOutput;
+}) {
+  const [copiedMd, setCopiedMd] = useState(false);
+
+  const handleCopyMarkdown = () => {
+    const md = formatTableToMarkdown(table.columns, table.rows);
+    if (!md) return;
+    void navigator.clipboard?.writeText(md).then(() => {
+      setCopiedMd(true);
+      window.setTimeout(() => setCopiedMd(false), 1400);
+    });
+  };
+
+  const handleExportCsv = () => {
+    const csv = formatTableToCsv(table.columns, table.rows);
+    if (!csv) return;
+    const blob = new Blob([`\uFEFF${csv}`], {
+      type: 'text/csv;charset=utf-8',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `query_result_${Date.now()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="codelab-data-table-wrap">
+      <div className="codelab-data-table-bar">
+        <div className="codelab-data-table-meta">
+          {table.engine && (
+            <span className="codelab-data-engine-pill">{table.engine}</span>
+          )}
+          <span>
+            {table.rows.length} 行 × {table.columns.length} 列
+            {table.truncated ? '（已截断预览）' : ''}
+          </span>
+          {table.boundVar && (
+            <span className="codelab-data-bound-pill">
+              已注入 → {table.boundVar}
+            </span>
+          )}
+          {table.message && <span>{table.message}</span>}
+        </div>
+        {table.columns.length > 0 && (
+          <div className="codelab-data-table-actions">
+            <button
+              type="button"
+              className="codelab-data-mini-btn"
+              onClick={handleCopyMarkdown}
+            >
+              {copiedMd ? '已复制 MD' : '复制 Markdown'}
+            </button>
+            <button
+              type="button"
+              className="codelab-data-mini-btn"
+              onClick={handleExportCsv}
+            >
+              导出 CSV
+            </button>
+          </div>
+        )}
+      </div>
+      {table.columns.length > 0 ? (
+        <div className="codelab-data-table-scroll">
+          <table className="codelab-data-table">
+            <thead>
+              <tr>
+                <th className="codelab-data-idx-col">#</th>
+                {table.columns.map((col, idx) => (
+                  <th key={`${col.name}-${idx}`}>
+                    <div className="codelab-data-th-inner">
+                      <span>{col.name}</span>
+                      <span className="codelab-data-col-type">
+                        {col.dataType}
+                      </span>
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {table.rows.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={table.columns.length + 1}
+                    className="codelab-data-empty-cell"
+                  >
+                    查询返回 0 行结果
+                  </td>
+                </tr>
+              ) : (
+                table.rows.map((row, rIdx) => (
+                  <tr key={rIdx}>
+                    <td className="codelab-data-idx-col">{rIdx + 1}</td>
+                    {table.columns.map((_, cIdx) => {
+                      const val = row[cIdx];
+                      const isNull = val === null || val === undefined;
+                      const isNum = typeof val === 'number';
+                      return (
+                        <td
+                          key={cIdx}
+                          className={
+                            isNull ? 'is-null' : isNum ? 'is-num' : undefined
+                          }
+                        >
+                          {isNull ? 'NULL' : String(val)}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </div>
+  );
+});
 
 const LEGACY_STARTER_NOTES = new Set([
   '### Python Euporie 交互笔记本\n状态变量在格间持久化保存；按 `Shift+Enter` 运行并跳至下一格，`Esc` 切换命令模式（`j/k` 移动、`a/b` 插格、`dd` 删格）。',
@@ -126,6 +259,7 @@ export const CellOutputList = memo(function CellOutputList({
       if (o.kind === 'stream' || o.kind === 'text') return o.text;
       if (o.kind === 'error') return o.message;
       if (o.kind === 'text/latex') return o.latex;
+      if (o.kind === 'table') return formatTableToMarkdown(o.columns, o.rows);
       return '';
     })
     .filter(Boolean)
@@ -215,8 +349,35 @@ export const CellOutputList = memo(function CellOutputList({
               );
             }
             if (out.kind === 'image/png') {
+              const handleDownloadImage = () => {
+                const a = document.createElement('a');
+                a.href = out.dataUrl;
+                const ext = out.dataUrl.startsWith('data:image/jpeg')
+                  ? 'jpg'
+                  : out.dataUrl.startsWith('data:image/webp')
+                    ? 'webp'
+                    : 'png';
+                a.download = `seamind_chart_${oIdx + 1}.${ext}`;
+                a.click();
+              };
               return (
                 <div key={oIdx} className="codelab-image-wrap">
+                  <div className="codelab-image-toolbar">
+                    <button
+                      type="button"
+                      className="codelab-image-action-btn"
+                      onClick={() => onZoomImage(out.dataUrl)}
+                    >
+                      放大查看
+                    </button>
+                    <button
+                      type="button"
+                      className="codelab-image-action-btn"
+                      onClick={handleDownloadImage}
+                    >
+                      下载图片
+                    </button>
+                  </div>
                   <img
                     src={out.dataUrl}
                     alt="实验绘图输出（点击放大）"
@@ -240,6 +401,9 @@ export const CellOutputList = memo(function CellOutputList({
             }
             if (out.kind === 'text/latex') {
               return <KatexOutputBlock key={oIdx} latex={out.latex} />;
+            }
+            if (out.kind === 'table') {
+              return <DataTableOutput key={oIdx} table={out} />;
             }
             return (
               <GuardedTextOutput
@@ -271,6 +435,11 @@ export interface CodeLabCellRowProps {
   onCommitSource: (cellId: string, next: string) => void;
   onChangeLanguage: (cellId: string, lang: TerminalCodeLabLanguage) => void;
   onChangeStdin: (cellId: string, stdin: string) => void;
+  dbConnections?: DataLabDbConnection[];
+  onChangeSqlConfig?: (
+    cellId: string,
+    patch: { sqlConnectionId?: string; sqlResultVar?: string },
+  ) => void;
   onToggleMarkdownEdit: (cellId: string) => void;
   onStartMarkdownEdit: (cellId: string) => void;
   onEditorFocus: (cellId: string) => void;
@@ -291,6 +460,8 @@ export interface CodeLabCellRowProps {
   onZoomImage: (src: string) => void;
   onPinOutput: (cellId: string) => void;
   pinnedOutputCellId: string | null;
+  nested?: boolean;
+  hideSource?: boolean;
 }
 
 export const CodeLabCellRow = memo(function CodeLabCellRow({
@@ -309,6 +480,8 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
   onCommitSource,
   onChangeLanguage,
   onChangeStdin,
+  dbConnections = [],
+  onChangeSqlConfig,
   onToggleMarkdownEdit,
   onStartMarkdownEdit,
   onEditorFocus,
@@ -326,6 +499,8 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
   onZoomImage,
   onPinOutput,
   pinnedOutputCellId,
+  nested = false,
+  hideSource = false,
 }: CodeLabCellRowProps) {
   const [langMenuOpen, setLangMenuOpen] = useState(false);
   const [copiedSource, setCopiedSource] = useState(false);
@@ -362,7 +537,7 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
   return (
     <article
       data-cell-id={cell.id}
-      className={`codelab-cell is-${cell.kind} is-${cell.status}${isFocused ? ' is-cell-focused' : ''}${isMarkdownPreview ? ' is-md-preview-mode' : ''}`}
+      className={`codelab-cell is-${cell.kind} is-${cell.status}${isFocused ? ' is-cell-focused' : ''}${isMarkdownPreview ? ' is-md-preview-mode' : ''}${nested ? ` is-nested-subblock is-lang-${isMarkdown ? 'md' : cell.language}` : ''}${hideSource && !isMarkdown ? ' is-source-hidden' : ''}`}
       onMouseDown={() => onSelectCell(cell.id)}
     >
       {cell.status === 'running' && (
@@ -425,23 +600,27 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
               </button>
               {langMenuOpen && (
                 <div className="codelab-cell-lang-menu" role="menu">
-                  {(['python', 'c', 'cpp'] as const).map((langOpt) => (
-                    <button
-                      key={langOpt}
-                      type="button"
-                      role="menuitemradio"
-                      aria-checked={cell.language === langOpt}
-                      className={cell.language === langOpt ? 'is-active' : ''}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onChangeLanguage(cell.id, langOpt);
-                        setLangMenuOpen(false);
-                      }}
-                    >
-                      <span>{LANG_FULL[langOpt]}</span>
-                      {cell.language === langOpt && <LabCheckIcon size={11} />}
-                    </button>
-                  ))}
+                  {(['python', 'sql', 'r', 'c', 'cpp'] as const).map(
+                    (langOpt) => (
+                      <button
+                        key={langOpt}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={cell.language === langOpt}
+                        className={cell.language === langOpt ? 'is-active' : ''}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onChangeLanguage(cell.id, langOpt);
+                          setLangMenuOpen(false);
+                        }}
+                      >
+                        <span>{LANG_FULL[langOpt]}</span>
+                        {cell.language === langOpt && (
+                          <LabCheckIcon size={11} />
+                        )}
+                      </button>
+                    ),
+                  )}
                 </div>
               )}
             </div>
@@ -667,7 +846,7 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
               <BookProseView content={cell.source || '*双击编辑研究笔记…*'} />
             )}
           </div>
-        ) : (
+        ) : !hideSource ? (
           <CodeLabEditor
             cellId={cell.id}
             value={cell.source}
@@ -685,21 +864,64 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
             onRunInPlace={(id) => onRunCell(id, false)}
             onEscapeToCommandMode={onEscapeCommandMode}
           />
-        )}
+        ) : null}
+
+        {/* SQL Inline DataSource & Variable Injection Strip */}
+        {!hideSource &&
+          !isMarkdown &&
+          cell.language === 'sql' &&
+          onChangeSqlConfig && (
+            <div className="codelab-sql-bar">
+              <label className="codelab-sql-field">
+                <span>数据源</span>
+                <select
+                  value={cell.sqlConnectionId ?? ''}
+                  onChange={(e) =>
+                    onChangeSqlConfig(cell.id, {
+                      sqlConnectionId: e.target.value,
+                    })
+                  }
+                >
+                  <option value="">本地文件 (DuckDB / 内存 SQLite)</option>
+                  {dbConnections.map((conn) => (
+                    <option key={conn.id} value={conn.id}>
+                      [{conn.dbType.toUpperCase()}] {conn.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="codelab-sql-field is-var">
+                <span>共享表/变量</span>
+                <input
+                  type="text"
+                  value={cell.sqlResultVar ?? ''}
+                  onChange={(e) =>
+                    onChangeSqlConfig(cell.id, {
+                      sqlResultVar: e.target.value,
+                    })
+                  }
+                  placeholder="可选，如 df_res"
+                  title="执行成功后自动将全量结果写入共享总线并注入 Python / R（sm_load 可读）"
+                />
+              </label>
+            </div>
+          )}
 
         {/* C / C++ Stdin Input Strip */}
-        {!isMarkdown && cell.language !== 'python' && (
-          <div className="codelab-stdin-row">
-            <span className="codelab-stdin-label">STDIN</span>
-            <input
-              type="text"
-              className="codelab-stdin-input"
-              value={cell.stdinInput}
-              onChange={(e) => onChangeStdin(cell.id, e.target.value)}
-              placeholder="可选：传递给 scanf / cin 的标准输入…"
-            />
-          </div>
-        )}
+        {!hideSource &&
+          !isMarkdown &&
+          (cell.language === 'c' || cell.language === 'cpp') && (
+            <div className="codelab-stdin-row">
+              <span className="codelab-stdin-label">STDIN</span>
+              <input
+                type="text"
+                className="codelab-stdin-input"
+                value={cell.stdinInput}
+                onChange={(e) => onChangeStdin(cell.id, e.target.value)}
+                placeholder="可选：传递给 scanf / cin 的标准输入…"
+              />
+            </div>
+          )}
 
         {/* Structured Output Well */}
         {cell.outputs.length > 0 &&

@@ -165,4 +165,41 @@ describe('stylesheet structure', () => {
     );
     expect(baseCss).toMatch(/@container canvas-pane \(max-width:\s*1040px\)/);
   });
+
+  it('keeps Pele/document workbench full-height when opened in knowledge mindmap surface', () => {
+    const surfaceCss = readFileSync(
+      new URL('knowledge/knowledge-surface.css', sourceDirectory),
+      'utf8',
+    );
+    const workbenchCss = readFileSync(
+      new URL('workbench/workbench.css', sourceDirectory),
+      'utf8',
+    );
+    const baseCss = readFileSync(
+      new URL('styles.css', sourceDirectory),
+      'utf8',
+    );
+
+    expect(surfaceCss).toMatch(
+      /\.app-shell\.is-knowledge-surface\s+\.workspace\.is-knowledge-map\.is-document-open\b[^{]*\{[^}]*grid-template-rows:\s*minmax\(0,\s*1fr\);/s,
+    );
+    expect(surfaceCss).toMatch(
+      /\.workspace\.is-knowledge-map\.is-document-open\s*>\s*\.document-workbench\s*\{[^}]*grid-row:\s*1\s*\/\s*-1;/s,
+    );
+    expect(workbenchCss).toMatch(
+      /\.document-workbench\s*\{[^}]*overflow:\s*hidden;/s,
+    );
+    expect(workbenchCss).toMatch(
+      /\.workbench-body\s*\{[^}]*overflow:\s*hidden;/s,
+    );
+    expect(baseCss).toMatch(
+      /\.app-shell\[data-theme='navy'\]\s+\.seamind-pele-panel\s*\{/,
+    );
+    expect(baseCss).toMatch(
+      /\.app-shell\[data-theme='purple'\]\s+\.seamind-pele-panel\s*\{/,
+    );
+    expect(baseCss).toMatch(
+      /\.app-shell\.is-universal-split\s*>\s*\.is-split-pane-secondary\s+\.terminal-left-rail/,
+    );
+  });
 });

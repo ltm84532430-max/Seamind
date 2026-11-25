@@ -75,17 +75,30 @@ describe('terminal agent /## protocol', () => {
     expect(applied.nextCaret).toBe('explain #last-error '.length);
   });
 
-  it('routes every slash intent within the 16-tool / 24-tool Rust ceiling', () => {
+  it('routes slash intents and exposes full tool catalog in default mode within the Rust ceiling', () => {
     const known = new Set(agentToolCatalog.map((t) => t.name));
     for (const cmd of TERMINAL_SLASH_COMMANDS) {
       const selected = selectTerminalAgentToolNames(cmd.command, 'test');
-      expect(selected.length).toBeLessThanOrEqual(16);
+      expect(selected.length).toBeLessThanOrEqual(64);
       for (const name of selected) {
         expect(known.has(name)).toBe(true);
       }
     }
-    const general = selectTerminalAgentToolNames(null, 'YouTube 视频学习路径');
-    expect(general.length).toBeLessThanOrEqual(16);
+    const general = selectTerminalAgentToolNames(null, '帮我填写左侧代码块');
+    expect(general.length).toBe(agentToolCatalog.length);
+    expect(general).toContain('datalab_update_cell');
+    expect(general).toContain('datalab_run_cell');
+    expect(general).toContain('datalab_delete_cell');
+    expect(general).toContain('mindmap_propose_node_branch');
+    expect(general).toContain('knowledge_update_book_note');
+    expect(general).toContain('learning_path_propose');
+
+    const ytGeneral = selectTerminalAgentToolNames(
+      null,
+      'YouTube 视频学习路径',
+    );
+    expect(ytGeneral[0]).toBe('player_search_youtube');
+    expect(ytGeneral.length).toBe(agentToolCatalog.length);
   });
 
   it('keeps symmetrical widths on the dot-matrix book splash art', () => {

@@ -4,14 +4,14 @@ import type { EpubBookDocument, MapDocument } from '../library/library';
 
 export type TerminalShellType = 'powershell' | 'wsl' | 'bash' | 'cmd';
 
-export type TerminalCliPreset = 'agy' | 'claude' | 'codex';
+export type TerminalCliPreset = 'agy' | 'gemini' | 'claude' | 'codex';
 
 export type TerminalTabKind = 'shell' | 'agent' | 'lab';
 
-export type TerminalCodeLabLanguage = 'python' | 'c' | 'cpp';
+export type TerminalCodeLabLanguage = 'python' | 'sql' | 'r' | 'c' | 'cpp';
 
 export type TerminalAgentEngineMode =
-  'api' | 'cli:claude' | 'cli:codex' | 'cli:agy' | 'hybrid';
+  'api' | 'cli:claude' | 'cli:codex' | 'cli:agy' | 'cli:gemini' | 'hybrid';
 
 export interface TerminalShellOption {
   id: TerminalShellType;

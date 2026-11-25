@@ -8,6 +8,11 @@ import type {
   ToolHandler,
 } from '../tool-api';
 import type { AgentToolDescriptor } from '../types';
+import {
+  DATALAB_TOOL_NAMES,
+  datalabHandlers,
+  datalabToolCatalog,
+} from './datalab-tools';
 import { assertOnlyKeys, requireString, schema } from './parse';
 
 export function createFallbackTerminalCapabilities(
@@ -46,25 +51,7 @@ export function createFallbackTerminalCapabilities(
   };
 }
 
-export const terminalBridgeToolCatalog: AgentToolDescriptor[] = [
-  {
-    version: 1,
-    name: 'code_run_python',
-    description:
-      '在 Seamind Code Lab（Pyodide 或本机 Conda Python 内核）中执行 Python 代码片段并返回 stdout/stderr 与表达式结果。适合数值验证、算法实验与数据整理。',
-    permission: 'read',
-    inputSchema: schema(
-      {
-        code: {
-          type: 'string',
-          minLength: 1,
-          maxLength: 16_000,
-          description: '待执行的 Python 源码',
-        },
-      },
-      ['code'],
-    ),
-  },
+const terminalSystemToolCatalog: AgentToolDescriptor[] = [
   {
     version: 1,
     name: 'code_run_c',
@@ -148,14 +135,78 @@ export const terminalBridgeToolCatalog: AgentToolDescriptor[] = [
     permission: 'read',
     inputSchema: schema(
       {
-        engine: { type: 'string', enum: ['claude', 'codex', 'agy'] },
+        engine: {
+          type: 'string',
+          enum: ['claude', 'codex', 'agy', 'gemini'],
+        },
         prompt: { type: 'string', minLength: 1, maxLength: 12_000 },
         attachMcp: { type: 'boolean' },
+        model: {
+          type: 'string',
+          maxLength: 160,
+          description: '可选：指定该 CLI 使用的模型名',
+        },
       },
       ['engine', 'prompt'],
     ),
   },
 ];
+
+export const terminalBridgeToolCatalog: AgentToolDescriptor[] = [
+  ...datalabToolCatalog,
+  ...terminalSystemToolCatalog,
+];
+
+const CROSS_SURFACE_FULL_TOOL_NAMES: readonly string[] = [
+  ...DATALAB_TOOL_NAMES,
+  'code_run_c',
+  'terminal_read_pane',
+  'terminal_send_command',
+  'cli_delegate',
+  'library_search',
+  'library_read_document',
+  'mindmap_get_current',
+  'mindmap_propose_node_edit',
+  'mindmap_propose_node_branch',
+  'mindmap_propose_code_block',
+  'mindmap_run_code_block',
+  'epub_get_current_chapter',
+  'epub_propose_footnote',
+  'knowledge_get_book_note',
+  'knowledge_update_book_note',
+  'knowledge_query_book_galaxy',
+  'knowledge_sync_reader_chapter',
+  'knowledge_append_excerpt',
+  'exam_list_papers',
+  'exam_get_paper',
+  'literature_list_papers',
+  'rss_get_current_article',
+  'rss_list_subscriptions',
+  'rss_add_subscription',
+  'player_search_youtube',
+  'learning_path_list',
+  'learning_path_get',
+  'learning_path_propose',
+  'favorites_get_board',
+  'favorites_propose_categorization',
+];
+
+function dedupeToolNames(
+  prioritized: readonly string[],
+  fallback?: readonly string[],
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const list of fallback ? [prioritized, fallback] : [prioritized]) {
+    for (const name of list) {
+      if (!seen.has(name)) {
+        seen.add(name);
+        out.push(name);
+      }
+    }
+  }
+  return out;
+}
 
 export function selectTerminalAgentToolNames(
   slashCommand: string | null,
@@ -163,7 +214,7 @@ export function selectTerminalAgentToolNames(
 ): string[] {
   switch (slashCommand) {
     case '/book':
-      return [
+      return dedupeToolNames([
         'epub_get_current_chapter',
         'knowledge_get_book_note',
         'knowledge_query_book_galaxy',
@@ -172,11 +223,12 @@ export function selectTerminalAgentToolNames(
         'knowledge_sync_reader_chapter',
         'epub_propose_footnote',
         'library_search',
+        'library_read_document',
         'cli_delegate',
-      ];
+      ]);
     case '/kb':
     case '/map':
-      return [
+      return dedupeToolNames([
         'mindmap_get_current',
         'library_search',
         'library_read_document',
@@ -187,9 +239,9 @@ export function selectTerminalAgentToolNames(
         'knowledge_get_book_note',
         'knowledge_update_book_note',
         'cli_delegate',
-      ];
+      ]);
     case '/exam':
-      return [
+      return dedupeToolNames([
         'exam_list_papers',
         'exam_get_paper',
         'epub_get_current_chapter',
@@ -197,98 +249,76 @@ export function selectTerminalAgentToolNames(
         'code_run_c',
         'code_run_python',
         'cli_delegate',
-      ];
+      ]);
     case '/player':
-      return [
+      return dedupeToolNames([
         'player_search_youtube',
         'learning_path_list',
         'learning_path_get',
         'learning_path_propose',
         'favorites_get_board',
         'favorites_propose_categorization',
-      ];
+      ]);
     case '/paper':
-      return [
+      return dedupeToolNames([
         'literature_list_papers',
         'library_search',
         'library_read_document',
         'mindmap_propose_node_branch',
         'cli_delegate',
-      ];
+      ]);
     case '/rss':
-      return [
+      return dedupeToolNames([
         'rss_get_current_article',
         'rss_list_subscriptions',
         'rss_add_subscription',
         'library_search',
         'cli_delegate',
-      ];
+      ]);
+    case '/data':
+      return dedupeToolNames([
+        ...DATALAB_TOOL_NAMES,
+        'terminal_read_pane',
+        'terminal_send_command',
+        'cli_delegate',
+      ]);
     case '/code':
     case '/exec':
-      return [
-        'code_run_python',
+      return dedupeToolNames([
+        ...DATALAB_TOOL_NAMES,
         'code_run_c',
         'terminal_read_pane',
         'terminal_send_command',
         'library_search',
         'library_read_document',
         'cli_delegate',
-      ];
+      ]);
     default: {
       const lower = promptText.toLowerCase();
-      const base = [
-        'terminal_read_pane',
-        'terminal_send_command',
-        'code_run_python',
-        'code_run_c',
-        'cli_delegate',
-        'library_search',
-        'library_read_document',
-        'mindmap_get_current',
-        'mindmap_propose_node_branch',
-        'epub_get_current_chapter',
-        'knowledge_get_book_note',
-        'knowledge_update_book_note',
-        'exam_list_papers',
-        'literature_list_papers',
-        'rss_get_current_article',
-        'learning_path_list',
-      ];
       if (
         lower.includes('youtube') ||
         lower.includes('视频') ||
         lower.includes('学习路径')
       ) {
-        return [
-          'player_search_youtube',
-          'learning_path_list',
-          'learning_path_get',
-          'learning_path_propose',
-          ...base.slice(0, 12),
-        ];
+        return dedupeToolNames(
+          [
+            'player_search_youtube',
+            'learning_path_list',
+            'learning_path_get',
+            'learning_path_propose',
+            'favorites_get_board',
+            'favorites_propose_categorization',
+          ],
+          CROSS_SURFACE_FULL_TOOL_NAMES,
+        );
       }
-      return base;
+      return dedupeToolNames(CROSS_SURFACE_FULL_TOOL_NAMES);
     }
   }
 }
 
 export const terminalBridgeHandlers: Record<string, ToolHandler> = {
-  async code_run_python(input, capabilities): Promise<AgentToolResult> {
-    assertOnlyKeys(input, ['code']);
-    const code = requireString(input, 'code', 16_000);
-    if (!capabilities.runPythonSnippet) {
-      throw new Error('当前工作区暂未挂载 Python 实验内核。');
-    }
-    const result = await capabilities.runPythonSnippet({ code });
-    return {
-      version: 1,
-      permission: 'read',
-      name: 'code_run_python',
-      label: '执行 Python 实验',
-      summary: '已完成 Python 代码执行',
-      result,
-    };
-  },
+  ...datalabHandlers,
 
   async code_run_c(input, capabilities): Promise<AgentToolResult> {
     assertOnlyKeys(input, ['source', 'stdinInput', 'isCpp']);
@@ -478,18 +508,30 @@ export const terminalBridgeHandlers: Record<string, ToolHandler> = {
   },
 
   async cli_delegate(input, capabilities): Promise<AgentToolResult> {
-    assertOnlyKeys(input, ['engine', 'prompt', 'attachMcp']);
+    assertOnlyKeys(input, ['engine', 'prompt', 'attachMcp', 'model']);
     const engine = requireString(input, 'engine', 24).toLowerCase();
-    if (engine !== 'claude' && engine !== 'codex' && engine !== 'agy') {
-      throw new Error('cli_delegate 仅支持 claude / codex / agy 引擎。');
+    if (
+      engine !== 'claude' &&
+      engine !== 'codex' &&
+      engine !== 'agy' &&
+      engine !== 'gemini'
+    ) {
+      throw new Error(
+        'cli_delegate 仅支持 claude / codex / agy / gemini 引擎。',
+      );
     }
     const prompt = requireString(input, 'prompt', 12_000);
     const attachMcp = input.attachMcp !== false;
+    const model =
+      typeof input.model === 'string' && input.model.trim()
+        ? input.model.trim()
+        : undefined;
     if (capabilities.delegateCliAgent) {
       const result = await capabilities.delegateCliAgent({
         engine,
         prompt,
         attachMcp,
+        model,
       });
       return {
         version: 1,
@@ -506,6 +548,7 @@ export const terminalBridgeHandlers: Record<string, ToolHandler> = {
       engine,
       prompt,
       attachMcp,
+      model: model ?? null,
     });
     return {
       version: 1,

@@ -13,6 +13,8 @@ export type ActiveWorkspace =
   | 'literature'
   | 'tasks'
   | 'feed'
+  | 'lab'
+  | 'agent'
   | 'terminal';
 export type MindmapStyle =
   'gray' | 'roots' | 'cards' | 'warm' | 'emerald' | 'cobalt';
@@ -191,6 +193,8 @@ export function readActiveWorkspace(): ActiveWorkspace {
       stored === 'literature' ||
       stored === 'tasks' ||
       stored === 'feed' ||
+      stored === 'lab' ||
+      stored === 'agent' ||
       stored === 'terminal'
       ? stored
       : 'mindmap';

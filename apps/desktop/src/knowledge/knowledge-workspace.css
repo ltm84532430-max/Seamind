@@ -1225,12 +1225,6 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
-}
-
-.knowledge-groups:hover {
-  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 .knowledge-groups::-webkit-scrollbar {

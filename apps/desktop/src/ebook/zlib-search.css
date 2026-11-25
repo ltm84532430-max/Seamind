@@ -532,8 +532,6 @@
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
-  scrollbar-color: #c5cdd1 transparent;
 }
 
 .zlib-side-empty {

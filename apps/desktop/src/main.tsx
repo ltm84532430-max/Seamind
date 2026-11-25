@@ -42,7 +42,12 @@ function parseShellParam(value: string | null): TerminalShellType {
 }
 
 function parseCliParam(value: string | null): TerminalCliPreset | undefined {
-  if (value === 'agy' || value === 'claude' || value === 'codex') {
+  if (
+    value === 'agy' ||
+    value === 'gemini' ||
+    value === 'claude' ||
+    value === 'codex'
+  ) {
     return value;
   }
   return undefined;
@@ -54,7 +59,9 @@ function parseKindParam(value: string | null): TerminalTabKind {
 }
 
 function parseLabParam(value: string | null): TerminalCodeLabLanguage {
-  if (value === 'c' || value === 'cpp') return value;
+  if (value === 'c' || value === 'cpp' || value === 'sql' || value === 'r') {
+    return value;
+  }
   return 'python';
 }
 

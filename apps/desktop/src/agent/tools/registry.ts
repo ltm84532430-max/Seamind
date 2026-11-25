@@ -93,6 +93,10 @@ export function agentToolCatalogForWorkspace(
       ]);
     case 'literature':
       return catalogEntriesNamed(['literature_list_papers']);
+    case 'lab':
+    case 'agent':
+    case 'terminal':
+      return [...agentToolCatalog];
     default:
       return null;
   }

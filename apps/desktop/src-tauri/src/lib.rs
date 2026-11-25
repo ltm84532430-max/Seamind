@@ -81,10 +81,14 @@ mod learning_tasks;
 
 #[path = "system/c_runner.rs"]
 mod c_runner;
+#[path = "system/data_lab.rs"]
+mod data_lab;
 #[path = "system/installer_components.rs"]
 mod installer_components;
 #[path = "system/python_lab.rs"]
 mod python_lab;
+#[path = "system/r_lab.rs"]
+mod r_lab;
 #[path = "system/terminal.rs"]
 mod terminal;
 
@@ -100,6 +104,7 @@ pub fn run() {
         .manage(library::WatcherState::default())
         .manage(terminal::TerminalState::default())
         .manage(python_lab::PythonKernelState::default())
+        .manage(r_lab::RKernelState::default())
         .manage(agent_bridge::AgentBridgeState::default())
         .manage(cli_agent::CliAgentState::default())
         .manage(youtube::YouTubeJobs::default())
@@ -150,6 +155,7 @@ pub fn run() {
             epub_translation::list_epub_book_translations,
             transcript_refiner::refine_transcript_stage,
             agent_completion,
+            agent_bridge::agent_bridge_status,
             agent_bridge::agent_bridge_set_tools,
             agent_bridge::agent_bridge_resolve,
             epub::import_epub_toc,
@@ -206,7 +212,21 @@ pub fn run() {
             python_lab::python_kernel_reset,
             python_lab::python_kernel_vars,
             python_lab::python_kernel_close,
+            r_lab::r_kernel_detect_envs,
+            r_lab::r_kernel_start,
+            r_lab::r_kernel_eval,
+            r_lab::r_kernel_reset,
+            r_lab::r_kernel_vars,
+            r_lab::r_kernel_close,
+            data_lab::data_lab_save_db_password,
+            data_lab::data_lab_delete_db_password,
+            data_lab::data_lab_inspect_file,
+            data_lab::data_lab_test_connection,
+            data_lab::data_lab_query_sql,
+            data_lab::data_lab_bus_info,
+            data_lab::data_lab_sync_context,
             cli_agent::cli_agent_detect,
+            cli_agent::cli_agent_list_models,
             cli_agent::cli_agent_run,
             cli_agent::cli_agent_cancel,
             youtube::youtube_playback_capabilities,
@@ -374,6 +394,7 @@ pub fn run() {
                 app_handle
                     .state::<python_lab::PythonKernelState>()
                     .close_all();
+                app_handle.state::<r_lab::RKernelState>().close_all();
                 app_handle.state::<cli_agent::CliAgentState>().cancel_all();
             }
         });
@@ -385,10 +406,10 @@ const MAX_PROMPT_CHARS: usize = 4_000;
 const MAX_MARKDOWN_BYTES: usize = 100_000;
 const MAX_RESPONSE_BYTES: usize = 1_048_576;
 const MAX_PROVIDER_MODELS: usize = 500;
-const MAX_AGENT_MESSAGES: usize = 32;
+const MAX_AGENT_MESSAGES: usize = 120;
 const MAX_AGENT_CONTEXT_BYTES: usize = 250_000;
-const MAX_AGENT_TOOLS: usize = 24;
-const MAX_AGENT_TOOLS_BYTES: usize = 48_000;
+const MAX_AGENT_TOOLS: usize = 64;
+const MAX_AGENT_TOOLS_BYTES: usize = 180_000;
 const MAX_EPUB_SUMMARY_PROMPT_CHARS: usize = 60_000;
 const MAX_EPUB_HIGHLIGHT_PROMPT_CHARS: usize = 10_000;
 const MAX_EPUB_HIGHLIGHT_INPUT_CHARS: usize = 6_000;
@@ -1107,6 +1128,15 @@ async fn agent_completion(
         "favorites_propose_categorization",
         "code_run_python",
         "code_run_c",
+        "datalab_list_sources",
+        "datalab_inspect_file",
+        "datalab_query_sql",
+        "datalab_run_r",
+        "datalab_read_notebook",
+        "datalab_push_cell",
+        "datalab_update_cell",
+        "datalab_run_cell",
+        "datalab_delete_cell",
         "exam_list_papers",
         "exam_get_paper",
         "literature_list_papers",

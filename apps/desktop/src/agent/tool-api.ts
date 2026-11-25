@@ -215,9 +215,10 @@ export interface AgentCapabilities {
     reason?: string;
   }): Promise<{ queued: boolean; command: string; paneIndex: number }>;
   delegateCliAgent?(input: {
-    engine: 'claude' | 'codex' | 'agy';
+    engine: 'claude' | 'codex' | 'agy' | 'gemini';
     prompt: string;
     attachMcp?: boolean;
+    model?: string;
   }): Promise<Record<string, unknown>>;
 }
 

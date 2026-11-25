@@ -10,9 +10,9 @@ import {
   mcpToolSpecs,
 } from '../src/agent/capabilities';
 
-const MAX_MCP_TOOLS = 32;
-const MAX_AGENT_TOOLS = 24;
-const MAX_AGENT_TOOLS_BYTES = 48_000;
+const MAX_MCP_TOOLS = 64;
+const MAX_AGENT_TOOLS = 64;
+const MAX_AGENT_TOOLS_BYTES = 180_000;
 
 function toolNames(
   tools: Array<{ name?: string; function?: { name: string } }>,
@@ -60,7 +60,15 @@ describe('agent tool surfaces', () => {
     expect(toolNames(agentToolCatalogForWorkspace('literature') ?? [])).toEqual(
       ['literature_list_papers'],
     );
-    expect(agentToolCatalogForWorkspace('terminal')).toBeNull();
+    expect(toolNames(agentToolCatalogForWorkspace('lab') ?? [])).toEqual(
+      toolNames(agentToolCatalog),
+    );
+    expect(toolNames(agentToolCatalogForWorkspace('agent') ?? [])).toEqual(
+      toolNames(agentToolCatalog),
+    );
+    expect(toolNames(agentToolCatalogForWorkspace('terminal') ?? [])).toEqual(
+      toolNames(agentToolCatalog),
+    );
     expect(agentToolCatalogForWorkspace('tasks')).toBeNull();
   });
 

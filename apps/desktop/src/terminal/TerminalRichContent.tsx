@@ -480,6 +480,7 @@ export const SandboxedHtmlTableFrame = memo(function SandboxedHtmlTableFrame({
   theme?: Theme;
 }) {
   const srcDoc = useMemo(() => {
+    const isDark = theme !== 'light';
     const palette =
       theme === 'navy'
         ? {
@@ -489,6 +490,9 @@ export const SandboxedHtmlTableFrame = memo(function SandboxedHtmlTableFrame({
             headBg: '#0d1a2e',
             zebraBg: 'rgba(100, 181, 246, 0.04)',
             border: '#193050',
+            sbThumb: 'rgba(148, 185, 226, 0.34)',
+            sbHover: 'rgba(148, 185, 226, 0.56)',
+            sbActive: 'rgba(148, 185, 226, 0.72)',
           }
         : theme === 'purple'
           ? {
@@ -498,6 +502,9 @@ export const SandboxedHtmlTableFrame = memo(function SandboxedHtmlTableFrame({
               headBg: '#170f28',
               zebraBg: 'rgba(179, 152, 216, 0.05)',
               border: '#2d1c47',
+              sbThumb: 'rgba(182, 158, 224, 0.34)',
+              sbHover: 'rgba(182, 158, 224, 0.56)',
+              sbActive: 'rgba(182, 158, 224, 0.72)',
             }
           : theme === 'dark'
             ? {
@@ -507,6 +514,9 @@ export const SandboxedHtmlTableFrame = memo(function SandboxedHtmlTableFrame({
                 headBg: '#171c21',
                 zebraBg: 'rgba(255, 255, 255, 0.025)',
                 border: '#242b33',
+                sbThumb: 'rgba(156, 168, 178, 0.30)',
+                sbHover: 'rgba(156, 168, 178, 0.52)',
+                sbActive: 'rgba(156, 168, 178, 0.68)',
               }
             : {
                 bg: '#ffffff',
@@ -515,9 +525,25 @@ export const SandboxedHtmlTableFrame = memo(function SandboxedHtmlTableFrame({
                 headBg: '#f4f6f8',
                 zebraBg: '#fafbfc',
                 border: '#e2e6eb',
+                sbThumb: 'rgba(100, 100, 100, 0.30)',
+                sbHover: 'rgba(100, 100, 100, 0.52)',
+                sbActive: 'rgba(100, 100, 100, 0.68)',
               };
     return `<!doctype html><html><head><meta charset="utf-8"><style>
-body { margin: 0; padding: 8px 10px; font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; font-size: 12px; color: ${palette.fg}; background: ${palette.bg}; font-variant-numeric: tabular-nums; }
+@property --sb-thumb { syntax: '<color>'; inherits: true; initial-value: transparent; }
+html { color-scheme: ${isDark ? 'dark' : 'light'}; background: ${palette.bg}; height: 100%; }
+body { margin: 0; padding: 8px 10px; box-sizing: border-box; height: 100%; overflow: auto; font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; font-size: 12px; color: ${palette.fg}; background: ${palette.bg}; font-variant-numeric: tabular-nums; --sb-thumb: transparent; transition: --sb-thumb 650ms ease; }
+body:hover { --sb-thumb: ${palette.sbThumb}; transition-duration: 120ms; }
+*::-webkit-scrollbar { width: 7px; height: 7px; background: transparent; }
+*::-webkit-scrollbar-track, *::-webkit-scrollbar-corner { background: transparent; }
+*::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+*::-webkit-scrollbar-thumb { min-width: 24px; min-height: 24px; border-radius: 999px; border: 1.5px solid transparent; background-clip: content-box; background-color: var(--sb-thumb); }
+*::-webkit-scrollbar-thumb:hover { background-color: ${palette.sbHover}; }
+*::-webkit-scrollbar-thumb:active { background-color: ${palette.sbActive}; }
+@supports not selector(::-webkit-scrollbar) {
+  body { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+  body:hover { scrollbar-color: ${palette.sbThumb} transparent; }
+}
 table { border-collapse: collapse; width: 100%; border: 1px solid ${palette.border}; }
 th, td { border-bottom: 1px solid ${palette.border}; border-right: 1px solid ${palette.border}; padding: 5px 9px; text-align: left; }
 th:last-child, td:last-child { border-right: 0; }

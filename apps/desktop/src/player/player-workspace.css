@@ -49,15 +49,7 @@
   --player-scrollbar-slider-active: rgba(255, 255, 255, 0.72);
 }
 
-/* VS Code style implicit scrollbars across the player workspace */
-.player-workspace-stage * {
-  scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
-}
-.player-workspace-stage *:hover {
-  scrollbar-color: var(--player-scrollbar-slider) transparent;
-}
-
+/* Unified subtle scrollbars across the player workspace (no arrow buttons or track) */
 .player-workspace-stage *::-webkit-scrollbar {
   width: 7px;
   height: 7px;
@@ -76,22 +68,28 @@
 }
 
 .player-workspace-stage *::-webkit-scrollbar-thumb {
-  min-width: 20px;
-  min-height: 20px;
-  border-radius: 4px;
-  background: transparent;
+  min-width: 24px;
+  min-height: 24px;
+  border-radius: 999px;
+  border: 1.5px solid transparent;
+  background-clip: content-box;
+  background-color: color-mix(
+    in srgb,
+    var(--player-scrollbar-slider) 62%,
+    transparent
+  );
 }
 
 .player-workspace-stage *:hover::-webkit-scrollbar-thumb {
-  background: var(--player-scrollbar-slider);
+  background-color: var(--player-scrollbar-slider);
 }
 
 .player-workspace-stage *::-webkit-scrollbar-thumb:hover {
-  background: var(--player-scrollbar-slider-hover) !important;
+  background-color: var(--player-scrollbar-slider-hover) !important;
 }
 
 .player-workspace-stage *::-webkit-scrollbar-thumb:active {
-  background: var(--player-scrollbar-slider-active) !important;
+  background-color: var(--player-scrollbar-slider-active) !important;
 }
 
 /* Smooth fade-in and fade-out transitions for player views */
@@ -1244,7 +1242,6 @@
   gap: 8px;
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: thin;
 }
 .player-watch-history-item {
   display: flex;

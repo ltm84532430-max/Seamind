@@ -19,7 +19,8 @@ import type {
 import type { AgentToolResult, TerminalCommandProposal } from './tool-api';
 
 const MAX_CONTEXT_BYTES = 250_000;
-const MAX_HISTORY_MESSAGES = 40;
+const MAX_HISTORY_MESSAGES = 64;
+const MAX_WORKING_MESSAGES = 100;
 const KEEP_RECENT_TOOL_RESULTS = 4;
 const SHRINK_TOOL_RESULT_AT = 800;
 
@@ -129,6 +130,9 @@ function isToolCall(value: unknown): value is AgentToolCall {
 const PRESERVED_IDENTIFIER_KEYS = [
   'id',
   'nodeId',
+  'cellId',
+  'groupId',
+  'fileId',
   'path',
   'relativePath',
   'bookKey',
@@ -555,6 +559,7 @@ export async function runAgentSession(args: {
 
   const prior = compactHistory(args.history ?? []);
   const userMessage: AgentChatMessage = { role: 'user', content: prompt };
+  const staticPrefixCount = 1 + (args.contextMessages?.length ?? 0);
   const workingMessages: AgentChatMessage[] = [
     {
       role: 'system',
@@ -570,6 +575,23 @@ export async function runAgentSession(args: {
     (args.profile.surface ? agentToolDefinitionsFor(args.profile.surface) : []);
   const usage = emptyUsage();
   let totalToolCalls = 0;
+
+  const compactWorkingMessagesInPlace = (
+    maxMessages: number,
+    keepRecentToolResults = KEEP_RECENT_TOOL_RESULTS,
+    shrinkAt = SHRINK_TOOL_RESULT_AT,
+  ) => {
+    const budget = Math.max(8, maxMessages - staticPrefixCount);
+    const compactedTail = compactHistory(
+      workingMessages.slice(staticPrefixCount),
+      { maxMessages: budget, keepRecentToolResults, shrinkAt },
+    );
+    workingMessages.splice(
+      staticPrefixCount,
+      workingMessages.length - staticPrefixCount,
+      ...compactedTail,
+    );
+  };
 
   const finish = (
     status: 'completed' | 'paused',
@@ -587,7 +609,7 @@ export async function runAgentSession(args: {
     history: compactHistory([
       ...prior,
       userMessage,
-      ...workingMessages.slice(prefixCount),
+      ...workingMessages.slice(Math.min(prefixCount, workingMessages.length)),
     ]),
     usage,
     roundsUsed,
@@ -595,9 +617,18 @@ export async function runAgentSession(args: {
   });
 
   for (let round = 0; round < args.profile.maxRounds; round += 1) {
-    const requestBytes = new TextEncoder().encode(
+    if (workingMessages.length > MAX_WORKING_MESSAGES) {
+      compactWorkingMessagesInPlace(MAX_WORKING_MESSAGES);
+    }
+    let requestBytes = new TextEncoder().encode(
       JSON.stringify(workingMessages),
     ).byteLength;
+    if (requestBytes > MAX_CONTEXT_BYTES) {
+      compactWorkingMessagesInPlace(Math.min(MAX_WORKING_MESSAGES, 48), 2, 320);
+      requestBytes = new TextEncoder().encode(
+        JSON.stringify(workingMessages),
+      ).byteLength;
+    }
     if (requestBytes > MAX_CONTEXT_BYTES) {
       throw new Error(args.profile.contextOverflowMessage);
     }

@@ -5,7 +5,12 @@ import {
   WORKSPACE_LAYOUT_PRESETS,
   type WorkspacePresetSpec,
 } from './terminal-agent-protocol';
-import { terminalApi } from './terminal-api';
+import {
+  terminalApi,
+  type DataBusInfo,
+  type PythonEnvInfo,
+  type REnvInfo,
+} from './terminal-api';
 import type { Theme } from '../app/app-storage';
 import type { EpubBookDocument } from '../library/library';
 import {
@@ -39,27 +44,46 @@ import {
   type TerminalAgentViewHandle,
 } from './TerminalAgentView';
 import {
+  registerCodeLabLiveBridge,
+  type CodeLabLiveBridgeController,
+  type CodeLabNotebookSelector,
+} from './codelab-live-bridge';
+import {
   TerminalCodeLabView,
   type CodeLabCanvasViewMode,
   type TerminalCodeLabViewHandle,
 } from './TerminalCodeLabView';
 import {
-  LabChevronDownIcon,
-  LabChevronRightIcon,
-  LabCloseIcon,
-  LabStarIcon,
-} from './CodeLabIcons';
-import {
+  CODELAB_AGENT_PUSH_EVENT,
   CODELAB_COLLECTION_EVENT,
-  DEFAULT_CODELAB_SNIPPETS,
+  createCodeLabFolder,
+  createCodeLabSavedFile,
+  DATALAB_STORAGE_EVENT,
   deleteCodeLabFile,
+  deleteCodeLabFolder,
   duplicateCodeLabFile,
   groupCodeLabFilesByFolder,
   loadCodeLabCollection,
+  loadCodeLabFolders,
+  loadCustomEnvPaths,
+  loadDataLabBaseProfile,
+  loadDataLabConnections,
+  loadDataLabFiles,
+  moveCodeLabFileToFolder,
+  renameCodeLabFolder,
+  saveCustomEnvPaths,
+  saveDataLabBaseProfile,
+  saveDataLabConnections,
+  saveDataLabFiles,
   toggleStarCodeLabFile,
+  UNCATEGORIZED_CODELAB_FOLDER,
+  type CodeLabAgentPushPayload,
   type CodeLabSavedFile,
-  type CodeLabSnippetItem,
   type CodeLabSourceOrigin,
+  type DataLabBaseProfile,
+  type DataLabCustomEnvPaths,
+  type DataLabDbConnection,
+  type DataLabMountedFile,
 } from './terminal-codelab-model';
 import {
   TerminalSessionView,
@@ -93,9 +117,23 @@ import {
   openStandaloneTerminalWindow,
   visiblePaneCountForMode,
 } from './terminal-window';
+import { AgentWorkspaceSidebar } from './sidebars/AgentWorkspaceSidebar';
+import { EditorWorkspaceSidebar } from './sidebars/EditorWorkspaceSidebar';
+import { ShellWorkspaceSidebar } from './sidebars/ShellWorkspaceSidebar';
+import {
+  dispatchCrossPushToLab,
+  dispatchCrossSendToAgent,
+  dispatchCrossSendToShell,
+  dispatchOpenSplitPair,
+  readCrossWorkspaceLastError,
+  readCrossWorkspacePaneText,
+  registerAgentRuntimeProvider,
+  registerLabRuntimeProvider,
+  registerShellRuntimeProvider,
+} from './workspace-cross-bus';
 import './terminal-workspace.css';
 
-interface TerminalWorkspaceProps {
+export interface TerminalWorkspaceProps {
   active: boolean;
   cwd: string;
   theme: Theme;
@@ -103,6 +141,8 @@ interface TerminalWorkspaceProps {
   onOpenBook?: (book: EpubBookDocument) => void;
   bridge?: TerminalWorkspaceBridge;
   standalone?: boolean;
+  workspaceFocus?: TerminalTabKind;
+  hideSidebar?: boolean;
   initialShell?: TerminalShellType;
   initialCli?: TerminalCliPreset;
   initialKind?: TerminalTabKind;
@@ -154,7 +194,12 @@ const CLI_PRESETS: ReadonlyArray<{
   label: string;
   desc: string;
 }> = [
-  { id: 'agy', label: 'agy', desc: 'Antigravity CLI（含 Seamind 工作区）' },
+  { id: 'agy', label: 'agy', desc: 'Antigravity CLI（含 Seamind MCP）' },
+  {
+    id: 'gemini',
+    label: 'gemini',
+    desc: 'Google Gemini CLI（含 Seamind MCP）',
+  },
   { id: 'claude', label: 'claude', desc: 'Claude Code CLI（已注入 MCP）' },
   { id: 'codex', label: 'codex', desc: 'Codex CLI（已注入 MCP）' },
 ];
@@ -194,7 +239,7 @@ function readSavedLabWorkspace(): SavedLabWorkspace | null {
             typeof tab.id === 'string' &&
             (tab.fileId === null || typeof tab.fileId === 'string') &&
             typeof tab.title === 'string' &&
-            ['python', 'c', 'cpp'].includes(tab.language),
+            ['python', 'sql', 'r', 'c', 'cpp'].includes(tab.language),
           ),
         )
         .slice(0, MAX_WORKSPACE_TABS - 1),
@@ -300,7 +345,7 @@ function PopoutWindowIcon() {
   );
 }
 
-export default function TerminalWorkspace({
+export function TerminalWorkspace({
   active,
   cwd,
   theme,
@@ -308,44 +353,54 @@ export default function TerminalWorkspace({
   onOpenBook,
   bridge,
   standalone = false,
+  workspaceFocus,
+  hideSidebar = false,
   initialShell = 'powershell',
   initialCli,
-  initialKind = 'shell',
+  initialKind = workspaceFocus ?? 'shell',
   initialLabLanguage = 'python',
   initialLabFileId,
   externalCodeLabPush,
   onExternalCodeLabPushConsumed,
 }: TerminalWorkspaceProps) {
+  const effectiveKind: TerminalTabKind = workspaceFocus ?? initialKind;
   const initialCleanCwd = normalizeDisplayPath(cwd);
   const initialTabRef = useRef<TerminalTab>({
-    id: 'tab-1',
+    id: workspaceFocus ? `${workspaceFocus}-tab-1` : 'tab-1',
     title:
-      initialKind === 'agent'
+      effectiveKind === 'agent'
         ? 'Seamind Agent'
-        : initialKind === 'lab'
+        : effectiveKind === 'lab'
           ? initialLabFileId
             ? (loadCodeLabCollection().find(
                 (file) => file.id === initialLabFileId,
               )?.title ?? 'Python 实验本')
             : initialLabLanguage === 'python'
               ? 'Python 实验本'
-              : initialLabLanguage === 'cpp'
-                ? 'C++ 实验本'
-                : 'C 实验本'
+              : initialLabLanguage === 'sql'
+                ? 'SQL 数据实验本'
+                : initialLabLanguage === 'r'
+                  ? 'R 统计实验本'
+                  : initialLabLanguage === 'cpp'
+                    ? 'C++ 实验本'
+                    : 'C 实验本'
           : initialCli
             ? `${initialCli.toUpperCase()} · ${initialShell.toUpperCase()}`
             : `${initialShell === 'powershell' ? 'PowerShell' : initialShell.toUpperCase()} 1`,
-    kind: initialKind,
+    kind: effectiveKind,
     shell: initialShell,
-    labLanguage: initialKind === 'lab' ? initialLabLanguage : undefined,
-    labFileId: initialKind === 'lab' ? initialLabFileId : undefined,
+    labLanguage: effectiveKind === 'lab' ? initialLabLanguage : undefined,
+    labFileId: effectiveKind === 'lab' ? initialLabFileId : undefined,
     cwd: initialCleanCwd,
     initialCli,
-    status: initialKind === 'shell' ? 'starting' : 'ready',
+    status: effectiveKind === 'shell' ? 'starting' : 'ready',
     createdAt: Date.now(),
   });
+  const shouldRestoreLabSession =
+    !standalone &&
+    (workspaceFocus === 'lab' || (!workspaceFocus && initialKind === 'shell'));
   const restoredLabRef = useRef<SavedLabWorkspace | null>(
-    !standalone && initialKind === 'shell' ? readSavedLabWorkspace() : null,
+    shouldRestoreLabSession ? readSavedLabWorkspace() : null,
   );
   const initialWorkspaceRef = useRef<{
     tabs: TerminalTab[];
@@ -371,15 +426,33 @@ export default function TerminalWorkspace({
         status: 'ready',
         createdAt: Date.now(),
       }));
-    const restoredIds = new Set(restoredTabs.map((tab) => tab.id));
-    const visibleIds = (restoredLabRef.current?.paneTabIds ?? []).filter(
-      (id) => id === initialTabRef.current.id || restoredIds.has(id),
-    );
-    initialWorkspaceRef.current = {
-      tabs: [initialTabRef.current, ...restoredTabs],
-      paneTabIds:
-        visibleIds.length > 0 ? visibleIds : [initialTabRef.current.id],
-    };
+    if (workspaceFocus === 'lab') {
+      const nextTabs =
+        restoredTabs.length > 0 ? restoredTabs : [initialTabRef.current];
+      const restoredIds = new Set(nextTabs.map((tab) => tab.id));
+      const visibleIds = (restoredLabRef.current?.paneTabIds ?? []).filter(
+        (id) => restoredIds.has(id),
+      );
+      initialWorkspaceRef.current = {
+        tabs: nextTabs,
+        paneTabIds: visibleIds.length > 0 ? visibleIds : [nextTabs[0].id],
+      };
+    } else if (workspaceFocus === 'agent' || workspaceFocus === 'shell') {
+      initialWorkspaceRef.current = {
+        tabs: [initialTabRef.current],
+        paneTabIds: [initialTabRef.current.id],
+      };
+    } else {
+      const restoredIds = new Set(restoredTabs.map((tab) => tab.id));
+      const visibleIds = (restoredLabRef.current?.paneTabIds ?? []).filter(
+        (id) => id === initialTabRef.current.id || restoredIds.has(id),
+      );
+      initialWorkspaceRef.current = {
+        tabs: [initialTabRef.current, ...restoredTabs],
+        paneTabIds:
+          visibleIds.length > 0 ? visibleIds : [initialTabRef.current.id],
+      };
+    }
   }
 
   const [shells, setShells] = useState<TerminalShellOption[]>(DEFAULT_SHELLS);
@@ -464,12 +537,34 @@ export default function TerminalWorkspace({
       ? 'lab'
       : initialKind,
   );
-  const [labRailSubTab, setLabRailSubTab] = useState<
-    'files' | 'snippets' | 'sessions'
-  >('files');
+  const [mountedDataFiles, setMountedDataFiles] = useState<
+    DataLabMountedFile[]
+  >(() => loadDataLabFiles());
+  const [dbConnections, setDbConnections] = useState<DataLabDbConnection[]>(
+    () => loadDataLabConnections(),
+  );
+  const [customEnvPaths, setCustomEnvPaths] = useState<DataLabCustomEnvPaths>(
+    () => loadCustomEnvPaths(),
+  );
+  const [baseProfile, setBaseProfile] = useState<DataLabBaseProfile>(() =>
+    loadDataLabBaseProfile(),
+  );
+  const [busInfo, setBusInfo] = useState<DataBusInfo | null>(null);
+  const [pythonEnvs, setPythonEnvs] = useState<PythonEnvInfo[]>([]);
+  const [rEnvs, setREnvs] = useState<REnvInfo[]>([]);
+  const [envsLoading, setEnvsLoading] = useState(false);
+  const [selectedPythonRuntime, setSelectedPythonRuntime] = useState<string>(
+    () => loadDataLabBaseProfile().pythonPath || 'pyodide',
+  );
+  const [selectedRRuntime, setSelectedRRuntime] = useState<string>(
+    () => loadDataLabBaseProfile().rscriptPath || '',
+  );
   const [draggingTabId, setDraggingTabId] = useState<string | null>(null);
   const [codeLabFiles, setCodeLabFiles] = useState<CodeLabSavedFile[]>(() =>
     loadCodeLabCollection(),
+  );
+  const [codeLabFolders, setCodeLabFolders] = useState<string[]>(() =>
+    loadCodeLabFolders(),
   );
   const [codeLabSearch, setCodeLabSearch] = useState('');
   const [pendingExternalCode, setPendingExternalCode] = useState<NonNullable<
@@ -504,7 +599,7 @@ export default function TerminalWorkspace({
   };
 
   useEffect(() => {
-    if (standalone) return;
+    if (standalone || (workspaceFocus && workspaceFocus !== 'lab')) return;
     const session: SavedLabWorkspace = {
       tabs: tabs
         .filter((tab) => tab.kind === 'lab')
@@ -524,23 +619,110 @@ export default function TerminalWorkspace({
     } catch {
       // Layout restoration is optional when storage is unavailable.
     }
-  }, [focusedPaneIndex, paneTabIds, splitMode, splitRatio, standalone, tabs]);
+  }, [
+    focusedPaneIndex,
+    paneTabIds,
+    splitMode,
+    splitRatio,
+    standalone,
+    tabs,
+    workspaceFocus,
+  ]);
 
   useEffect(() => {
     const syncCollection = () => {
-      setCodeLabFiles(loadCodeLabCollection());
+      const nextFiles = loadCodeLabCollection();
+      setCodeLabFiles(nextFiles);
+      setCodeLabFolders(loadCodeLabFolders(nextFiles));
+    };
+    const syncDataLab = () => {
+      setMountedDataFiles(loadDataLabFiles());
+      setDbConnections(loadDataLabConnections());
+      setCustomEnvPaths(loadCustomEnvPaths());
+      const nextProf = loadDataLabBaseProfile();
+      setBaseProfile(nextProf);
+      if (nextProf.pythonPath) {
+        setSelectedPythonRuntime(nextProf.pythonPath);
+      }
+      if (nextProf.rscriptPath) {
+        setSelectedRRuntime(nextProf.rscriptPath);
+      }
     };
     const syncExternalCollection = (event: StorageEvent) => {
       if (event.key?.includes('codelab') || event.key === null)
         syncCollection();
+      if (event.key?.includes('datalab') || event.key === null) syncDataLab();
     };
     window.addEventListener(CODELAB_COLLECTION_EVENT, syncCollection);
+    window.addEventListener(DATALAB_STORAGE_EVENT, syncDataLab);
     window.addEventListener('storage', syncExternalCollection);
     return () => {
       window.removeEventListener(CODELAB_COLLECTION_EVENT, syncCollection);
+      window.removeEventListener(DATALAB_STORAGE_EVENT, syncDataLab);
       window.removeEventListener('storage', syncExternalCollection);
     };
   }, []);
+
+  const syncSharedBusContext = useCallback(() => {
+    terminalApi
+      .syncDataBusContext({
+        sessionId: 'default',
+        mountedFiles: mountedDataFiles.map((f) => ({
+          alias: f.alias,
+          path: f.path,
+          format: f.format,
+        })),
+        dbConnections: dbConnections.map((c) => ({
+          id: c.id,
+          name: c.name,
+          dbType: c.dbType,
+          filePath: c.filePath ?? null,
+          host: c.host ?? null,
+          port: c.port ?? null,
+          database: c.database ?? null,
+          username: c.username ?? null,
+        })),
+        defaultPythonPath:
+          baseProfile.pythonPath && baseProfile.pythonPath !== 'pyodide'
+            ? baseProfile.pythonPath
+            : null,
+        defaultRscriptPath: baseProfile.rscriptPath || null,
+        defaultConnectionId: baseProfile.defaultConnectionId || null,
+      })
+      .then((info) => setBusInfo(info))
+      .catch(() => undefined);
+  }, [baseProfile, dbConnections, mountedDataFiles]);
+
+  useEffect(() => {
+    if (!active) return;
+    syncSharedBusContext();
+  }, [active, syncSharedBusContext]);
+
+  const refreshDataEnvs = useCallback(
+    (pathsOverride?: DataLabCustomEnvPaths) => {
+      const targetPaths = pathsOverride ?? customEnvPaths;
+      setEnvsLoading(true);
+      Promise.allSettled([
+        terminalApi.detectPythonEnvs({
+          cwd: initialCleanCwd || null,
+          extraPaths: targetPaths.pythonPaths,
+        }),
+        terminalApi.detectREnvs({ extraPaths: targetPaths.rPaths }),
+      ])
+        .then(([pyRes, rRes]) => {
+          if (pyRes.status === 'fulfilled') {
+            setPythonEnvs(pyRes.value);
+          }
+          if (rRes.status === 'fulfilled') {
+            setREnvs(rRes.value);
+          }
+        })
+        .finally(() => {
+          setEnvsLoading(false);
+        });
+    },
+    [customEnvPaths, initialCleanCwd],
+  );
 
   const toggleLeftRail = useCallback(() => {
     setLeftRailCollapsed((prev) => {
@@ -1183,9 +1365,13 @@ export default function TerminalWorkspace({
             ? file.title
             : labLanguage === 'python'
               ? `Python Lab ${nextIndex}`
-              : labLanguage === 'cpp'
-                ? `C++ Lab ${nextIndex}`
-                : `C Lab ${nextIndex}`;
+              : labLanguage === 'sql'
+                ? `SQL Lab ${nextIndex}`
+                : labLanguage === 'r'
+                  ? `R Lab ${nextIndex}`
+                  : labLanguage === 'cpp'
+                    ? `C++ Lab ${nextIndex}`
+                    : `C Lab ${nextIndex}`;
       const newTab: TerminalTab = {
         id: makeTabId(),
         title,
@@ -1260,6 +1446,9 @@ export default function TerminalWorkspace({
 
   const sendToShellPane = useCallback(
     (command: string, execute = true, paneNumber?: number) => {
+      if (workspaceFocus && workspaceFocus !== 'shell') {
+        if (dispatchCrossSendToShell(command, execute, paneNumber)) return;
+      }
       const currentTabs = tabsRef.current;
       const paneTabId = paneNumber
         ? activePaneIdsRef.current[paneNumber - 1]
@@ -1311,6 +1500,9 @@ export default function TerminalWorkspace({
       autoRun = true,
       origin?: CodeLabSourceOrigin,
     ) => {
+      if (workspaceFocus && workspaceFocus !== 'lab') {
+        if (dispatchCrossPushToLab(lang, code, autoRun, origin)) return;
+      }
       const existing =
         activePaneIdsRef.current
           .map((id) => tabsRef.current.find((t) => t.id === id))
@@ -1406,6 +1598,9 @@ export default function TerminalWorkspace({
 
   const sendToAgentPane = useCallback(
     (prompt: string) => {
+      if (workspaceFocus && workspaceFocus !== 'agent') {
+        if (dispatchCrossSendToAgent(prompt)) return;
+      }
       const existing =
         activePaneIdsRef.current
           .map((id) => tabsRef.current.find((t) => t.id === id))
@@ -1438,6 +1633,10 @@ export default function TerminalWorkspace({
   const paneAccessor = useMemo(
     () => ({
       readPaneText: (paneNumber: number, maxLines = 80) => {
+        if (workspaceFocus === 'agent') {
+          const cross = readCrossWorkspacePaneText(paneNumber, maxLines);
+          if (cross) return cross;
+        }
         const tabId = activePaneIdsRef.current[paneNumber - 1];
         if (!tabId) return null;
         const tabItem = tabsRef.current.find((t) => t.id === tabId);
@@ -1456,6 +1655,10 @@ export default function TerminalWorkspace({
         };
       },
       readLastError: () => {
+        if (workspaceFocus === 'agent') {
+          const crossErr = readCrossWorkspaceLastError();
+          if (crossErr) return crossErr;
+        }
         for (const id of activePaneIdsRef.current) {
           const labErr = labRefs.current.get(id)?.getLastErrorText();
           if (labErr) return labErr;
@@ -1481,8 +1684,114 @@ export default function TerminalWorkspace({
       sendToShellPane,
       pushToCodeLab,
     }),
-    [pushToCodeLab, sendToShellPane],
+    [pushToCodeLab, sendToShellPane, workspaceFocus],
   );
+
+  // Register cross-workspace runtime providers so Lab, Agent, and Shell collaborate seamlessly
+  useEffect(() => {
+    if (standalone) return;
+    const disposers: Array<() => void> = [];
+    if (!workspaceFocus || workspaceFocus === 'shell') {
+      disposers.push(
+        registerShellRuntimeProvider({
+          readPaneText: (paneNumber, maxLines = 80) => {
+            const tabId = activePaneIdsRef.current[paneNumber - 1];
+            const candidateId =
+              tabId ??
+              tabsRef.current.find((t) => !t.kind || t.kind === 'shell')?.id;
+            if (!candidateId) return null;
+            const tabItem = tabsRef.current.find((t) => t.id === candidateId);
+            const text = terminalRefs.current
+              .get(candidateId)
+              ?.getScreenText(maxLines);
+            if (!tabItem || !text) return null;
+            return {
+              title: tabItem.title,
+              cwd:
+                terminalRefs.current.get(candidateId)?.getCwd() ||
+                tabItem.cwd ||
+                '',
+              text,
+            };
+          },
+          readLastError: () => {
+            for (const id of activePaneIdsRef.current) {
+              const text = terminalRefs.current.get(id)?.getScreenText(60);
+              if (text) {
+                const lines = text.split('\n');
+                const errStart = lines.findIndex((l) =>
+                  /error|traceback|exception|fatal|failed|无法/i.test(l),
+                );
+                if (errStart >= 0) {
+                  return lines.slice(Math.max(0, errStart - 2)).join('\n');
+                }
+              }
+            }
+            return '';
+          },
+          sendToShell: (command, execute = true, paneNumber) => {
+            sendToShellPane(command, execute, paneNumber);
+          },
+        }),
+      );
+    }
+    if (!workspaceFocus || workspaceFocus === 'lab') {
+      disposers.push(
+        registerLabRuntimeProvider({
+          readPaneText: (paneNumber, maxLines = 80) => {
+            const tabId = activePaneIdsRef.current[paneNumber - 1];
+            const candidateId =
+              tabId ?? tabsRef.current.find((t) => t.kind === 'lab')?.id;
+            if (!candidateId) return null;
+            const tabItem = tabsRef.current.find((t) => t.id === candidateId);
+            const text = labRefs.current
+              .get(candidateId)
+              ?.getScreenText(maxLines);
+            if (!tabItem || !text) return null;
+            return {
+              title: tabItem.title,
+              cwd: tabItem.cwd || '',
+              text,
+            };
+          },
+          readLastError: () => {
+            for (const id of activePaneIdsRef.current) {
+              const err = labRefs.current.get(id)?.getLastErrorText();
+              if (err) return err;
+            }
+            return '';
+          },
+          pushToCodeLab: (language, code, autoRun = true, origin) => {
+            pushToCodeLab(language, code, autoRun, origin);
+          },
+        }),
+      );
+    }
+    if (!workspaceFocus || workspaceFocus === 'agent') {
+      disposers.push(
+        registerAgentRuntimeProvider({
+          submitPrompt: (prompt) => {
+            sendToAgentPane(prompt);
+          },
+          openModelModal: () => {
+            const targetId =
+              activePaneIdsRef.current[0] ??
+              tabsRef.current.find((t) => t.kind === 'agent')?.id;
+            if (targetId) agentRefs.current.get(targetId)?.openModelModal();
+          },
+        }),
+      );
+    }
+    return () => {
+      for (const dispose of disposers) dispose();
+    };
+  }, [
+    pushToCodeLab,
+    sendToAgentPane,
+    sendToShellPane,
+    standalone,
+    workspaceFocus,
+  ]);
 
   const mergedBridge = useMemo<TerminalWorkspaceBridge>(() => {
     const runPythonQuick = async ({ code }: { code: string }) => {
@@ -1851,11 +2160,15 @@ export default function TerminalWorkspace({
     [activeTab?.kind, isStageZoomed],
   );
 
-  // Auto-sync left rail module with active tab kind
+  // Auto-sync left rail module with active tab kind (disabled in focused workspace mode so rail never jumps)
   useEffect(() => {
+    if (workspaceFocus) {
+      setRailModule(workspaceFocus);
+      return;
+    }
     const currentKind: TerminalTabKind = activeTab?.kind ?? 'shell';
     setRailModule(currentKind);
-  }, [activeTab?.id, activeTab?.kind]);
+  }, [activeTab?.id, activeTab?.kind, workspaceFocus]);
 
   const shellTabs = useMemo(
     () => tabs.filter((t) => !t.kind || t.kind === 'shell'),
@@ -1868,8 +2181,14 @@ export default function TerminalWorkspace({
   const labTabs = useMemo(() => tabs.filter((t) => t.kind === 'lab'), [tabs]);
 
   const groupedCodeLabFiles = useMemo(
-    () => groupCodeLabFilesByFolder(codeLabFiles, codeLabSearch, codeLabFilter),
-    [codeLabFiles, codeLabSearch, codeLabFilter],
+    () =>
+      groupCodeLabFilesByFolder(
+        codeLabFiles,
+        codeLabSearch,
+        codeLabFilter,
+        codeLabFolders,
+      ),
+    [codeLabFiles, codeLabFolders, codeLabSearch, codeLabFilter],
   );
 
   const activateOrCreateTabInFocusedPane = useCallback(
@@ -1914,44 +2233,137 @@ export default function TerminalWorkspace({
     ],
   );
 
+  const resolveLiveLabHandle = useCallback(
+    (
+      selector?: CodeLabNotebookSelector & {
+        preferredLang?: TerminalCodeLabLanguage;
+      },
+    ): TerminalCodeLabViewHandle | null => {
+      const targetId = selector?.fileId?.trim() || '';
+      const targetTitle = selector?.title?.trim().toLowerCase() || '';
+
+      const matchesSelector = (
+        tab: TerminalTab,
+        handle: TerminalCodeLabViewHandle,
+      ): boolean => {
+        if (targetId && handle.getActiveFileId() === targetId) return true;
+        if (targetTitle) {
+          const title = (handle.getNotebookTitle() || tab.title).toLowerCase();
+          if (title.includes(targetTitle)) return true;
+        }
+        return false;
+      };
+
+      // 1. Explicit fileId / title match across all mounted lab tabs
+      if (targetId || targetTitle) {
+        for (const tab of tabs) {
+          if (tab.kind !== 'lab') continue;
+          const handle = labRefs.current.get(tab.id);
+          if (handle && matchesSelector(tab, handle)) return handle;
+        }
+      }
+
+      // 2. If the currently focused pane is a lab tab, use it
+      if (activeTab?.kind === 'lab') {
+        const handle = labRefs.current.get(activeTab.id);
+        if (handle) return handle;
+      }
+
+      // 3. CRITICAL for split view (e.g. Left = CodeLab, Right = Agent):
+      //    Prefer the currently VISIBLE lab pane over hidden background lab tabs!
+      for (const paneTabId of activePaneIds) {
+        const tab = tabs.find((t) => t.id === paneTabId && t.kind === 'lab');
+        if (!tab) continue;
+        const handle = labRefs.current.get(tab.id);
+        if (handle) return handle;
+      }
+
+      // 4. Fallback to any mounted lab tab matching preferred language or any lab tab
+      if (selector?.preferredLang) {
+        const langTab = tabs.find(
+          (t) =>
+            t.kind === 'lab' &&
+            t.labLanguage === selector.preferredLang &&
+            labRefs.current.has(t.id),
+        );
+        if (langTab) return labRefs.current.get(langTab.id) ?? null;
+      }
+
+      for (const tab of tabs) {
+        if (tab.kind !== 'lab') continue;
+        const handle = labRefs.current.get(tab.id);
+        if (handle) return handle;
+      }
+      return null;
+    },
+    [activePaneIds, activeTab?.id, activeTab?.kind, tabs],
+  );
+
+  const ensureLiveLabHandle = useCallback(
+    async (
+      selector?: CodeLabNotebookSelector & {
+        preferredLang?: TerminalCodeLabLanguage;
+      },
+    ): Promise<TerminalCodeLabViewHandle | null> => {
+      const existing = resolveLiveLabHandle(selector);
+      if (existing) return existing;
+
+      // No mounted lab handle yet: open an existing lab tab or create one in a split pane
+      // without stealing focus from an active Agent pane when possible.
+      const preferredLang = selector?.preferredLang ?? 'python';
+      const unmountedLab =
+        tabs.find((t) => t.kind === 'lab' && t.labLanguage === preferredLang) ??
+        tabs.find((t) => t.kind === 'lab');
+
+      if (unmountedLab) {
+        if (splitMode === 'single') {
+          activateOrCreateTabInFocusedPane(unmountedLab.id);
+        } else {
+          const targetPane = safeFocusedPane === 0 ? 1 : 0;
+          setPaneTabIds((prev) => {
+            const next = [...prev];
+            next[targetPane] = unmountedLab.id;
+            return next;
+          });
+        }
+      } else {
+        const targetPane =
+          splitMode === 'single' ? undefined : safeFocusedPane === 0 ? 1 : 0;
+        createSpecialTab('lab', preferredLang, targetPane);
+      }
+
+      for (let attempt = 0; attempt < 15; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 40));
+        const mounted = resolveLiveLabHandle(selector);
+        if (mounted) return mounted;
+      }
+      return null;
+    },
+    [
+      activateOrCreateTabInFocusedPane,
+      createSpecialTab,
+      resolveLiveLabHandle,
+      safeFocusedPane,
+      splitMode,
+      tabs,
+    ],
+  );
+
   const withActiveLabHandle = useCallback(
     (
       preferredLang: TerminalCodeLabLanguage,
       callback: (handle: TerminalCodeLabViewHandle) => void,
     ) => {
-      if (activeTab?.kind === 'lab') {
-        const handle = labRefs.current.get(activeTab.id);
-        if (handle) {
-          callback(handle);
-          return;
-        }
+      const visible = resolveLiveLabHandle({ preferredLang });
+      if (visible) {
+        callback(visible);
+        return;
       }
-      const existingLab =
-        tabs.find((t) => t.kind === 'lab' && t.labLanguage === preferredLang) ??
-        tabs.find((t) => t.kind === 'lab');
-      if (existingLab) {
-        activateOrCreateTabInFocusedPane(existingLab.id);
-        window.setTimeout(() => {
-          const handle = labRefs.current.get(existingLab.id);
-          if (handle) callback(handle);
-        }, 60);
-      } else {
-        createSpecialTab('lab', preferredLang);
-        window.setTimeout(() => {
-          for (const [, handle] of labRefs.current.entries()) {
-            callback(handle);
-            break;
-          }
-        }, 90);
-      }
+      void ensureLiveLabHandle({ preferredLang }).then((handle) => {
+        if (handle) callback(handle);
+      });
     },
-    [
-      activateOrCreateTabInFocusedPane,
-      activeTab?.id,
-      activeTab?.kind,
-      createSpecialTab,
-      tabs,
-    ],
+    [ensureLiveLabHandle, resolveLiveLabHandle],
   );
 
   const handleOpenSavedCodeFile = useCallback(
@@ -2061,15 +2473,165 @@ export default function TerminalWorkspace({
     [handleOpenSavedCodeFile, labInfoByTab, tabs],
   );
 
-  const handleInsertSnippetToLab = useCallback(
-    (snippet: CodeLabSnippetItem, autoRun: boolean) => {
+  const handleInsertDataCellToLab = useCallback(
+    (
+      lang: TerminalCodeLabLanguage,
+      source: string,
+      autoRun: boolean,
+      sqlConnectionId?: string,
+      sqlResultVar?: string,
+      kind: 'code' | 'markdown' = 'code',
+    ) => {
       setRailModule('lab');
-      withActiveLabHandle(snippet.language, (handle) => {
-        handle.insertAndRunCell(snippet.language, snippet.code, autoRun);
+      withActiveLabHandle(lang, (handle) => {
+        handle.insertAndRunCell(
+          lang,
+          source,
+          autoRun,
+          undefined,
+          sqlConnectionId,
+          sqlResultVar,
+          kind,
+        );
       });
     },
     [withActiveLabHandle],
   );
+
+  // Register synchronous live Code Lab controller for Agent & MCP tools (Lab workspace owns this bridge)
+  useEffect(() => {
+    if (workspaceFocus && workspaceFocus !== 'lab') return;
+    const controller: CodeLabLiveBridgeController = {
+      readNotebook: async (selector) => {
+        const handle = resolveLiveLabHandle(selector);
+        return handle ? handle.getLiveNotebookSnapshot() : null;
+      },
+      pushCell: async (request) => {
+        const handle = await ensureLiveLabHandle({
+          fileId: request.fileId,
+          title: request.title,
+          preferredLang: request.language,
+        });
+        if (!handle) {
+          return {
+            ok: false,
+            notebookTitle: request.title ?? '未打开实验本',
+            fileId: request.fileId ?? null,
+            message: '无法定位或打开代码实验本窗口',
+            error: '未找到可用的实验本实例',
+          };
+        }
+        const res = await handle.agentPushCell(request);
+        if (res.ok) showTempNotice(res.message);
+        return res;
+      },
+      updateCell: async (request) => {
+        const handle = await ensureLiveLabHandle({
+          fileId: request.fileId,
+          title: request.title,
+          preferredLang: request.language,
+        });
+        if (!handle) {
+          return {
+            ok: false,
+            notebookTitle: request.title ?? '未打开实验本',
+            fileId: request.fileId ?? null,
+            message: '当前未打开代码实验本窗口',
+            error: '未找到可用的实验本实例',
+          };
+        }
+        const res = await handle.agentUpdateCell(request);
+        if (res.ok) showTempNotice(res.message);
+        return res;
+      },
+      runCell: async (request) => {
+        const handle = await ensureLiveLabHandle({
+          fileId: request.fileId,
+          title: request.title,
+        });
+        if (!handle) {
+          return {
+            ok: false,
+            notebookTitle: request.title ?? '未打开实验本',
+            fileId: request.fileId ?? null,
+            message: '当前未打开代码实验本窗口',
+            error: '未找到可用的实验本实例',
+          };
+        }
+        const res = await handle.agentRunCell(request);
+        showTempNotice(res.message);
+        return res;
+      },
+      deleteCell: async (request) => {
+        const handle = resolveLiveLabHandle({
+          fileId: request.fileId,
+          title: request.title,
+        });
+        if (!handle) {
+          return {
+            ok: false,
+            notebookTitle: request.title ?? '未打开实验本',
+            fileId: request.fileId ?? null,
+            message: '当前未打开代码实验本窗口',
+            error: '未找到可用的实验本实例',
+          };
+        }
+        const res = await handle.agentDeleteCell(request);
+        if (res.ok) showTempNotice(res.message);
+        return res;
+      },
+    };
+    return registerCodeLabLiveBridge(controller);
+  }, [ensureLiveLabHandle, resolveLiveLabHandle, workspaceFocus]);
+
+  // Keep legacy CustomEvent fallback for external/detached dispatches
+  useEffect(() => {
+    if (workspaceFocus && workspaceFocus !== 'lab') return;
+    const onAgentPush = (event: Event) => {
+      const custom = event as CustomEvent<CodeLabAgentPushPayload>;
+      const detail = custom.detail;
+      if (!detail || !detail.source) return;
+      withActiveLabHandle(detail.language, (handle) => {
+        handle.insertAndRunCell(
+          detail.language,
+          detail.source,
+          Boolean(detail.autoRun),
+          undefined,
+          detail.sqlConnectionId,
+          detail.sqlResultVar,
+          detail.kind ?? 'code',
+          detail.groupId,
+          detail.groupTitle,
+        );
+      });
+      showTempNotice(
+        `Agent 已向实验本${detail.groupTitle ? `「${detail.groupTitle}」` : ''}推送 ${detail.kind === 'markdown' ? 'Markdown 笔记' : detail.language.toUpperCase()} 分区`,
+      );
+    };
+    window.addEventListener(CODELAB_AGENT_PUSH_EVENT, onAgentPush);
+    return () =>
+      window.removeEventListener(CODELAB_AGENT_PUSH_EVENT, onAgentPush);
+  }, [withActiveLabHandle]);
+
+  const handleSelectWorkspacePythonRuntime = useCallback((runtime: string) => {
+    setSelectedPythonRuntime(runtime);
+    for (const [, handle] of labRefs.current.entries()) {
+      handle.setPythonRuntime(runtime);
+    }
+    showTempNotice(
+      runtime === 'pyodide'
+        ? '已切换至 Pyodide 内置沙盒内核'
+        : '已切换当前实验室 Python / Anaconda 内核',
+    );
+  }, []);
+
+  const handleSelectWorkspaceRRuntime = useCallback((rscriptPath: string) => {
+    setSelectedRRuntime(rscriptPath);
+    for (const [, handle] of labRefs.current.entries()) {
+      handle.setRRuntime(rscriptPath);
+    }
+    showTempNotice('已切换当前实验室 R 语言内核');
+  }, []);
 
   interface PaletteActionItem {
     id: string;
@@ -2176,13 +2738,20 @@ export default function TerminalWorkspace({
       aria-label="终端与多窗格 CLI 工作区"
     >
       {/* Unified Session Tabs & Image-2 Multi-Window Controls */}
-      <nav className="terminal-topbar" aria-label="终端会话与多开控制">
+      <nav
+        className={`terminal-topbar${workspaceFocus === 'lab' ? ' is-notebook-topbar' : ''}`}
+        aria-label={
+          workspaceFocus === 'lab' ? '编辑器笔记标签栏' : '终端会话与多开控制'
+        }
+      >
         <div className="terminal-tabs-track" role="tablist">
           {tabs.map((tab, index) => {
             const assignedPane = tabToPaneIndex.get(tab.id);
             const isVisible = assignedPane !== undefined;
             const isActive = tab.id === activeTabId;
             const isEditing = editingTabId === tab.id;
+            const isNotebookTab =
+              workspaceFocus === 'lab' || tab.kind === 'lab';
             const isLabDirty =
               tab.kind === 'lab' && Boolean(labInfoByTab[tab.id]?.dirty);
             return (
@@ -2195,7 +2764,7 @@ export default function TerminalWorkspace({
                   event.dataTransfer.setData('text/plain', tab.id);
                 }}
                 onDragEnd={() => setDraggingTabId(null)}
-                className={`terminal-tab-item${isActive ? ' is-active' : ''}${isVisible ? ' is-visible-in-pane' : ''}${draggingTabId === tab.id ? ' is-dragging' : ''}`}
+                className={`terminal-tab-item${isNotebookTab ? ' is-notebook-tab' : ''}${isActive ? ' is-active' : ''}${isVisible ? ' is-visible-in-pane' : ''}${isLabDirty ? ' is-dirty' : ''}${draggingTabId === tab.id ? ' is-dragging' : ''}`}
                 onClick={() => {
                   const paneIdx = activePaneIds.indexOf(tab.id);
                   if (paneIdx >= 0) {
@@ -2220,10 +2789,31 @@ export default function TerminalWorkspace({
                 role="tab"
                 aria-selected={isActive}
               >
-                <span
-                  className={`tab-status-dot is-${tab.status}`}
-                  aria-hidden="true"
-                />
+                {isNotebookTab ? (
+                  <span
+                    className={`tab-note-glyph is-${tab.labLanguage ?? 'python'}`}
+                    aria-hidden="true"
+                  >
+                    <svg
+                      viewBox="0 0 16 16"
+                      width="12"
+                      height="12"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.35"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M4 2.2h5.8L12.6 5v8.8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3.2a1 1 0 0 1 1-1Z" />
+                      <path d="M9.6 2.2V5h3" />
+                    </svg>
+                  </span>
+                ) : (
+                  <span
+                    className={`tab-status-dot is-${tab.status}`}
+                    aria-hidden="true"
+                  />
+                )}
                 {tab.bellCount ? (
                   <span className="tab-bell-dot" title="该会话刚完成响铃提醒" />
                 ) : null}
@@ -2253,169 +2843,266 @@ export default function TerminalWorkspace({
                     {tab.title}
                   </span>
                 )}
-                {isLabDirty && !isEditing && (
-                  <span
-                    className="tab-dirty-dot"
-                    title="实验本有未保存更改"
-                    aria-label="未保存"
-                  >
-                    ●
+                {isNotebookTab ? (
+                  <span className="tab-end-slot">
+                    {isLabDirty && !isEditing && (
+                      <span
+                        className="tab-dirty-pip"
+                        title="有未保存更改"
+                        aria-label="未保存"
+                      />
+                    )}
+                    {tabs.length > 1 && (
+                      <button
+                        type="button"
+                        className="tab-close-btn"
+                        onClick={(e) => closeTab(tab.id, e)}
+                        aria-label={`关闭 ${tab.title}`}
+                        title="关闭标签页"
+                      >
+                        ×
+                      </button>
+                    )}
                   </span>
-                )}
-                {tabs.length > 1 && (
-                  <button
-                    type="button"
-                    className="tab-close-btn"
-                    onClick={(e) => closeTab(tab.id, e)}
-                    aria-label={`关闭 ${tab.title}`}
-                    title="关闭会话"
-                  >
-                    ×
-                  </button>
+                ) : (
+                  <>
+                    {isLabDirty && !isEditing && (
+                      <span
+                        className="tab-dirty-dot"
+                        title="实验本有未保存更改"
+                        aria-label="未保存"
+                      >
+                        ●
+                      </span>
+                    )}
+                    {tabs.length > 1 && (
+                      <button
+                        type="button"
+                        className="tab-close-btn"
+                        onClick={(e) => closeTab(tab.id, e)}
+                        aria-label={`关闭 ${tab.title}`}
+                        title="关闭会话"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </>
                 )}
               </div>
             );
           })}
 
           <div className="terminal-new-tab-container" ref={shellMenuRef}>
-            <button
-              type="button"
-              className="terminal-new-tab-btn"
-              onClick={() => {
-                setShowShellMenu((prev) => !prev);
-                setToolsMenuOpen(false);
-                setShowPrefsMenu(false);
-                setShowPopoutMenu(false);
-              }}
-              disabled={tabs.length >= MAX_WORKSPACE_TABS}
-              aria-expanded={showShellMenu}
-              title="新建终端、交互 Agent 或 Euporie 代码实验本"
-            >
-              + 新建
-            </button>
-
-            <button
-              type="button"
-              className="terminal-new-special-btn"
-              onClick={() => createSpecialTab('agent')}
-              disabled={tabs.length >= MAX_WORKSPACE_TABS}
-              title="打开自研 Seamind Agent（支持 /## 命令及 API×CLI 套娃协同）"
-            >
-              Agent
-            </button>
-
-            <div className="terminal-preset-container" ref={presetMenuRef}>
+            {workspaceFocus === 'agent' ? (
               <button
                 type="button"
-                className={`terminal-new-special-btn${showPresetMenu ? ' is-active' : ''}`}
+                className="terminal-new-tab-btn"
+                onClick={() => createSpecialTab('agent')}
+                disabled={tabs.length >= MAX_WORKSPACE_TABS}
+                title="新建独立 Agent 对话会话"
+              >
+                + 新建 Agent
+              </button>
+            ) : workspaceFocus === 'lab' ? (
+              <button
+                type="button"
+                className="terminal-new-tab-btn is-notebook-plus"
                 onClick={() => {
-                  setShowPresetMenu((prev) => !prev);
-                  setShowShellMenu(false);
+                  setShowShellMenu((prev) => !prev);
                   setToolsMenuOpen(false);
                   setShowPrefsMenu(false);
                   setShowPopoutMenu(false);
                 }}
-                aria-expanded={showPresetMenu}
-                title="一键套用多窗格协同预设模板"
+                disabled={tabs.length >= MAX_WORKSPACE_TABS}
+                aria-expanded={showShellMenu}
+                aria-label="新建笔记"
+                title="新建笔记"
               >
-                场景模板 ▾
+                +
               </button>
+            ) : (
+              <button
+                type="button"
+                className="terminal-new-tab-btn"
+                onClick={() => {
+                  setShowShellMenu((prev) => !prev);
+                  setToolsMenuOpen(false);
+                  setShowPrefsMenu(false);
+                  setShowPopoutMenu(false);
+                }}
+                disabled={tabs.length >= MAX_WORKSPACE_TABS}
+                aria-expanded={showShellMenu}
+                title={
+                  workspaceFocus === 'shell'
+                    ? '新建 Shell 或 CLI 会话'
+                    : '新建终端、交互 Agent 或 Euporie 代码实验本'
+                }
+              >
+                + 新建
+              </button>
+            )}
 
-              {showPresetMenu && (
-                <div className="terminal-preset-menu" role="menu">
-                  <div className="shell-menu-header">多窗协同场景预设模板</div>
-                  {WORKSPACE_LAYOUT_PRESETS.map((preset) => (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      className="terminal-preset-option"
-                      onClick={() => applyWorkspacePreset(preset)}
-                    >
-                      <div className="terminal-preset-opt-top">
-                        <span className="option-badge">{preset.badge}</span>
-                        <strong>{preset.title}</strong>
+            {!workspaceFocus && (
+              <>
+                <button
+                  type="button"
+                  className="terminal-new-special-btn"
+                  onClick={() => createSpecialTab('agent')}
+                  disabled={tabs.length >= MAX_WORKSPACE_TABS}
+                  title="打开自研 Seamind Agent（支持 /## 命令及 API×CLI 套娃协同）"
+                >
+                  Agent
+                </button>
+
+                <div className="terminal-preset-container" ref={presetMenuRef}>
+                  <button
+                    type="button"
+                    className={`terminal-new-special-btn${showPresetMenu ? ' is-active' : ''}`}
+                    onClick={() => {
+                      setShowPresetMenu((prev) => !prev);
+                      setShowShellMenu(false);
+                      setToolsMenuOpen(false);
+                      setShowPrefsMenu(false);
+                      setShowPopoutMenu(false);
+                    }}
+                    aria-expanded={showPresetMenu}
+                    title="一键套用多窗格协同预设模板"
+                  >
+                    场景模板 ▾
+                  </button>
+
+                  {showPresetMenu && (
+                    <div className="terminal-preset-menu" role="menu">
+                      <div className="shell-menu-header">
+                        多窗协同场景预设模板
                       </div>
-                      <span className="option-desc">{preset.description}</span>
-                    </button>
-                  ))}
+                      {WORKSPACE_LAYOUT_PRESETS.map((preset) => (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          className="terminal-preset-option"
+                          onClick={() => applyWorkspacePreset(preset)}
+                        >
+                          <div className="terminal-preset-opt-top">
+                            <span className="option-badge">{preset.badge}</span>
+                            <strong>{preset.title}</strong>
+                          </div>
+                          <span className="option-desc">
+                            {preset.description}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              </>
+            )}
 
             {showShellMenu && (
               <div className="terminal-shell-menu">
-                <div className="shell-menu-header">
-                  Seamind Agent &amp; Euporie 实验
-                </div>
-                <div className="shell-cli-quick-row">
-                  <button
-                    type="button"
-                    className="shell-cli-quick-btn is-primary"
-                    disabled={tabs.length >= MAX_WORKSPACE_TABS}
-                    onClick={() => createSpecialTab('agent')}
-                  >
-                    Seamind Agent
-                  </button>
-                  <button
-                    type="button"
-                    className="shell-cli-quick-btn"
-                    disabled={tabs.length >= MAX_WORKSPACE_TABS}
-                    onClick={() => createSpecialTab('lab', 'python')}
-                  >
-                    Python 实验本
-                  </button>
-                  <button
-                    type="button"
-                    className="shell-cli-quick-btn"
-                    disabled={tabs.length >= MAX_WORKSPACE_TABS}
-                    onClick={() => createSpecialTab('lab', 'c')}
-                  >
-                    C/C++ 实验本
-                  </button>
-                </div>
-
-                <div className="shell-menu-header">一键启动 CLI 模型会话</div>
-                <div className="shell-cli-quick-row">
-                  {CLI_PRESETS.map((cli) => (
-                    <button
-                      key={cli.id}
-                      type="button"
-                      className="shell-cli-quick-btn"
-                      disabled={tabs.length >= MAX_WORKSPACE_TABS}
-                      onClick={() => createNewTab('powershell', cli.id)}
-                      title={cli.desc}
-                    >
-                      {cli.label}
-                    </button>
-                  ))}
-                </div>
-
-                <div className="shell-menu-header">选择 Shell 外壳</div>
-                {tabs.length >= MAX_WORKSPACE_TABS && (
-                  <div className="shell-menu-limit">
-                    已达到 {MAX_WORKSPACE_TABS} 个会话上限，请先关闭不用的标签。
-                  </div>
-                )}
-                {shells.map((opt) => (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    className={`shell-menu-option ${opt.available ? '' : 'is-unavailable'}`}
-                    disabled={
-                      !opt.available || tabs.length >= MAX_WORKSPACE_TABS
-                    }
-                    onClick={() => createNewTab(opt.id)}
-                  >
-                    <div className="option-main">
-                      <span className="option-badge">{opt.badge}</span>
-                      <strong className="option-name">{opt.name}</strong>
-                      {!opt.available && (
-                        <span className="option-status">未检测到</span>
-                      )}
+                {workspaceFocus !== 'shell' && (
+                  <>
+                    <div className="shell-menu-header">
+                      {workspaceFocus === 'lab'
+                        ? '新建代码实验本'
+                        : 'Seamind Agent & Euporie 实验'}
                     </div>
-                    <span className="option-desc">{opt.description}</span>
-                  </button>
-                ))}
+                    <div className="shell-cli-quick-row">
+                      {!workspaceFocus && (
+                        <button
+                          type="button"
+                          className="shell-cli-quick-btn is-primary"
+                          disabled={tabs.length >= MAX_WORKSPACE_TABS}
+                          onClick={() => createSpecialTab('agent')}
+                        >
+                          Seamind Agent
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="shell-cli-quick-btn"
+                        disabled={tabs.length >= MAX_WORKSPACE_TABS}
+                        onClick={() => createSpecialTab('lab', 'python')}
+                      >
+                        Python 实验本
+                      </button>
+                      <button
+                        type="button"
+                        className="shell-cli-quick-btn"
+                        disabled={tabs.length >= MAX_WORKSPACE_TABS}
+                        onClick={() => createSpecialTab('lab', 'sql')}
+                      >
+                        SQL 数据本
+                      </button>
+                      <button
+                        type="button"
+                        className="shell-cli-quick-btn"
+                        disabled={tabs.length >= MAX_WORKSPACE_TABS}
+                        onClick={() => createSpecialTab('lab', 'r')}
+                      >
+                        R 统计本
+                      </button>
+                      <button
+                        type="button"
+                        className="shell-cli-quick-btn"
+                        disabled={tabs.length >= MAX_WORKSPACE_TABS}
+                        onClick={() => createSpecialTab('lab', 'c')}
+                      >
+                        C/C++ 实验本
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {workspaceFocus !== 'lab' && (
+                  <>
+                    <div className="shell-menu-header">
+                      一键启动 CLI 模型会话
+                    </div>
+                    <div className="shell-cli-quick-row">
+                      {CLI_PRESETS.map((cli) => (
+                        <button
+                          key={cli.id}
+                          type="button"
+                          className="shell-cli-quick-btn"
+                          disabled={tabs.length >= MAX_WORKSPACE_TABS}
+                          onClick={() => createNewTab('powershell', cli.id)}
+                          title={cli.desc}
+                        >
+                          {cli.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="shell-menu-header">选择 Shell 外壳</div>
+                    {tabs.length >= MAX_WORKSPACE_TABS && (
+                      <div className="shell-menu-limit">
+                        已达到 {MAX_WORKSPACE_TABS}{' '}
+                        个会话上限，请先关闭不用的标签。
+                      </div>
+                    )}
+                    {shells.map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        className={`shell-menu-option ${opt.available ? '' : 'is-unavailable'}`}
+                        disabled={
+                          !opt.available || tabs.length >= MAX_WORKSPACE_TABS
+                        }
+                        onClick={() => createNewTab(opt.id)}
+                      >
+                        <div className="option-main">
+                          <span className="option-badge">{opt.badge}</span>
+                          <strong className="option-name">{opt.name}</strong>
+                          {!opt.available && (
+                            <span className="option-status">未检测到</span>
+                          )}
+                        </div>
+                        <span className="option-desc">{opt.description}</span>
+                      </button>
+                    ))}
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -2427,44 +3114,46 @@ export default function TerminalWorkspace({
             <span className="terminal-topbar-notice">{windowNotice}</span>
           )}
 
-          <details className="terminal-layout-menu">
-            <summary title="选择窗格布局" aria-label="选择窗格布局">
-              <span>布局</span>
-            </summary>
-            <div
-              className="terminal-layout-options"
-              role="group"
-              aria-label="多窗格分屏交互"
-            >
-              {(
-                [
-                  ['single', '单窗格'],
-                  ['vertical', '左右并排双开（自动新建右窗）'],
-                  ['horizontal', '上下双开（自动新建下窗）'],
-                  ['tri', '三窗格布局（左主 + 右上下）'],
-                  ['quad', '四宫格多开（最多 4 窗同时运行 CLI）'],
-                ] as const
-              ).map(([mode, title]) => (
-                <button
-                  key={mode}
-                  type="button"
-                  className={
-                    !isStageZoomed && splitMode === mode ? 'is-active' : ''
-                  }
-                  onClick={(event) => {
-                    switchLayoutMode(mode);
-                    event.currentTarget
-                      .closest('details')
-                      ?.removeAttribute('open');
-                  }}
-                  title={title}
-                  aria-label={title}
-                >
-                  <span>{title}</span>
-                </button>
-              ))}
-            </div>
-          </details>
+          {workspaceFocus !== 'agent' && (
+            <details className="terminal-layout-menu">
+              <summary title="选择窗格布局" aria-label="选择窗格布局">
+                <span>布局</span>
+              </summary>
+              <div
+                className="terminal-layout-options"
+                role="group"
+                aria-label="多窗格分屏交互"
+              >
+                {(
+                  [
+                    ['single', '单窗格'],
+                    ['vertical', '左右并排双开（自动新建右窗）'],
+                    ['horizontal', '上下双开（自动新建下窗）'],
+                    ['tri', '三窗格布局（左主 + 右上下）'],
+                    ['quad', '四宫格多开（最多 4 窗同时运行 CLI）'],
+                  ] as const
+                ).map(([mode, title]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={
+                      !isStageZoomed && splitMode === mode ? 'is-active' : ''
+                    }
+                    onClick={(event) => {
+                      switchLayoutMode(mode);
+                      event.currentTarget
+                        .closest('details')
+                        ?.removeAttribute('open');
+                    }}
+                    title={title}
+                    aria-label={title}
+                  >
+                    <span>{title}</span>
+                  </button>
+                ))}
+              </div>
+            </details>
+          )}
 
           {visibleCount > 1 && (
             <button
@@ -2515,7 +3204,9 @@ export default function TerminalWorkspace({
 
             {showPopoutMenu && (
               <div className="terminal-popout-menu" role="menu">
-                <div className="shell-menu-header">多开独立桌面窗口</div>
+                <div className="shell-menu-header">
+                  独立窗口 · 智能体与实验本
+                </div>
                 <button
                   type="button"
                   className="terminal-tools-option"
@@ -2525,7 +3216,8 @@ export default function TerminalWorkspace({
                     })
                   }
                 >
-                  独立窗口打开 Seamind Agent
+                  <span>Seamind Agent</span>
+                  <span className="terminal-popout-badge">AI</span>
                 </button>
                 <button
                   type="button"
@@ -2537,14 +3229,46 @@ export default function TerminalWorkspace({
                     })
                   }
                 >
-                  独立窗口打开 Euporie Python 实验本
+                  <span>Python 交互实验本</span>
+                  <span className="terminal-popout-badge">PY</span>
                 </button>
+                <button
+                  type="button"
+                  className="terminal-tools-option"
+                  onClick={() =>
+                    void handlePopoutWindow(undefined, undefined, {
+                      kind: 'lab',
+                      labLanguage: 'sql',
+                    })
+                  }
+                >
+                  <span>SQL 数据分析实验本</span>
+                  <span className="terminal-popout-badge">SQL</span>
+                </button>
+                <button
+                  type="button"
+                  className="terminal-tools-option"
+                  onClick={() =>
+                    void handlePopoutWindow(undefined, undefined, {
+                      kind: 'lab',
+                      labLanguage: 'r',
+                    })
+                  }
+                >
+                  <span>R 语言统计实验本</span>
+                  <span className="terminal-popout-badge">R</span>
+                </button>
+                <div className="terminal-popout-sep" />
+                <div className="shell-menu-header">
+                  独立窗口 · 终端与 CLI (MCP)
+                </div>
                 <button
                   type="button"
                   className="terminal-tools-option"
                   onClick={() => void handlePopoutWindow(undefined)}
                 >
-                  新建独立 Shell 窗口
+                  <span>新建独立 Shell 窗口</span>
+                  <span className="terminal-popout-badge">SHELL</span>
                 </button>
                 {CLI_PRESETS.map((cli) => (
                   <button
@@ -2553,898 +3277,520 @@ export default function TerminalWorkspace({
                     className="terminal-tools-option"
                     onClick={() => void handlePopoutWindow(cli.id)}
                   >
-                    独立窗口启动 {cli.label}
+                    <span>独立窗口启动 {cli.label}</span>
+                    <span className="terminal-popout-badge">MCP</span>
                   </button>
                 ))}
               </div>
             )}
           </div>
 
-          <div className="terminal-prefs-container" ref={prefsMenuRef}>
-            <button
-              type="button"
-              className={`terminal-icon-btn${showPrefsMenu ? ' is-active' : ''}`}
-              onClick={() => {
-                setShowPrefsMenu((prev) => !prev);
-                setShowShellMenu(false);
-                setShowPopoutMenu(false);
-                setToolsMenuOpen(false);
-              }}
-              title="终端外观与 Alacritty 交互设置"
-              aria-expanded={showPrefsMenu}
-            >
-              配置
-            </button>
+          {(!workspaceFocus || workspaceFocus === 'shell') && (
+            <div className="terminal-prefs-container" ref={prefsMenuRef}>
+              <button
+                type="button"
+                className={`terminal-icon-btn${showPrefsMenu ? ' is-active' : ''}`}
+                onClick={() => {
+                  setShowPrefsMenu((prev) => !prev);
+                  setShowShellMenu(false);
+                  setShowPopoutMenu(false);
+                  setToolsMenuOpen(false);
+                }}
+                title="终端外观与 Alacritty 交互设置"
+                aria-expanded={showPrefsMenu}
+              >
+                配置
+              </button>
 
-            {showPrefsMenu && (
-              <div className="terminal-prefs-popover">
-                <div className="shell-menu-header">
-                  Alacritty 交互与渲染设置
-                </div>
-                <div className="terminal-prefs-row">
-                  <span>字号</span>
-                  <div className="terminal-prefs-stepper">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        saveTerminalPreferences({
-                          fontSize: prefs.fontSize - 1,
-                        })
-                      }
-                    >
-                      -
-                    </button>
-                    <strong>{prefs.fontSize}px</strong>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        saveTerminalPreferences({
-                          fontSize: prefs.fontSize + 1,
-                        })
-                      }
-                    >
-                      +
-                    </button>
+              {showPrefsMenu && (
+                <div className="terminal-prefs-popover">
+                  <div className="shell-menu-header">
+                    Alacritty 交互与渲染设置
                   </div>
-                </div>
-
-                <div className="terminal-prefs-row">
-                  <span>光标形态</span>
-                  <div className="terminal-prefs-seg">
-                    {(['block', 'underline', 'bar'] as const).map((style) => (
+                  <div className="terminal-prefs-row">
+                    <span>字号</span>
+                    <div className="terminal-prefs-stepper">
                       <button
-                        key={style}
                         type="button"
-                        className={
-                          prefs.cursorStyle === style ? 'is-active' : ''
-                        }
                         onClick={() =>
-                          saveTerminalPreferences({ cursorStyle: style })
+                          saveTerminalPreferences({
+                            fontSize: prefs.fontSize - 1,
+                          })
                         }
                       >
-                        {style === 'block'
-                          ? '方块'
-                          : style === 'underline'
-                            ? '底线'
-                            : '竖线'}
+                        -
                       </button>
-                    ))}
+                      <strong>{prefs.fontSize}px</strong>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          saveTerminalPreferences({
+                            fontSize: prefs.fontSize + 1,
+                          })
+                        }
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="terminal-prefs-row">
+                    <span>光标形态</span>
+                    <div className="terminal-prefs-seg">
+                      {(['block', 'underline', 'bar'] as const).map((style) => (
+                        <button
+                          key={style}
+                          type="button"
+                          className={
+                            prefs.cursorStyle === style ? 'is-active' : ''
+                          }
+                          onClick={() =>
+                            saveTerminalPreferences({ cursorStyle: style })
+                          }
+                        >
+                          {style === 'block'
+                            ? '方块'
+                            : style === 'underline'
+                              ? '底线'
+                              : '竖线'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <label className="terminal-prefs-check">
+                    <input
+                      type="checkbox"
+                      checked={prefs.cursorBlink}
+                      onChange={(e) =>
+                        saveTerminalPreferences({
+                          cursorBlink: e.target.checked,
+                        })
+                      }
+                    />
+                    <span>光标闪烁</span>
+                  </label>
+
+                  <label className="terminal-prefs-check">
+                    <input
+                      type="checkbox"
+                      checked={prefs.saveOnSelect}
+                      onChange={(e) =>
+                        saveTerminalPreferences({
+                          saveOnSelect: e.target.checked,
+                        })
+                      }
+                    />
+                    <span>鼠标选中自动复制 (save_to_clipboard)</span>
+                  </label>
+
+                  <label className="terminal-prefs-check">
+                    <input
+                      type="checkbox"
+                      checked={prefs.smartCopyPaste}
+                      onChange={(e) =>
+                        saveTerminalPreferences({
+                          smartCopyPaste: e.target.checked,
+                        })
+                      }
+                    />
+                    <span>智能 Ctrl+C（有选区时复制，无选区中断）</span>
+                  </label>
+
+                  <label className="terminal-prefs-check">
+                    <input
+                      type="checkbox"
+                      checked={prefs.webglEnabled}
+                      onChange={(e) =>
+                        saveTerminalPreferences({
+                          webglEnabled: e.target.checked,
+                        })
+                      }
+                    />
+                    <span>WebGL2 GPU 加速（重开会话生效）</span>
+                  </label>
+
+                  <div className="terminal-prefs-footer">
+                    <button
+                      type="button"
+                      className="terminal-status-btn"
+                      onClick={() =>
+                        saveTerminalPreferences(DEFAULT_TERMINAL_PREFERENCES)
+                      }
+                    >
+                      恢复默认
+                    </button>
+                    <span>Vi: Ctrl+Shift+Space · Hints: Ctrl+Shift+O</span>
                   </div>
                 </div>
+              )}
+            </div>
+          )}
 
-                <label className="terminal-prefs-check">
-                  <input
-                    type="checkbox"
-                    checked={prefs.cursorBlink}
-                    onChange={(e) =>
-                      saveTerminalPreferences({ cursorBlink: e.target.checked })
-                    }
-                  />
-                  <span>光标闪烁</span>
-                </label>
-
-                <label className="terminal-prefs-check">
-                  <input
-                    type="checkbox"
-                    checked={prefs.saveOnSelect}
-                    onChange={(e) =>
-                      saveTerminalPreferences({
-                        saveOnSelect: e.target.checked,
-                      })
-                    }
-                  />
-                  <span>鼠标选中自动复制 (save_to_clipboard)</span>
-                </label>
-
-                <label className="terminal-prefs-check">
-                  <input
-                    type="checkbox"
-                    checked={prefs.smartCopyPaste}
-                    onChange={(e) =>
-                      saveTerminalPreferences({
-                        smartCopyPaste: e.target.checked,
-                      })
-                    }
-                  />
-                  <span>智能 Ctrl+C（有选区时复制，无选区中断）</span>
-                </label>
-
-                <label className="terminal-prefs-check">
-                  <input
-                    type="checkbox"
-                    checked={prefs.webglEnabled}
-                    onChange={(e) =>
-                      saveTerminalPreferences({
-                        webglEnabled: e.target.checked,
-                      })
-                    }
-                  />
-                  <span>WebGL2 GPU 加速（重开会话生效）</span>
-                </label>
-
-                <div className="terminal-prefs-footer">
-                  <button
-                    type="button"
-                    className="terminal-status-btn"
-                    onClick={() =>
-                      saveTerminalPreferences(DEFAULT_TERMINAL_PREFERENCES)
-                    }
-                  >
-                    恢复默认
-                  </button>
-                  <span>Vi: Ctrl+Shift+Space · Hints: Ctrl+Shift+O</span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="terminal-tools-container" ref={toolsMenuRef}>
-            <button
-              type="button"
-              className={`terminal-icon-btn terminal-drawer-toggle-btn${drawerOpen || toolsMenuOpen ? ' is-active' : ''}`}
-              aria-expanded={drawerOpen}
-              onClick={() => {
-                setDrawerOpen((open) => !open);
-                setToolsMenuOpen(false);
-                setShowShellMenu(false);
-                setShowPopoutMenu(false);
-                setShowPrefsMenu(false);
-              }}
-              title={`切换命令库 / 知识修正侧栏 (${COMMAND_LIBRARY_SHORTCUT_LABEL})`}
-              aria-keyshortcuts="Control+Shift+L"
-            >
-              <span>工具栏</span>
-            </button>
-          </div>
+          {(!workspaceFocus || workspaceFocus === 'shell') && (
+            <div className="terminal-tools-container" ref={toolsMenuRef}>
+              <button
+                type="button"
+                className={`terminal-icon-btn terminal-drawer-toggle-btn${drawerOpen || toolsMenuOpen ? ' is-active' : ''}`}
+                aria-expanded={drawerOpen}
+                onClick={() => {
+                  setDrawerOpen((open) => !open);
+                  setToolsMenuOpen(false);
+                  setShowShellMenu(false);
+                  setShowPopoutMenu(false);
+                  setShowPrefsMenu(false);
+                }}
+                title={`切换命令库 / 知识修正侧栏 (${COMMAND_LIBRARY_SHORTCUT_LABEL})`}
+                aria-keyshortcuts="Control+Shift+L"
+              >
+                <span>工具栏</span>
+              </button>
+            </div>
+          )}
         </div>
       </nav>
 
       {/* Center Multi-Pane Stage + Left Modular Rail + Optional Right Drawer */}
       <div className="terminal-workspace-body">
-        <aside
-          className={`terminal-left-rail${railModule === 'lab' ? ' is-lab-rail' : ''}${leftRailCollapsed ? ' is-collapsed' : ''}`}
-          aria-label="终端模块切换与代码文件收集侧边栏"
-        >
-          {leftRailCollapsed ? (
-            <div className="terminal-rail-slim">
-              <button
-                type="button"
-                className="terminal-rail-slim-btn"
-                onClick={toggleLeftRail}
-                title="展开终端与代码收集侧边栏"
-                aria-label="展开侧边栏"
-              >
-                &gt;
-              </button>
-              <button
-                type="button"
-                className={`terminal-rail-slim-btn${railModule === 'shell' ? ' is-active' : ''}`}
-                onClick={() => handleSelectRailModule('shell')}
-                title={`终端会话 (${shellTabs.length})`}
-              >
-                &gt;_
-              </button>
-              <button
-                type="button"
-                className={`terminal-rail-slim-btn${railModule === 'agent' ? ' is-active' : ''}`}
-                onClick={() => handleSelectRailModule('agent')}
-                title={`Seamind Agent (${agentTabs.length})`}
-              >
-                AI
-              </button>
-              <button
-                type="button"
-                className={`terminal-rail-slim-btn${railModule === 'lab' ? ' is-active' : ''}`}
-                onClick={() => handleSelectRailModule('lab')}
-                title={`代码实验室与文件收集库 (${codeLabFiles.length})`}
-              >
-                Lab
-              </button>
-              <div className="terminal-rail-slim-sep" />
-              <button
-                type="button"
-                className="terminal-rail-slim-btn"
-                onClick={() => {
-                  if (railModule === 'agent') createSpecialTab('agent');
-                  else if (railModule === 'lab')
-                    createSpecialTab('lab', 'python');
-                  else createNewTab('powershell');
-                }}
-                title="新建当前模块会话"
-              >
-                +
-              </button>
-              <button
-                type="button"
-                className="terminal-rail-slim-btn"
-                onClick={() => {
-                  setPaletteOpen(true);
-                  setPaletteQuery('');
-                  setPaletteIndex(0);
-                }}
-                title="命令面板 (Ctrl+K)"
-              >
-                ⌘
-              </button>
-            </div>
-          ) : (
-            <>
-              <div className="terminal-rail-top">
-                <div className="terminal-rail-brand-row">
-                  <span className="terminal-rail-brand-title">
-                    {railModule === 'lab' ? '实验本' : '终端与代码实验室'}
-                  </span>
-                  <button
-                    type="button"
-                    className="terminal-rail-collapse-btn"
-                    onClick={toggleLeftRail}
-                    title="收起左侧边栏"
-                    aria-label="收起左侧边栏"
-                  >
-                    &lt;
-                  </button>
+        {!hideSidebar && (
+          <aside
+            className={`terminal-left-rail${railModule === 'lab' ? ' is-lab-rail' : ''}${leftRailCollapsed ? ' is-collapsed' : ''}`}
+            aria-label={
+              workspaceFocus === 'lab'
+                ? '编辑器文件与数据环境侧边栏'
+                : workspaceFocus === 'agent'
+                  ? 'Agent 会话侧边栏'
+                  : workspaceFocus === 'shell'
+                    ? '系统终端侧边栏'
+                    : '终端模块切换与代码文件收集侧边栏'
+            }
+          >
+            {leftRailCollapsed ? (
+              <div className="terminal-rail-slim">
+                <button
+                  type="button"
+                  className="terminal-rail-slim-btn"
+                  onClick={toggleLeftRail}
+                  title="展开左侧边栏"
+                  aria-label="展开侧边栏"
+                >
+                  &gt;
+                </button>
+                {!workspaceFocus && (
+                  <>
+                    <button
+                      type="button"
+                      className={`terminal-rail-slim-btn${railModule === 'shell' ? ' is-active' : ''}`}
+                      onClick={() => handleSelectRailModule('shell')}
+                      title={`终端会话 (${shellTabs.length})`}
+                    >
+                      &gt;_
+                    </button>
+                    <button
+                      type="button"
+                      className={`terminal-rail-slim-btn${railModule === 'agent' ? ' is-active' : ''}`}
+                      onClick={() => handleSelectRailModule('agent')}
+                      title={`Seamind Agent (${agentTabs.length})`}
+                    >
+                      AI
+                    </button>
+                    <button
+                      type="button"
+                      className={`terminal-rail-slim-btn${railModule === 'lab' ? ' is-active' : ''}`}
+                      onClick={() => handleSelectRailModule('lab')}
+                      title={`代码实验室与文件收集库 (${codeLabFiles.length})`}
+                    >
+                      Lab
+                    </button>
+                  </>
+                )}
+                <div className="terminal-rail-slim-sep" />
+                <button
+                  type="button"
+                  className="terminal-rail-slim-btn"
+                  onClick={() => {
+                    if (railModule === 'agent') createSpecialTab('agent');
+                    else if (railModule === 'lab')
+                      createSpecialTab('lab', 'python');
+                    else createNewTab('powershell');
+                  }}
+                  title="新建当前模块会话"
+                >
+                  +
+                </button>
+                <button
+                  type="button"
+                  className="terminal-rail-slim-btn"
+                  onClick={() => {
+                    setPaletteOpen(true);
+                    setPaletteQuery('');
+                    setPaletteIndex(0);
+                  }}
+                  title="命令面板 (Ctrl+K)"
+                >
+                  ⌘
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="terminal-rail-top">
+                  <div className="terminal-rail-brand-row">
+                    <span className="terminal-rail-brand-title">
+                      {workspaceFocus === 'lab'
+                        ? '编辑器'
+                        : workspaceFocus === 'agent'
+                          ? 'Agent 中枢'
+                          : workspaceFocus === 'shell'
+                            ? '系统终端'
+                            : railModule === 'lab'
+                              ? '编辑器'
+                              : '终端与编辑器'}
+                    </span>
+                    <button
+                      type="button"
+                      className="terminal-rail-collapse-btn"
+                      onClick={toggleLeftRail}
+                      title="收起左侧边栏"
+                      aria-label="收起左侧边栏"
+                    >
+                      &lt;
+                    </button>
+                  </div>
+
+                  {!workspaceFocus && (
+                    <div
+                      className="terminal-rail-mode-tabs"
+                      role="tablist"
+                      aria-label="终端三大模块切换"
+                    >
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={railModule === 'shell'}
+                        className={`terminal-rail-mode-tab${railModule === 'shell' ? ' is-active' : ''}`}
+                        onClick={() => handleSelectRailModule('shell')}
+                      >
+                        <span>终端</span>
+                        <span className="terminal-rail-count">
+                          {shellTabs.length}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={railModule === 'agent'}
+                        className={`terminal-rail-mode-tab${railModule === 'agent' ? ' is-active' : ''}`}
+                        onClick={() => handleSelectRailModule('agent')}
+                      >
+                        <span>Agent</span>
+                        <span className="terminal-rail-count">
+                          {agentTabs.length}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={railModule === 'lab'}
+                        className={`terminal-rail-mode-tab${railModule === 'lab' ? ' is-active' : ''}`}
+                        onClick={() => handleSelectRailModule('lab')}
+                      >
+                        <span>编辑器</span>
+                        <span className="terminal-rail-count">
+                          {codeLabFiles.length}
+                        </span>
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 <div
-                  className="terminal-rail-mode-tabs"
-                  role="tablist"
-                  aria-label="终端三大模块切换"
+                  className={`terminal-rail-scroll${railModule === 'lab' ? ' is-obsidian-host' : ''}`}
                 >
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={railModule === 'shell'}
-                    className={`terminal-rail-mode-tab${railModule === 'shell' ? ' is-active' : ''}`}
-                    onClick={() => handleSelectRailModule('shell')}
-                  >
-                    <span>终端</span>
-                    <span className="terminal-rail-count">
-                      {shellTabs.length}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={railModule === 'agent'}
-                    className={`terminal-rail-mode-tab${railModule === 'agent' ? ' is-active' : ''}`}
-                    onClick={() => handleSelectRailModule('agent')}
-                  >
-                    <span>Agent</span>
-                    <span className="terminal-rail-count">
-                      {agentTabs.length}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={railModule === 'lab'}
-                    className={`terminal-rail-mode-tab${railModule === 'lab' ? ' is-active' : ''}`}
-                    onClick={() => handleSelectRailModule('lab')}
-                  >
-                    <span>实验室</span>
-                    <span className="terminal-rail-count">
-                      {codeLabFiles.length}
-                    </span>
-                  </button>
+                  {railModule === 'lab' && (
+                    <EditorWorkspaceSidebar
+                      groupedFiles={groupedCodeLabFiles}
+                      collapsedFolders={collapsedLabFolders}
+                      onToggleFolder={(folder) =>
+                        setCollapsedLabFolders((prev) => ({
+                          ...prev,
+                          [folder]: !prev[folder],
+                        }))
+                      }
+                      onSetAllFoldersCollapsed={(collapsed) => {
+                        const next: Record<string, boolean> = {};
+                        for (const group of groupedCodeLabFiles) {
+                          next[group.folder] = collapsed;
+                        }
+                        setCollapsedLabFolders(next);
+                      }}
+                      searchQuery={codeLabSearch}
+                      onSearchChange={setCodeLabSearch}
+                      filter={codeLabFilter}
+                      onFilterChange={setCodeLabFilter}
+                      activeFileId={activeLabInfo.fileId}
+                      tabs={tabs}
+                      labInfoByTab={labInfoByTab}
+                      onCreateNotebook={(lang, targetFolder) => {
+                        const created = createCodeLabSavedFile(
+                          lang,
+                          targetFolder,
+                        );
+                        setCodeLabFiles(created.files);
+                        setCodeLabFolders(created.folders);
+                        handleOpenSavedCodeFile(created.file, 'tab');
+                        showTempNotice(
+                          `已在「${created.file.folder}」新建笔记 ${created.file.title}`,
+                        );
+                      }}
+                      onCreateFolder={(name) => {
+                        const res = createCodeLabFolder(name);
+                        if (!res.createdName) {
+                          showTempNotice('笔记本名称为空或已存在');
+                          return false;
+                        }
+                        setCodeLabFolders(res.folders);
+                        setCollapsedLabFolders((prev) => ({
+                          ...prev,
+                          [res.createdName!]: false,
+                        }));
+                        showTempNotice(`已新建笔记本「${res.createdName}」`);
+                        return true;
+                      }}
+                      onRenameFolder={(oldName, newName) => {
+                        const res = renameCodeLabFolder(oldName, newName);
+                        if (!res.renamedTo) {
+                          showTempNotice('笔记本名称无效或已存在');
+                          return false;
+                        }
+                        setCodeLabFolders(res.folders);
+                        setCodeLabFiles(res.files);
+                        showTempNotice(`已重命名笔记本为「${res.renamedTo}」`);
+                        return true;
+                      }}
+                      onDeleteFolder={(name) => {
+                        const res = deleteCodeLabFolder(name);
+                        setCodeLabFolders(res.folders);
+                        setCodeLabFiles(res.files);
+                        showTempNotice(
+                          `已移除笔记本「${name}」，原笔记已保留至「${UNCATEGORIZED_CODELAB_FOLDER}」`,
+                        );
+                      }}
+                      onMoveFileToFolder={(fileId, targetFolder) => {
+                        const res = moveCodeLabFileToFolder(
+                          fileId,
+                          targetFolder,
+                        );
+                        if (!res.movedFile) return;
+                        setCodeLabFiles(res.files);
+                        setCollapsedLabFolders((prev) => ({
+                          ...prev,
+                          [targetFolder]: false,
+                        }));
+                        showTempNotice(
+                          `已将「${res.movedFile.title}」移入「${targetFolder}」`,
+                        );
+                      }}
+                      onOpenFile={(file, placement = 'tab') =>
+                        handleOpenSavedCodeFile(file, placement)
+                      }
+                      onDuplicateFile={(file) =>
+                        handleDuplicateSavedCodeFile(file, 'tab')
+                      }
+                      onToggleStarFile={(fileId) =>
+                        setCodeLabFiles(toggleStarCodeLabFile(fileId))
+                      }
+                      onDeleteFile={(fileId) =>
+                        setCodeLabFiles(deleteCodeLabFile(fileId))
+                      }
+                      mountedDataFiles={mountedDataFiles}
+                      dbConnections={dbConnections}
+                      pythonEnvs={pythonEnvs}
+                      rEnvs={rEnvs}
+                      baseProfile={baseProfile}
+                      busInfo={busInfo}
+                      selectedPythonRuntime={selectedPythonRuntime}
+                      selectedRRuntime={selectedRRuntime}
+                      customEnvPaths={customEnvPaths}
+                      envsLoading={envsLoading}
+                      onUpdateDataFiles={(next) => {
+                        setMountedDataFiles(next);
+                        saveDataLabFiles(next);
+                      }}
+                      onUpdateDbConnections={(next) => {
+                        setDbConnections(next);
+                        saveDataLabConnections(next);
+                      }}
+                      onInsertDataCell={handleInsertDataCellToLab}
+                      onRefreshEnvs={() => refreshDataEnvs()}
+                      onRefreshBus={syncSharedBusContext}
+                      onSaveBaseProfile={(next) => {
+                        setBaseProfile(next);
+                        saveDataLabBaseProfile(next);
+                        if (next.pythonPath) {
+                          handleSelectWorkspacePythonRuntime(next.pythonPath);
+                        }
+                        if (next.rscriptPath) {
+                          handleSelectWorkspaceRRuntime(next.rscriptPath);
+                        }
+                        showTempNotice('已保存永久默认分析基座');
+                      }}
+                      onSelectPythonRuntime={handleSelectWorkspacePythonRuntime}
+                      onSelectRRuntime={handleSelectWorkspaceRRuntime}
+                      onActivateInTerminal={(cmd) => {
+                        sendToShellPane(cmd, true);
+                        showTempNotice(`已在终端执行：${cmd}`);
+                      }}
+                      onUpdateCustomEnvPaths={(next) => {
+                        setCustomEnvPaths(next);
+                        saveCustomEnvPaths(next);
+                        refreshDataEnvs(next);
+                      }}
+                      onNotify={showTempNotice}
+                    />
+                  )}
+
+                  {railModule === 'agent' && (
+                    <AgentWorkspaceSidebar
+                      agentTabs={agentTabs}
+                      activeTabId={activeTabId}
+                      onCreateAgentTab={() => createSpecialTab('agent')}
+                      onSelectTab={(tabId) =>
+                        activateOrCreateTabInFocusedPane(tabId)
+                      }
+                      onSendPrompt={(prompt) => sendToAgentPane(prompt)}
+                      onOpenModelModal={() => {
+                        if (activeTab?.kind === 'agent') {
+                          agentRefs.current.get(activeTab.id)?.openModelModal();
+                        }
+                      }}
+                      onOpenSplitPair={(primary, secondary) =>
+                        dispatchOpenSplitPair(primary, secondary)
+                      }
+                    />
+                  )}
+
+                  {railModule === 'shell' && (
+                    <ShellWorkspaceSidebar
+                      shellTabs={shellTabs}
+                      activeTabId={activeTabId}
+                      shells={shells}
+                      cliPresets={CLI_PRESETS}
+                      tabLimitReached={tabs.length >= MAX_WORKSPACE_TABS}
+                      drawerOpen={drawerOpen}
+                      onCreateShellTab={(shellId, cliId) =>
+                        createNewTab(shellId, cliId)
+                      }
+                      onSelectTab={(tabId) =>
+                        activateOrCreateTabInFocusedPane(tabId)
+                      }
+                      onToggleCommandDrawer={() => setDrawerOpen((o) => !o)}
+                    />
+                  )}
                 </div>
-              </div>
-
-              <div className="terminal-rail-scroll">
-                {railModule === 'lab' && (
-                  <div className="terminal-rail-section is-lab-institutional">
-                    <div
-                      className="terminal-rail-sub-seg is-three-way"
-                      role="tablist"
-                      aria-label="实验本文件、代码片段与运行会话切换"
-                    >
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={labRailSubTab === 'files'}
-                        className={labRailSubTab === 'files' ? 'is-active' : ''}
-                        onClick={() => setLabRailSubTab('files')}
-                      >
-                        文件 ({codeLabFiles.length})
-                      </button>
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={labRailSubTab === 'snippets'}
-                        className={
-                          labRailSubTab === 'snippets' ? 'is-active' : ''
-                        }
-                        onClick={() => setLabRailSubTab('snippets')}
-                      >
-                        代码片段 ({DEFAULT_CODELAB_SNIPPETS.length})
-                      </button>
-                      <button
-                        type="button"
-                        role="tab"
-                        aria-selected={labRailSubTab === 'sessions'}
-                        className={
-                          labRailSubTab === 'sessions' ? 'is-active' : ''
-                        }
-                        onClick={() => setLabRailSubTab('sessions')}
-                      >
-                        运行会话 ({labTabs.length})
-                      </button>
-                    </div>
-
-                    {labRailSubTab === 'files' && (
-                      <>
-                        <details className="terminal-rail-new-details">
-                          <summary>新建实验本</summary>
-                          <div className="terminal-rail-new-options">
-                            <button
-                              type="button"
-                              onClick={(event) => {
-                                event.currentTarget
-                                  .closest('details')
-                                  ?.removeAttribute('open');
-                                createSpecialTab('lab', 'python');
-                              }}
-                            >
-                              Python 实验本
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(event) => {
-                                event.currentTarget
-                                  .closest('details')
-                                  ?.removeAttribute('open');
-                                createSpecialTab('lab', 'c');
-                              }}
-                            >
-                              C 实验本
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(event) => {
-                                event.currentTarget
-                                  .closest('details')
-                                  ?.removeAttribute('open');
-                                createSpecialTab('lab', 'cpp');
-                              }}
-                            >
-                              C++ 实验本
-                            </button>
-                          </div>
-                        </details>
-
-                        <input
-                          type="search"
-                          className="terminal-rail-search"
-                          value={codeLabSearch}
-                          onChange={(e) => setCodeLabSearch(e.target.value)}
-                          placeholder="搜索实验本、标签或函数…"
-                          aria-label="搜索收集的代码文件"
-                        />
-
-                        <label className="terminal-rail-filter-row">
-                          <span>筛选</span>
-                          <select
-                            value={codeLabFilter}
-                            onChange={(event) =>
-                              setCodeLabFilter(
-                                event.target.value as
-                                  'all' | TerminalCodeLabLanguage | 'starred',
-                              )
-                            }
-                          >
-                            <option value="all">全部实验本</option>
-                            <option value="python">Python</option>
-                            <option value="c">C</option>
-                            <option value="cpp">C++</option>
-                            <option value="starred">已收藏</option>
-                          </select>
-                        </label>
-
-                        <div className="terminal-rail-folders">
-                          {groupedCodeLabFiles.map((group) => {
-                            const isCollapsed = Boolean(
-                              collapsedLabFolders[group.folder],
-                            );
-                            return (
-                              <div
-                                key={group.folder}
-                                className="terminal-rail-folder-group"
-                              >
-                                <button
-                                  type="button"
-                                  className="terminal-rail-folder-head"
-                                  onClick={() =>
-                                    setCollapsedLabFolders((prev) => ({
-                                      ...prev,
-                                      [group.folder]: !prev[group.folder],
-                                    }))
-                                  }
-                                >
-                                  <span className="terminal-rail-folder-caret">
-                                    {isCollapsed ? (
-                                      <LabChevronRightIcon size={11} />
-                                    ) : (
-                                      <LabChevronDownIcon size={11} />
-                                    )}
-                                  </span>
-                                  <span className="terminal-rail-folder-name">
-                                    {group.folder}
-                                  </span>
-                                  <span className="terminal-rail-folder-count">
-                                    {group.items.length}
-                                  </span>
-                                </button>
-
-                                {!isCollapsed && (
-                                  <div className="terminal-rail-folder-items">
-                                    {group.items.length === 0 ? (
-                                      <div className="terminal-rail-empty-hint">
-                                        暂无归档文件
-                                      </div>
-                                    ) : (
-                                      group.items.map((file) => {
-                                        const isCurrent =
-                                          activeLabInfo.fileId === file.id;
-                                        const isDirtyInAnyTab = tabs.some(
-                                          (t) =>
-                                            t.kind === 'lab' &&
-                                            (labInfoByTab[t.id]?.fileId ??
-                                              t.labFileId) === file.id &&
-                                            labInfoByTab[t.id]?.dirty,
-                                        );
-                                        const badge =
-                                          file.language === 'cpp'
-                                            ? 'CPP'
-                                            : file.language === 'c'
-                                              ? 'C'
-                                              : 'PY';
-                                        return (
-                                          <div
-                                            key={file.id}
-                                            className={`terminal-rail-file-row${isCurrent ? ' is-active' : ''}`}
-                                          >
-                                            <button
-                                              type="button"
-                                              className="terminal-rail-file-main"
-                                              onClick={() =>
-                                                handleOpenSavedCodeFile(file)
-                                              }
-                                              title={`${file.title} (${file.cells.length} 格${isDirtyInAnyTab ? ' · 未保存' : ''})`}
-                                            >
-                                              <span
-                                                className={`terminal-rail-lang-badge is-${file.language}`}
-                                              >
-                                                {badge}
-                                              </span>
-                                              <span className="terminal-rail-file-title">
-                                                {file.title}
-                                              </span>
-                                              {isDirtyInAnyTab && (
-                                                <span
-                                                  className="tab-dirty-dot"
-                                                  title="有未保存更改"
-                                                >
-                                                  ●
-                                                </span>
-                                              )}
-                                              <span className="terminal-rail-file-cells">
-                                                {file.cells.length}
-                                              </span>
-                                            </button>
-                                            <button
-                                              type="button"
-                                              className="terminal-rail-file-open-action"
-                                              onClick={() =>
-                                                handleOpenSavedCodeFile(
-                                                  file,
-                                                  'right',
-                                                )
-                                              }
-                                              title={
-                                                isCurrent
-                                                  ? `在右侧分屏新建「${file.title}」同步视图`
-                                                  : `在右侧分屏打开 ${file.title}`
-                                              }
-                                              aria-label={`在右侧分屏打开 ${file.title}`}
-                                            >
-                                              <DrawerSplitIcon />
-                                            </button>
-                                            <button
-                                              type="button"
-                                              className="terminal-rail-file-open-action"
-                                              onClick={() =>
-                                                handleDuplicateSavedCodeFile(
-                                                  file,
-                                                  'tab',
-                                                )
-                                              }
-                                              title={`复制实验本 ${file.title}（新文档 · 独立内核）`}
-                                              aria-label={`复制实验本 ${file.title}`}
-                                            >
-                                              ⧉
-                                            </button>
-                                            <button
-                                              type="button"
-                                              className="terminal-rail-file-open-action"
-                                              onClick={() =>
-                                                handleOpenSavedCodeFile(
-                                                  file,
-                                                  'window',
-                                                )
-                                              }
-                                              title={`在独立窗口打开 ${file.title}`}
-                                              aria-label={`在独立窗口打开 ${file.title}`}
-                                            >
-                                              <PopoutWindowIcon />
-                                            </button>
-                                            <button
-                                              type="button"
-                                              className={`terminal-rail-star-btn${file.starred ? ' is-starred' : ''}`}
-                                              onClick={() =>
-                                                setCodeLabFiles(
-                                                  toggleStarCodeLabFile(
-                                                    file.id,
-                                                  ),
-                                                )
-                                              }
-                                              title={
-                                                file.starred
-                                                  ? '取消收藏'
-                                                  : '收藏代码文件'
-                                              }
-                                              aria-label={
-                                                file.starred
-                                                  ? '取消收藏'
-                                                  : '收藏代码文件'
-                                              }
-                                            >
-                                              <LabStarIcon
-                                                size={11}
-                                                filled={file.starred}
-                                              />
-                                            </button>
-                                            <button
-                                              type="button"
-                                              className="terminal-rail-del-btn"
-                                              onClick={() =>
-                                                setCodeLabFiles(
-                                                  deleteCodeLabFile(file.id),
-                                                )
-                                              }
-                                              title="从收集库移除"
-                                              aria-label="从收集库移除"
-                                            >
-                                              <LabCloseIcon size={11} />
-                                            </button>
-                                          </div>
-                                        );
-                                      })
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </>
-                    )}
-
-                    {labRailSubTab === 'snippets' && (
-                      <div className="terminal-rail-snippets-list">
-                        {DEFAULT_CODELAB_SNIPPETS.map((snip) => (
-                          <div
-                            key={snip.id}
-                            className="terminal-rail-snippet-card"
-                          >
-                            <div className="terminal-rail-snippet-top">
-                              <span
-                                className={`terminal-rail-lang-badge is-${snip.language}`}
-                              >
-                                {snip.language.toUpperCase()}
-                              </span>
-                              <strong>{snip.title}</strong>
-                            </div>
-                            <p className="terminal-rail-snippet-desc">
-                              {snip.description}
-                            </p>
-                            <div className="terminal-rail-snippet-actions">
-                              <button
-                                type="button"
-                                className="terminal-rail-mini-btn"
-                                onClick={() =>
-                                  handleInsertSnippetToLab(snip, false)
-                                }
-                              >
-                                <span>插入格</span>
-                              </button>
-                              <button
-                                type="button"
-                                className="terminal-rail-mini-btn is-accent"
-                                onClick={() =>
-                                  handleInsertSnippetToLab(snip, true)
-                                }
-                              >
-                                <span>运行</span>
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {labRailSubTab === 'sessions' && (
-                      <div className="terminal-rail-sessions-view">
-                        <div className="terminal-rail-group-head">
-                          <span>活跃实验本会话 ({labTabs.length})</span>
-                          <button
-                            type="button"
-                            className="terminal-rail-mini-btn is-accent"
-                            onClick={() => createSpecialTab('lab', 'python')}
-                          >
-                            + 新建会话
-                          </button>
-                        </div>
-                        {labTabs.length === 0 ? (
-                          <div className="terminal-rail-empty-hint">
-                            当前没有打开的实验本会话
-                          </div>
-                        ) : (
-                          <div className="terminal-rail-session-list">
-                            {labTabs.map((t) => {
-                              const info = labInfoByTab[t.id];
-                              const paneSlot = tabToPaneIndex.get(t.id);
-                              const isDirty = Boolean(info?.dirty);
-                              return (
-                                <div
-                                  key={t.id}
-                                  className={`terminal-rail-session-row${t.id === activeTabId ? ' is-active' : ''}`}
-                                >
-                                  <button
-                                    type="button"
-                                    className="terminal-rail-session-main"
-                                    onClick={() =>
-                                      activateOrCreateTabInFocusedPane(t.id)
-                                    }
-                                    title={
-                                      t.statusMessage ||
-                                      `${t.title}${isDirty ? ' · 未保存' : ''}`
-                                    }
-                                  >
-                                    <span className="terminal-rail-session-name">
-                                      {t.title}
-                                    </span>
-                                    {isDirty && (
-                                      <span
-                                        className="tab-dirty-dot"
-                                        title="有未保存更改"
-                                      >
-                                        ●
-                                      </span>
-                                    )}
-                                    {paneSlot !== undefined && (
-                                      <span className="option-badge">
-                                        窗格 {paneSlot + 1}
-                                      </span>
-                                    )}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="terminal-rail-file-open-action"
-                                    onClick={() =>
-                                      handleOpenSyncViewForTab(t.id)
-                                    }
-                                    title="在右侧分屏新建此实验本的同步视图"
-                                    aria-label="新建同步视图"
-                                  >
-                                    <DrawerSplitIcon />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="terminal-rail-file-open-action"
-                                    onClick={() =>
-                                      void handlePopoutWindow(undefined, t.id)
-                                    }
-                                    title="弹出到独立窗口"
-                                    aria-label="弹出到独立窗口"
-                                  >
-                                    <PopoutWindowIcon />
-                                  </button>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {railModule === 'agent' && (
-                  <div className="terminal-rail-section">
-                    <div className="terminal-rail-group-head">
-                      <span>活跃 Agent 会话 ({agentTabs.length})</span>
-                      <button
-                        type="button"
-                        className="terminal-rail-mini-btn is-accent"
-                        onClick={() => createSpecialTab('agent')}
-                      >
-                        + 新建 Agent
-                      </button>
-                    </div>
-                    <div className="terminal-rail-session-list">
-                      {agentTabs.map((t) => (
-                        <button
-                          key={t.id}
-                          type="button"
-                          className={`terminal-rail-session-item${t.id === activeTabId ? ' is-active' : ''}`}
-                          onClick={() => activateOrCreateTabInFocusedPane(t.id)}
-                        >
-                          <span className="terminal-rail-session-name">
-                            {t.title}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-
-                    <div className="terminal-rail-group-label">
-                      多窗协同场景模板
-                    </div>
-                    <div className="terminal-rail-preset-list">
-                      {WORKSPACE_LAYOUT_PRESETS.map((preset) => (
-                        <button
-                          key={preset.id}
-                          type="button"
-                          className="terminal-rail-preset-card"
-                          onClick={() => applyWorkspacePreset(preset)}
-                        >
-                          <div className="terminal-rail-preset-top">
-                            <span className="option-badge">{preset.badge}</span>
-                            <strong>{preset.title}</strong>
-                          </div>
-                          <span>{preset.description}</span>
-                        </button>
-                      ))}
-                    </div>
-
-                    <div className="terminal-rail-group-label">
-                      快捷指令与模型配置
-                    </div>
-                    <div className="terminal-rail-action-grid">
-                      <button
-                        type="button"
-                        className="terminal-rail-mini-btn"
-                        onClick={() => sendToAgentPane('/help')}
-                      >
-                        /help 指南
-                      </button>
-                      <button
-                        type="button"
-                        className="terminal-rail-mini-btn"
-                        onClick={() => {
-                          if (activeTab?.kind === 'agent') {
-                            agentRefs.current
-                              .get(activeTab.id)
-                              ?.openModelModal();
-                          }
-                        }}
-                      >
-                        Ctrl+M 模型
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {railModule === 'shell' && (
-                  <div className="terminal-rail-section">
-                    <div className="terminal-rail-group-head">
-                      <span>活跃终端会话 ({shellTabs.length})</span>
-                      <button
-                        type="button"
-                        className="terminal-rail-mini-btn is-accent"
-                        onClick={() => createNewTab('powershell')}
-                      >
-                        + 新建终端
-                      </button>
-                    </div>
-                    <div className="terminal-rail-session-list">
-                      {shellTabs.map((t) => (
-                        <div
-                          key={t.id}
-                          className={`terminal-rail-session-item${t.id === activeTabId ? ' is-active' : ''}`}
-                        >
-                          <button
-                            type="button"
-                            className="terminal-rail-session-main"
-                            onClick={() =>
-                              activateOrCreateTabInFocusedPane(t.id)
-                            }
-                          >
-                            <span className="option-badge">
-                              {t.shell.toUpperCase()}
-                            </span>
-                            <span className="terminal-rail-session-name">
-                              {t.title}
-                            </span>
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-
-                    <div className="terminal-rail-group-label">
-                      启动 Shell 外壳
-                    </div>
-                    <div className="terminal-rail-action-grid">
-                      {shells.map((opt) => (
-                        <button
-                          key={opt.id}
-                          type="button"
-                          className="terminal-rail-mini-btn"
-                          disabled={
-                            !opt.available || tabs.length >= MAX_WORKSPACE_TABS
-                          }
-                          onClick={() => createNewTab(opt.id)}
-                          title={opt.description}
-                        >
-                          + {opt.badge}
-                        </button>
-                      ))}
-                    </div>
-
-                    <div className="terminal-rail-group-label">
-                      CLI 模型套娃会话
-                    </div>
-                    <div className="terminal-rail-action-grid is-three-col">
-                      {CLI_PRESETS.map((cli) => (
-                        <button
-                          key={cli.id}
-                          type="button"
-                          className="terminal-rail-mini-btn"
-                          disabled={tabs.length >= MAX_WORKSPACE_TABS}
-                          onClick={() => createNewTab('powershell', cli.id)}
-                          title={cli.desc}
-                        >
-                          {cli.label}
-                        </button>
-                      ))}
-                    </div>
-
-                    <div className="terminal-rail-group-label">
-                      命令速查与知识动作
-                    </div>
-                    <button
-                      type="button"
-                      className="terminal-rail-full-btn"
-                      onClick={() => setDrawerOpen((o) => !o)}
-                    >
-                      {drawerOpen
-                        ? '收起右侧命令速查栏'
-                        : '展开 Linux / 知识库命令栏'}
-                    </button>
-                  </div>
-                )}
-              </div>
-            </>
-          )}
-        </aside>
+              </>
+            )}
+          </aside>
+        )}
 
         <section
           className={`terminal-stage-panes is-${isStageZoomed ? 'single' : splitMode}${isStageZoomed ? ' is-zoomed' : ''}${showPaneHeaders ? '' : ' is-headerless'}${draggingTabId ? ' is-drop-ready' : ''}`}
@@ -3751,6 +4097,14 @@ export default function TerminalWorkspace({
                   style={paneStyle}
                   active={active && isVisibleInStage}
                   bridge={mergedBridge}
+                  mountedFiles={mountedDataFiles}
+                  dbConnections={dbConnections}
+                  pythonEnvs={pythonEnvs}
+                  rEnvs={rEnvs}
+                  preferredPythonRuntime={selectedPythonRuntime}
+                  preferredRRuntime={selectedRRuntime}
+                  onSelectPythonRuntime={setSelectedPythonRuntime}
+                  onSelectRRuntime={setSelectedRRuntime}
                   onFocusPane={onFocusTabPane}
                   onStatusChange={onTabStatus}
                   onSendToShellPane={sendToShellPane}
@@ -4702,3 +5056,5 @@ export default function TerminalWorkspace({
     </main>
   );
 }
+
+export default TerminalWorkspace;

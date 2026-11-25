@@ -239,12 +239,13 @@
   grid-column: 4;
   grid-row: 2;
 }
+.app-shell.is-knowledge-surface .workspace.is-knowledge-map.is-document-open,
 .workspace.is-knowledge-map.is-document-open {
   grid-template-rows: minmax(0, 1fr);
 }
 .workspace.is-knowledge-map.is-document-open > .library-sidebar,
 .workspace.is-knowledge-map.is-document-open > .document-workbench {
-  grid-row: 1;
+  grid-row: 1 / -1;
 }
 .knowledge-file-header {
   display: flex;

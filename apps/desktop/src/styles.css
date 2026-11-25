@@ -52,6 +52,47 @@ select option {
   color: var(--ink, #20252b);
 }
 
+/* Global subtle scrollbars: slim arrowless translucent thumb without gray track,
+   always faintly visible and deepening smoothly on hover/drag across all themes. */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+  background: transparent;
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+::-webkit-scrollbar-thumb {
+  min-width: 24px;
+  min-height: 24px;
+  border-radius: 999px;
+  border: 1.5px solid transparent;
+  background-clip: content-box;
+  background-color: color-mix(
+    in srgb,
+    var(--scrollbar-slider) 56%,
+    transparent
+  );
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-slider-hover);
+}
+::-webkit-scrollbar-thumb:active {
+  background-color: var(--scrollbar-slider-active);
+}
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-slider) transparent;
+  }
+}
+
 /* VS Code style scrollbars: flat slider without arrow buttons or track that
    only shows while the pointer is over the area and fades out on leave. The
    registered property lets the slider color transition. */
@@ -192,10 +233,6 @@ select option {
   background: transparent;
 }
 
-.library-tree {
-  scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
-}
 .epub-reader-sidebar-content::-webkit-scrollbar-track,
 .exam-paper-scroll::-webkit-scrollbar-track,
 .epub-reader-selection-quote-text::-webkit-scrollbar-track,
@@ -319,31 +356,33 @@ select option {
     scrollbar-color: var(--scrollbar-slider) transparent;
   }
 }
-.task-board,
-.task-column-items,
-.task-list,
-.task-calendar-grid-wrap,
-.task-calendar-agenda-list,
-.task-archive-view,
-.task-detail-body,
-.task-modal-body,
-.task-prerequisites {
-  scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
-}
-.task-board:hover,
-.task-column-items:hover,
-.task-list:hover,
-.task-calendar-grid-wrap:hover,
-.task-calendar-agenda-list:hover,
-.task-archive-view:hover,
-.task-detail-body:hover,
-.task-modal-body:hover,
-.task-prerequisites:hover {
-  scrollbar-color: var(--scrollbar-slider) transparent;
-}
-.library-tree:hover {
-  scrollbar-color: var(--scrollbar-slider) transparent;
+@supports not selector(::-webkit-scrollbar) {
+  .task-board,
+  .task-column-items,
+  .task-list,
+  .task-calendar-grid-wrap,
+  .task-calendar-agenda-list,
+  .task-archive-view,
+  .task-detail-body,
+  .task-modal-body,
+  .task-prerequisites {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+  .task-board:hover,
+  .task-column-items:hover,
+  .task-list:hover,
+  .task-calendar-grid-wrap:hover,
+  .task-calendar-agenda-list:hover,
+  .task-archive-view:hover,
+  .task-detail-body:hover,
+  .task-modal-body:hover,
+  .task-prerequisites:hover {
+    scrollbar-color: var(--scrollbar-slider) transparent;
+  }
+  .library-tree:hover {
+    scrollbar-color: var(--scrollbar-slider) transparent;
+  }
 }
 .library-tree::-webkit-scrollbar {
   width: 5px;
@@ -8567,6 +8606,26 @@ select option {
   --pele-border: #4d5b63;
   --pele-accent: #e58a62;
 }
+.app-shell[data-theme='navy'] .seamind-pele-panel {
+  --pele-bg: #07101e;
+  --pele-fg: #dce8f5;
+  --pele-muted: #8ea5c2;
+  --pele-line: #7e9bc0;
+  --pele-surface: #0e1c31;
+  --pele-surface-alt: #162844;
+  --pele-border: #2a4365;
+  --pele-accent: #63b3ed;
+}
+.app-shell[data-theme='purple'] .seamind-pele-panel {
+  --pele-bg: #0d0818;
+  --pele-fg: #eee4fa;
+  --pele-muted: #a992c7;
+  --pele-line: #9f86c0;
+  --pele-surface: #170f29;
+  --pele-surface-alt: #22163b;
+  --pele-border: #3d2c63;
+  --pele-accent: #c084fc;
+}
 .seamind-echarts-panel .seamind-viz-output {
   height: 290px;
 }
@@ -10278,7 +10337,6 @@ select option {
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior-inline: contain;
-  scrollbar-width: thin;
   text-align: left;
 }
 .markmap-node .katex-display > .katex {
@@ -10393,13 +10451,13 @@ select option {
   flex: 0 0 auto;
   width: auto;
   height: 100%;
-  min-width: 68px;
+  min-width: 58px;
   box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 5px;
-  padding: 0 18px;
+  padding: 0 13px;
   border: 0;
   border-right: 1px solid var(--line, #e4e7ea);
   border-radius: 0;
@@ -10426,6 +10484,8 @@ select option {
   line-height: 1;
 }
 .exam-workspace-stage,
+.lab-workspace-stage,
+.agent-workspace-stage,
 .terminal-workspace-stage {
   grid-row: 2;
   min-width: 0;
@@ -10989,8 +11049,6 @@ select option {
   border-right: 1px solid #dfe4e7;
   color: #344149;
   background: transparent;
-  scrollbar-width: thin;
-  scrollbar-color: #c5cdd1 transparent;
   box-sizing: border-box;
 }
 .ebook-dashboard-header {
@@ -12476,6 +12534,35 @@ select option {
   box-shadow: inset 0 2px 0 var(--accent);
 }
 
+/* Primary-only sidebar policy: secondary split pane hides its sidebar and reclaims full width */
+.app-shell.is-universal-split > .is-split-pane-secondary .terminal-left-rail,
+.app-shell.is-universal-split > .is-split-pane-secondary .library-sidebar,
+.app-shell.is-universal-split > .is-split-pane-secondary .knowledge-sidebar,
+.app-shell.is-universal-split > .is-split-pane-secondary .exam-center-sidebar,
+.app-shell.is-universal-split > .is-split-pane-secondary .literature-sidebar,
+.app-shell.is-universal-split > .is-split-pane-secondary .feed-sidebar,
+.app-shell.is-universal-split > .is-split-pane-secondary .task-sidebar,
+.app-shell.is-universal-split > .is-split-pane-secondary .player-sidebar,
+.app-shell.is-universal-split > .is-split-pane-secondary .epub-reader-sidebar {
+  display: none !important;
+}
+
+.app-shell.is-universal-split > .workspace.is-split-pane-secondary {
+  --col-library: 0px;
+}
+
+.app-shell.is-universal-split
+  > .knowledge-workspace-stage.is-split-pane-secondary
+  .knowledge-workspace {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
+.app-shell.is-universal-split
+  > .exam-workspace-stage.is-split-pane-secondary
+  .exam-center-body {
+  grid-template-columns: minmax(0, 1fr) 236px;
+}
+
 .app-shell.is-universal-split > .workspace {
   --col-library: 180px;
   --col-source: minmax(190px, 28%);
@@ -12833,8 +12920,6 @@ select option {
   min-height: 0;
   overflow: auto;
   padding: 5px 7px 7px;
-  scrollbar-width: thin;
-  scrollbar-color: var(--scrollbar-slider) transparent;
 }
 .mindmap-mini-tree-list {
   position: relative;
@@ -13286,8 +13371,6 @@ select option {
   border-left: 1px solid #dfe4e7;
   color: #344149;
   background: transparent;
-  scrollbar-width: thin;
-  scrollbar-color: #c5cdd1 transparent;
   box-sizing: border-box;
 }
 .epub-exam-library.is-collapsed {

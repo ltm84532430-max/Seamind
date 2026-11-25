@@ -89,6 +89,25 @@ fn kill_pid_tree(pid: u32) {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliModelOption {
+    pub id: String,
+    pub label: String,
+    pub family: String,
+    pub tier: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliModelsCatalog {
+    pub engine: String,
+    pub current_default: Option<String>,
+    pub models: Vec<String>,
+    pub options: Vec<CliModelOption>,
+    pub source: String,
+}
+
 fn resolve_cli_binary(engine: &str) -> Option<PathBuf> {
     let candidates: &[&str] = match engine {
         "claude" => {
@@ -110,6 +129,13 @@ fn resolve_cli_binary(engine: &str) -> Option<PathBuf> {
                 &["agy.cmd", "agy.exe", "agy"]
             } else {
                 &["agy"]
+            }
+        }
+        "gemini" => {
+            if cfg!(windows) {
+                &["gemini.cmd", "gemini.exe", "gemini"]
+            } else {
+                &["gemini"]
             }
         }
         _ => return None,
@@ -238,6 +264,27 @@ fn parse_cli_output_line(
                     }
                 }
             }
+            // Gemini CLI `--output-format stream-json` events
+            if typ == "message" {
+                let role = val.get("role").and_then(|v| v.as_str()).unwrap_or("");
+                if role == "assistant" {
+                    if let Some(content) = val.get("content").and_then(|v| v.as_str()) {
+                        if !content.is_empty() {
+                            acc.assistant_chunks.push(content.to_string());
+                            return Some(("text".to_string(), content.to_string(), None));
+                        }
+                    }
+                }
+            }
+            if typ == "tool_use" {
+                let name = val
+                    .get("tool_name")
+                    .or_else(|| val.get("name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("tool")
+                    .to_string();
+                return Some(("tool".to_string(), format!("调用工具: {name}"), Some(name)));
+            }
             // Codex `--json` style item.completed
             if typ == "item.completed" {
                 if let Some(text) = val.pointer("/item/text").and_then(|v| v.as_str()) {
@@ -271,6 +318,18 @@ fn parse_cli_output_line(
 pub fn cli_agent_detect() -> Result<Vec<CliEngineStatus>, String> {
     let specs = [
         (
+            "agy",
+            "Antigravity CLI (agy)",
+            "已检测到 agy，支持切换谷歌/多模型并自动挂载 Seamind MCP。",
+            "未检测到 agy 命令；请在 Antigravity IDE 设置中安装 SHELL 命令。",
+        ),
+        (
+            "gemini",
+            "Google Gemini CLI",
+            "已检测到 gemini，支持切换 Gemini 系列模型并自动挂载 Seamind MCP。",
+            "未检测到 gemini（可用 `npm i -g @google/gemini-cli` 安装）。",
+        ),
+        (
             "claude",
             "Claude Code CLI",
             "已检测到 claude，可直接无头执行并反向挂载 Seamind MCP 工具。",
@@ -281,12 +340,6 @@ pub fn cli_agent_detect() -> Result<Vec<CliEngineStatus>, String> {
             "Codex CLI",
             "已检测到 codex，可用于代码重构、沙盒排错与仓库检索协同。",
             "未检测到 codex（可用 `npm i -g @openai/codex` 安装）。",
-        ),
-        (
-            "agy",
-            "Antigravity CLI (agy)",
-            "已检测到 agy，可注入 Seamind 插件包协作。",
-            "未检测到 agy 命令；请在 Antigravity IDE 设置中安装 SHELL 命令。",
         ),
     ];
 
@@ -310,6 +363,285 @@ pub fn cli_agent_detect() -> Result<Vec<CliEngineStatus>, String> {
         .collect())
 }
 
+fn strip_ansi_codes(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for c in chars.by_ref() {
+                    if c.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn read_json_default_model(path: PathBuf) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let val: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    if let Some(s) = val.get("model").and_then(|v| v.as_str()) {
+        let trimmed = s.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    if let Some(s) = val.pointer("/model/name").and_then(|v| v.as_str()) {
+        let trimmed = s.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    None
+}
+
+fn split_family_and_tier(label: &str) -> (String, Option<String>) {
+    let trimmed = label.trim();
+    if let Some(open) = trimmed.rfind('(') {
+        if trimmed.ends_with(')') && open > 0 {
+            let fam = trimmed[..open].trim();
+            let tier = trimmed[open + 1..trimmed.len() - 1].trim();
+            if !fam.is_empty() && !tier.is_empty() {
+                return (fam.to_string(), Some(tier.to_string()));
+            }
+        }
+    }
+    (trimmed.to_string(), None)
+}
+
+fn parse_agy_model_line(clean: &str) -> Option<CliModelOption> {
+    let mut parts = clean.splitn(2, |c: char| c.is_whitespace());
+    let first = parts.next()?.trim();
+    let rest = parts.next().map(str::trim).unwrap_or("");
+    if first.is_empty() {
+        return None;
+    }
+    // Check if first token looks like a slug id (e.g. `gemini-4-neon-high` or `gpt-oss-120b-medium`)
+    let is_slug = first.contains('-')
+        && first
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if is_slug && !rest.is_empty() {
+        // Strip any trailing extra metadata after double-space or tab
+        let label = rest.split("  ").next().unwrap_or(rest).trim();
+        let (family, tier) = split_family_and_tier(label);
+        return Some(CliModelOption {
+            id: first.to_string(),
+            label: label.to_string(),
+            family,
+            tier,
+        });
+    }
+    let label = clean.split("  ").next().unwrap_or(clean).trim();
+    let (family, tier) = split_family_and_tier(label);
+    Some(CliModelOption {
+        id: label.to_string(),
+        label: label.to_string(),
+        family,
+        tier,
+    })
+}
+
+fn make_preset_option(id: &str, label: &str) -> CliModelOption {
+    let (family, tier) = split_family_and_tier(label);
+    CliModelOption {
+        id: id.to_string(),
+        label: label.to_string(),
+        family,
+        tier,
+    }
+}
+
+#[tauri::command]
+pub async fn cli_agent_list_models(engine: String) -> Result<CliModelsCatalog, String> {
+    let engine_id = engine.trim().to_lowercase();
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from);
+
+    let mut options: Vec<CliModelOption> = Vec::new();
+    let mut push_opt = |opt: CliModelOption| {
+        if !opt.id.is_empty()
+            && !options
+                .iter()
+                .any(|o| o.id.eq_ignore_ascii_case(&opt.id) || o.label.eq_ignore_ascii_case(&opt.label))
+        {
+            options.push(opt);
+        }
+    };
+
+    match engine_id.as_str() {
+        "agy" => {
+            let current_default = home.as_ref().and_then(|h| {
+                read_json_default_model(
+                    h.join(".gemini")
+                        .join("antigravity-cli")
+                        .join("settings.json"),
+                )
+            });
+            let mut source = "presets".to_string();
+            let mut found_live = 0usize;
+            if let Some(bin) = resolve_cli_binary("agy") {
+                let is_cmd = cfg!(windows)
+                    && bin
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .map(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"))
+                        .unwrap_or(false);
+                let mut cmd = if is_cmd {
+                    let mut c = Command::new("cmd.exe");
+                    c.arg("/d").arg("/c").arg(&bin).arg("models");
+                    c
+                } else {
+                    let mut c = Command::new(&bin);
+                    c.arg("models");
+                    c
+                };
+                cmd.stdin(std::process::Stdio::null());
+                cmd.stdout(std::process::Stdio::piped());
+                cmd.stderr(std::process::Stdio::null());
+                #[cfg(windows)]
+                cmd.creation_flags(0x08000000);
+                if let Ok(Ok(out)) =
+                    tokio::time::timeout(std::time::Duration::from_secs(8), cmd.output()).await
+                {
+                    if out.status.success() {
+                        let text = strip_ansi_codes(&String::from_utf8_lossy(&out.stdout));
+                        for line in text.lines() {
+                            let clean = line
+                                .trim()
+                                .trim_start_matches(['*', '-', '•', '>', '✓', '●', ' '])
+                                .trim();
+                            if clean.is_empty()
+                                || clean.starts_with("Available")
+                                || clean.starts_with("Models")
+                                || clean.starts_with("Use ")
+                                || clean.starts_with("---")
+                                || clean.len() > 120
+                            {
+                                continue;
+                            }
+                            let lower = clean.to_lowercase();
+                            if lower.contains("gemini")
+                                || lower.contains("claude")
+                                || lower.contains("gpt")
+                                || lower.contains("orchestrator")
+                                || lower.contains("o3")
+                                || lower.contains("o4")
+                            {
+                                if let Some(opt) = parse_agy_model_line(clean) {
+                                    push_opt(opt);
+                                    found_live += 1;
+                                }
+                            }
+                        }
+                        if found_live > 0 {
+                            source = "agy models".to_string();
+                        }
+                    }
+                }
+            }
+            // Only fall back to curated presets if `agy models` returned no live models
+            if found_live == 0 {
+                if let Some(ref def) = current_default {
+                    push_opt(make_preset_option(def, def));
+                }
+                for (id, label) in [
+                    ("Gemini 3.1 Pro (High)", "Gemini 3.1 Pro (High)"),
+                    ("Gemini 3.1 Pro (Low)", "Gemini 3.1 Pro (Low)"),
+                    ("Gemini 3 Flash", "Gemini 3 Flash"),
+                    ("Gemini 2.5 Pro", "Gemini 2.5 Pro"),
+                    ("Gemini 2.5 Flash", "Gemini 2.5 Flash"),
+                    ("Claude Sonnet 4.6 (Thinking)", "Claude Sonnet 4.6 (Thinking)"),
+                    ("Claude Opus 4.6 (Thinking)", "Claude Opus 4.6 (Thinking)"),
+                ] {
+                    push_opt(make_preset_option(id, label));
+                }
+            }
+            let models = options.iter().map(|o| o.id.clone()).collect();
+            Ok(CliModelsCatalog {
+                engine: engine_id,
+                current_default,
+                models,
+                options,
+                source,
+            })
+        }
+        "gemini" => {
+            let current_default = home
+                .as_ref()
+                .and_then(|h| read_json_default_model(h.join(".gemini").join("settings.json")));
+            if let Some(ref def) = current_default {
+                push_opt(make_preset_option(def, def));
+            }
+            for (id, label) in [
+                ("gemini-2.5-pro", "Gemini 2.5 Pro"),
+                ("gemini-2.5-flash", "Gemini 2.5 Flash"),
+                ("gemini-2.5-flash-lite", "Gemini 2.5 Flash (Lite)"),
+                ("gemini-3-pro-preview", "Gemini 3 Pro (Preview)"),
+                ("gemini-3-flash-preview", "Gemini 3 Flash (Preview)"),
+                ("auto-gemini-2.5", "Auto Gemini 2.5"),
+            ] {
+                push_opt(make_preset_option(id, label));
+            }
+            let models = options.iter().map(|o| o.id.clone()).collect();
+            Ok(CliModelsCatalog {
+                engine: engine_id,
+                current_default,
+                models,
+                options,
+                source: "gemini presets".to_string(),
+            })
+        }
+        "claude" => {
+            for (id, label) in [
+                ("claude-sonnet-4-6", "Claude Sonnet 4.6"),
+                ("claude-opus-4-6", "Claude Opus 4.6"),
+                ("claude-haiku-4-5", "Claude Haiku 4.5"),
+                ("sonnet", "Sonnet (Latest)"),
+                ("opus", "Opus (Latest)"),
+                ("haiku", "Haiku (Latest)"),
+            ] {
+                push_opt(make_preset_option(id, label));
+            }
+            let models = options.iter().map(|o| o.id.clone()).collect();
+            Ok(CliModelsCatalog {
+                engine: engine_id,
+                current_default: None,
+                models,
+                options,
+                source: "claude presets".to_string(),
+            })
+        }
+        "codex" => {
+            for (id, label) in [
+                ("gpt-5.4", "GPT-5.4"),
+                ("gpt-5.3-codex", "GPT-5.3 (Codex)"),
+                ("o3", "o3"),
+                ("o4-mini", "o4-mini"),
+                ("gpt-4.1", "GPT-4.1"),
+            ] {
+                push_opt(make_preset_option(id, label));
+            }
+            let models = options.iter().map(|o| o.id.clone()).collect();
+            Ok(CliModelsCatalog {
+                engine: engine_id,
+                current_default: None,
+                models,
+                options,
+                source: "codex presets".to_string(),
+            })
+        }
+        _ => Err(format!("不支持的 CLI 引擎：{engine}")),
+    }
+}
+
 fn cleanup_mcp_session(session: Option<CliMcpSession>) {
     if let Some(s) = session {
         let _ = std::fs::remove_file(s.config_path);
@@ -328,9 +660,10 @@ pub async fn cli_agent_run(
     system_prompt: Option<String>,
     cwd: Option<String>,
     attach_mcp: Option<bool>,
+    model: Option<String>,
 ) -> Result<CliAgentRunResult, String> {
     let engine_id = engine.trim().to_lowercase();
-    if !matches!(engine_id.as_str(), "claude" | "codex" | "agy") {
+    if !matches!(engine_id.as_str(), "claude" | "codex" | "agy" | "gemini") {
         return Err(format!("不支持的 CLI 引擎：{engine}"));
     }
     let prompt_trimmed = prompt.trim();
@@ -345,10 +678,11 @@ pub async fn cli_agent_run(
         format!("本机未找到 `{engine_id}` CLI，请先安装并在终端完成登录认证。")
     })?;
 
-    let combined_prompt = match system_prompt.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
-        Some(sys) => format!("[系统约定]\n{sys}\n\n[任务]\n{prompt_trimmed}"),
-        None => prompt_trimmed.to_string(),
-    };
+    let clean_cwd = cwd
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.trim_start_matches("\\\\?\\").to_string());
 
     let want_mcp = attach_mcp.unwrap_or(true);
     let mcp_session = if want_mcp {
@@ -357,9 +691,43 @@ pub async fn cli_agent_run(
         None
     };
 
+    let use_mcp_workspace_dir =
+        mcp_session.is_some() && matches!(engine_id.as_str(), "agy" | "gemini");
+
+    let cwd_note = if use_mcp_workspace_dir {
+        clean_cwd
+            .as_ref()
+            .map(|d| format!("[用户工作目录]\n{d}\n提示：你已挂载 `seamind` MCP 服务，可优先调用 `datalab_list_sources`、`datalab_read_notebook`、`datalab_update_cell`、`datalab_push_cell`、`datalab_run_cell`、`datalab_delete_cell`、`datalab_query_sql`、`code_run_python`、`datalab_run_r` 等全量 Seamind 工具。"))
+    } else {
+        None
+    };
+
+    let mut prompt_sections: Vec<String> = Vec::new();
+    if let Some(sys) = system_prompt
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+    {
+        prompt_sections.push(format!("[系统约定]\n{sys}"));
+    }
+    if let Some(note) = cwd_note {
+        prompt_sections.push(note);
+    }
+    prompt_sections.push(format!("[任务]\n{prompt_trimmed}"));
+    let combined_prompt = prompt_sections.join("\n\n");
+
+    let selected_model = model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && s.len() <= 160)
+        .map(str::to_string);
+
     let mut args: Vec<String> = Vec::new();
     match engine_id.as_str() {
         "claude" => {
+            if let Some(ref m) = selected_model {
+                args.push("--model".to_string());
+                args.push(m.clone());
+            }
             args.push("-p".to_string());
             args.push(combined_prompt);
             args.push("--output-format".to_string());
@@ -372,11 +740,40 @@ pub async fn cli_agent_run(
         }
         "codex" => {
             args.push("exec".to_string());
+            if let Some(ref m) = selected_model {
+                args.push("-m".to_string());
+                args.push(m.clone());
+            }
             args.push("--json".to_string());
             args.push(combined_prompt);
         }
+        "gemini" => {
+            if let Some(ref m) = selected_model {
+                args.push("-m".to_string());
+                args.push(m.clone());
+            }
+            args.push("-p".to_string());
+            args.push(combined_prompt);
+            args.push("-o".to_string());
+            args.push("stream-json".to_string());
+            args.push("--skip-trust".to_string());
+            if mcp_session.is_some() {
+                args.push("--allowed-mcp-server-names".to_string());
+                args.push("seamind".to_string());
+            }
+            if let Some(ref dir) = clean_cwd {
+                if PathBuf::from(dir).is_dir() {
+                    args.push("--include-directories".to_string());
+                    args.push(dir.clone());
+                }
+            }
+        }
         _ => {
-            // agy headless attempt: pass prompt cleanly; falls back clearly if interactive-only
+            // agy headless execution with optional model flag
+            if let Some(ref m) = selected_model {
+                args.push("--model".to_string());
+                args.push(m.clone());
+            }
             args.push("-p".to_string());
             args.push(combined_prompt);
         }
@@ -399,15 +796,20 @@ pub async fn cli_agent_run(
         c
     };
 
-    if let Some(dir) = cwd.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
-        let p = PathBuf::from(dir.trim_start_matches("\\\\?\\"));
+    if use_mcp_workspace_dir {
+        if let Some(ref s) = mcp_session {
+            if s.agy_workspace_dir.is_dir() {
+                cmd.current_dir(&s.agy_workspace_dir);
+            }
+        }
+    } else if let Some(ref dir) = clean_cwd {
+        let p = PathBuf::from(dir);
         if p.is_dir() {
             cmd.current_dir(p);
         }
-    } else if let Some(ref s) = mcp_session {
-        if engine_id == "agy" && s.agy_workspace_dir.is_dir() {
-            cmd.current_dir(&s.agy_workspace_dir);
-        }
+    }
+    if let Some(ref dir) = clean_cwd {
+        cmd.env("SEAMIND_WORKSPACE_CWD", dir);
     }
 
     if let Some(ref s) = mcp_session {
@@ -582,5 +984,32 @@ mod tests {
         assert_eq!(parsed.0, "text");
         assert_eq!(parsed.1, "hello from cli");
         assert_eq!(acc.events_count, 1);
+    }
+
+    #[test]
+    fn parses_agy_model_lines_into_family_and_tier() {
+        let opt1 = parse_agy_model_line("gemini-4-neon-high Gemini 4 Neon (High)")
+            .expect("should parse neon high");
+        assert_eq!(opt1.id, "gemini-4-neon-high");
+        assert_eq!(opt1.label, "Gemini 4 Neon (High)");
+        assert_eq!(opt1.family, "Gemini 4 Neon");
+        assert_eq!(opt1.tier.as_deref(), Some("High"));
+
+        let opt2 = parse_agy_model_line("gemini-pro-orchestrator Orchestrator (Carbon)")
+            .expect("should parse orchestrator");
+        assert_eq!(opt2.id, "gemini-pro-orchestrator");
+        assert_eq!(opt2.family, "Orchestrator");
+        assert_eq!(opt2.tier.as_deref(), Some("Carbon"));
+
+        let opt3 = parse_agy_model_line("claude-opus-5-5-medium Claude Opus 5.5 (Medium)")
+            .expect("should parse claude opus");
+        assert_eq!(opt3.id, "claude-opus-5-5-medium");
+        assert_eq!(opt3.family, "Claude Opus 5.5");
+        assert_eq!(opt3.tier.as_deref(), Some("Medium"));
+
+        let opt4 = parse_agy_model_line("Gemini 3 Flash").expect("should parse label only");
+        assert_eq!(opt4.id, "Gemini 3 Flash");
+        assert_eq!(opt4.family, "Gemini 3 Flash");
+        assert_eq!(opt4.tier, None);
     }
 }

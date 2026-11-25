@@ -34,33 +34,63 @@ import {
   LabTrashIcon,
   LabVarsIcon,
 } from './CodeLabIcons';
-import { terminalApi, type PythonEnvInfo } from './terminal-api';
+import {
+  terminalApi,
+  type DataDbConnectionInput,
+  type PythonEnvInfo,
+  type REnvInfo,
+} from './terminal-api';
 import {
   assembleCCellProgram,
   assembleFullScriptSource,
+  buildNotebookRenderItems,
   CODELAB_COLLECTION_EVENT,
   CODELAB_SYNC_VIEW_EVENT,
+  createEmptyAnalysisBlockCells,
+  createPolyglotAnalysisTemplateCells,
   createStarterCodeLabCells,
+  DATALAB_STORAGE_EVENT,
   DEFAULT_C_PROLOGUE,
-  DEFAULT_CODELAB_FOLDERS,
+  DEFAULT_CODELAB_SNIPPETS,
   DEFAULT_CPP_PROLOGUE,
   duplicateCodeLabCell,
   exportCodeLabToMarkdown,
   formatCellStudyExportMarkdown,
   formatDurationCompact,
   loadCodeLabCollection,
+  loadCodeLabFolders,
+  loadCustomEnvPaths,
+  loadDataLabBaseProfile,
+  loadDataLabConnections,
+  loadDataLabFiles,
   makeCodeLabCellId,
   moveCodeLabCell,
   parseIpynbJson,
   serializeIpynbJson,
   stripHeavyOutputsForStorage,
+  summarizeCellOutputsForAgent,
   upsertCodeLabFile,
   type CodeLabCell,
   type CodeLabOutputItem,
   type CodeLabSavedFile,
   type CodeLabSourceOrigin,
   type CodeLabSyncViewPayload,
+  type DataLabDbConnection,
+  type DataLabMountedFile,
 } from './terminal-codelab-model';
+import type {
+  CodeLabCellExecutionRecord,
+  CodeLabDeleteCellRequest,
+  CodeLabLiveNotebookSnapshot,
+  CodeLabMutationResult,
+  CodeLabPushCellRequest,
+  CodeLabRunCellRequest,
+  CodeLabUpdateCellRequest,
+} from './codelab-live-bridge';
+import {
+  buildCodeLabAppearanceCssVars,
+  useCodeLabAppearance,
+} from './codelab-appearance';
 import type {
   TerminalCodeLabLanguage,
   TerminalTab,
@@ -76,7 +106,14 @@ export interface TerminalCodeLabViewHandle {
     source: string,
     autoRun?: boolean,
     origin?: CodeLabSourceOrigin,
+    sqlConnectionId?: string,
+    sqlResultVar?: string,
+    kind?: 'code' | 'markdown',
+    groupId?: string,
+    groupTitle?: string,
   ) => void;
+  setPythonRuntime: (runtime: string) => void;
+  setRRuntime: (rscriptPath: string) => void;
   loadSavedFile: (file: CodeLabSavedFile) => void;
   saveCurrentToCollection: (asNew?: boolean) => CodeLabSavedFile | null;
   createNewNotebook: (
@@ -86,6 +123,20 @@ export interface TerminalCodeLabViewHandle {
   setCanvasViewMode: (mode: CodeLabCanvasViewMode) => void;
   getCanvasViewMode: () => CodeLabCanvasViewMode;
   getActiveFileId: () => string | null;
+  getNotebookTitle: () => string;
+  getLiveNotebookSnapshot: () => CodeLabLiveNotebookSnapshot;
+  agentPushCell: (
+    request: CodeLabPushCellRequest,
+  ) => Promise<CodeLabMutationResult>;
+  agentUpdateCell: (
+    request: CodeLabUpdateCellRequest,
+  ) => Promise<CodeLabMutationResult>;
+  agentRunCell: (
+    request: CodeLabRunCellRequest,
+  ) => Promise<CodeLabMutationResult>;
+  agentDeleteCell: (
+    request: CodeLabDeleteCellRequest,
+  ) => Promise<CodeLabMutationResult>;
   hasUnsavedChanges: () => boolean;
   getScreenText: (maxLines?: number) => string;
   getLastErrorText: () => string;
@@ -100,6 +151,14 @@ interface TerminalCodeLabViewProps {
   isFocused?: boolean;
   style?: React.CSSProperties;
   bridge?: TerminalWorkspaceBridge;
+  mountedFiles?: DataLabMountedFile[];
+  dbConnections?: DataLabDbConnection[];
+  pythonEnvs?: PythonEnvInfo[];
+  rEnvs?: REnvInfo[];
+  preferredPythonRuntime?: string;
+  preferredRRuntime?: string;
+  onSelectPythonRuntime?: (runtime: string) => void;
+  onSelectRRuntime?: (rscriptPath: string) => void;
   onFocusPane?: () => void;
   onStatusChange?: (status: TerminalTab['status'], message?: string) => void;
   onSendToShellPane?: (command: string, execute?: boolean) => void;
@@ -190,6 +249,14 @@ export const TerminalCodeLabView = forwardRef<
     isFocused = false,
     style,
     bridge,
+    mountedFiles: mountedFilesProp,
+    dbConnections: dbConnectionsProp,
+    pythonEnvs: pythonEnvsProp,
+    rEnvs: rEnvsProp,
+    preferredPythonRuntime,
+    preferredRRuntime,
+    onSelectPythonRuntime,
+    onSelectRRuntime,
     onFocusPane,
     onStatusChange,
     onSendToShellPane,
@@ -241,7 +308,11 @@ export const TerminalCodeLabView = forwardRef<
         ? 'C 语言步进实验.c'
         : initialLang === 'cpp'
           ? 'C++ 算法验证实验.cpp'
-          : 'Python 交互实验本.ipynb')
+          : initialLang === 'sql'
+            ? 'SQL 数据分析实验.sql'
+            : initialLang === 'r'
+              ? 'R 统计分析实验.R'
+              : 'Python 交互实验本.ipynb')
     );
   });
   const [activeFileFolder, setActiveFileFolder] = useState<string>(
@@ -267,7 +338,9 @@ export const TerminalCodeLabView = forwardRef<
     const firstCode = cells.find((c) => c.kind === 'code') ?? cells[0];
     return firstCode ? [firstCode.id] : [];
   });
-  const [showPrologue, setShowPrologue] = useState(language !== 'python');
+  const [showPrologue, setShowPrologue] = useState(
+    language === 'c' || language === 'cpp',
+  );
   const [prologueSource, setPrologueSource] = useState(
     () =>
       initialDraft?.prologueSource ??
@@ -332,12 +405,74 @@ export const TerminalCodeLabView = forwardRef<
   } | null>(null);
   const [variablePreviewLoading, setVariablePreviewLoading] = useState(false);
   const [zoomedImageSrc, setZoomedImageSrc] = useState<string | null>(null);
+  const [blockResultsOnly, setBlockResultsOnly] = useState<
+    Record<string, boolean>
+  >({});
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
 
-  // Python Kernels: 'pyodide' or local pythonPath
-  const [pythonEnvs, setPythonEnvs] = useState<PythonEnvInfo[]>([]);
-  const [selectedPyRuntime, setSelectedPyRuntime] = useState<string>('pyodide');
+  // Python & R Kernels + Data Lab state
+  const [localPythonEnvs, setLocalPythonEnvs] = useState<PythonEnvInfo[]>([]);
+  const [localREnvs, setLocalREnvs] = useState<REnvInfo[]>([]);
+  const [localMountedFiles, setLocalMountedFiles] = useState<
+    DataLabMountedFile[]
+  >(() => loadDataLabFiles());
+  const [localDbConnections, setLocalDbConnections] = useState<
+    DataLabDbConnection[]
+  >(() => loadDataLabConnections());
+  const pythonEnvs = pythonEnvsProp ?? localPythonEnvs;
+  const rEnvs = rEnvsProp ?? localREnvs;
+  const effectiveMountedFiles = mountedFilesProp ?? localMountedFiles;
+  const effectiveDbConnections = dbConnectionsProp ?? localDbConnections;
+
+  const [selectedPyRuntime, setSelectedPyRuntime] = useState<string>(
+    () =>
+      preferredPythonRuntime ||
+      loadDataLabBaseProfile().pythonPath ||
+      'pyodide',
+  );
+  const [selectedRRuntime, setSelectedRRuntime] = useState<string>(
+    () => preferredRRuntime || loadDataLabBaseProfile().rscriptPath || '',
+  );
   const [localKernelId, setLocalKernelId] = useState<string | null>(null);
+  const [rKernelId, setRKernelId] = useState<string | null>(null);
   const [variables, setVariables] = useState<PythonWorkerVarSummary[]>([]);
+  const rKernelIdRef = useRef<string | null>(null);
+  rKernelIdRef.current = rKernelId;
+
+  useEffect(() => {
+    if (
+      preferredPythonRuntime &&
+      preferredPythonRuntime !== selectedPyRuntime
+    ) {
+      setSelectedPyRuntime(preferredPythonRuntime);
+    }
+  }, [preferredPythonRuntime, selectedPyRuntime]);
+
+  useEffect(() => {
+    if (
+      preferredRRuntime !== undefined &&
+      preferredRRuntime !== selectedRRuntime
+    ) {
+      setSelectedRRuntime(preferredRRuntime);
+    }
+  }, [preferredRRuntime, selectedRRuntime]);
+
+  useEffect(() => {
+    if (!selectedRRuntime && rEnvs.length > 0) {
+      setSelectedRRuntime(rEnvs[0].rscriptPath);
+    }
+  }, [rEnvs, selectedRRuntime]);
+
+  useEffect(() => {
+    if (mountedFilesProp && dbConnectionsProp) return;
+    const syncDataSources = () => {
+      setLocalMountedFiles(loadDataLabFiles());
+      setLocalDbConnections(loadDataLabConnections());
+    };
+    window.addEventListener(DATALAB_STORAGE_EVENT, syncDataSources);
+    return () =>
+      window.removeEventListener(DATALAB_STORAGE_EVENT, syncDataSources);
+  }, [dbConnectionsProp, mountedFilesProp]);
 
   // C/C++ compiler status
   const [cCompilerReady, setCCompilerReady] = useState<boolean | null>(null);
@@ -658,7 +793,7 @@ export const TerminalCodeLabView = forwardRef<
         setEditingCellId(firstCode.id);
         setHydratedCellIds([firstCode.id]);
       }
-      if (file.language !== 'python') {
+      if (file.language === 'c' || file.language === 'cpp') {
         setShowPrologue(true);
         setPrologueSource(
           file.prologueSource ||
@@ -666,6 +801,8 @@ export const TerminalCodeLabView = forwardRef<
               ? DEFAULT_CPP_PROLOGUE
               : DEFAULT_C_PROLOGUE),
         );
+      } else {
+        setShowPrologue(false);
       }
       showTempNotice(`已加载：${file.title}`);
     },
@@ -676,7 +813,15 @@ export const TerminalCodeLabView = forwardRef<
     (asNew = false): CodeLabSavedFile | null => {
       const liveCells = getCellsWithLiveSources();
       const ext =
-        language === 'cpp' ? '.cpp' : language === 'c' ? '.c' : '.ipynb';
+        language === 'cpp'
+          ? '.cpp'
+          : language === 'c'
+            ? '.c'
+            : language === 'sql'
+              ? '.sql'
+              : language === 'r'
+                ? '.R'
+                : '.ipynb';
       const rawTitle = activeFileTitle.trim() || `未命名实验${ext}`;
       const id =
         !asNew && activeFileId
@@ -688,9 +833,18 @@ export const TerminalCodeLabView = forwardRef<
         folder: activeFileFolder || '未归类代码',
         language,
         cells: liveCells,
-        prologueSource: language !== 'python' ? prologueSource : undefined,
+        prologueSource:
+          language === 'c' || language === 'cpp' ? prologueSource : undefined,
         tags: [
-          language === 'cpp' ? 'C++' : language === 'c' ? 'C' : 'Python',
+          language === 'cpp'
+            ? 'C++'
+            : language === 'c'
+              ? 'C'
+              : language === 'sql'
+                ? 'SQL'
+                : language === 'r'
+                  ? 'R'
+                  : 'Python',
           activeFileFolder || '实验',
         ],
         starred: activeFileStarred,
@@ -752,7 +906,15 @@ export const TerminalCodeLabView = forwardRef<
   const handleCreateNewNotebook = useCallback(
     (nextLang: TerminalCodeLabLanguage, folder = '未归类代码') => {
       const ext =
-        nextLang === 'cpp' ? '.cpp' : nextLang === 'c' ? '.c' : '.ipynb';
+        nextLang === 'cpp'
+          ? '.cpp'
+          : nextLang === 'c'
+            ? '.c'
+            : nextLang === 'sql'
+              ? '.sql'
+              : nextLang === 'r'
+                ? '.R'
+                : '.ipynb';
       const nextCells = createStarterCodeLabCells(nextLang);
       liveSourceMapRef.current = new Map(
         nextCells.map((c) => [c.id, c.source]),
@@ -776,11 +938,13 @@ export const TerminalCodeLabView = forwardRef<
         setEditingCellId(firstCode.id);
         setHydratedCellIds([firstCode.id]);
       }
-      if (nextLang !== 'python') {
+      if (nextLang === 'c' || nextLang === 'cpp') {
         setShowPrologue(true);
         setPrologueSource(
           nextLang === 'cpp' ? DEFAULT_CPP_PROLOGUE : DEFAULT_C_PROLOGUE,
         );
+      } else {
+        setShowPrologue(false);
       }
       showTempNotice(`已新建 ${nextLang.toUpperCase()} 实验本`);
     },
@@ -793,14 +957,30 @@ export const TerminalCodeLabView = forwardRef<
     let cancelled = false;
     const probe = () => {
       if (cancelled) return;
-      terminalApi
-        .detectPythonEnvs({ cwd: tab.cwd || null })
-        .then((envs) => {
-          if (!cancelled) setPythonEnvs(envs);
-        })
-        .catch(() => {
-          if (!cancelled) setPythonEnvs([]);
-        });
+      const customPaths = loadCustomEnvPaths();
+      if (!pythonEnvsProp) {
+        terminalApi
+          .detectPythonEnvs({
+            cwd: tab.cwd || null,
+            extraPaths: customPaths.pythonPaths,
+          })
+          .then((envs) => {
+            if (!cancelled) setLocalPythonEnvs(envs);
+          })
+          .catch(() => {
+            if (!cancelled) setLocalPythonEnvs([]);
+          });
+      }
+      if (!rEnvsProp) {
+        terminalApi
+          .detectREnvs({ extraPaths: customPaths.rPaths })
+          .then((envs) => {
+            if (!cancelled) setLocalREnvs(envs);
+          })
+          .catch(() => {
+            if (!cancelled) setLocalREnvs([]);
+          });
+      }
 
       systemApi
         .checkCEnvironment()
@@ -820,9 +1000,9 @@ export const TerminalCodeLabView = forwardRef<
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [active, tab.cwd]);
+  }, [active, pythonEnvsProp, rEnvsProp, tab.cwd]);
 
-  // Terminate worker + close Rust kernel cleanly on unmount
+  // Terminate worker + close Rust kernels cleanly on unmount
   useEffect(() => {
     const pending = workerPendingRef.current;
     return () => {
@@ -837,6 +1017,11 @@ export const TerminalCodeLabView = forwardRef<
       if (localKernelIdRef.current) {
         void terminalApi
           .closePythonKernel({ kernelId: localKernelIdRef.current })
+          .catch(() => undefined);
+      }
+      if (rKernelIdRef.current) {
+        void terminalApi
+          .closeRKernel({ kernelId: rKernelIdRef.current })
           .catch(() => undefined);
       }
     };
@@ -923,14 +1108,143 @@ export const TerminalCodeLabView = forwardRef<
 
   const ensureLocalPythonKernel = useCallback(async (): Promise<string> => {
     if (localKernelIdRef.current) return localKernelIdRef.current;
+    const baseProf = loadDataLabBaseProfile();
+    await terminalApi
+      .syncDataBusContext({
+        sessionId: 'default',
+        mountedFiles: effectiveMountedFiles.map((f) => ({
+          alias: f.alias,
+          path: f.path,
+          format: f.format,
+        })),
+        dbConnections: effectiveDbConnections.map((c) => ({
+          id: c.id,
+          name: c.name,
+          dbType: c.dbType,
+          filePath: c.filePath ?? null,
+          host: c.host ?? null,
+          port: c.port ?? null,
+          database: c.database ?? null,
+          username: c.username ?? null,
+        })),
+        defaultPythonPath:
+          baseProf.pythonPath && baseProf.pythonPath !== 'pyodide'
+            ? baseProf.pythonPath
+            : null,
+        defaultRscriptPath: baseProf.rscriptPath || null,
+        defaultConnectionId: baseProf.defaultConnectionId || null,
+      })
+      .catch(() => undefined);
     const kernelId = await terminalApi.startPythonKernel({
       pythonPath: selectedPyRuntime === 'pyodide' ? null : selectedPyRuntime,
       cwd: tab.cwd || null,
+      sessionId: 'default',
     });
     localKernelIdRef.current = kernelId;
     setLocalKernelId(kernelId);
     return kernelId;
-  }, [selectedPyRuntime, tab.cwd]);
+  }, [
+    effectiveDbConnections,
+    effectiveMountedFiles,
+    selectedPyRuntime,
+    tab.cwd,
+  ]);
+
+  const ensureRKernel = useCallback(async (): Promise<string> => {
+    if (rKernelIdRef.current) return rKernelIdRef.current;
+    const baseProf = loadDataLabBaseProfile();
+    await terminalApi
+      .syncDataBusContext({
+        sessionId: 'default',
+        mountedFiles: effectiveMountedFiles.map((f) => ({
+          alias: f.alias,
+          path: f.path,
+          format: f.format,
+        })),
+        dbConnections: effectiveDbConnections.map((c) => ({
+          id: c.id,
+          name: c.name,
+          dbType: c.dbType,
+          filePath: c.filePath ?? null,
+          host: c.host ?? null,
+          port: c.port ?? null,
+          database: c.database ?? null,
+          username: c.username ?? null,
+        })),
+        defaultPythonPath:
+          baseProf.pythonPath && baseProf.pythonPath !== 'pyodide'
+            ? baseProf.pythonPath
+            : null,
+        defaultRscriptPath: baseProf.rscriptPath || null,
+        defaultConnectionId: baseProf.defaultConnectionId || null,
+      })
+      .catch(() => undefined);
+    const rPath =
+      selectedRRuntime || baseProf.rscriptPath || rEnvs[0]?.rscriptPath || null;
+    const kernelId = await terminalApi.startRKernel({
+      rscriptPath: rPath,
+      cwd: tab.cwd || null,
+      sessionId: 'default',
+    });
+    rKernelIdRef.current = kernelId;
+    setRKernelId(kernelId);
+    return kernelId;
+  }, [
+    effectiveDbConnections,
+    effectiveMountedFiles,
+    rEnvs,
+    selectedRRuntime,
+    tab.cwd,
+  ]);
+
+  const executeRSnippet = useCallback(
+    async (
+      code: string,
+    ): Promise<{
+      ok: boolean;
+      outputs: CodeLabOutputItem[];
+      durationMs: number;
+      vars: PythonWorkerVarSummary[];
+      plainError: string;
+    }> => {
+      const started = performance.now();
+      const kernelId = await ensureRKernel();
+      const res = await terminalApi.evalRKernel({ kernelId, code });
+      const outputs: CodeLabOutputItem[] = [];
+      if (res.stdout.trim()) {
+        outputs.push({ kind: 'stream', name: 'stdout', text: res.stdout });
+      }
+      if (res.stderr.trim()) {
+        outputs.push({ kind: 'stream', name: 'stderr', text: res.stderr });
+      }
+      for (const img of res.images) {
+        outputs.push({ kind: 'image/png', dataUrl: img });
+      }
+      for (const html of res.htmls) {
+        outputs.push({ kind: 'text/html', html });
+      }
+      if (
+        res.resultText.trim() &&
+        res.htmls.length === 0 &&
+        res.images.length === 0
+      ) {
+        outputs.push({ kind: 'text', text: res.resultText });
+      }
+      let plainError = '';
+      if (!res.ok || res.error) {
+        plainError = res.error || res.stderr || 'R 内核执行失败';
+        outputs.push({ kind: 'error', message: plainError });
+      }
+      return {
+        ok: res.ok && !res.error,
+        outputs,
+        durationMs: Math.round(performance.now() - started),
+        vars: res.variables,
+        plainError,
+      };
+    },
+    [ensureRKernel],
+  );
 
   const executePythonSnippet = useCallback(
     async (
@@ -1093,6 +1407,135 @@ export const TerminalCodeLabView = forwardRef<
               ? `PY [${runNumber}] · ${formatDurationCompact(res.durationMs)}`
               : 'Python 运行出错',
           );
+        } else if (cell.language === 'r') {
+          const res = await executeRSnippet(liveSource);
+          setVariables(res.vars);
+          setCells((prev) =>
+            prev.map((item) =>
+              item.id === cellId
+                ? {
+                    ...item,
+                    executionCount: runNumber,
+                    status: res.ok ? 'success' : 'error',
+                    outputs: res.outputs,
+                    lastExecutedSource: liveSource,
+                    durationMs: res.durationMs,
+                  }
+                : item,
+            ),
+          );
+          onStatusChange?.(
+            res.ok ? 'ready' : 'error',
+            res.ok
+              ? `R [${runNumber}] · ${formatDurationCompact(res.durationMs)}`
+              : 'R 运行出错',
+          );
+        } else if (cell.language === 'sql') {
+          const conn = cell.sqlConnectionId
+            ? effectiveDbConnections.find((c) => c.id === cell.sqlConnectionId)
+            : undefined;
+          const connPayload: DataDbConnectionInput | null = conn
+            ? {
+                id: conn.id,
+                name: conn.name,
+                dbType: conn.dbType,
+                filePath: conn.filePath ?? null,
+                host: conn.host ?? null,
+                port: conn.port ?? null,
+                database: conn.database ?? null,
+                username: conn.username ?? null,
+                password: null,
+                pythonPath:
+                  conn.pythonPath ??
+                  (selectedPyRuntime !== 'pyodide' ? selectedPyRuntime : null),
+              }
+            : null;
+          const mountedPayload = conn
+            ? []
+            : effectiveMountedFiles.map((f) => ({
+                alias: f.alias,
+                path: f.path,
+                format: f.format,
+              }));
+          const rawVar = (cell.sqlResultVar ?? '').trim();
+          const validBusVar =
+            rawVar && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(rawVar) ? rawVar : null;
+          const baseProf = loadDataLabBaseProfile();
+          const effectivePyForSql =
+            selectedPyRuntime !== 'pyodide'
+              ? selectedPyRuntime
+              : baseProf.pythonPath && baseProf.pythonPath !== 'pyodide'
+                ? baseProf.pythonPath
+                : null;
+          const res = await terminalApi.querySql({
+            sql: liveSource,
+            connection: connPayload,
+            mountedFiles: mountedPayload,
+            pythonPath: effectivePyForSql,
+            maxRows: 200,
+            exportBusTable: validBusVar,
+            sessionId: 'default',
+          });
+          const outputs: CodeLabOutputItem[] = [];
+          let boundVarName: string | undefined;
+          if (res.ok) {
+            if (validBusVar && res.busTablePath) {
+              boundVarName = `${validBusVar} (共享总线 · Py/R 可 sm_load)`;
+            }
+            if (validBusVar && res.columns.length > 0) {
+              const colNames = res.columns.map((c) => c.name);
+              const injectPy = res.busTablePath
+                ? `try:\n    ${validBusVar} = sm_load(${JSON.stringify(validBusVar)})\nexcept Exception:\n    import json as _sm_json\n    _sm_cols = _sm_json.loads(${JSON.stringify(JSON.stringify(colNames))})\n    _sm_rows = _sm_json.loads(${JSON.stringify(JSON.stringify(res.rows))})\n    ${validBusVar} = [dict(zip(_sm_cols, _r)) for _r in _sm_rows]`
+                : `import json as _sm_json\n_sm_cols = _sm_json.loads(${JSON.stringify(JSON.stringify(colNames))})\n_sm_rows = _sm_json.loads(${JSON.stringify(JSON.stringify(res.rows))})\ntry:\n    import pandas as _sm_pd\n    ${validBusVar} = _sm_pd.DataFrame(_sm_rows, columns=_sm_cols)\nexcept Exception:\n    ${validBusVar} = [dict(zip(_sm_cols, _r)) for _r in _sm_rows]\ndel _sm_cols, _sm_rows, _sm_json`;
+              try {
+                const injected = await executePythonSnippet(injectPy);
+                if (injected.ok) {
+                  setVariables(injected.vars);
+                  boundVarName = res.busTablePath
+                    ? `${validBusVar} (Py + 总线)`
+                    : validBusVar;
+                }
+              } catch {
+                // ignore optional variable injection failure
+              }
+            }
+            outputs.push({
+              kind: 'table',
+              columns: res.columns,
+              rows: res.rows,
+              totalRows: res.totalRows ?? null,
+              truncated: res.truncated,
+              engine: res.engine,
+              boundVar: boundVarName,
+              message: res.message ?? undefined,
+            });
+          } else {
+            outputs.push({
+              kind: 'error',
+              message: res.error || 'SQL 查询失败',
+            });
+          }
+          setCells((prev) =>
+            prev.map((item) =>
+              item.id === cellId
+                ? {
+                    ...item,
+                    executionCount: runNumber,
+                    status: res.ok ? 'success' : 'error',
+                    outputs,
+                    lastExecutedSource: liveSource,
+                    durationMs: res.durationMs,
+                    stage: res.engine,
+                  }
+                : item,
+            ),
+          );
+          onStatusChange?.(
+            res.ok ? 'ready' : 'error',
+            res.ok
+              ? `SQL [${runNumber}] · ${res.rows.length} 行 · ${formatDurationCompact(res.durationMs)}`
+              : 'SQL 执行出错',
+          );
         } else {
           const isCpp = cell.language === 'cpp';
           const assembled = assembleCCellProgram(
@@ -1195,7 +1638,15 @@ export const TerminalCodeLabView = forwardRef<
         }
       }
     },
-    [executePythonSnippet, onStatusChange, prologueSource],
+    [
+      effectiveDbConnections,
+      effectiveMountedFiles,
+      executePythonSnippet,
+      executeRSnippet,
+      onStatusChange,
+      prologueSource,
+      selectedPyRuntime,
+    ],
   );
 
   const insertCell = useCallback(
@@ -1213,10 +1664,16 @@ export const TerminalCodeLabView = forwardRef<
           : relative === 'above'
             ? idx
             : idx + 1;
+      const targetLang = overrideLang ?? language;
+      const defaultSqlConnId =
+        targetLang === 'sql'
+          ? loadDataLabBaseProfile().defaultConnectionId || undefined
+          : undefined;
       const newCell: CodeLabCell = {
         id: makeCodeLabCellId(),
         kind,
-        language: overrideLang ?? language,
+        language: targetLang,
+        sqlConnectionId: defaultSqlConnId,
         source: '',
         stdinInput: '',
         executionCount: null,
@@ -1438,6 +1895,38 @@ export const TerminalCodeLabView = forwardRef<
     [executePythonSnippet, isAnyRunning, variablePreviewLoading],
   );
 
+  const handleResetRKernel = useCallback(async () => {
+    try {
+      if (rKernelIdRef.current) {
+        await terminalApi.resetRKernel({ kernelId: rKernelIdRef.current });
+      }
+      setVariables([]);
+      setVariablePreview(null);
+      showTempNotice('R 内核变量空间已清空重置');
+    } catch (err) {
+      showTempNotice(err instanceof Error ? err.message : 'R 内核重置失败');
+    }
+  }, [showTempNotice]);
+
+  const handleSwitchRRuntime = useCallback(
+    async (nextRPath: string) => {
+      if (nextRPath === selectedRRuntime) return;
+      if (rKernelIdRef.current) {
+        const oldId = rKernelIdRef.current;
+        rKernelIdRef.current = null;
+        setRKernelId(null);
+        await terminalApi
+          .closeRKernel({ kernelId: oldId })
+          .catch(() => undefined);
+      }
+      setSelectedRRuntime(nextRPath);
+      onSelectRRuntime?.(nextRPath);
+      setVariables([]);
+      showTempNotice('已切换本地 R 环境（下次运行自动拉起）');
+    },
+    [onSelectRRuntime, selectedRRuntime, showTempNotice],
+  );
+
   const handleSwitchPythonRuntime = useCallback(
     async (nextRuntime: string) => {
       if (nextRuntime === selectedPyRuntime) return;
@@ -1450,6 +1939,7 @@ export const TerminalCodeLabView = forwardRef<
           .catch(() => undefined);
       }
       setSelectedPyRuntime(nextRuntime);
+      onSelectPythonRuntime?.(nextRuntime);
       setVariables([]);
       showTempNotice(
         nextRuntime === 'pyodide'
@@ -1457,17 +1947,19 @@ export const TerminalCodeLabView = forwardRef<
           : '已切换本地 Python 环境（下次运行自动拉起）',
       );
     },
-    [selectedPyRuntime, showTempNotice],
+    [onSelectPythonRuntime, selectedPyRuntime, showTempNotice],
   );
 
   const handleSwitchLanguage = useCallback(
     (nextLang: TerminalCodeLabLanguage) => {
       setLanguage(nextLang);
-      if (nextLang !== 'python') {
+      if (nextLang === 'c' || nextLang === 'cpp') {
         setShowPrologue(true);
         setPrologueSource(
           nextLang === 'cpp' ? DEFAULT_CPP_PROLOGUE : DEFAULT_C_PROLOGUE,
         );
+      } else {
+        setShowPrologue(false);
       }
     },
     [],
@@ -1618,6 +2110,70 @@ export const TerminalCodeLabView = forwardRef<
               durationMs: res.durationMs,
             },
           ]);
+        } else if (language === 'r') {
+          const res = await executeRSnippet(code);
+          setVariables(res.vars);
+          const lines: string[] = [];
+          for (const o of res.outputs) {
+            if (o.kind === 'stream' || o.kind === 'text')
+              lines.push(o.text.trimEnd());
+            if (o.kind === 'error') lines.push(o.message);
+          }
+          const images = res.outputs
+            .filter(
+              (o): o is Extract<CodeLabOutputItem, { kind: 'image/png' }> =>
+                o.kind === 'image/png',
+            )
+            .map((o) => o.dataUrl);
+          setReplHistory((prev) => [
+            ...prev.slice(-14),
+            {
+              id: `repl-${Date.now()}`,
+              code,
+              language,
+              ok: res.ok,
+              text: lines.join('\n') || (res.ok ? '(ok)' : 'error'),
+              images,
+              durationMs: res.durationMs,
+            },
+          ]);
+        } else if (language === 'sql') {
+          const res = await terminalApi.querySql({
+            sql: code,
+            connection: null,
+            mountedFiles: effectiveMountedFiles.map((f) => ({
+              alias: f.alias,
+              path: f.path,
+              format: f.format,
+            })),
+            pythonPath:
+              selectedPyRuntime !== 'pyodide' ? selectedPyRuntime : null,
+            maxRows: 30,
+          });
+          const summaryText = res.ok
+            ? res.columns.length > 0
+              ? `${res.engine} · ${res.rows.length} 行 × ${res.columns.length} 列\n` +
+                res.columns.map((c) => c.name).join(' | ') +
+                '\n' +
+                res.rows
+                  .slice(0, 8)
+                  .map((r) =>
+                    r.map((v) => (v === null ? 'NULL' : String(v))).join(' | '),
+                  )
+                  .join('\n')
+              : res.message || 'SQL 执行成功'
+            : res.error || 'SQL 执行失败';
+          setReplHistory((prev) => [
+            ...prev.slice(-14),
+            {
+              id: `repl-${Date.now()}`,
+              code,
+              language,
+              ok: res.ok,
+              text: summaryText,
+              durationMs: res.durationMs,
+            },
+          ]);
         } else {
           const isCpp = language === 'cpp';
           const assembled = assembleCCellProgram(prologueSource, code, isCpp);
@@ -1656,7 +2212,16 @@ export const TerminalCodeLabView = forwardRef<
         setReplBusy(false);
       }
     },
-    [executePythonSnippet, language, prologueSource, replBusy, replInput],
+    [
+      effectiveMountedFiles,
+      executePythonSnippet,
+      executeRSnippet,
+      language,
+      prologueSource,
+      replBusy,
+      replInput,
+      selectedPyRuntime,
+    ],
   );
 
   // Stable cell callbacks for React.memo isolation
@@ -1701,6 +2266,50 @@ export const TerminalCodeLabView = forwardRef<
     setDirty(true);
   }, []);
 
+  const handleChangeCellSqlConfig = useCallback(
+    (
+      cellId: string,
+      patch: { sqlConnectionId?: string; sqlResultVar?: string },
+    ) => {
+      setCells((prev) =>
+        prev.map((c) => (c.id === cellId ? { ...c, ...patch } : c)),
+      );
+      setDirty(true);
+    },
+    [],
+  );
+
+  const handleInsertSnippetCell = useCallback(
+    (lang: TerminalCodeLabLanguage, code: string) => {
+      const idx = cellsRef.current.findIndex(
+        (c) => c.id === focusedCellIdRef.current,
+      );
+      const insertAt = idx < 0 ? cellsRef.current.length : idx + 1;
+      const newCell: CodeLabCell = {
+        id: makeCodeLabCellId(),
+        kind: 'code',
+        language: lang,
+        source: code,
+        stdinInput: '',
+        executionCount: null,
+        status: 'idle',
+        outputs: [],
+      };
+      liveSourceMapRef.current.set(newCell.id, code);
+      setCells((prev) => [
+        ...prev.slice(0, insertAt),
+        newCell,
+        ...prev.slice(insertAt),
+      ]);
+      setDirty(true);
+      setFocusedCellId(newCell.id);
+      setEditingCellId(newCell.id);
+      setHydratedCellIds((prev) => pushHydratedLru(prev, newCell.id));
+      setInteractionMode('edit');
+    },
+    [],
+  );
+
   const handleToggleMarkdownEdit = useCallback((cellId: string) => {
     setEditingCellId((curr) => {
       const next = curr === cellId ? null : cellId;
@@ -1726,6 +2335,183 @@ export const TerminalCodeLabView = forwardRef<
     setHydratedCellIds((prev) => pushHydratedLru(prev, cellId));
   }, []);
 
+  const handleRunAnalysisBlock = useCallback(
+    async (groupId: string) => {
+      const targetIds = cellsRef.current
+        .filter((c) => c.groupId === groupId && c.kind === 'code')
+        .map((c) => c.id);
+      if (targetIds.length === 0) return;
+      runAbortRef.current = false;
+      for (const cid of targetIds) {
+        if (runAbortRef.current) break;
+        await runCellById(cid, false);
+        const latest = cellsRef.current.find((c) => c.id === cid);
+        if (latest?.status === 'error') {
+          showTempNotice('复合分析区块在出错分区自动暂停');
+          break;
+        }
+      }
+    },
+    [runCellById, showTempNotice],
+  );
+
+  const handleInsertSubBlockInGroup = useCallback(
+    (
+      groupId: string,
+      groupTitle: string,
+      kind: 'code' | 'markdown',
+      lang: TerminalCodeLabLanguage,
+    ) => {
+      const defaultSqlConnId =
+        kind === 'code' && lang === 'sql'
+          ? loadDataLabBaseProfile().defaultConnectionId || undefined
+          : undefined;
+      const newCell: CodeLabCell = {
+        id: makeCodeLabCellId(),
+        kind,
+        language: lang,
+        sqlConnectionId: defaultSqlConnId,
+        source: '',
+        stdinInput: '',
+        executionCount: null,
+        status: 'idle',
+        outputs: [],
+        groupId,
+        groupTitle,
+        groupCollapsed: false,
+      };
+      liveSourceMapRef.current.set(newCell.id, '');
+      setCells((prev) => {
+        let lastIdx = -1;
+        for (let i = 0; i < prev.length; i += 1) {
+          if (prev[i].groupId === groupId) lastIdx = i;
+        }
+        const insertAt = lastIdx >= 0 ? lastIdx + 1 : prev.length;
+        const normalized = prev.map((c) =>
+          c.groupId === groupId ? { ...c, groupCollapsed: false } : c,
+        );
+        return [
+          ...normalized.slice(0, insertAt),
+          newCell,
+          ...normalized.slice(insertAt),
+        ];
+      });
+      setDirty(true);
+      setFocusedCellId(newCell.id);
+      setEditingCellId(newCell.id);
+      setHydratedCellIds((prev) => pushHydratedLru(prev, newCell.id));
+      setInteractionMode('edit');
+    },
+    [],
+  );
+
+  const handleRenameAnalysisBlock = useCallback(
+    (groupId: string, nextTitle: string) => {
+      setCells((prev) =>
+        prev.map((c) =>
+          c.groupId === groupId ? { ...c, groupTitle: nextTitle } : c,
+        ),
+      );
+      setDirty(true);
+    },
+    [],
+  );
+
+  const handleToggleAnalysisBlockCollapse = useCallback((groupId: string) => {
+    setCells((prev) => {
+      const currCollapsed = prev.some(
+        (c) => c.groupId === groupId && c.groupCollapsed,
+      );
+      return prev.map((c) =>
+        c.groupId === groupId ? { ...c, groupCollapsed: !currCollapsed } : c,
+      );
+    });
+    setDirty(true);
+  }, []);
+
+  const handleDeleteAnalysisBlock = useCallback((groupId: string) => {
+    setCells((prev) => {
+      const remaining = prev.filter((c) => c.groupId !== groupId);
+      if (remaining.length === 0) {
+        return createStarterCodeLabCells('python');
+      }
+      return remaining;
+    });
+    setDirty(true);
+  }, []);
+
+  const handleExportAnalysisBlock = useCallback(
+    async (
+      groupId: string,
+      blockTitle: string,
+      target: 'knowledge' | 'mindmap',
+    ) => {
+      const blockCells = getCellsWithLiveSources().filter(
+        (c) => c.groupId === groupId,
+      );
+      if (blockCells.length === 0) return;
+      const md = exportCodeLabToMarkdown(blockTitle, language, blockCells);
+      if (target === 'mindmap') {
+        if (bridge?.onAppendToMindmap) {
+          const ok = await bridge.onAppendToMindmap({
+            title: blockTitle,
+            markdown: md,
+          });
+          showTempNotice(ok ? '已将复合分析区块追加到导图' : '追加导图失败');
+        } else {
+          await navigator.clipboard?.writeText(md);
+          showTempNotice('已复制复合分析区块 Markdown');
+        }
+        return;
+      }
+      if (bridge?.onSaveMarkdownNote) {
+        const ok = await bridge.onSaveMarkdownNote({
+          title: blockTitle,
+          category: '数据分析',
+          source: md,
+        });
+        showTempNotice(ok ? '已将复合分析区块存入知识库' : '保存知识库失败');
+      } else {
+        await navigator.clipboard?.writeText(md);
+        showTempNotice('已复制复合分析区块 Markdown');
+      }
+    },
+    [bridge, getCellsWithLiveSources, language, showTempNotice],
+  );
+
+  const handleAddAnalysisBlock = useCallback(
+    (kind: 'empty' | 'polyglot') => {
+      const baseProf = loadDataLabBaseProfile();
+      const blockCells =
+        kind === 'polyglot'
+          ? createPolyglotAnalysisTemplateCells()
+          : createEmptyAnalysisBlockCells(
+              `复合分析区块 #${
+                buildNotebookRenderItems(cellsRef.current).filter(
+                  (it) => it.kind === 'group',
+                ).length + 1
+              }`,
+              baseProf.defaultConnectionId || undefined,
+            );
+      for (const c of blockCells) {
+        liveSourceMapRef.current.set(c.id, c.source);
+      }
+      setCells((prev) => [...prev, ...blockCells]);
+      setDirty(true);
+      if (blockCells[0]) {
+        setFocusedCellId(blockCells[0].id);
+        setEditingCellId(blockCells[0].id);
+        setHydratedCellIds((prev) => pushHydratedLru(prev, blockCells[0].id));
+      }
+      showTempNotice(
+        kind === 'polyglot'
+          ? '已新建多语言复合分析区块（SQL → Python → R → 结论）'
+          : '已新建复合分析区块，可在块内自由嵌套 SQL / Python / R 分区',
+      );
+    },
+    [showTempNotice],
+  );
+
   const handleEditorBlur = useCallback((cellId: string) => {
     const cell = cellsRef.current.find((c) => c.id === cellId);
     if (cell?.kind === 'markdown') {
@@ -1748,12 +2534,25 @@ export const TerminalCodeLabView = forwardRef<
       focus: () => {
         rootContainerRef.current?.focus();
       },
-      insertAndRunCell: (lang, source, autoRun = true, origin) => {
-        setLanguage(lang);
-        if (lang !== 'python') setShowPrologue(true);
+      insertAndRunCell: (
+        lang,
+        source,
+        autoRun = true,
+        origin,
+        sqlConnectionId,
+        sqlResultVar,
+        kind = 'code',
+        groupId,
+        groupTitle,
+      ) => {
+        if (kind === 'code') {
+          setLanguage(lang);
+          if (lang === 'c' || lang === 'cpp') setShowPrologue(true);
+        }
+        const cleanGroupId = groupId?.trim() || undefined;
         const newCell: CodeLabCell = {
           id: makeCodeLabCellId(),
-          kind: 'code',
+          kind,
           language: lang,
           source,
           stdinInput: '',
@@ -1761,18 +2560,51 @@ export const TerminalCodeLabView = forwardRef<
           status: 'idle',
           outputs: [],
           origin,
+          sqlConnectionId:
+            kind === 'code' && lang === 'sql'
+              ? (sqlConnectionId ?? '')
+              : undefined,
+          sqlResultVar:
+            kind === 'code' && lang === 'sql'
+              ? (sqlResultVar ?? '')
+              : undefined,
+          groupId: cleanGroupId,
+          groupTitle: cleanGroupId
+            ? groupTitle?.trim() || 'Agent 复合分析区块'
+            : undefined,
         };
         liveSourceMapRef.current.set(newCell.id, source);
-        setCells((prev) => [...prev, newCell]);
+        setCells((prev) => {
+          if (cleanGroupId) {
+            let lastIdx = -1;
+            for (let i = 0; i < prev.length; i += 1) {
+              if (prev[i].groupId === cleanGroupId) lastIdx = i;
+            }
+            if (lastIdx >= 0) {
+              return [
+                ...prev.slice(0, lastIdx + 1),
+                newCell,
+                ...prev.slice(lastIdx + 1),
+              ];
+            }
+          }
+          return [...prev, newCell];
+        });
         setDirty(true);
         setFocusedCellId(newCell.id);
         setEditingCellId(newCell.id);
         setHydratedCellIds((prev) => pushHydratedLru(prev, newCell.id));
-        if (autoRun) {
+        if (autoRun && kind === 'code') {
           requestAnimationFrame(() => {
             void runCellById(newCell.id, false);
           });
         }
+      },
+      setPythonRuntime: (runtime) => {
+        void handleSwitchPythonRuntime(runtime);
+      },
+      setRRuntime: (rscriptPath) => {
+        void handleSwitchRRuntime(rscriptPath);
       },
       loadSavedFile: (file) => {
         handleLoadSavedFile(file);
@@ -1792,6 +2624,379 @@ export const TerminalCodeLabView = forwardRef<
       },
       getCanvasViewMode: () => canvasViewMode,
       getActiveFileId: () => activeFileId,
+      getNotebookTitle: () => activeFileTitle.trim() || tab.title,
+      getLiveNotebookSnapshot: (): CodeLabLiveNotebookSnapshot => {
+        const liveCells = getCellsWithLiveSources();
+        return {
+          source: 'live',
+          tabId: tab.id,
+          fileId: activeFileId,
+          title: activeFileTitle.trim() || tab.title,
+          folder: activeFileFolder,
+          language,
+          cells: liveCells.map((c, idx) => ({
+            cellId: c.id,
+            index: idx + 1,
+            kind: c.kind,
+            language: c.language,
+            status: c.status,
+            executionCount: c.executionCount,
+            groupId: c.groupId,
+            groupTitle: c.groupTitle,
+            sqlConnectionId: c.sqlConnectionId,
+            sqlResultVar: c.sqlResultVar,
+            source: c.source,
+            outputs: summarizeCellOutputsForAgent(c.outputs),
+          })),
+        };
+      },
+      agentPushCell: async (
+        request: CodeLabPushCellRequest,
+      ): Promise<CodeLabMutationResult> => {
+        const notebookTitle = activeFileTitle.trim() || tab.title;
+        const kind = request.kind ?? 'code';
+        const lang = request.language;
+        if (kind === 'code') {
+          setLanguage(lang);
+          if (lang === 'c' || lang === 'cpp') setShowPrologue(true);
+        }
+        const cleanGroupId = request.groupId?.trim() || undefined;
+        const existingGroupTitle = cleanGroupId
+          ? cellsRef.current.find((c) => c.groupId === cleanGroupId)?.groupTitle
+          : undefined;
+        const resolvedGroupTitle = cleanGroupId
+          ? request.groupTitle?.trim() ||
+            existingGroupTitle ||
+            'Agent 复合分析区块'
+          : undefined;
+        const newCell: CodeLabCell = {
+          id: makeCodeLabCellId(),
+          kind,
+          language: lang,
+          source: request.source,
+          stdinInput: '',
+          executionCount: null,
+          status: 'idle',
+          outputs: [],
+          sqlConnectionId:
+            kind === 'code' && lang === 'sql'
+              ? (request.sqlConnectionId ?? '')
+              : undefined,
+          sqlResultVar:
+            kind === 'code' && lang === 'sql'
+              ? (request.sqlResultVar ?? '')
+              : undefined,
+          groupId: cleanGroupId,
+          groupTitle: resolvedGroupTitle,
+        };
+
+        const currentCells = getCellsWithLiveSources();
+        let insertIndex = currentCells.length;
+        if (request.afterCellId) {
+          const afterIdx = currentCells.findIndex(
+            (c) => c.id === request.afterCellId,
+          );
+          if (afterIdx >= 0) insertIndex = afterIdx + 1;
+        } else if (cleanGroupId) {
+          let lastIdx = -1;
+          for (let i = 0; i < currentCells.length; i += 1) {
+            if (currentCells[i].groupId === cleanGroupId) lastIdx = i;
+          }
+          if (lastIdx >= 0) insertIndex = lastIdx + 1;
+        }
+
+        const nextCells = [
+          ...currentCells.slice(0, insertIndex),
+          newCell,
+          ...currentCells.slice(insertIndex),
+        ];
+        liveSourceMapRef.current.set(newCell.id, newCell.source);
+        cellsRef.current = nextCells;
+        setCells(nextCells);
+        setDirty(true);
+        setFocusedCellId(newCell.id);
+        setHydratedCellIds((prev) => pushHydratedLru(prev, newCell.id));
+
+        const executedCells: CodeLabCellExecutionRecord[] = [];
+        if (request.autoRun && kind === 'code') {
+          await runCellById(newCell.id, false);
+          const after = cellsRef.current.find((c) => c.id === newCell.id);
+          if (after) {
+            executedCells.push({
+              cellId: after.id,
+              index: insertIndex + 1,
+              language: after.language,
+              groupId: after.groupId,
+              status: after.status,
+              executionCount: after.executionCount,
+              outputs: summarizeCellOutputsForAgent(after.outputs),
+            });
+          }
+        }
+
+        return {
+          ok: true,
+          notebookTitle,
+          fileId: activeFileId,
+          tabId: tab.id,
+          cellId: newCell.id,
+          cellIndex: insertIndex + 1,
+          groupId: cleanGroupId,
+          groupTitle: resolvedGroupTitle,
+          ...(executedCells.length > 0 ? { executedCells } : {}),
+          message:
+            executedCells.length > 0
+              ? `已向「${notebookTitle}」插入第 #${insertIndex + 1} 格并完成执行（${executedCells[0].status}）`
+              : `已向「${notebookTitle}」插入第 #${insertIndex + 1} 格${resolvedGroupTitle ? `（区块：${resolvedGroupTitle}）` : ''}`,
+        };
+      },
+      agentUpdateCell: async (
+        request: CodeLabUpdateCellRequest,
+      ): Promise<CodeLabMutationResult> => {
+        const notebookTitle = activeFileTitle.trim() || tab.title;
+        const currentCells = getCellsWithLiveSources();
+        let targetIndex = -1;
+
+        if (request.cellId) {
+          targetIndex = currentCells.findIndex((c) => c.id === request.cellId);
+        }
+        if (targetIndex < 0 && request.cellIndex) {
+          const idx = request.cellIndex - 1;
+          if (idx >= 0 && idx < currentCells.length) targetIndex = idx;
+        }
+        if (targetIndex < 0 && request.groupId) {
+          targetIndex = currentCells.findIndex((c) => {
+            if (c.groupId !== request.groupId) return false;
+            if (!request.matchLanguage) return true;
+            if (request.matchLanguage === 'markdown') {
+              return c.kind === 'markdown';
+            }
+            return c.kind === 'code' && c.language === request.matchLanguage;
+          });
+        }
+
+        if (targetIndex < 0) {
+          return {
+            ok: false,
+            notebookTitle,
+            fileId: activeFileId,
+            tabId: tab.id,
+            message: `未在「${notebookTitle}」中找到目标单元格（当前共 ${currentCells.length} 格）。`,
+            error: `未在「${notebookTitle}」中找到匹配的单元格，请先调用 datalab_read_notebook 核对 cellId / cellIndex / groupId。`,
+          };
+        }
+
+        const existing = currentCells[targetIndex];
+        const nextKind = request.kind ?? existing.kind;
+        const nextLanguage = request.language ?? existing.language;
+        const nextSource =
+          request.source !== undefined ? request.source : existing.source;
+        const nextGroupId =
+          request.newGroupId !== undefined
+            ? request.newGroupId || undefined
+            : existing.groupId;
+        const nextGroupTitle =
+          nextGroupId !== undefined
+            ? request.newGroupTitle?.trim() ||
+              existing.groupTitle ||
+              '复合分析区块'
+            : undefined;
+
+        const updatedCell: CodeLabCell = {
+          ...existing,
+          kind: nextKind,
+          language: nextLanguage,
+          source: nextSource,
+          sqlConnectionId:
+            nextKind === 'code' && nextLanguage === 'sql'
+              ? (request.sqlConnectionId ?? existing.sqlConnectionId ?? '')
+              : existing.sqlConnectionId,
+          sqlResultVar:
+            nextKind === 'code' && nextLanguage === 'sql'
+              ? (request.sqlResultVar ?? existing.sqlResultVar ?? '')
+              : existing.sqlResultVar,
+          groupId: nextGroupId,
+          groupTitle: nextGroupTitle,
+        };
+
+        const nextCells = currentCells.map((c, idx) =>
+          idx === targetIndex ? updatedCell : c,
+        );
+        liveSourceMapRef.current.set(updatedCell.id, updatedCell.source);
+        cellsRef.current = nextCells;
+        setCells(nextCells);
+        setDirty(true);
+        setFocusedCellId(updatedCell.id);
+        setHydratedCellIds((prev) => pushHydratedLru(prev, updatedCell.id));
+
+        const executedCells: CodeLabCellExecutionRecord[] = [];
+        if (request.autoRun && updatedCell.kind === 'code') {
+          await runCellById(updatedCell.id, false);
+          const after = cellsRef.current.find((c) => c.id === updatedCell.id);
+          if (after) {
+            executedCells.push({
+              cellId: after.id,
+              index: targetIndex + 1,
+              language: after.language,
+              groupId: after.groupId,
+              status: after.status,
+              executionCount: after.executionCount,
+              outputs: summarizeCellOutputsForAgent(after.outputs),
+            });
+          }
+        }
+
+        return {
+          ok: true,
+          notebookTitle,
+          fileId: activeFileId,
+          tabId: tab.id,
+          cellId: updatedCell.id,
+          cellIndex: targetIndex + 1,
+          groupId: updatedCell.groupId,
+          groupTitle: updatedCell.groupTitle,
+          ...(executedCells.length > 0 ? { executedCells } : {}),
+          message:
+            executedCells.length > 0
+              ? `已原地更新「${notebookTitle}」第 #${targetIndex + 1} 格并执行完成（${executedCells[0].status}）`
+              : `已原地更新「${notebookTitle}」第 #${targetIndex + 1} 格（${updatedCell.kind === 'markdown' ? 'MD' : updatedCell.language.toUpperCase()}）`,
+        };
+      },
+      agentRunCell: async (
+        request: CodeLabRunCellRequest,
+      ): Promise<CodeLabMutationResult> => {
+        const notebookTitle = activeFileTitle.trim() || tab.title;
+        const currentCells = getCellsWithLiveSources();
+        let targets: Array<{ cell: CodeLabCell; index: number }> = [];
+
+        if (request.runAll) {
+          targets = currentCells
+            .map((cell, idx) => ({ cell, index: idx + 1 }))
+            .filter(({ cell }) => cell.kind === 'code');
+        } else if (request.groupId) {
+          targets = currentCells
+            .map((cell, idx) => ({ cell, index: idx + 1 }))
+            .filter(
+              ({ cell }) =>
+                cell.groupId === request.groupId && cell.kind === 'code',
+            );
+        } else if (request.cellId) {
+          const idx = currentCells.findIndex((c) => c.id === request.cellId);
+          if (idx >= 0) targets = [{ cell: currentCells[idx], index: idx + 1 }];
+        } else if (request.cellIndex) {
+          const idx = request.cellIndex - 1;
+          if (idx >= 0 && idx < currentCells.length) {
+            targets = [{ cell: currentCells[idx], index: idx + 1 }];
+          }
+        }
+
+        if (targets.length === 0) {
+          return {
+            ok: false,
+            notebookTitle,
+            fileId: activeFileId,
+            tabId: tab.id,
+            message: `未在「${notebookTitle}」中找到可运行的目标代码块。`,
+            error: '未找到匹配的可运行单元格或复合分析区块。',
+          };
+        }
+
+        const executedCells: CodeLabCellExecutionRecord[] = [];
+        let hasError = false;
+        for (const target of targets) {
+          await runCellById(target.cell.id, false);
+          const after = cellsRef.current.find((c) => c.id === target.cell.id);
+          if (after) {
+            if (after.status === 'error') hasError = true;
+            executedCells.push({
+              cellId: after.id,
+              index: target.index,
+              language: after.language,
+              groupId: after.groupId,
+              status: after.status,
+              executionCount: after.executionCount,
+              outputs: summarizeCellOutputsForAgent(after.outputs),
+            });
+          }
+        }
+
+        const first = targets[0];
+        return {
+          ok: !hasError,
+          notebookTitle,
+          fileId: activeFileId,
+          tabId: tab.id,
+          cellId: targets.length === 1 ? first.cell.id : undefined,
+          cellIndex: targets.length === 1 ? first.index : undefined,
+          groupId: request.groupId ?? first.cell.groupId,
+          groupTitle: first.cell.groupTitle,
+          executedCells,
+          message: hasError
+            ? `已执行「${notebookTitle}」中 ${executedCells.length} 个代码块，其中存在运行报错`
+            : `已完成「${notebookTitle}」中 ${executedCells.length} 个代码块执行`,
+        };
+      },
+      agentDeleteCell: async (
+        request: CodeLabDeleteCellRequest,
+      ): Promise<CodeLabMutationResult> => {
+        const notebookTitle = activeFileTitle.trim() || tab.title;
+        const currentCells = getCellsWithLiveSources();
+        const idsToDelete = new Set<string>();
+
+        if (request.groupId) {
+          for (const c of currentCells) {
+            if (c.groupId === request.groupId) idsToDelete.add(c.id);
+          }
+        } else if (request.cellId) {
+          if (currentCells.some((c) => c.id === request.cellId)) {
+            idsToDelete.add(request.cellId);
+          }
+        } else if (request.cellIndex) {
+          const target = currentCells[request.cellIndex - 1];
+          if (target) idsToDelete.add(target.id);
+        }
+
+        if (idsToDelete.size === 0) {
+          return {
+            ok: false,
+            notebookTitle,
+            fileId: activeFileId,
+            tabId: tab.id,
+            message: `未在「${notebookTitle}」中找到要删除的单元格。`,
+            error: '未找到匹配的 cellId / cellIndex / groupId。',
+          };
+        }
+
+        for (const id of idsToDelete) {
+          liveSourceMapRef.current.delete(id);
+        }
+        const remaining = currentCells.filter((c) => !idsToDelete.has(c.id));
+        const nextCells =
+          remaining.length > 0
+            ? remaining
+            : createStarterCodeLabCells(language);
+        for (const c of nextCells) {
+          if (!liveSourceMapRef.current.has(c.id)) {
+            liveSourceMapRef.current.set(c.id, c.source);
+          }
+        }
+        cellsRef.current = nextCells;
+        setCells(nextCells);
+        setDirty(true);
+        if (nextCells[0]) {
+          setFocusedCellId(nextCells[0].id);
+        }
+
+        return {
+          ok: true,
+          notebookTitle,
+          fileId: activeFileId,
+          tabId: tab.id,
+          groupId: request.groupId,
+          deletedCount: idsToDelete.size,
+          message: `已从「${notebookTitle}」删除 ${idsToDelete.size} 个单元格`,
+        };
+      },
       hasUnsavedChanges: () => dirty,
       getScreenText: (maxLines = 80) => {
         const lines: string[] = [];
@@ -1825,13 +3030,20 @@ export const TerminalCodeLabView = forwardRef<
       },
     }),
     [
+      activeFileFolder,
       activeFileId,
+      activeFileTitle,
       dirty,
       canvasViewMode,
       getCellsWithLiveSources,
       handleCreateNewNotebook,
       handleLoadSavedFile,
+      language,
+      tab.id,
+      tab.title,
       handleSaveToCollection,
+      handleSwitchPythonRuntime,
+      handleSwitchRRuntime,
       runCellById,
     ],
   );
@@ -1924,7 +3136,16 @@ export const TerminalCodeLabView = forwardRef<
 
   const handleExportScriptFile = () => {
     const liveCells = getCellsWithLiveSources();
-    const ext = language === 'cpp' ? 'cpp' : language === 'c' ? 'c' : 'py';
+    const ext =
+      language === 'cpp'
+        ? 'cpp'
+        : language === 'c'
+          ? 'c'
+          : language === 'sql'
+            ? 'sql'
+            : language === 'r'
+              ? 'R'
+              : 'py';
     const docTitle = activeFileTitle.trim() || tab.title;
     const scriptText = assembleFullScriptSource(
       liveCells,
@@ -1988,6 +3209,10 @@ export const TerminalCodeLabView = forwardRef<
     () => pythonEnvs.find((e) => e.pythonPath === selectedPyRuntime),
     [pythonEnvs, selectedPyRuntime],
   );
+  const activeREnvObj = useMemo(
+    () => rEnvs.find((e) => e.rscriptPath === selectedRRuntime) ?? rEnvs[0],
+    [rEnvs, selectedRRuntime],
+  );
 
   const filteredVariables = useMemo(() => {
     const q = varFilter.trim().toLowerCase();
@@ -1999,6 +3224,26 @@ export const TerminalCodeLabView = forwardRef<
         v.preview.toLowerCase().includes(q),
     );
   }, [varFilter, variables]);
+
+  const inferShortEnvName = useCallback((rawPath: string) => {
+    const clean = rawPath.trim().replace(/[\\/]+$/, '');
+    if (!clean) return '';
+    const parts = clean.split(/[\\/]/).filter(Boolean);
+    const last = parts[parts.length - 1] ?? '';
+    if (/^(python|rscript)(\.exe)?$/i.test(last)) {
+      const parent = parts[parts.length - 2] ?? '';
+      if (/^(scripts|bin|x64)$/i.test(parent)) {
+        const grand = parts[parts.length - 3] ?? '';
+        return /^(bin)$/i.test(grand)
+          ? (parts[parts.length - 4] ?? parent)
+          : grand || parent;
+      }
+      return parent || last;
+    }
+    return last;
+  }, []);
+
+  const renderItems = useMemo(() => buildNotebookRenderItems(cells), [cells]);
 
   const kernelSummary = useMemo(() => {
     if (language === 'c') {
@@ -2015,6 +3260,33 @@ export const TerminalCodeLabView = forwardRef<
         tone: cCompilerReady === false ? 'warn' : 'ready',
       };
     }
+    if (language === 'sql') {
+      const hasDuck = pythonEnvs.some((e) => e.hasDuckdb);
+      return {
+        tag: 'SQL',
+        label: hasDuck ? 'DuckDB / DB' : 'SQLite / DB',
+        tone: isAnyRunning ? 'busy' : 'ready',
+      };
+    }
+    if (language === 'r') {
+      const rName =
+        activeREnvObj?.label ||
+        (selectedRRuntime
+          ? `${inferShortEnvName(selectedRRuntime)} (自动激活)`
+          : '未指定 R 基座');
+      return {
+        tag: 'R',
+        label: rName,
+        tone:
+          !activeREnvObj && !selectedRRuntime
+            ? 'warn'
+            : isAnyRunning
+              ? 'busy'
+              : rKernelId
+                ? 'ready'
+                : 'idle',
+      };
+    }
     if (selectedPyRuntime === 'pyodide') {
       return {
         tag: 'Python',
@@ -2022,27 +3294,58 @@ export const TerminalCodeLabView = forwardRef<
         tone: isAnyRunning ? 'busy' : 'ready',
       };
     }
+    const pyEnvShort = inferShortEnvName(selectedPyRuntime);
     return {
       tag: 'Python',
-      label: activeEnvObj?.label || 'Local Python',
+      label:
+        activeEnvObj?.label ||
+        (pyEnvShort ? `${pyEnvShort} (自动激活)` : 'Local Python'),
       tone: isAnyRunning ? 'busy' : localKernelId ? 'ready' : 'idle',
     };
   }, [
     activeEnvObj?.label,
+    activeREnvObj,
     cCompilerReady,
+    inferShortEnvName,
     isAnyRunning,
     language,
     localKernelId,
+    pythonEnvs,
+    rKernelId,
     selectedPyRuntime,
+    selectedRRuntime,
   ]);
 
-  const bottomDrawerOpen = replOpen || (showVars && language === 'python');
-  const activeBottomTab: 'console' | 'vars' =
-    language !== 'python'
-      ? 'console'
-      : showVars && (!replOpen || bottomDrawerTab === 'vars')
-        ? 'vars'
-        : 'console';
+  const supportsVarsDrawer = language === 'python' || language === 'r';
+  const bottomDrawerOpen = replOpen || (showVars && supportsVarsDrawer);
+  const activeBottomTab: 'console' | 'vars' = !supportsVarsDrawer
+    ? 'console'
+    : showVars && (!replOpen || bottomDrawerTab === 'vars')
+      ? 'vars'
+      : 'console';
+  const [availableFolders, setAvailableFolders] = useState<string[]>(() =>
+    loadCodeLabFolders(),
+  );
+
+  useEffect(() => {
+    const syncFolders = () => {
+      setAvailableFolders(loadCodeLabFolders());
+    };
+    window.addEventListener(CODELAB_COLLECTION_EVENT, syncFolders);
+    return () => {
+      window.removeEventListener(CODELAB_COLLECTION_EVENT, syncFolders);
+    };
+  }, []);
+
+  const appearance = useCodeLabAppearance();
+  const appearanceVars = useMemo(
+    () => buildCodeLabAppearanceCssVars(appearance, theme),
+    [appearance, theme],
+  );
+  const mergedRootStyle = useMemo(
+    () => ({ ...appearanceVars, ...style }),
+    [appearanceVars, style],
+  );
   const runningCellsCount = useMemo(
     () => cells.filter((c) => c.status === 'running').length,
     [cells],
@@ -2052,11 +3355,16 @@ export const TerminalCodeLabView = forwardRef<
     <div
       ref={rootContainerRef}
       tabIndex={0}
+      data-editor-theme={appearance.themePreset}
+      data-cell-radius={appearance.cellRadius}
       className={`codelab-root${active ? '' : ' is-hidden-pane'}${isFocused ? ' is-focused' : ''}${isSplitView ? ' is-split-view' : ''}`}
-      style={style}
+      style={mergedRootStyle}
       onMouseDown={() => onFocusPane?.()}
       onKeyDown={handleContainerKeyDown}
     >
+      {appearance.customCss.trim() ? (
+        <style data-codelab-custom-css="true">{appearance.customCss}</style>
+      ) : null}
       {/* Single-Row Document-Centric Notebook Toolbar */}
       <header className="codelab-toolbar" aria-label="代码实验室控制栏">
         {/* File location, title and save state */}
@@ -2076,8 +3384,8 @@ export const TerminalCodeLabView = forwardRef<
             </button>
             {showFolderMenu && (
               <div className="codelab-popover-menu is-left" role="menu">
-                <div className="codelab-popover-head">代码归档分类</div>
-                {DEFAULT_CODELAB_FOLDERS.map((folder) => (
+                <div className="codelab-popover-head">笔记本目录</div>
+                {availableFolders.map((folder) => (
                   <button
                     key={folder}
                     type="button"
@@ -2234,23 +3542,57 @@ export const TerminalCodeLabView = forwardRef<
           <details className="codelab-insert-menu">
             <summary
               className="codelab-tool-btn"
-              title="在当前格下方添加单元格"
+              title="在当前格下方添加单元格或插入常用代码片段"
             >
               <LabPlusIcon size={12} />
               <span>添加单元格</span>
               <LabChevronDownIcon size={10} />
             </summary>
-            <div className="codelab-insert-options">
+            <div className="codelab-insert-options is-wide">
+              <div className="codelab-insert-group-head">新建单元格</div>
               <button
                 type="button"
                 onClick={(event) => {
-                  insertCell('below', 'code');
+                  insertCell('below', 'code', 'python');
                   event.currentTarget
                     .closest('details')
                     ?.removeAttribute('open');
                 }}
               >
-                <LabCodeIcon size={13} /> 代码单元格
+                <LabCodeIcon size={13} /> Python 代码格
+              </button>
+              <button
+                type="button"
+                onClick={(event) => {
+                  insertCell('below', 'code', 'sql');
+                  event.currentTarget
+                    .closest('details')
+                    ?.removeAttribute('open');
+                }}
+              >
+                <LabCodeIcon size={13} /> SQL 查询格
+              </button>
+              <button
+                type="button"
+                onClick={(event) => {
+                  insertCell('below', 'code', 'r');
+                  event.currentTarget
+                    .closest('details')
+                    ?.removeAttribute('open');
+                }}
+              >
+                <LabCodeIcon size={13} /> R 语言代码格
+              </button>
+              <button
+                type="button"
+                onClick={(event) => {
+                  insertCell('below', 'code', language === 'cpp' ? 'cpp' : 'c');
+                  event.currentTarget
+                    .closest('details')
+                    ?.removeAttribute('open');
+                }}
+              >
+                <LabCodeIcon size={13} /> C / C++ 代码格
               </button>
               <button
                 type="button"
@@ -2261,8 +3603,60 @@ export const TerminalCodeLabView = forwardRef<
                     ?.removeAttribute('open');
                 }}
               >
-                <LabNoteIcon size={13} /> Markdown 笔记
+                <LabNoteIcon size={13} /> Markdown 笔记格
               </button>
+              <button
+                type="button"
+                onClick={(event) => {
+                  handleAddAnalysisBlock('empty');
+                  event.currentTarget
+                    .closest('details')
+                    ?.removeAttribute('open');
+                }}
+              >
+                <LabCellsIcon size={13} /> 新建复合分析区块（嵌套多语言）
+              </button>
+              <button
+                type="button"
+                onClick={(event) => {
+                  handleAddAnalysisBlock('polyglot');
+                  event.currentTarget
+                    .closest('details')
+                    ?.removeAttribute('open');
+                }}
+              >
+                <LabCellsIcon size={13} /> 多语言分析流水线示例 (SQL→Py→R)
+              </button>
+
+              <div className="codelab-popover-sep" />
+              <div className="codelab-insert-group-head">
+                常用代码片段 ({DEFAULT_CODELAB_SNIPPETS.length})
+              </div>
+              {DEFAULT_CODELAB_SNIPPETS.map((snip) => (
+                <button
+                  key={snip.id}
+                  type="button"
+                  className="codelab-insert-snippet-btn"
+                  title={snip.description}
+                  onClick={(event) => {
+                    handleInsertSnippetCell(snip.language, snip.code);
+                    event.currentTarget
+                      .closest('details')
+                      ?.removeAttribute('open');
+                  }}
+                >
+                  <span
+                    className={`terminal-rail-lang-badge is-${snip.language}`}
+                  >
+                    {snip.language === 'cpp'
+                      ? 'CPP'
+                      : snip.language.toUpperCase()}
+                  </span>
+                  <span className="codelab-insert-snippet-title">
+                    {snip.title}
+                  </span>
+                </button>
+              ))}
             </div>
           </details>
         </div>
@@ -2303,27 +3697,33 @@ export const TerminalCodeLabView = forwardRef<
                 role="menu"
               >
                 <div className="codelab-popover-head">计算语言</div>
-                <div className="codelab-kernel-lang-tabs">
-                  {(['python', 'c', 'cpp'] as const).map((langOpt) => (
-                    <button
-                      key={langOpt}
-                      type="button"
-                      className={language === langOpt ? 'is-active' : ''}
-                      onClick={() => handleSwitchLanguage(langOpt)}
-                    >
-                      {langOpt === 'python'
-                        ? 'Python'
-                        : langOpt === 'c'
-                          ? 'C · GCC'
-                          : 'C++ · G++'}
-                    </button>
-                  ))}
+                <div className="codelab-kernel-lang-tabs is-five-way">
+                  {(['python', 'sql', 'r', 'c', 'cpp'] as const).map(
+                    (langOpt) => (
+                      <button
+                        key={langOpt}
+                        type="button"
+                        className={language === langOpt ? 'is-active' : ''}
+                        onClick={() => handleSwitchLanguage(langOpt)}
+                      >
+                        {langOpt === 'python'
+                          ? 'PY'
+                          : langOpt === 'sql'
+                            ? 'SQL'
+                            : langOpt === 'r'
+                              ? 'R'
+                              : langOpt === 'c'
+                                ? 'C'
+                                : 'C++'}
+                      </button>
+                    ),
+                  )}
                 </div>
 
                 {language === 'python' ? (
                   <>
                     <div className="codelab-popover-head">
-                      Python 运行时内核
+                      Anaconda / Python 运行时内核
                     </div>
                     <button
                       type="button"
@@ -2345,9 +3745,11 @@ export const TerminalCodeLabView = forwardRef<
                     </button>
                     {pythonEnvs.map((env) => {
                       const pkgs = [
+                        env.hasPandas ? 'pd' : '',
+                        env.hasDuckdb ? 'duckdb' : '',
+                        env.hasPyarrow ? 'pyarrow' : '',
                         env.hasNumpy ? 'np' : '',
                         env.hasMatplotlib ? 'plt' : '',
-                        env.hasPandas ? 'pd' : '',
                       ].filter(Boolean);
                       const isSelected = selectedPyRuntime === env.pythonPath;
                       return (
@@ -2388,6 +3790,84 @@ export const TerminalCodeLabView = forwardRef<
                       <LabResetIcon size={12} />
                       <span>重置 Python 内核变量空间</span>
                     </button>
+                  </>
+                ) : language === 'r' ? (
+                  <>
+                    <div className="codelab-popover-head">R 语言运行时内核</div>
+                    {rEnvs.length === 0 ? (
+                      <div className="codelab-kernel-info-row">
+                        <span className="codelab-kernel-dot is-warn" />
+                        <span>
+                          未检测到 Rscript，请在左侧「环境」面板添加 R 路径
+                        </span>
+                      </div>
+                    ) : (
+                      rEnvs.map((env) => {
+                        const pkgs = [
+                          env.hasTidyverse ? 'tidyverse' : '',
+                          env.hasGgplot2 ? 'ggplot2' : '',
+                          env.hasDataTable ? 'data.table' : '',
+                          env.hasArrow ? 'arrow' : '',
+                          env.hasDuckdb ? 'duckdb' : '',
+                        ].filter(Boolean);
+                        const isSelected = selectedRRuntime === env.rscriptPath;
+                        return (
+                          <button
+                            key={env.id}
+                            type="button"
+                            role="menuitemradio"
+                            aria-checked={isSelected}
+                            className={`codelab-kernel-option${isSelected ? ' is-active' : ''}`}
+                            onClick={() => {
+                              void handleSwitchRRuntime(env.rscriptPath);
+                              setShowKernelMenu(false);
+                            }}
+                          >
+                            <div className="codelab-kernel-opt-main">
+                              <strong>
+                                {env.label}
+                                {env.version ? ` v${env.version}` : ''}
+                              </strong>
+                              <span>
+                                {pkgs.length > 0
+                                  ? pkgs.join(' · ')
+                                  : env.rscriptPath}
+                              </span>
+                            </div>
+                            {isSelected && <LabCheckIcon size={12} />}
+                          </button>
+                        );
+                      })
+                    )}
+                    <div className="codelab-popover-sep" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowKernelMenu(false);
+                        void handleResetRKernel();
+                      }}
+                    >
+                      <LabResetIcon size={12} />
+                      <span>重置 R 内核变量空间</span>
+                    </button>
+                  </>
+                ) : language === 'sql' ? (
+                  <>
+                    <div className="codelab-popover-head">SQL 数据引擎</div>
+                    <div className="codelab-kernel-info-row">
+                      <span className="codelab-kernel-dot is-ready" />
+                      <span>
+                        已挂载 {effectiveMountedFiles.length} 个数据文件 ·{' '}
+                        {effectiveDbConnections.length} 个数据库连接
+                      </span>
+                    </div>
+                    <div className="codelab-kernel-info-row">
+                      <span>
+                        可在每个 SQL
+                        单元格顶部选择目标数据库或本地文件模式，并指定变量名直接注入
+                        Python
+                      </span>
+                    </div>
                   </>
                 ) : (
                   <>
@@ -2432,7 +3912,7 @@ export const TerminalCodeLabView = forwardRef<
             <span>{fullWidth ? '标准宽度' : '全宽'}</span>
           </button>
 
-          {language === 'python' ? (
+          {supportsVarsDrawer ? (
             <button
               type="button"
               className={`codelab-tool-btn is-tabular${showVars && activeBottomTab === 'vars' ? ' is-active' : ''}`}
@@ -2445,7 +3925,7 @@ export const TerminalCodeLabView = forwardRef<
                   setShowVars(true);
                 }
               }}
-              title="在底部抽屉打开 / 收起 Python 变量检查器"
+              title="在底部抽屉打开 / 收起内核变量检查器"
               aria-expanded={showVars && activeBottomTab === 'vars'}
             >
               <LabVarsIcon size={12} />
@@ -2454,7 +3934,7 @@ export const TerminalCodeLabView = forwardRef<
                 <span className="codelab-vars-badge">{variables.length}</span>
               )}
             </button>
-          ) : (
+          ) : language === 'c' || language === 'cpp' ? (
             <button
               type="button"
               className={`codelab-tool-btn${showPrologue ? ' is-active' : ''}`}
@@ -2463,7 +3943,7 @@ export const TerminalCodeLabView = forwardRef<
             >
               <span>#include</span>
             </button>
-          )}
+          ) : null}
 
           <div className="codelab-popover-wrap" ref={exportMenuRef}>
             <button
@@ -2757,7 +4237,7 @@ export const TerminalCodeLabView = forwardRef<
             ) : (
               <>
                 {/* C/C++ Shared Prologue Header Strip */}
-                {showPrologue && language !== 'python' && (
+                {showPrologue && (language === 'c' || language === 'cpp') && (
                   <section className="codelab-prologue-box">
                     <div className="codelab-prologue-head">
                       <span>
@@ -2786,59 +4266,354 @@ export const TerminalCodeLabView = forwardRef<
                   </section>
                 )}
 
-                {/* Paper-Stream Memoized Cells */}
+                {/* Paper-Stream Memoized Cells & Nested Composite Analysis Blocks */}
                 <div className="codelab-cell-stream">
-                  {cells.map((cell, index) => (
-                    <CodeLabCellRow
-                      key={cell.id}
-                      cell={cell}
-                      index={index}
-                      totalCells={cells.length}
-                      isFocused={cell.id === focusedCellId}
-                      isEditing={editingCellId === cell.id}
-                      hydrated={
-                        cell.id === focusedCellId ||
-                        editingCellId === cell.id ||
-                        hydratedSet.has(cell.id)
-                      }
-                      theme={theme}
-                      canSendToShell={Boolean(onSendToShellPane)}
-                      canSendToAgent={Boolean(onSendToAgentPane)}
-                      liveSourceMapRef={liveSourceMapRef}
-                      onSelectCell={handleSelectCell}
-                      onRequestHydrate={handleRequestHydrate}
-                      onCommitSource={handleCommitCellSource}
-                      onChangeLanguage={handleChangeCellLanguage}
-                      onChangeStdin={handleChangeCellStdin}
-                      onToggleMarkdownEdit={handleToggleMarkdownEdit}
-                      onStartMarkdownEdit={handleStartMarkdownEdit}
-                      onEditorFocus={handleEditorFocus}
-                      onEditorBlur={handleEditorBlur}
-                      onRunCell={runCellById}
-                      onEscapeCommandMode={handleEscapeCommandMode}
-                      onSendToShell={handleSendCellToShellById}
-                      onSendToAgent={handleSendCellToAgentById}
-                      onMoveCell={handleMoveCell}
-                      onDeleteCell={deleteCellById}
-                      onDuplicateCell={handleDuplicateCell}
-                      onInsertCellBelow={handleInsertCellBelowById}
-                      onExportCellToStudy={(cellId, target) => {
-                        void handleExportCellToStudy(cellId, target);
-                      }}
-                      onClearOutputs={handleClearCellOutputs}
-                      onZoomImage={setZoomedImageSrc}
-                      onPinOutput={(cellId) => {
-                        setPinnedCellId((current) =>
-                          current === cellId ? null : cellId,
-                        );
-                      }}
-                      pinnedOutputCellId={pinnedCellId}
-                    />
-                  ))}
+                  {renderItems.map((item) => {
+                    if (item.kind === 'single') {
+                      const { cell, index } = item;
+                      return (
+                        <CodeLabCellRow
+                          key={cell.id}
+                          cell={cell}
+                          index={index}
+                          totalCells={cells.length}
+                          isFocused={cell.id === focusedCellId}
+                          isEditing={editingCellId === cell.id}
+                          hydrated={
+                            cell.id === focusedCellId ||
+                            editingCellId === cell.id ||
+                            hydratedSet.has(cell.id)
+                          }
+                          theme={theme}
+                          canSendToShell={Boolean(onSendToShellPane)}
+                          canSendToAgent={Boolean(onSendToAgentPane)}
+                          liveSourceMapRef={liveSourceMapRef}
+                          onSelectCell={handleSelectCell}
+                          onRequestHydrate={handleRequestHydrate}
+                          onCommitSource={handleCommitCellSource}
+                          onChangeLanguage={handleChangeCellLanguage}
+                          onChangeStdin={handleChangeCellStdin}
+                          dbConnections={effectiveDbConnections}
+                          onChangeSqlConfig={handleChangeCellSqlConfig}
+                          onToggleMarkdownEdit={handleToggleMarkdownEdit}
+                          onStartMarkdownEdit={handleStartMarkdownEdit}
+                          onEditorFocus={handleEditorFocus}
+                          onEditorBlur={handleEditorBlur}
+                          onRunCell={runCellById}
+                          onEscapeCommandMode={handleEscapeCommandMode}
+                          onSendToShell={handleSendCellToShellById}
+                          onSendToAgent={handleSendCellToAgentById}
+                          onMoveCell={handleMoveCell}
+                          onDeleteCell={deleteCellById}
+                          onDuplicateCell={handleDuplicateCell}
+                          onInsertCellBelow={handleInsertCellBelowById}
+                          onExportCellToStudy={(cellId, target) => {
+                            void handleExportCellToStudy(cellId, target);
+                          }}
+                          onClearOutputs={handleClearCellOutputs}
+                          onZoomImage={setZoomedImageSrc}
+                          onPinOutput={(cellId) => {
+                            setPinnedCellId((current) =>
+                              current === cellId ? null : cellId,
+                            );
+                          }}
+                          pinnedOutputCellId={pinnedCellId}
+                        />
+                      );
+                    }
+
+                    const isResultsOnly = Boolean(
+                      blockResultsOnly[item.groupId],
+                    );
+                    const blockHasRunning = item.cells.some(
+                      (c) => c.cell.status === 'running',
+                    );
+                    const blockHasError = item.cells.some(
+                      (c) => c.cell.status === 'error',
+                    );
+                    const chartCount = item.cells.reduce(
+                      (acc, c) =>
+                        acc +
+                        c.cell.outputs.filter(
+                          (o) =>
+                            o.kind === 'image/png' ||
+                            o.kind === 'image/svg+xml',
+                        ).length,
+                      0,
+                    );
+                    const langTags = Array.from(
+                      new Set(
+                        item.cells.map((c) =>
+                          c.cell.kind === 'markdown'
+                            ? 'MD'
+                            : c.cell.language.toUpperCase(),
+                        ),
+                      ),
+                    );
+
+                    return (
+                      <section
+                        key={item.groupId}
+                        className={`codelab-analysis-block${item.collapsed ? ' is-collapsed' : ''}${blockHasRunning ? ' is-running' : ''}${blockHasError ? ' is-error' : ''}`}
+                      >
+                        <header className="codelab-ablock-head">
+                          <div className="codelab-ablock-head-left">
+                            <button
+                              type="button"
+                              className="codelab-ablock-collapse-btn"
+                              onClick={() =>
+                                handleToggleAnalysisBlockCollapse(item.groupId)
+                              }
+                              title={
+                                item.collapsed
+                                  ? '展开复合分析区块'
+                                  : '折叠复合分析区块'
+                              }
+                              aria-expanded={!item.collapsed}
+                            >
+                              <LabChevronDownIcon size={11} />
+                            </button>
+
+                            <span className="codelab-ablock-kicker">
+                              分析区块
+                            </span>
+
+                            {editingGroupId === item.groupId ? (
+                              <input
+                                type="text"
+                                className="codelab-ablock-title-input"
+                                value={item.title}
+                                autoFocus
+                                onChange={(e) =>
+                                  handleRenameAnalysisBlock(
+                                    item.groupId,
+                                    e.target.value,
+                                  )
+                                }
+                                onBlur={() => setEditingGroupId(null)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' || e.key === 'Escape') {
+                                    setEditingGroupId(null);
+                                  }
+                                }}
+                                aria-label="复合分析区块标题"
+                              />
+                            ) : (
+                              <button
+                                type="button"
+                                className="codelab-ablock-title-btn"
+                                onClick={() => setEditingGroupId(item.groupId)}
+                                title="点击重命名本次分析区块"
+                              >
+                                {item.title}
+                              </button>
+                            )}
+
+                            <div className="codelab-ablock-badges">
+                              {langTags.map((tag) => (
+                                <span
+                                  key={tag}
+                                  className={`codelab-ablock-lang-tag is-${tag.toLowerCase()}`}
+                                >
+                                  {tag}
+                                </span>
+                              ))}
+                              <span className="codelab-ablock-meta">
+                                {item.cells.length} 分区
+                                {chartCount > 0 ? ` · ${chartCount} 图` : ''}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="codelab-ablock-actions">
+                            <button
+                              type="button"
+                              className="codelab-ablock-btn is-run"
+                              disabled={isAnyRunning}
+                              onClick={() =>
+                                void handleRunAnalysisBlock(item.groupId)
+                              }
+                              title="按顺序自动激活虚拟环境并串行运行块内全部语言分区"
+                            >
+                              <LabPlayIcon size={11} />
+                              <span>运行整块</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="codelab-ablock-btn"
+                              onClick={() =>
+                                handleInsertSubBlockInGroup(
+                                  item.groupId,
+                                  item.title,
+                                  'code',
+                                  'sql',
+                                )
+                              }
+                              title="在块内新增 SQL 分区"
+                            >
+                              + SQL
+                            </button>
+                            <button
+                              type="button"
+                              className="codelab-ablock-btn"
+                              onClick={() =>
+                                handleInsertSubBlockInGroup(
+                                  item.groupId,
+                                  item.title,
+                                  'code',
+                                  'python',
+                                )
+                              }
+                              title="在块内新增 Python 分区"
+                            >
+                              + PY
+                            </button>
+                            <button
+                              type="button"
+                              className="codelab-ablock-btn"
+                              onClick={() =>
+                                handleInsertSubBlockInGroup(
+                                  item.groupId,
+                                  item.title,
+                                  'code',
+                                  'r',
+                                )
+                              }
+                              title="在块内新增 R 语言分区"
+                            >
+                              + R
+                            </button>
+                            <button
+                              type="button"
+                              className="codelab-ablock-btn"
+                              onClick={() =>
+                                handleInsertSubBlockInGroup(
+                                  item.groupId,
+                                  item.title,
+                                  'markdown',
+                                  'python',
+                                )
+                              }
+                              title="在块内新增 Markdown 结论分区"
+                            >
+                              + 结论
+                            </button>
+                            <button
+                              type="button"
+                              className={`codelab-ablock-btn${isResultsOnly ? ' is-active' : ''}`}
+                              onClick={() =>
+                                setBlockResultsOnly((prev) => ({
+                                  ...prev,
+                                  [item.groupId]: !prev[item.groupId],
+                                }))
+                              }
+                              title={
+                                isResultsOnly
+                                  ? '展开块内源码'
+                                  : '收起源码，仅展示图表与结论报告'
+                              }
+                            >
+                              {isResultsOnly ? '展开代码' : '仅看结果'}
+                            </button>
+                            <button
+                              type="button"
+                              className="codelab-ablock-btn"
+                              onClick={() =>
+                                void handleExportAnalysisBlock(
+                                  item.groupId,
+                                  item.title,
+                                  'knowledge',
+                                )
+                              }
+                              title="将整块分析（代码、表格、图表与结论）存入知识库"
+                            >
+                              存知识库
+                            </button>
+                            <button
+                              type="button"
+                              className="codelab-ablock-btn is-danger"
+                              onClick={() =>
+                                handleDeleteAnalysisBlock(item.groupId)
+                              }
+                              title="删除整个复合分析区块"
+                              aria-label="删除复合分析区块"
+                            >
+                              <LabTrashIcon size={11} />
+                            </button>
+                          </div>
+                        </header>
+
+                        {!item.collapsed && (
+                          <div className="codelab-ablock-body">
+                            {item.cells.map(({ cell, index }) => (
+                              <CodeLabCellRow
+                                key={cell.id}
+                                cell={cell}
+                                index={index}
+                                totalCells={cells.length}
+                                isFocused={cell.id === focusedCellId}
+                                isEditing={editingCellId === cell.id}
+                                hydrated={
+                                  cell.id === focusedCellId ||
+                                  editingCellId === cell.id ||
+                                  hydratedSet.has(cell.id)
+                                }
+                                theme={theme}
+                                nested
+                                hideSource={isResultsOnly}
+                                canSendToShell={Boolean(onSendToShellPane)}
+                                canSendToAgent={Boolean(onSendToAgentPane)}
+                                liveSourceMapRef={liveSourceMapRef}
+                                onSelectCell={handleSelectCell}
+                                onRequestHydrate={handleRequestHydrate}
+                                onCommitSource={handleCommitCellSource}
+                                onChangeLanguage={handleChangeCellLanguage}
+                                onChangeStdin={handleChangeCellStdin}
+                                dbConnections={effectiveDbConnections}
+                                onChangeSqlConfig={handleChangeCellSqlConfig}
+                                onToggleMarkdownEdit={handleToggleMarkdownEdit}
+                                onStartMarkdownEdit={handleStartMarkdownEdit}
+                                onEditorFocus={handleEditorFocus}
+                                onEditorBlur={handleEditorBlur}
+                                onRunCell={runCellById}
+                                onEscapeCommandMode={handleEscapeCommandMode}
+                                onSendToShell={handleSendCellToShellById}
+                                onSendToAgent={handleSendCellToAgentById}
+                                onMoveCell={handleMoveCell}
+                                onDeleteCell={deleteCellById}
+                                onDuplicateCell={handleDuplicateCell}
+                                onInsertCellBelow={handleInsertCellBelowById}
+                                onExportCellToStudy={(cellId, target) => {
+                                  void handleExportCellToStudy(cellId, target);
+                                }}
+                                onClearOutputs={handleClearCellOutputs}
+                                onZoomImage={setZoomedImageSrc}
+                                onPinOutput={(cellId) => {
+                                  setPinnedCellId((current) =>
+                                    current === cellId ? null : cellId,
+                                  );
+                                }}
+                                pinnedOutputCellId={pinnedCellId}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </section>
+                    );
+                  })}
                 </div>
 
                 {/* Quiet bottom append affordance */}
                 <div className="codelab-append-strip">
+                  <button
+                    type="button"
+                    className="codelab-append-btn is-primary"
+                    onClick={() => handleAddAnalysisBlock('empty')}
+                    title="新建一个可嵌套 SQL / Python / R / 结论的复合分析区块"
+                  >
+                    <LabCellsIcon size={11} />
+                    <span>新建复合分析区块</span>
+                  </button>
                   <button
                     type="button"
                     className="codelab-append-btn"
@@ -2966,7 +4741,7 @@ export const TerminalCodeLabView = forwardRef<
               </span>
             </button>
 
-            {language === 'python' && (
+            {supportsVarsDrawer && (
               <button
                 type="button"
                 role="tab"

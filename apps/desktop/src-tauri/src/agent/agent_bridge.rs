@@ -22,7 +22,7 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 const MAX_MCP_BODY_BYTES: usize = 512 * 1024;
-const MAX_MCP_TOOLS: usize = 32;
+const MAX_MCP_TOOLS: usize = 64;
 const MCP_CALL_TIMEOUT: Duration = Duration::from_secs(180);
 
 #[derive(Default, Clone)]
@@ -230,7 +230,7 @@ fn write_agy_plugin_bundle(root: &PathBuf, endpoint: &str, token: &str) -> Resul
     let manifest = json!({
         "name": "seamind-bridge",
         "displayName": "Seamind Bridge",
-        "description": "Seamind mindmap, knowledge base, YouTube search, favorites board categorization, and video learning path MCP tools."
+        "description": "Seamind mindmap, knowledge base, Data Lab (SQL/CSV/Parquet/Anaconda/R/Notebook), YouTube search, favorites board categorization, and video learning path MCP tools."
     });
     let manifest_bytes =
         serde_json::to_vec_pretty(&manifest).map_err(|_| "无法编码 AGY 插件清单。".to_string())?;
@@ -250,11 +250,32 @@ fn write_agy_plugin_bundle(root: &PathBuf, endpoint: &str, token: &str) -> Resul
     });
     let mcp_bytes = serde_json::to_vec_pretty(&mcp_config)
         .map_err(|_| "无法编码 AGY MCP 配置。".to_string())?;
-    std::fs::write(plugin_dir.join("mcp_config.json"), mcp_bytes)
+    std::fs::write(plugin_dir.join("mcp_config.json"), &mcp_bytes)
         .map_err(|_| "无法写入 AGY MCP 配置。".to_string())?;
+    // Also place at workspace-level `.agents/mcp_config.json` for direct AGY discovery
+    let _ = std::fs::write(root.join(".agents").join("mcp_config.json"), &mcp_bytes);
+
+    // Also write `.gemini/settings.json` so Google Gemini CLI auto-connects to Seamind HTTP MCP
+    let gemini_dir = root.join(".gemini");
+    if std::fs::create_dir_all(&gemini_dir).is_ok() {
+        let gemini_settings = json!({
+            "mcpServers": {
+                "seamind": {
+                    "httpUrl": endpoint,
+                    "headers": {
+                        "Authorization": format!("Bearer {token}")
+                    },
+                    "trust": true
+                }
+            }
+        });
+        if let Ok(gbytes) = serde_json::to_vec_pretty(&gemini_settings) {
+            let _ = std::fs::write(gemini_dir.join("settings.json"), gbytes);
+        }
+    }
 
     // Learning-path sizes match LEARNING_PATH_BUDGET in apps/desktop/src/agent/learning-path-budget.ts.
-    let rules_md = "# Seamind 桌面端工具调用规范\n\n当前终端运行在 Seamind 桌面应用内，已挂载 `seamind` MCP 服务。只调用 tools/list 里出现的工具；列表随 Seamind 当前工作区变化。\n\n1. **生成或扩展播放器视频学习路径（学术理论 × 工业工程双螺旋准则）**：\n   - 必须分多批次（建议 4–6 次，每次 `limit: 12`）调用 `player_search_youtube` 执行正交搜索，同时覆盖：\n     * **学术理论基座**：MIT / CMU / Stanford / UC Berkeley / ETH / pwn.college / Christof Paar 等名校公开课、形式化模型与经典教材精讲；\n     * **底层工程实现**：内核/编译器/协议栈源码剖析（Kernel internals / Source walkthrough）、GDB / Wireshark / eBPF 调试、经典 Lab 实验与 USENIX / DEF CON / Black Hat / CppCon 顶会实战。\n   - 严禁编造视频链接或编号，严禁只用几分钟的浅层科普短视频敷衍了事。这一轮先提交第一段：**4–6 个知识星域（`kind=\"stage\"`）与 16–28 个节点（`kind=\"video\"` / `\"checkpoint\"`）**。用户确认后再追加更大的星图。本会话硬上限是 10 轮模型推理、12 次工具调用。\n   - 每个节点的 `note` 请以 `【学术基座】` / `【工程实现】` / `【源码剖析】` / `【实验靶场】` 开头，并用顿号「、」列出 3–6 个核心底层术语（供星图自动拆解生成第三级知识卫星点），同时用 `prerequisiteIds` 构建跨星域前置依赖网。\n   - 查看或续写现有路径时，先调用 `learning_path_list` 与 `learning_path_get`，再调用 `learning_path_propose`（`create` / `replace` / `append_nodes`）提交预览弹窗等待用户确认。\n2. **整理播放器收藏视频分类（单主分类看板/网格）**：\n   - 先调用 `favorites_get_board` 获取当前已有分类和全部收藏视频（特别是 `categoryId: null` 的未分类视频）。\n   - 根据视频标题与频道类型，优先复用用户已有分类或按需提议新建精简分类，调用 `favorites_propose_categorization` 提交单主分类归类预览，等待用户在 Seamind 中确认。\n3. **读写思维导图与知识库**：\n   - 使用 `mindmap_get_current`、`library_search`、`library_read_document` 读取上下文，使用 `mindmap_propose_node_edit`、`mindmap_propose_node_branch` 提交导图修改预览。\n4. **电子书阅读与脚注**：\n   - 使用 `epub_get_current_chapter` 读取当前章节正文；如果 nextOffset 不为空，继续按 offset 读取直至结束，不要把部分章节当作全文。\n   - 对当前选区添加脚注时，先读取返回的 selection.cfi，再调用 `epub_propose_footnote` 提交脚注预览，等待用户在阅读器中确认。\n5. **电子书知识库笔记与章节跳转**：\n   - 调用 `knowledge_get_book_note` 或 `knowledge_query_book_galaxy` 只读取笔记与章节结构。\n   - `knowledge_update_book_note`、`knowledge_append_excerpt` 和 `knowledge_sync_reader_chapter` 只提交预览。用户在 Seamind 中确认前，笔记不会写入，阅读位置也不会变化。\n";
+    let rules_md = "# Seamind 桌面端工具调用规范\n\n当前终端运行在 Seamind 桌面应用内，已挂载 `seamind` MCP 服务。只调用 tools/list 里出现的工具；列表随 Seamind 当前工作区变化。\n\n1. **数据分析实验室（SQL / CSV / Parquet / Anaconda Python / R / 实验本）**：\n   - 先调用 `datalab_list_sources` 获取用户当前挂载的本地数据文件（CSV/Parquet/JSON/Excel 路径与字段）、已连接的数据库（SQLite/DuckDB/PostgreSQL/MySQL 表结构）、可用的 Anaconda/Python 与 R 运行环境，以及已保存的实验本列表。\n   - 需要查看当前实验本里正在编辑的代码格、SQL 或表格输出时，调用 `datalab_read_notebook` 读取实时窗口内容（包含每个单元格的 `cellId`、`index`、`groupId`）；不要猜测用户窗口里的内容。\n   - 需要检索数据或输出聚合统计表时，调用 `datalab_inspect_file` 探查字段，调用 `datalab_query_sql` 直接对本地文件或数据库执行 SQL，调用 `code_run_python`（可指定 `condaEnv` 或 `pythonPath`）或 `datalab_run_r` 执行统计/建模代码。\n   - 要原地修改、填写或补全实验本已有代码块或复合分析区块时，优先调用 `datalab_update_cell`；要追加新单元格或嵌套语言分区时调用 `datalab_push_cell`；要执行单格或整块复合分析区块并获取真实输出时调用 `datalab_run_cell`；要删除废格时调用 `datalab_delete_cell`。\n2. **生成或扩展播放器视频学习路径（学术理论 × 工业工程双螺旋准则）**：\n   - 必须分多批次（建议 4–6 次，每次 `limit: 12`）调用 `player_search_youtube` 执行正交搜索，同时覆盖：\n     * **学术理论基座**：MIT / CMU / Stanford / UC Berkeley / ETH / pwn.college / Christof Paar 等名校公开课、形式化模型与经典教材精讲；\n     * **底层工程实现**：内核/编译器/协议栈源码剖析（Kernel internals / Source walkthrough）、GDB / Wireshark / eBPF 调试、经典 Lab 实验与 USENIX / DEF CON / Black Hat / CppCon 顶会实战。\n   - 严禁编造视频链接或编号，严禁只用几分钟的浅层科普短视频敷衍了事。这一轮先提交第一段：**4–6 个知识星域（`kind=\"stage\"`）与 16–28 个节点（`kind=\"video\"` / `\"checkpoint\"`）**。用户确认后再追加更大的星图。本会话硬上限是 10 轮模型推理、12 次工具调用。\n   - 每个节点的 `note` 请以 `【学术基座】` / `【工程实现】` / `【源码剖析】` / `【实验靶场】` 开头，并用顿号「、」列出 3–6 个核心底层术语（供星图自动拆解生成第三级知识卫星点），同时用 `prerequisiteIds` 构建跨星域前置依赖网。\n   - 查看或续写现有路径时，先调用 `learning_path_list` 与 `learning_path_get`，再调用 `learning_path_propose`（`create` / `replace` / `append_nodes`）提交预览弹窗等待用户确认。\n3. **整理播放器收藏视频分类（单主分类看板/网格）**：\n   - 先调用 `favorites_get_board` 获取当前已有分类和全部收藏视频（特别是 `categoryId: null` 的未分类视频）。\n   - 根据视频标题与频道类型，优先复用用户已有分类或按需提议新建精简分类，调用 `favorites_propose_categorization` 提交单主分类归类预览，等待用户在 Seamind 中确认。\n4. **读写思维导图与知识库**：\n   - 使用 `mindmap_get_current`、`library_search`、`library_read_document` 读取上下文，使用 `mindmap_propose_node_edit`、`mindmap_propose_node_branch` 提交导图修改预览。\n5. **电子书阅读与脚注**：\n   - 使用 `epub_get_current_chapter` 读取当前章节正文；如果 nextOffset 不为空，继续按 offset 读取直至结束，不要把部分章节当作全文。\n   - 对当前选区添加脚注时，先读取返回的 selection.cfi，再调用 `epub_propose_footnote` 提交脚注预览，等待用户在阅读器中确认。\n6. **电子书知识库笔记与章节跳转**：\n   - 调用 `knowledge_get_book_note` 或 `knowledge_query_book_galaxy` 只读取笔记与章节结构。\n   - `knowledge_update_book_note`、`knowledge_append_excerpt` 和 `knowledge_sync_reader_chapter` 只提交预览。用户在 Seamind 中确认前，笔记不会写入，阅读位置也不会变化。\n";
     std::fs::write(rules_dir.join("AGENTS.md"), rules_md.as_bytes())
         .map_err(|_| "无法写入 AGY 规则说明。".to_string())?;
 
@@ -311,6 +332,34 @@ impl AgentBridgeState {
             }
         }
     }
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentBridgeStatus {
+    pub ready: bool,
+    pub endpoint: Option<String>,
+    pub tool_count: usize,
+    pub tool_names: Vec<String>,
+}
+
+#[tauri::command]
+pub fn agent_bridge_status(state: State<'_, AgentBridgeState>) -> Result<AgentBridgeStatus, String> {
+    let inner = state
+        .0
+        .lock()
+        .map_err(|_| "Seamind MCP 状态不可用。".to_string())?;
+    let tool_names: Vec<String> = inner
+        .tools
+        .iter()
+        .filter_map(|t| t.get("name").and_then(Value::as_str).map(String::from))
+        .collect();
+    Ok(AgentBridgeStatus {
+        ready: inner.endpoint.is_some() && inner.token.is_some(),
+        endpoint: inner.endpoint.clone(),
+        tool_count: tool_names.len(),
+        tool_names,
+    })
 }
 
 #[tauri::command]

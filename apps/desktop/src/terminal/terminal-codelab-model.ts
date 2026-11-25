@@ -1,5 +1,10 @@
 import type { TerminalCodeLabLanguage } from './terminal-types';
-import type { PythonVarSummary } from './terminal-api';
+import type {
+  DataColumnInfo,
+  DataDbTableSchema,
+  DataScalarValue,
+  PythonVarSummary,
+} from './terminal-api';
 
 export type CodeLabCellKind = 'code' | 'markdown';
 
@@ -10,6 +15,17 @@ export interface CodeLabSourceOrigin {
   reference: string;
 }
 
+export interface CodeLabTableOutput {
+  kind: 'table';
+  columns: DataColumnInfo[];
+  rows: DataScalarValue[][];
+  totalRows?: number | null;
+  truncated?: boolean;
+  engine?: string;
+  boundVar?: string;
+  message?: string;
+}
+
 export type CodeLabOutputItem =
   | { kind: 'stream'; name: 'stdout' | 'stderr'; text: string }
   | { kind: 'text'; text: string }
@@ -17,6 +33,7 @@ export type CodeLabOutputItem =
   | { kind: 'image/svg+xml'; svg: string }
   | { kind: 'text/html'; html: string }
   | { kind: 'text/latex'; latex: string }
+  | CodeLabTableOutput
   | { kind: 'error'; message: string };
 
 export interface CodeLabCell {
@@ -33,6 +50,62 @@ export interface CodeLabCell {
   durationMs?: number;
   stage?: string;
   exitCode?: number | null;
+  sqlConnectionId?: string;
+  sqlResultVar?: string;
+  groupId?: string;
+  groupTitle?: string;
+  groupCollapsed?: boolean;
+}
+
+export type NotebookRenderItem =
+  | { kind: 'single'; cell: CodeLabCell; index: number }
+  | {
+      kind: 'group';
+      groupId: string;
+      title: string;
+      collapsed: boolean;
+      cells: Array<{ cell: CodeLabCell; index: number }>;
+    };
+
+export function makeAnalysisBlockId(): string {
+  return `blk-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+export function buildNotebookRenderItems(
+  cells: readonly CodeLabCell[],
+): NotebookRenderItem[] {
+  const items: NotebookRenderItem[] = [];
+  let i = 0;
+  while (i < cells.length) {
+    const cell = cells[i];
+    const gid = cell.groupId?.trim();
+    if (!gid) {
+      items.push({ kind: 'single', cell, index: i });
+      i += 1;
+      continue;
+    }
+    const grouped: Array<{ cell: CodeLabCell; index: number }> = [];
+    let title = cell.groupTitle?.trim() || '复合数据分析区块';
+    let collapsed = Boolean(cell.groupCollapsed);
+    while (i < cells.length && cells[i].groupId?.trim() === gid) {
+      if (cells[i].groupTitle?.trim()) {
+        title = cells[i].groupTitle!.trim();
+      }
+      if (cells[i].groupCollapsed) {
+        collapsed = true;
+      }
+      grouped.push({ cell: cells[i], index: i });
+      i += 1;
+    }
+    items.push({
+      kind: 'group',
+      groupId: gid,
+      title,
+      collapsed,
+      cells: grouped,
+    });
+  }
+  return items;
 }
 
 export interface CodeLabVariablesState {
@@ -57,6 +130,43 @@ export function makeCodeLabCellId(): string {
 export function createStarterCodeLabCells(
   language: TerminalCodeLabLanguage,
 ): CodeLabCell[] {
+  if (language === 'sql') {
+    return [
+      {
+        id: makeCodeLabCellId(),
+        kind: 'code',
+        language: 'sql',
+        source: `-- 提示：可在左侧「数据」面板挂载 CSV / Parquet 文件或连接 SQLite / DuckDB / PostgreSQL / MySQL
+SELECT 'Seamind Data Lab' AS engine, 2026 AS year, 'SQL Ready' AS status;`,
+        stdinInput: '',
+        executionCount: null,
+        status: 'idle',
+        outputs: [],
+      },
+    ];
+  }
+
+  if (language === 'r') {
+    return [
+      {
+        id: makeCodeLabCellId(),
+        kind: 'code',
+        language: 'r',
+        source: `# R 语言统计分析与可视化示例
+df <- data.frame(
+  group = c("A", "B", "C", "D"),
+  score = c(84.5, 91.2, 78.6, 95.0)
+)
+summary(df)
+df`,
+        stdinInput: '',
+        executionCount: null,
+        status: 'idle',
+        outputs: [],
+      },
+    ];
+  }
+
   if (language === 'c') {
     return [
       {
@@ -206,18 +316,29 @@ export function serializeIpynbJson(
         display_name:
           language === 'python'
             ? 'Python 3 (Seamind)'
-            : language === 'cpp'
-              ? 'C++ (GCC)'
-              : 'C (GCC)',
+            : language === 'sql'
+              ? 'SQL (Data Lab)'
+              : language === 'r'
+                ? 'R (Seamind)'
+                : language === 'cpp'
+                  ? 'C++ (GCC)'
+                  : 'C (GCC)',
         language,
       },
       language_info: { name: language },
     },
     cells: cells.map((cell) => {
+      const seamindGroup = cell.groupId
+        ? {
+            id: cell.groupId,
+            title: cell.groupTitle || '复合数据分析区块',
+            collapsed: Boolean(cell.groupCollapsed),
+          }
+        : undefined;
       if (cell.kind === 'markdown') {
         return {
           cell_type: 'markdown',
-          metadata: {},
+          metadata: seamindGroup ? { seamindGroup } : {},
           source: cell.source
             .split('\n')
             .map((l, idx, arr) => (idx < arr.length - 1 ? `${l}\n` : l)),
@@ -270,6 +391,15 @@ export function serializeIpynbJson(
             metadata: {},
             data: { 'text/latex': out.latex },
           });
+        } else if (out.kind === 'table') {
+          nbOutputs.push({
+            output_type: 'execute_result',
+            execution_count: cell.executionCount ?? 1,
+            metadata: {},
+            data: {
+              'text/plain': formatTableToMarkdown(out.columns, out.rows),
+            },
+          });
         }
       }
       return {
@@ -279,6 +409,9 @@ export function serializeIpynbJson(
           language: cell.language,
           stdin: cell.stdinInput || undefined,
           seamindOrigin: cell.origin,
+          sqlConnectionId: cell.sqlConnectionId || undefined,
+          sqlResultVar: cell.sqlResultVar || undefined,
+          seamindGroup,
         },
         source: cell.source
           .split('\n')
@@ -316,6 +449,13 @@ export function parseIpynbJson(rawText: string): {
         language?: string;
         stdin?: string;
         seamindOrigin?: CodeLabSourceOrigin;
+        sqlConnectionId?: string;
+        sqlResultVar?: string;
+        seamindGroup?: {
+          id?: string;
+          title?: string;
+          collapsed?: boolean;
+        };
       };
       source?: unknown;
       outputs?: Array<{
@@ -339,7 +479,11 @@ export function parseIpynbJson(rawText: string): {
       ? 'c'
       : langHint === 'cpp' || langHint === 'c++'
         ? 'cpp'
-        : 'python';
+        : langHint === 'sql'
+          ? 'sql'
+          : langHint === 'r'
+            ? 'r'
+            : 'python';
 
   const cells: CodeLabCell[] = (parsed.cells ?? []).map((rawCell) => {
     const isMarkdown = rawCell.cell_type === 'markdown';
@@ -351,7 +495,11 @@ export function parseIpynbJson(rawText: string): {
         ? 'c'
         : cellLangRaw === 'cpp' || cellLangRaw === 'c++'
           ? 'cpp'
-          : 'python';
+          : cellLangRaw === 'sql'
+            ? 'sql'
+            : cellLangRaw === 'r'
+              ? 'r'
+              : 'python';
 
     const outputs: CodeLabOutputItem[] = [];
     for (const out of rawCell.outputs ?? []) {
@@ -419,6 +567,11 @@ export function parseIpynbJson(rawText: string): {
           : 'idle',
       outputs,
       origin: rawCell.metadata?.seamindOrigin,
+      sqlConnectionId: rawCell.metadata?.sqlConnectionId,
+      sqlResultVar: rawCell.metadata?.sqlResultVar,
+      groupId: rawCell.metadata?.seamindGroup?.id,
+      groupTitle: rawCell.metadata?.seamindGroup?.title,
+      groupCollapsed: rawCell.metadata?.seamindGroup?.collapsed,
     };
   });
 
@@ -442,7 +595,15 @@ export function exportCodeLabToMarkdown(
       continue;
     }
     const langTag =
-      cell.language === 'cpp' ? 'cpp' : cell.language === 'c' ? 'c' : 'python';
+      cell.language === 'cpp'
+        ? 'cpp'
+        : cell.language === 'c'
+          ? 'c'
+          : cell.language === 'sql'
+            ? 'sql'
+            : cell.language === 'r'
+              ? 'r'
+              : 'python';
     parts.push(`\`\`\`${langTag}\n${cell.source.trimEnd()}\n\`\`\``);
     if (cell.origin) {
       parts.push(
@@ -458,6 +619,8 @@ export function exportCodeLabToMarkdown(
         parts.push(`![实验图表](${out.dataUrl})`);
       } else if (out.kind === 'text/latex' && out.latex.trim()) {
         parts.push(`$$\n${out.latex.replace(/^\$+|\$+$/g, '').trim()}\n$$`);
+      } else if (out.kind === 'table') {
+        parts.push(formatTableToMarkdown(out.columns, out.rows.slice(0, 30)));
       } else if (out.kind === 'error' && out.message.trim()) {
         parts.push(`\`\`\`text\n[Error]\n${out.message.trimEnd()}\n\`\`\``);
       }
@@ -497,6 +660,18 @@ export const CODELAB_SNIPPETS_STORAGE_KEY =
   'seamind:codelab-collection-snippets:v1';
 export const CODELAB_COLLECTION_EVENT = 'seamind:codelab-collection-changed';
 export const CODELAB_SYNC_VIEW_EVENT = 'seamind:codelab-sync-view';
+export const CODELAB_AGENT_PUSH_EVENT = 'seamind:codelab-agent-push-cell';
+
+export interface CodeLabAgentPushPayload {
+  kind?: CodeLabCellKind;
+  language: TerminalCodeLabLanguage;
+  source: string;
+  autoRun?: boolean;
+  sqlConnectionId?: string;
+  sqlResultVar?: string;
+  groupId?: string;
+  groupTitle?: string;
+}
 
 export interface CodeLabSyncViewPayload {
   sourceTabId: string;
@@ -540,7 +715,15 @@ export function formatCellStudyExportMarkdown(
     return parts.join('\n\n');
   }
   const langTag =
-    cell.language === 'cpp' ? 'cpp' : cell.language === 'c' ? 'c' : 'python';
+    cell.language === 'cpp'
+      ? 'cpp'
+      : cell.language === 'c'
+        ? 'c'
+        : cell.language === 'sql'
+          ? 'sql'
+          : cell.language === 'r'
+            ? 'r'
+            : 'python';
   parts.push(`\`\`\`${langTag}\n${cell.source.trimEnd()}\n\`\`\``);
   for (const out of cell.outputs) {
     if (out.kind === 'stream' && out.text.trim()) {
@@ -551,6 +734,8 @@ export function formatCellStudyExportMarkdown(
       parts.push(`![实验图表](${out.dataUrl})`);
     } else if (out.kind === 'text/latex' && out.latex.trim()) {
       parts.push(`$$\n${out.latex.replace(/^\$+|\$+$/g, '').trim()}\n$$`);
+    } else if (out.kind === 'table') {
+      parts.push(formatTableToMarkdown(out.columns, out.rows.slice(0, 30)));
     } else if (out.kind === 'error' && out.message.trim()) {
       parts.push(`\`\`\`text\n[Error]\n${out.message.trimEnd()}\n\`\`\``);
     }
@@ -558,11 +743,14 @@ export function formatCellStudyExportMarkdown(
   return parts.join('\n\n');
 }
 
+export const UNCATEGORIZED_CODELAB_FOLDER = '未归类代码';
+export const CODELAB_FOLDERS_STORAGE_KEY = 'seamind.codelab.folders.v1';
+
 export const DEFAULT_CODELAB_FOLDERS: readonly string[] = [
   '书籍伴读验证',
   '算法与数据结构',
   '系统与网络实验',
-  '未归类代码',
+  UNCATEGORIZED_CODELAB_FOLDER,
 ];
 
 export const DEFAULT_CODELAB_SNIPPETS: readonly CodeLabSnippetItem[] = [
@@ -649,6 +837,31 @@ for (int step = 0; step < 4; ++step) {
     }
 }
 for (int i = 0; i < 4; ++i) cout << "0 -> " << i << " shortest = " << dist[i] << endl;`,
+  },
+  {
+    id: 'snip-sql-file-agg',
+    title: 'SQL 分组聚合与 Top-N 检索',
+    language: 'sql',
+    category: '数据分析与统计',
+    description: '对已挂载 CSV / Parquet 文件或数据表进行分组汇总',
+    code: `-- 将表名替换为左侧「数据」面板中的文件别名或数据库表名
+SELECT *
+FROM dataset
+LIMIT 50;`,
+  },
+  {
+    id: 'snip-r-summary-plot',
+    title: 'R 语言回归拟合与残差绘图',
+    language: 'r',
+    category: '数据分析与统计',
+    description: '使用内置 lm() 建立线性模型并直接输出散点回归图',
+    code: `set.seed(42)
+x <- seq(1, 30)
+y <- 2.4 * x + rnorm(30, sd = 6)
+fit <- lm(y ~ x)
+print(summary(fit))
+plot(x, y, pch = 19, col = "#2c6e58", main = "Linear Regression Fit")
+abline(fit, col = "#d97757", lwd = 2)`,
   },
 ];
 
@@ -859,6 +1072,12 @@ export function stripHeavyOutputsForStorage(
               }
             : out,
         );
+      } else if (out.kind === 'table') {
+        slimOutputs.push({
+          ...out,
+          rows: out.rows.slice(0, 30),
+          truncated: out.truncated || out.rows.length > 30,
+        });
       } else {
         slimOutputs.push(out);
       }
@@ -907,10 +1126,14 @@ export function duplicateCodeLabFile(
       ? '.cpp'
       : source.language === 'c'
         ? '.c'
-        : '.ipynb';
+        : source.language === 'sql'
+          ? '.sql'
+          : source.language === 'r'
+            ? '.R'
+            : '.ipynb';
   const baseTitle = source.title
     .trim()
-    .replace(/(\.ipynb|\.cpp|\.c)$/i, '')
+    .replace(/(\.ipynb|\.cpp|\.c|\.sql|\.r)$/i, '')
     .trim();
   const copyTitle = `${baseTitle || '未命名实验'} 副本${ext}`;
   const copyId = `codelab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -999,16 +1222,267 @@ export function toggleStarCodeLabFile(fileId: string): CodeLabSavedFile[] {
   return next;
 }
 
+export function moveCodeLabFileToFolder(
+  fileId: string,
+  targetFolder: string,
+): {
+  files: CodeLabSavedFile[];
+  movedFile: CodeLabSavedFile | null;
+  fromFolder: string | null;
+} {
+  const cleanTarget = targetFolder.trim() || UNCATEGORIZED_CODELAB_FOLDER;
+  const current = loadCodeLabCollection();
+  const existing = current.find((item) => item.id === fileId);
+  if (!existing) {
+    return { files: current, movedFile: null, fromFolder: null };
+  }
+  const fromFolder = existing.folder.trim() || UNCATEGORIZED_CODELAB_FOLDER;
+  if (fromFolder === cleanTarget) {
+    return { files: current, movedFile: null, fromFolder };
+  }
+  const updatedFile: CodeLabSavedFile = {
+    ...existing,
+    folder: cleanTarget,
+    updatedAt: Date.now(),
+  };
+  const next = current.map((item) => (item.id === fileId ? updatedFile : item));
+  saveCodeLabCollection(next);
+  return { files: next, movedFile: updatedFile, fromFolder };
+}
+
+function normalizeFolderList(
+  folders: readonly string[],
+  files: readonly CodeLabSavedFile[] = [],
+): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  const push = (raw: string) => {
+    const clean = raw.trim();
+    if (!clean || clean === UNCATEGORIZED_CODELAB_FOLDER || seen.has(clean)) {
+      return;
+    }
+    seen.add(clean);
+    ordered.push(clean);
+  };
+  for (const folder of folders) push(folder);
+  for (const file of files) {
+    if (file.folder) push(file.folder);
+  }
+  ordered.push(UNCATEGORIZED_CODELAB_FOLDER);
+  return ordered;
+}
+
+export function loadCodeLabFolders(
+  files: readonly CodeLabSavedFile[] = [],
+): string[] {
+  if (typeof localStorage === 'undefined') {
+    return normalizeFolderList(DEFAULT_CODELAB_FOLDERS, files);
+  }
+  try {
+    const raw = localStorage.getItem(CODELAB_FOLDERS_STORAGE_KEY);
+    if (!raw) {
+      return normalizeFolderList(DEFAULT_CODELAB_FOLDERS, files);
+    }
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return normalizeFolderList(DEFAULT_CODELAB_FOLDERS, files);
+    }
+    const valid = parsed.filter(
+      (item): item is string =>
+        typeof item === 'string' && item.trim().length > 0,
+    );
+    return normalizeFolderList(
+      valid.length > 0 ? valid : DEFAULT_CODELAB_FOLDERS,
+      files,
+    );
+  } catch {
+    return normalizeFolderList(DEFAULT_CODELAB_FOLDERS, files);
+  }
+}
+
+export function saveCodeLabFolders(folders: readonly string[]): string[] {
+  const normalized = normalizeFolderList(folders);
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.setItem(
+        CODELAB_FOLDERS_STORAGE_KEY,
+        JSON.stringify(normalized),
+      );
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent(CODELAB_COLLECTION_EVENT));
+      }
+    } catch {
+      // ignore storage quota errors
+    }
+  }
+  return normalized;
+}
+
+export function createCodeLabFolder(name: string): {
+  folders: string[];
+  createdName: string | null;
+} {
+  const clean = name.trim();
+  const current = loadCodeLabFolders();
+  if (!clean || current.includes(clean)) {
+    return { folders: current, createdName: null };
+  }
+  const withoutUncat = current.filter(
+    (f) => f !== UNCATEGORIZED_CODELAB_FOLDER,
+  );
+  const next = saveCodeLabFolders([
+    ...withoutUncat,
+    clean,
+    UNCATEGORIZED_CODELAB_FOLDER,
+  ]);
+  return { folders: next, createdName: clean };
+}
+
+export function renameCodeLabFolder(
+  oldName: string,
+  newName: string,
+): {
+  folders: string[];
+  files: CodeLabSavedFile[];
+  renamedTo: string | null;
+} {
+  const cleanOld = oldName.trim();
+  const cleanNew = newName.trim();
+  const currentFolders = loadCodeLabFolders();
+  const currentFiles = loadCodeLabCollection();
+  if (
+    !cleanOld ||
+    !cleanNew ||
+    cleanOld === UNCATEGORIZED_CODELAB_FOLDER ||
+    cleanOld === cleanNew ||
+    currentFolders.includes(cleanNew)
+  ) {
+    return { folders: currentFolders, files: currentFiles, renamedTo: null };
+  }
+  const nextFolders = saveCodeLabFolders(
+    currentFolders.map((f) => (f === cleanOld ? cleanNew : f)),
+  );
+  const nextFiles = currentFiles.map((file) =>
+    file.folder === cleanOld ? { ...file, folder: cleanNew } : file,
+  );
+  saveCodeLabCollection(nextFiles);
+  return { folders: nextFolders, files: nextFiles, renamedTo: cleanNew };
+}
+
+export function deleteCodeLabFolder(name: string): {
+  folders: string[];
+  files: CodeLabSavedFile[];
+} {
+  const clean = name.trim();
+  const currentFolders = loadCodeLabFolders();
+  const currentFiles = loadCodeLabCollection();
+  if (!clean || clean === UNCATEGORIZED_CODELAB_FOLDER) {
+    return { folders: currentFolders, files: currentFiles };
+  }
+  const nextFiles = currentFiles.map((file) =>
+    file.folder === clean
+      ? { ...file, folder: UNCATEGORIZED_CODELAB_FOLDER }
+      : file,
+  );
+  saveCodeLabCollection(nextFiles);
+  const nextFolders = saveCodeLabFolders(
+    currentFolders.filter((f) => f !== clean),
+  );
+  return { folders: nextFolders, files: nextFiles };
+}
+
+export function createCodeLabSavedFile(
+  language: TerminalCodeLabLanguage,
+  folder?: string,
+  customTitle?: string,
+): {
+  file: CodeLabSavedFile;
+  files: CodeLabSavedFile[];
+  folders: string[];
+} {
+  const currentFiles = loadCodeLabCollection();
+  const targetFolder = folder?.trim() || UNCATEGORIZED_CODELAB_FOLDER;
+  const ext =
+    language === 'cpp'
+      ? '.cpp'
+      : language === 'c'
+        ? '.c'
+        : language === 'sql'
+          ? '.sql'
+          : language === 'r'
+            ? '.R'
+            : '.ipynb';
+  const baseLabel =
+    customTitle?.trim() ||
+    (language === 'python'
+      ? 'Python 笔记'
+      : language === 'sql'
+        ? 'SQL 笔记'
+        : language === 'r'
+          ? 'R 统计笔记'
+          : language === 'cpp'
+            ? 'C++ 实验笔记'
+            : 'C 实验笔记');
+  const existingTitles = new Set(currentFiles.map((f) => f.title));
+  let title = baseLabel.endsWith(ext) ? baseLabel : `${baseLabel}${ext}`;
+  let suffix = 2;
+  while (existingTitles.has(title)) {
+    const stem = baseLabel.replace(/(\.ipynb|\.cpp|\.c|\.sql|\.r)$/i, '');
+    title = `${stem} ${suffix}${ext}`;
+    suffix += 1;
+  }
+
+  const newId = `codelab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const cells = createStarterCodeLabCells(language);
+  const files = upsertCodeLabFile({
+    id: newId,
+    title,
+    folder: targetFolder,
+    language,
+    cells,
+    prologueSource:
+      language === 'cpp'
+        ? DEFAULT_CPP_PROLOGUE
+        : language === 'c'
+          ? DEFAULT_C_PROLOGUE
+          : undefined,
+    tags: [language.toUpperCase()],
+    starred: false,
+  });
+  const currentFolders = loadCodeLabFolders(files);
+  const folders = currentFolders.includes(targetFolder)
+    ? saveCodeLabFolders(currentFolders)
+    : createCodeLabFolder(targetFolder).folders;
+  const created =
+    files.find((item) => item.id === newId) ??
+    ({
+      id: newId,
+      title,
+      folder: targetFolder,
+      language,
+      cells,
+      tags: [language.toUpperCase()],
+      starred: false,
+      updatedAt: Date.now(),
+    } satisfies CodeLabSavedFile);
+  return { file: created, files, folders };
+}
+
 export function groupCodeLabFilesByFolder(
   files: readonly CodeLabSavedFile[],
   query: string,
   filter: 'all' | TerminalCodeLabLanguage | 'starred' = 'all',
+  knownFolders?: readonly string[],
 ): Array<{ folder: string; items: CodeLabSavedFile[] }> {
   const cleanQuery = query.trim().toLowerCase();
   const filtered = files.filter((file) => {
     if (filter === 'starred' && !file.starred) return false;
     if (
-      (filter === 'python' || filter === 'c' || filter === 'cpp') &&
+      (filter === 'python' ||
+        filter === 'sql' ||
+        filter === 'r' ||
+        filter === 'c' ||
+        filter === 'cpp') &&
       file.language !== filter
     ) {
       return false;
@@ -1024,11 +1498,15 @@ export function groupCodeLabFilesByFolder(
   });
 
   const folderMap = new Map<string, CodeLabSavedFile[]>();
-  for (const folder of DEFAULT_CODELAB_FOLDERS) {
+  const baseFolders =
+    knownFolders && knownFolders.length > 0
+      ? knownFolders
+      : loadCodeLabFolders(files);
+  for (const folder of baseFolders) {
     folderMap.set(folder, []);
   }
   for (const item of filtered) {
-    const folder = item.folder.trim() || '未归类代码';
+    const folder = item.folder.trim() || UNCATEGORIZED_CODELAB_FOLDER;
     const bucket = folderMap.get(folder) ?? [];
     bucket.push(item);
     folderMap.set(folder, bucket);
@@ -1055,7 +1533,12 @@ export function assembleFullScriptSource(
   language: TerminalCodeLabLanguage,
   prologueSource?: string,
 ): string {
-  const commentPrefix = language === 'python' ? '# ' : '// ';
+  const commentPrefix =
+    language === 'sql'
+      ? '-- '
+      : language === 'python' || language === 'r'
+        ? '# '
+        : '// ';
   const codeSegments: string[] = [];
 
   for (let i = 0; i < cells.length; i += 1) {
@@ -1081,10 +1564,596 @@ export function assembleFullScriptSource(
   if (language === 'python') {
     return combinedBody || '# 空 Python 实验脚本\n';
   }
+  if (language === 'sql') {
+    return combinedBody || '-- 空 SQL 查询脚本\n';
+  }
+  if (language === 'r') {
+    return combinedBody || '# 空 R 语言分析脚本\n';
+  }
   return assembleCCellProgram(
     prologueSource ??
       (language === 'cpp' ? DEFAULT_CPP_PROLOGUE : DEFAULT_C_PROLOGUE),
     combinedBody,
     language === 'cpp',
   );
+}
+
+/* ==========================================================================
+   Data Lab Persistence: Mounted Files, DB Connections & Custom Env Paths
+   ========================================================================== */
+
+export interface DataLabMountedFile {
+  id: string;
+  alias: string;
+  path: string;
+  format: string;
+  sizeBytes?: number;
+  rowCount?: number | null;
+  columns?: DataColumnInfo[];
+  engine?: string;
+  updatedAt: number;
+}
+
+export interface DataLabDbConnection {
+  id: string;
+  name: string;
+  dbType: 'sqlite' | 'duckdb' | 'postgres' | 'mysql';
+  filePath?: string;
+  host?: string;
+  port?: number;
+  database?: string;
+  username?: string;
+  hasPassword?: boolean;
+  pythonPath?: string;
+  tables?: DataDbTableSchema[];
+  lastTestedAt?: number;
+  lastStatus?: string;
+}
+
+export interface DataLabCustomEnvPaths {
+  pythonPaths: string[];
+  rPaths: string[];
+}
+
+export interface DataLabBaseProfile {
+  pythonPath: string;
+  pythonLabel?: string;
+  rscriptPath: string;
+  rLabel?: string;
+  defaultConnectionId: string;
+  preferredPythonLibs: string[];
+  preferredRLibs: string[];
+  updatedAt: number;
+}
+
+export const DEFAULT_PYTHON_STABLE_LIBS: readonly string[] = [
+  'pandas',
+  'numpy',
+  'pyarrow',
+  'duckdb',
+  'matplotlib',
+  'seaborn',
+  'scipy',
+  'statsmodels',
+  'openpyxl',
+  'sqlalchemy',
+];
+
+export const DEFAULT_R_STABLE_LIBS: readonly string[] = [
+  'tidyverse',
+  'ggplot2',
+  'data.table',
+  'arrow',
+  'DBI',
+  'duckdb',
+];
+
+export const DATALAB_FILES_STORAGE_KEY = 'seamind:datalab-mounted-files:v1';
+export const DATALAB_CONNS_STORAGE_KEY = 'seamind:datalab-db-connections:v1';
+export const DATALAB_CUSTOM_ENVS_KEY = 'seamind:datalab-custom-env-paths:v1';
+export const DATALAB_BASE_PROFILE_KEY = 'seamind:datalab-base-profile:v1';
+export const DATALAB_STORAGE_EVENT = 'seamind:datalab-sources-changed';
+
+export function createDefaultBaseProfile(): DataLabBaseProfile {
+  return {
+    pythonPath: '',
+    rscriptPath: '',
+    defaultConnectionId: '',
+    preferredPythonLibs: [...DEFAULT_PYTHON_STABLE_LIBS],
+    preferredRLibs: [...DEFAULT_R_STABLE_LIBS],
+    updatedAt: 0,
+  };
+}
+
+export function loadDataLabBaseProfile(): DataLabBaseProfile {
+  const defaults = createDefaultBaseProfile();
+  if (typeof localStorage === 'undefined') return defaults;
+  try {
+    const raw = localStorage.getItem(DATALAB_BASE_PROFILE_KEY);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw) as Partial<DataLabBaseProfile>;
+    return {
+      pythonPath:
+        typeof parsed.pythonPath === 'string' ? parsed.pythonPath.trim() : '',
+      pythonLabel:
+        typeof parsed.pythonLabel === 'string'
+          ? parsed.pythonLabel.trim()
+          : undefined,
+      rscriptPath:
+        typeof parsed.rscriptPath === 'string' ? parsed.rscriptPath.trim() : '',
+      rLabel:
+        typeof parsed.rLabel === 'string' ? parsed.rLabel.trim() : undefined,
+      defaultConnectionId:
+        typeof parsed.defaultConnectionId === 'string'
+          ? parsed.defaultConnectionId.trim()
+          : '',
+      preferredPythonLibs:
+        Array.isArray(parsed.preferredPythonLibs) &&
+        parsed.preferredPythonLibs.length > 0
+          ? parsed.preferredPythonLibs.filter(
+              (v): v is string => typeof v === 'string' && v.trim().length > 0,
+            )
+          : [...DEFAULT_PYTHON_STABLE_LIBS],
+      preferredRLibs:
+        Array.isArray(parsed.preferredRLibs) && parsed.preferredRLibs.length > 0
+          ? parsed.preferredRLibs.filter(
+              (v): v is string => typeof v === 'string' && v.trim().length > 0,
+            )
+          : [...DEFAULT_R_STABLE_LIBS],
+      updatedAt:
+        typeof parsed.updatedAt === 'number' ? parsed.updatedAt : Date.now(),
+    };
+  } catch {
+    return defaults;
+  }
+}
+
+export function saveDataLabBaseProfile(profile: DataLabBaseProfile): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    const payload: DataLabBaseProfile = {
+      ...profile,
+      pythonPath: profile.pythonPath.trim(),
+      rscriptPath: profile.rscriptPath.trim(),
+      defaultConnectionId: profile.defaultConnectionId.trim(),
+      updatedAt: Date.now(),
+    };
+    localStorage.setItem(DATALAB_BASE_PROFILE_KEY, JSON.stringify(payload));
+    dispatchDataLabChanged();
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export function createEmptyAnalysisBlockCells(
+  title = '新建复合分析区块',
+  defaultSqlConnId?: string,
+): CodeLabCell[] {
+  const groupId = makeAnalysisBlockId();
+  return [
+    {
+      id: makeCodeLabCellId(),
+      kind: 'code',
+      language: 'sql',
+      sqlConnectionId: defaultSqlConnId || undefined,
+      sqlResultVar: 'stage_data',
+      groupId,
+      groupTitle: title,
+      source: `-- 分区 1 · SQL 抽数（结果自动写入共享总线 stage_data）\nSELECT * FROM your_table LIMIT 100;`,
+      stdinInput: '',
+      executionCount: null,
+      status: 'idle',
+      outputs: [],
+    },
+    {
+      id: makeCodeLabCellId(),
+      kind: 'code',
+      language: 'python',
+      groupId,
+      groupTitle: title,
+      source: `# 分区 2 · Python 清洗与可视化（自动激活已指定的基座虚拟环境）\nimport matplotlib.pyplot as plt\ndf = sm_load("stage_data")\ndf.head()`,
+      stdinInput: '',
+      executionCount: null,
+      status: 'idle',
+      outputs: [],
+    },
+  ];
+}
+
+export function createPolyglotAnalysisTemplateCells(
+  title = '区域营收与利润归因分析',
+): CodeLabCell[] {
+  const groupId = makeAnalysisBlockId();
+  return [
+    {
+      id: makeCodeLabCellId(),
+      kind: 'code',
+      language: 'sql',
+      sqlResultVar: 'analysis_base',
+      groupId,
+      groupTitle: title,
+      source: `-- 步骤 1/4 [SQL 抽数 -> 写入共享数据总线 analysis_base]
+-- 可直接替换为你的挂载文件别名（见左侧「数据」面板）或默认数据库表
+SELECT '华东' AS region, 'Q1' AS quarter, 128.5 AS revenue, 31.2 AS profit
+UNION ALL SELECT '华东', 'Q2', 146.0, 38.5
+UNION ALL SELECT '华北', 'Q1', 96.4, 21.8
+UNION ALL SELECT '华北', 'Q2', 112.8, 27.4
+UNION ALL SELECT '华南', 'Q1', 118.2, 29.0
+UNION ALL SELECT '华南', 'Q2', 139.6, 36.1;`,
+      stdinInput: '',
+      executionCount: null,
+      status: 'idle',
+      outputs: [],
+    },
+    {
+      id: makeCodeLabCellId(),
+      kind: 'code',
+      language: 'python',
+      groupId,
+      groupTitle: title,
+      source: `# 步骤 2/4 [Python 从总线读取 -> 清洗衍生指标 -> 中文图表 -> 写回总线]
+import matplotlib.pyplot as plt
+
+df = sm_load("analysis_base")
+df["margin_pct"] = (df["profit"] / df["revenue"] * 100).round(2)
+sm_save("analysis_clean", df)
+
+fig, ax = plt.subplots(figsize=(6.8, 3.8))
+for reg, grp in df.groupby("region"):
+    ax.plot(grp["quarter"], grp["revenue"], marker="o", linewidth=2, label=reg)
+ax.set_title("各区域季度营收趋势 (Python 基座)")
+ax.set_xlabel("季度")
+ax.set_ylabel("营收")
+ax.legend()
+ax.grid(alpha=0.25)
+df`,
+      stdinInput: '',
+      executionCount: null,
+      status: 'idle',
+      outputs: [],
+    },
+    {
+      id: makeCodeLabCellId(),
+      kind: 'code',
+      language: 'r',
+      groupId,
+      groupTitle: title,
+      source: `# 步骤 3/4 [R 语言从同一总线读取 Python 清洗结果 -> 统计建模与可视化]
+df <- sm_load("analysis_clean")
+fit <- lm(profit ~ revenue, data = df)
+print(summary(fit)$coefficients)
+
+if (requireNamespace("ggplot2", quietly = TRUE)) {
+  library(ggplot2)
+  ggplot(df, aes(x = revenue, y = profit, color = region)) +
+    geom_point(size = 3.2) +
+    geom_smooth(method = "lm", se = FALSE, linetype = "dashed") +
+    labs(title = "营收与利润线性关系 (R 基座)", x = "营收", y = "利润") +
+    theme_minimal()
+} else {
+  plot(df$revenue, df$profit, pch = 19, col = "#2563eb",
+       main = "营收与利润关系 (R Base)", xlab = "营收", ylab = "利润")
+  abline(fit, col = "#dc2626", lwd = 2)
+}`,
+      stdinInput: '',
+      executionCount: null,
+      status: 'idle',
+      outputs: [],
+    },
+    {
+      id: makeCodeLabCellId(),
+      kind: 'markdown',
+      language: 'python',
+      groupId,
+      groupTitle: title,
+      source: `### 步骤 4/4 分析结论摘要
+- **数据流转**：\`SQL (analysis_base)\` → \`Python sm_load / sm_save (analysis_clean)\` → \`R sm_load\` 全部共享同一底座与 Parquet 总线。
+- **Agent 协同**：在右侧 Agent 输入 \`/data 结合 #lab 和共享表 analysis_clean 总结趋势并提出下一步假设\`，Agent 可直接调用相同基座环境继续分析。`,
+      stdinInput: '',
+      executionCount: null,
+      status: 'idle',
+      outputs: [],
+    },
+  ];
+}
+
+export function sanitizeDataAlias(raw: string): string {
+  const cleaned = raw
+    .replace(/\.[^.]+$/, '')
+    .replace(/[^a-zA-Z0-9_]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toLowerCase();
+  if (!cleaned) return 'dataset';
+  return /^[0-9]/.test(cleaned) ? `t_${cleaned}` : cleaned;
+}
+
+export function formatFileSizeCompact(bytes?: number): string {
+  if (bytes === undefined || !Number.isFinite(bytes) || bytes < 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+export function formatTableToCsv(
+  columns: readonly DataColumnInfo[],
+  rows: readonly DataScalarValue[][],
+): string {
+  const escape = (val: unknown): string => {
+    if (val === null || val === undefined) return '';
+    const str = String(val);
+    if (/[",\r\n]/.test(str)) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  };
+  const header = columns.map((c) => escape(c.name)).join(',');
+  const body = rows.map((r) => r.map(escape).join(','));
+  return [header, ...body].join('\n');
+}
+
+export function formatTableToMarkdown(
+  columns: readonly DataColumnInfo[],
+  rows: readonly DataScalarValue[][],
+): string {
+  if (columns.length === 0) return '';
+  const cellStr = (val: unknown): string => {
+    if (val === null || val === undefined) return 'NULL';
+    return String(val).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+  };
+  const head = `| ${columns.map((c) => cellStr(c.name)).join(' | ')} |`;
+  const sep = `| ${columns.map(() => '---').join(' | ')} |`;
+  const body = rows.map(
+    (r) => `| ${columns.map((_, i) => cellStr(r[i])).join(' | ')} |`,
+  );
+  return [head, sep, ...body].join('\n');
+}
+
+function dispatchDataLabChanged(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(DATALAB_STORAGE_EVENT));
+  }
+}
+
+export function loadDataLabFiles(): DataLabMountedFile[] {
+  if (typeof localStorage === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(DATALAB_FILES_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as DataLabMountedFile[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveDataLabFiles(files: DataLabMountedFile[]): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(DATALAB_FILES_STORAGE_KEY, JSON.stringify(files));
+    dispatchDataLabChanged();
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export function loadDataLabConnections(): DataLabDbConnection[] {
+  if (typeof localStorage === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(DATALAB_CONNS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as DataLabDbConnection[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveDataLabConnections(conns: DataLabDbConnection[]): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(DATALAB_CONNS_STORAGE_KEY, JSON.stringify(conns));
+    dispatchDataLabChanged();
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export function loadCustomEnvPaths(): DataLabCustomEnvPaths {
+  if (typeof localStorage === 'undefined') {
+    return { pythonPaths: [], rPaths: [] };
+  }
+  try {
+    const raw = localStorage.getItem(DATALAB_CUSTOM_ENVS_KEY);
+    if (!raw) return { pythonPaths: [], rPaths: [] };
+    const parsed = JSON.parse(raw) as Partial<DataLabCustomEnvPaths>;
+    return {
+      pythonPaths: Array.isArray(parsed.pythonPaths)
+        ? parsed.pythonPaths.filter((p): p is string => typeof p === 'string')
+        : [],
+      rPaths: Array.isArray(parsed.rPaths)
+        ? parsed.rPaths.filter((p): p is string => typeof p === 'string')
+        : [],
+    };
+  } catch {
+    return { pythonPaths: [], rPaths: [] };
+  }
+}
+
+export function saveCustomEnvPaths(paths: DataLabCustomEnvPaths): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(DATALAB_CUSTOM_ENVS_KEY, JSON.stringify(paths));
+    dispatchDataLabChanged();
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export interface CodeLabNotebookSnapshot {
+  source: 'live' | 'draft' | 'saved';
+  tabId?: string;
+  fileId: string | null;
+  title: string;
+  folder: string;
+  language: TerminalCodeLabLanguage;
+  cells: Array<{
+    cellId: string;
+    index: number;
+    kind: CodeLabCellKind;
+    language: TerminalCodeLabLanguage;
+    status: CodeLabCell['status'];
+    executionCount: number | null;
+    groupId?: string;
+    groupTitle?: string;
+    sqlConnectionId?: string;
+    sqlResultVar?: string;
+    source: string;
+    outputs: string[];
+  }>;
+}
+
+export function summarizeCellOutputsForAgent(
+  outputs: readonly CodeLabOutputItem[],
+): string[] {
+  const result: string[] = [];
+  for (const out of outputs) {
+    if (out.kind === 'stream' && out.text.trim()) {
+      result.push(`[${out.name}] ${out.text.trim().slice(0, 2000)}`);
+    } else if (out.kind === 'text' && out.text.trim()) {
+      result.push(out.text.trim().slice(0, 2000));
+    } else if (out.kind === 'table') {
+      const md = formatTableToMarkdown(out.columns, out.rows.slice(0, 30));
+      result.push(
+        `[TABLE ${out.engine ?? 'SQL'} · ${out.rows.length}×${out.columns.length}${out.boundVar ? ` -> ${out.boundVar}` : ''}]\n${md}`,
+      );
+    } else if (out.kind === 'error' && out.message.trim()) {
+      result.push(`[ERROR] ${out.message.trim().slice(0, 1500)}`);
+    } else if (out.kind === 'image/png') {
+      result.push('[IMAGE/PNG chart output]');
+    } else if (out.kind === 'text/html') {
+      result.push(`[HTML output · ${out.html.length} chars]`);
+    } else if (out.kind === 'text/latex') {
+      result.push(`[LATEX] ${out.latex.slice(0, 500)}`);
+    }
+  }
+  return result;
+}
+
+export function readCodeLabNotebookSnapshot(selector?: {
+  fileId?: string;
+  title?: string;
+}): CodeLabNotebookSnapshot | null {
+  const targetId = selector?.fileId?.trim() || '';
+  const targetTitle = selector?.title?.trim().toLowerCase() || '';
+
+  const drafts: Array<{
+    fileId: string | null;
+    title: string;
+    folder: string;
+    language: TerminalCodeLabLanguage;
+    cells: CodeLabCell[];
+  }> = [];
+
+  if (typeof localStorage !== 'undefined') {
+    try {
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const key = localStorage.key(i);
+        if (!key || !key.startsWith('seamind:codelab-draft:v1:')) continue;
+        if (
+          key.endsWith(':vars') ||
+          key.endsWith(':console') ||
+          key.endsWith(':scroll')
+        ) {
+          continue;
+        }
+        const raw = localStorage.getItem(key);
+        if (!raw) continue;
+        const parsed = JSON.parse(raw) as {
+          fileId?: string | null;
+          title?: string;
+          folder?: string;
+          language?: TerminalCodeLabLanguage;
+          cells?: CodeLabCell[];
+        };
+        if (Array.isArray(parsed.cells)) {
+          drafts.push({
+            fileId: parsed.fileId ?? null,
+            title: parsed.title || '未命名实验本',
+            folder: parsed.folder || '未归类代码',
+            language: parsed.language || 'python',
+            cells: parsed.cells,
+          });
+        }
+      }
+    } catch {
+      // ignore draft read errors
+    }
+  }
+
+  const matchedDraft = drafts.find((d) => {
+    if (targetId && d.fileId === targetId) return true;
+    if (targetTitle && d.title.toLowerCase().includes(targetTitle)) return true;
+    return !targetId && !targetTitle;
+  });
+
+  if (matchedDraft) {
+    return {
+      source: 'draft',
+      fileId: matchedDraft.fileId,
+      title: matchedDraft.title,
+      folder: matchedDraft.folder,
+      language: matchedDraft.language,
+      cells: matchedDraft.cells.map((c, idx) => ({
+        cellId: c.id,
+        index: idx + 1,
+        kind: c.kind,
+        language: c.language,
+        status: c.status,
+        executionCount: c.executionCount,
+        groupId: c.groupId,
+        groupTitle: c.groupTitle,
+        sqlConnectionId: c.sqlConnectionId,
+        sqlResultVar: c.sqlResultVar,
+        source: c.source,
+        outputs: summarizeCellOutputsForAgent(c.outputs),
+      })),
+    };
+  }
+
+  const saved = loadCodeLabCollection();
+  const matchedSaved =
+    saved.find((f) => {
+      if (targetId && f.id === targetId) return true;
+      if (targetTitle && f.title.toLowerCase().includes(targetTitle))
+        return true;
+      return !targetId && !targetTitle;
+    }) ?? saved[0];
+
+  if (!matchedSaved) return null;
+
+  return {
+    source: 'saved',
+    fileId: matchedSaved.id,
+    title: matchedSaved.title,
+    folder: matchedSaved.folder,
+    language: matchedSaved.language,
+    cells: matchedSaved.cells.map((c, idx) => ({
+      cellId: c.id,
+      index: idx + 1,
+      kind: c.kind,
+      language: c.language,
+      status: c.status,
+      executionCount: c.executionCount,
+      groupId: c.groupId,
+      groupTitle: c.groupTitle,
+      sqlConnectionId: c.sqlConnectionId,
+      sqlResultVar: c.sqlResultVar,
+      source: c.source,
+      outputs: summarizeCellOutputsForAgent(c.outputs),
+    })),
+  };
 }
