@@ -505,6 +505,7 @@ export default function ExamCenterWorkspace({
               coverDataUrl={graphCover}
               items={bookFilter ? graphItems : visible}
               selectedId={selected?.exam.id ?? null}
+              externalQuery={query}
               onSelectExam={setSelectedId}
               onOpenExam={setOpenedExam}
               onOpenBook={graphBook ? () => onOpenBook(graphBook) : undefined}

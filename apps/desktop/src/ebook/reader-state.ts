@@ -303,6 +303,69 @@ export function getReaderPalette(paletteKey: ReaderPalette, appTheme?: Theme) {
   return READER_PALETTES.dark;
 }
 
+export interface ReaderTranslationTheme {
+  bg: string;
+  headingBg: string;
+  accent: string;
+  border: string;
+  fg: string;
+  shadow: string;
+}
+
+export function getReaderTranslationTheme(
+  paletteKey: ReaderPalette,
+  appTheme?: Theme,
+): ReaderTranslationTheme {
+  if (paletteKey === 'sepia') {
+    return {
+      bg: 'rgba(180, 83, 9, 0.105)',
+      headingBg: 'rgba(180, 83, 9, 0.145)',
+      accent: '#b45309',
+      border: 'rgba(180, 83, 9, 0.25)',
+      fg: '#271c12',
+      shadow: '0 2px 8px rgba(120, 53, 15, 0.08)',
+    };
+  }
+  if (paletteKey === 'light') {
+    return {
+      bg: 'rgba(217, 87, 59, 0.08)',
+      headingBg: 'rgba(217, 87, 59, 0.12)',
+      accent: '#d9573b',
+      border: 'rgba(217, 87, 59, 0.24)',
+      fg: '#1e293b',
+      shadow: '0 2px 8px rgba(217, 87, 59, 0.07)',
+    };
+  }
+  if (appTheme === 'navy') {
+    return {
+      bg: 'rgba(56, 189, 248, 0.14)',
+      headingBg: 'rgba(56, 189, 248, 0.19)',
+      accent: '#38bdf8',
+      border: 'rgba(56, 189, 248, 0.32)',
+      fg: '#f0f9ff',
+      shadow: '0 4px 14px rgba(14, 165, 233, 0.14)',
+    };
+  }
+  if (appTheme === 'purple') {
+    return {
+      bg: 'rgba(192, 132, 252, 0.15)',
+      headingBg: 'rgba(192, 132, 252, 0.20)',
+      accent: '#c084fc',
+      border: 'rgba(192, 132, 252, 0.34)',
+      fg: '#faf5ff',
+      shadow: '0 4px 14px rgba(168, 85, 247, 0.15)',
+    };
+  }
+  return {
+    bg: 'rgba(249, 115, 22, 0.135)',
+    headingBg: 'rgba(249, 115, 22, 0.185)',
+    accent: '#fb923c',
+    border: 'rgba(251, 146, 60, 0.30)',
+    fg: '#f1f5f9',
+    shadow: '0 4px 14px rgba(249, 115, 22, 0.12)',
+  };
+}
+
 export function applyReaderSettings(
   view: ReaderStyleTarget | null,
   settings: ReaderSettings,
@@ -314,10 +377,17 @@ export function applyReaderSettings(
   if (!renderer.setStyles || view?.isFixedLayout) return;
 
   const palette = getReaderPalette(settings.palette, appTheme);
+  const transTheme = getReaderTranslationTheme(settings.palette, appTheme);
   renderer.setStyles(`
     html {
       color-scheme: ${settings.palette === 'dark' ? 'dark' : 'light'} !important;
       --theme-bg-color: ${palette.background};
+      --seamind-trans-bg: ${transTheme.bg};
+      --seamind-trans-heading-bg: ${transTheme.headingBg};
+      --seamind-trans-accent: ${transTheme.accent};
+      --seamind-trans-border: ${transTheme.border};
+      --seamind-trans-fg: ${transTheme.fg};
+      --seamind-trans-shadow: ${transTheme.shadow};
       font-size: ${settings.fontSize}px !important;
       background-color: ${palette.background} !important;
     }

@@ -3,6 +3,13 @@ import type { PythonVarSummary } from './terminal-api';
 
 export type CodeLabCellKind = 'code' | 'markdown';
 
+export interface CodeLabSourceOrigin {
+  kind: 'epub' | 'pdf' | 'mindmap';
+  title: string;
+  locator: string;
+  reference: string;
+}
+
 export type CodeLabOutputItem =
   | { kind: 'stream'; name: 'stdout' | 'stderr'; text: string }
   | { kind: 'text'; text: string }
@@ -21,6 +28,8 @@ export interface CodeLabCell {
   executionCount: number | null;
   status: 'idle' | 'running' | 'success' | 'error';
   outputs: CodeLabOutputItem[];
+  lastExecutedSource?: string;
+  origin?: CodeLabSourceOrigin;
   durationMs?: number;
   stage?: string;
   exitCode?: number | null;
@@ -269,6 +278,7 @@ export function serializeIpynbJson(
         metadata: {
           language: cell.language,
           stdin: cell.stdinInput || undefined,
+          seamindOrigin: cell.origin,
         },
         source: cell.source
           .split('\n')
@@ -302,7 +312,11 @@ export function parseIpynbJson(rawText: string): {
     cells?: Array<{
       cell_type?: string;
       execution_count?: number | null;
-      metadata?: { language?: string; stdin?: string };
+      metadata?: {
+        language?: string;
+        stdin?: string;
+        seamindOrigin?: CodeLabSourceOrigin;
+      };
       source?: unknown;
       outputs?: Array<{
         output_type?: string;
@@ -404,6 +418,7 @@ export function parseIpynbJson(rawText: string): {
           ? 'success'
           : 'idle',
       outputs,
+      origin: rawCell.metadata?.seamindOrigin,
     };
   });
 
@@ -429,6 +444,11 @@ export function exportCodeLabToMarkdown(
     const langTag =
       cell.language === 'cpp' ? 'cpp' : cell.language === 'c' ? 'c' : 'python';
     parts.push(`\`\`\`${langTag}\n${cell.source.trimEnd()}\n\`\`\``);
+    if (cell.origin) {
+      parts.push(
+        `来源：${cell.origin.title} · ${cell.origin.locator}\n\`${cell.origin.reference}\``,
+      );
+    }
     for (const out of cell.outputs) {
       if (out.kind === 'stream' && out.text.trim()) {
         parts.push(`\`\`\`text\n${out.text.trimEnd()}\n\`\`\``);
@@ -476,6 +496,67 @@ export const CODELAB_COLLECTION_STORAGE_KEY =
 export const CODELAB_SNIPPETS_STORAGE_KEY =
   'seamind:codelab-collection-snippets:v1';
 export const CODELAB_COLLECTION_EVENT = 'seamind:codelab-collection-changed';
+export const CODELAB_SYNC_VIEW_EVENT = 'seamind:codelab-sync-view';
+
+export interface CodeLabSyncViewPayload {
+  sourceTabId: string;
+  fileId: string;
+  title: string;
+  folder: string;
+  language: TerminalCodeLabLanguage;
+  starred: boolean;
+  cells: CodeLabCell[];
+  prologueSource: string;
+  variables?: PythonVarSummary[];
+  dirty: boolean;
+  revision: number | null;
+}
+
+export function formatCellStudyExportMarkdown(
+  docTitle: string,
+  cell: CodeLabCell,
+  cellIndex: number,
+): string {
+  const heading = `## ${docTitle.trim() || '代码实验'} · 单元格 #${cellIndex + 1}`;
+  const parts: string[] = [heading];
+  if (cell.origin) {
+    const kindLabel =
+      cell.origin.kind === 'epub'
+        ? 'EPUB'
+        : cell.origin.kind === 'pdf'
+          ? 'PDF'
+          : '思维导图';
+    const detail = [cell.origin.title, cell.origin.locator]
+      .filter(Boolean)
+      .join(' · ');
+    parts.push(
+      `> 来源（${kindLabel}）：${detail}${cell.origin.reference ? ` (\`${cell.origin.reference}\`)` : ''}`,
+    );
+  }
+  if (cell.kind === 'markdown') {
+    if (cell.source.trim()) {
+      parts.push(cell.source.trim());
+    }
+    return parts.join('\n\n');
+  }
+  const langTag =
+    cell.language === 'cpp' ? 'cpp' : cell.language === 'c' ? 'c' : 'python';
+  parts.push(`\`\`\`${langTag}\n${cell.source.trimEnd()}\n\`\`\``);
+  for (const out of cell.outputs) {
+    if (out.kind === 'stream' && out.text.trim()) {
+      parts.push(`\`\`\`text\n${out.text.trimEnd()}\n\`\`\``);
+    } else if (out.kind === 'text' && out.text.trim()) {
+      parts.push(`> 输出：\`${out.text.trim().slice(0, 600)}\``);
+    } else if (out.kind === 'image/png') {
+      parts.push(`![实验图表](${out.dataUrl})`);
+    } else if (out.kind === 'text/latex' && out.latex.trim()) {
+      parts.push(`$$\n${out.latex.replace(/^\$+|\$+$/g, '').trim()}\n$$`);
+    } else if (out.kind === 'error' && out.message.trim()) {
+      parts.push(`\`\`\`text\n[Error]\n${out.message.trimEnd()}\n\`\`\``);
+    }
+  }
+  return parts.join('\n\n');
+}
 
 export const DEFAULT_CODELAB_FOLDERS: readonly string[] = [
   '书籍伴读验证',
@@ -632,8 +713,8 @@ export function loadCodeLabCollection(): CodeLabSavedFile[] {
   }
 }
 
-export function saveCodeLabCollection(files: CodeLabSavedFile[]): void {
-  if (typeof localStorage === 'undefined') return;
+export function saveCodeLabCollection(files: CodeLabSavedFile[]): boolean {
+  if (typeof localStorage === 'undefined') return false;
   try {
     const lightweight = files.map((file) => ({
       ...file,
@@ -646,8 +727,9 @@ export function saveCodeLabCollection(files: CodeLabSavedFile[]): void {
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent(CODELAB_COLLECTION_EVENT));
     }
+    return true;
   } catch {
-    // ignore storage quota errors
+    return false;
   }
 }
 
@@ -800,6 +882,69 @@ export function moveCodeLabCell(
   return next;
 }
 
+export function duplicateCodeLabCell(
+  cells: readonly CodeLabCell[],
+  cellId: string,
+): { cells: CodeLabCell[]; duplicatedCellId: string | null } {
+  const index = cells.findIndex((c) => c.id === cellId);
+  if (index < 0) return { cells: [...cells], duplicatedCellId: null };
+  const target = cells[index];
+  const clone: CodeLabCell = {
+    ...target,
+    id: makeCodeLabCellId(),
+    outputs: target.outputs.map((out) => ({ ...out })),
+    origin: target.origin ? { ...target.origin } : undefined,
+  };
+  const next = [...cells.slice(0, index + 1), clone, ...cells.slice(index + 1)];
+  return { cells: next, duplicatedCellId: clone.id };
+}
+
+export function duplicateCodeLabFile(
+  source: Omit<CodeLabSavedFile, 'updatedAt'> & { updatedAt?: number },
+): CodeLabSavedFile {
+  const ext =
+    source.language === 'cpp'
+      ? '.cpp'
+      : source.language === 'c'
+        ? '.c'
+        : '.ipynb';
+  const baseTitle = source.title
+    .trim()
+    .replace(/(\.ipynb|\.cpp|\.c)$/i, '')
+    .trim();
+  const copyTitle = `${baseTitle || '未命名实验'} 副本${ext}`;
+  const copyId = `codelab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const clonedCells = source.cells.map((cell) => ({
+    ...cell,
+    id: makeCodeLabCellId(),
+    outputs: cell.outputs.map((out) => ({ ...out })),
+    origin: cell.origin ? { ...cell.origin } : undefined,
+  }));
+  const list = upsertCodeLabFile({
+    id: copyId,
+    title: copyTitle,
+    folder: source.folder || '未归类代码',
+    language: source.language,
+    cells: clonedCells,
+    prologueSource: source.prologueSource,
+    tags: [...source.tags],
+    starred: false,
+  });
+  return (
+    list.find((item) => item.id === copyId) ?? {
+      id: copyId,
+      title: copyTitle,
+      folder: source.folder || '未归类代码',
+      language: source.language,
+      cells: clonedCells,
+      prologueSource: source.prologueSource,
+      tags: [...source.tags],
+      starred: false,
+      updatedAt: Date.now(),
+    }
+  );
+}
+
 export function formatDurationCompact(ms?: number): string {
   if (ms === undefined || !Number.isFinite(ms) || ms < 0) return '';
   if (ms < 1000) return `${Math.round(ms)} ms`;
@@ -811,6 +956,7 @@ export function formatDurationCompact(ms?: number): string {
 
 export function upsertCodeLabFile(
   input: Omit<CodeLabSavedFile, 'updatedAt'> & { updatedAt?: number },
+  expectedUpdatedAt?: number | null,
 ): CodeLabSavedFile[] {
   const current = loadCodeLabCollection();
   const nextItem: CodeLabSavedFile = {
@@ -820,11 +966,20 @@ export function upsertCodeLabFile(
     updatedAt: input.updatedAt ?? Date.now(),
   };
   const existsIdx = current.findIndex((item) => item.id === nextItem.id);
+  if (
+    existsIdx >= 0 &&
+    expectedUpdatedAt !== undefined &&
+    current[existsIdx].updatedAt !== expectedUpdatedAt
+  ) {
+    throw new Error('CODELAB_REVISION_CONFLICT');
+  }
   const next =
     existsIdx >= 0
       ? current.map((item, idx) => (idx === existsIdx ? nextItem : item))
       : [nextItem, ...current];
-  saveCodeLabCollection(next);
+  if (!saveCodeLabCollection(next)) {
+    throw new Error('CODELAB_SAVE_FAILED');
+  }
   return next;
 }
 

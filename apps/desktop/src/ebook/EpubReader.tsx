@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import ReaderHeader from './ReaderHeader';
 import { notifyResourceProgress } from '../tasks/task-api';
 import ResourceTaskLinks from '../tasks/ResourceTaskLinks';
 import type { KeyboardEvent } from 'react';
@@ -456,6 +457,7 @@ export default function EpubReader({
   onChapterChange,
   onAnnotationsChange,
   onWriteFootnoteToNote,
+  onSendSelectionToCodeLab,
   onClose,
 }: {
   selection: EpubReaderSelection;
@@ -483,6 +485,11 @@ export default function EpubReader({
     chapterHref: string;
     chapterHierarchy: string[];
   }) => void;
+  onSendSelectionToCodeLab?: (
+    language: 'python' | 'c' | 'cpp',
+    source: string,
+    origin: { kind: 'epub'; title: string; locator: string; reference: string },
+  ) => void;
   onClose: () => void;
 }) {
   const stageRef = useRef<HTMLDivElement>(null);
@@ -524,6 +531,7 @@ export default function EpubReader({
     loadEpubAnnotations(selection.progressKey),
   );
   const [searchOpen, setSearchOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<ReaderSearchResult[]>([]);
   const [searchBusy, setSearchBusy] = useState(false);
@@ -534,7 +542,10 @@ export default function EpubReader({
   const [selectionDraft, setSelectionDraft] = useState<ReaderSelection | null>(
     null,
   );
+  const [selectionToolsExpanded, setSelectionToolsExpanded] = useState(false);
+  const [selectionCopyStatus, setSelectionCopyStatus] = useState('');
   const selectionToolbarRef = useRef<HTMLDivElement | null>(null);
+  const readerSettingsDetailsRef = useRef<HTMLDetailsElement | null>(null);
   const [selectionToolbarPosition, setSelectionToolbarPosition] = useState<{
     left: number;
     top: number;
@@ -1145,6 +1156,8 @@ export default function EpubReader({
     selectionDocumentRef.current?.getSelection()?.removeAllRanges();
     selectionDocumentRef.current = null;
     setSelectionDraft(null);
+    setSelectionToolsExpanded(false);
+    setSelectionCopyStatus('');
     setSelectionToolbarPosition(null);
     setNoteComposerOpen(false);
     setNoteDraft('');
@@ -1992,6 +2005,8 @@ export default function EpubReader({
         anchorLeft: anchor?.left ?? left - mainRect.left,
         anchorTop: anchor?.top ?? top - mainRect.top,
       });
+      setSelectionToolsExpanded(false);
+      setSelectionCopyStatus('');
     };
 
     const onViewLoad = (event: Event) => {
@@ -2086,6 +2101,14 @@ export default function EpubReader({
           ) {
             keyboardEvent.preventDefault();
             toggleBookmarkAt(currentLocationRef.current);
+          } else if (
+            (keyboardEvent.ctrlKey || keyboardEvent.metaKey) &&
+            keyboardEvent.key.toLowerCase() === 'f'
+          ) {
+            keyboardEvent.preventDefault();
+            setSidebarOpen(true);
+            setSearchOpen(true);
+            window.requestAnimationFrame(() => searchInputRef.current?.focus());
           }
         },
         { signal: documentListenerController.signal },
@@ -2484,6 +2507,13 @@ export default function EpubReader({
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+      event.preventDefault();
+      setSidebarOpen(true);
+      setSearchOpen(true);
+      window.requestAnimationFrame(() => searchInputRef.current?.focus());
+      return;
+    }
     const target = event.target as HTMLElement;
     if (
       target.isContentEditable ||
@@ -2544,167 +2574,228 @@ export default function EpubReader({
       aria-label={`EPUB 阅读器：${title}`}
       onKeyDown={handleKeyDown}
     >
-      <header className="epub-reader-header">
-        <div className="epub-reader-book-heading">
-          <span className="epub-reader-kicker">LOCAL EPUB · READER</span>
-          <strong title={title}>{title}</strong>
-          {author && <span className="epub-reader-author">{author}</span>}
-          {navigationNotice && (
-            <span
-              className={`epub-reader-navigation-notice is-${navigationNotice.kind}`}
-              role={navigationNotice.kind === 'error' ? 'alert' : 'status'}
-              title={navigationNotice.message}
-            >
-              {navigationNotice.message}
-            </span>
-          )}
-        </div>
-        <div className="epub-reader-header-actions">
-          <ResourceTaskLinks
-            kind="ebook"
-            identity={selection.progressKey}
-            bookId={
-              selection.bookId || epubBookIdentity(selection.relativePath)
-            }
-            onOpenTask={onOpenTask}
-          />
-          <button
-            type="button"
-            className="epub-reader-tool"
-            onClick={() =>
-              onCreateTask({ href: sectionHref, label: chapterTitle })
-            }
-            disabled={loading}
-            title="将当前章节加入任务工作台"
-          >
-            添加任务
-          </button>
-          <button
-            type="button"
-            className="epub-reader-tool epub-reader-exam-generate"
-            onClick={() => {
-              if (!examDraft && !unsavedExam) {
-                setExamQuestionCount('10');
-                setExamScope('section');
-                setExamMix(
-                  defaultExamMix(10, /\bC\b|C语言|C Primer/iu.test(title)),
-                );
-                setExamDifficulty('medium');
-                setExamError('');
-              }
-              setExamDialogOpen(true);
-            }}
-            disabled={loading || examGenerating}
-            title="根据当前阅读段落生成试卷"
-          >
-            {unsavedExam ? '重试保存试卷' : '生成试卷'}
-          </button>
-          {translating ? (
-            <button
-              type="button"
-              className="epub-reader-tool epub-reader-bilingual-btn is-translating"
-              disabled
-              title={`正在逐段翻译本章（${transProgress.done}/${transProgress.total}）`}
-            >
+      <ReaderHeader
+        className="epub-reader-header"
+        headingClassName="epub-reader-book-heading"
+        actionsClassName="epub-reader-header-actions"
+        eyebrow="LOCAL EPUB · READER"
+        title={title}
+        afterTitle={
+          <>
+            {author && <span className="epub-reader-author">{author}</span>}
+            {navigationNotice && (
               <span
-                className="epub-reader-bilingual-spinner"
-                aria-hidden="true"
-              />
-              翻译中 {transProgress.done}/{transProgress.total}
-            </button>
-          ) : !hasTranslation ? (
+                className={`epub-reader-navigation-notice is-${navigationNotice.kind}`}
+                role={navigationNotice.kind === 'error' ? 'alert' : 'status'}
+                title={navigationNotice.message}
+              >
+                {navigationNotice.message}
+              </span>
+            )}
+          </>
+        }
+        actions={
+          <>
             <button
               type="button"
-              className="epub-reader-tool epub-reader-bilingual-btn"
-              onClick={() => void startTranslateCurrentChapter()}
-              disabled={loading}
-              title="翻译当前章节（逐段双语对照，自动本地持久化保存）"
+              className="epub-reader-tool"
+              onClick={() => {
+                setSidebarOpen(true);
+                setSidebarSection('toc');
+              }}
+              aria-label="打开目录"
             >
-              <span className="epub-reader-bilingual-icon" aria-hidden="true">
-                文/A
-              </span>
-              翻译本章
+              目录
             </button>
-          ) : (
-            <div className="epub-reader-bilingual-group">
-              <button
-                type="button"
-                className={`epub-reader-tool epub-reader-bilingual-btn ${bilingualActive ? 'is-active' : ''}`}
-                onClick={toggleBilingualMode}
-                title={
-                  bilingualActive ? '隐藏双语对照译文' : '显示双语对照译文'
-                }
-              >
-                <span className="epub-reader-bilingual-icon" aria-hidden="true">
-                  文/A
-                </span>
-                双语 · {bilingualActive ? '开' : '关'}
-              </button>
-              <details
-                className="epub-reader-bilingual-menu"
-                ref={bilingualMenuRef}
-              >
-                <summary
-                  className="epub-reader-tool epub-reader-bilingual-menu-trigger"
-                  title="译文管理选项"
-                  aria-label="译文管理选项"
+            <button
+              type="button"
+              className="epub-reader-tool"
+              onClick={() => {
+                setSidebarOpen(true);
+                setSearchOpen(true);
+              }}
+              aria-label="搜索本书"
+            >
+              搜索
+            </button>
+            <button
+              type="button"
+              className="epub-reader-tool"
+              onClick={() => toggleBookmarkAt()}
+              disabled={!currentCfi}
+              aria-pressed={currentBookmarkExists}
+              aria-label={
+                currentBookmarkExists ? '移除当前位置书签' : '添加当前位置书签'
+              }
+            >
+              {currentBookmarkExists ? '已加书签' : '书签'}
+            </button>
+            <button
+              type="button"
+              className="epub-reader-tool"
+              onClick={() => {
+                setSidebarOpen(true);
+                window.requestAnimationFrame(() => {
+                  if (readerSettingsDetailsRef.current)
+                    readerSettingsDetailsRef.current.open = true;
+                });
+              }}
+              aria-label="打开阅读设置"
+            >
+              阅读设置
+            </button>
+            <details className="epub-reader-study-menu">
+              <summary className="epub-reader-tool">学习工具</summary>
+              <div className="epub-reader-study-menu-panel">
+                <ResourceTaskLinks
+                  kind="ebook"
+                  identity={selection.progressKey}
+                  bookId={
+                    selection.bookId || epubBookIdentity(selection.relativePath)
+                  }
+                  onOpenTask={onOpenTask}
+                />
+                <button
+                  type="button"
+                  className="epub-reader-tool"
+                  onClick={() =>
+                    onCreateTask({ href: sectionHref, label: chapterTitle })
+                  }
+                  disabled={loading}
+                  title="将当前章节加入任务工作台"
                 >
-                  ▾
-                </summary>
-                <div className="epub-reader-bilingual-dropdown">
+                  添加任务
+                </button>
+                <button
+                  type="button"
+                  className="epub-reader-tool epub-reader-exam-generate"
+                  onClick={() => {
+                    if (!examDraft && !unsavedExam) {
+                      setExamQuestionCount('10');
+                      setExamScope('section');
+                      setExamMix(
+                        defaultExamMix(
+                          10,
+                          /\bC\b|C语言|C Primer/iu.test(title),
+                        ),
+                      );
+                      setExamDifficulty('medium');
+                      setExamError('');
+                    }
+                    setExamDialogOpen(true);
+                  }}
+                  disabled={loading || examGenerating}
+                  title="根据当前阅读段落生成试卷"
+                >
+                  {unsavedExam ? '重试保存试卷' : '生成试卷'}
+                </button>
+                {translating ? (
                   <button
                     type="button"
-                    onClick={() => {
-                      bilingualMenuRef.current?.removeAttribute('open');
-                      void startTranslateCurrentChapter(true);
-                    }}
+                    className="epub-reader-tool epub-reader-bilingual-btn is-translating"
+                    disabled
+                    title={`正在逐段翻译本章（${transProgress.done}/${transProgress.total}）`}
                   >
-                    重新翻译本章
+                    <span
+                      className="epub-reader-bilingual-spinner"
+                      aria-hidden="true"
+                    />
+                    翻译中 {transProgress.done}/{transProgress.total}
                   </button>
+                ) : !hasTranslation ? (
                   <button
                     type="button"
-                    onClick={() => {
-                      bilingualMenuRef.current?.removeAttribute('open');
-                      void handleCopyChapterTranslation();
-                    }}
+                    className="epub-reader-tool epub-reader-bilingual-btn"
+                    onClick={() => void startTranslateCurrentChapter()}
+                    disabled={loading}
+                    title="翻译当前章节（逐段双语对照，自动本地持久化保存）"
                   >
-                    复制本章译文
+                    <span
+                      className="epub-reader-bilingual-icon"
+                      aria-hidden="true"
+                    >
+                      文/A
+                    </span>
+                    翻译本章
                   </button>
-                  <button
-                    type="button"
-                    className="is-danger"
-                    onClick={() => {
-                      bilingualMenuRef.current?.removeAttribute('open');
-                      void handleClearChapterTranslation();
-                    }}
-                  >
-                    清除本章译文
-                  </button>
-                </div>
-              </details>
-            </div>
-          )}
-          <button
-            type="button"
-            className="epub-reader-tool epub-reader-sidebar-toggle"
-            aria-pressed={sidebarOpen}
-            aria-label={sidebarOpen ? '收起目录侧栏' : '显示目录侧栏'}
-            title={sidebarOpen ? '收起目录侧栏' : '显示目录侧栏'}
-            onClick={() => setSidebarOpen((open) => !open)}
-          >
-            目录
-          </button>
-          <button
-            type="button"
-            className="epub-reader-close"
-            onClick={onClose}
-            aria-label="关闭阅读器"
-            title="关闭阅读器（Esc）"
-          >
-            ×
-          </button>
-        </div>
-      </header>
+                ) : (
+                  <div className="epub-reader-bilingual-group">
+                    <button
+                      type="button"
+                      className={`epub-reader-tool epub-reader-bilingual-btn ${bilingualActive ? 'is-active' : ''}`}
+                      onClick={toggleBilingualMode}
+                      title={
+                        bilingualActive
+                          ? '隐藏双语对照译文'
+                          : '显示双语对照译文'
+                      }
+                    >
+                      <span
+                        className="epub-reader-bilingual-icon"
+                        aria-hidden="true"
+                      >
+                        文/A
+                      </span>
+                      双语 · {bilingualActive ? '开' : '关'}
+                    </button>
+                    <details
+                      className="epub-reader-bilingual-menu"
+                      ref={bilingualMenuRef}
+                    >
+                      <summary
+                        className="epub-reader-tool epub-reader-bilingual-menu-trigger"
+                        title="译文管理选项"
+                        aria-label="译文管理选项"
+                      >
+                        ▾
+                      </summary>
+                      <div className="epub-reader-bilingual-dropdown">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            bilingualMenuRef.current?.removeAttribute('open');
+                            void startTranslateCurrentChapter(true);
+                          }}
+                        >
+                          重新翻译本章
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            bilingualMenuRef.current?.removeAttribute('open');
+                            void handleCopyChapterTranslation();
+                          }}
+                        >
+                          复制本章译文
+                        </button>
+                        <button
+                          type="button"
+                          className="is-danger"
+                          onClick={() => {
+                            bilingualMenuRef.current?.removeAttribute('open');
+                            void handleClearChapterTranslation();
+                          }}
+                        >
+                          清除本章译文
+                        </button>
+                      </div>
+                    </details>
+                  </div>
+                )}
+              </div>
+            </details>
+            <button
+              type="button"
+              className="epub-reader-close"
+              onClick={onClose}
+              aria-label="关闭阅读器"
+              title="关闭阅读器（Esc）"
+            >
+              ×
+            </button>
+          </>
+        }
+      />
 
       <div
         className={`epub-reader-layout${sidebarOpen ? '' : ' is-toc-closed'}`}
@@ -2760,12 +2851,15 @@ export default function EpubReader({
                 className={`epub-reader-sidebar-icon${searchOpen ? ' is-active' : ''}`}
                 aria-label="全文查找"
                 aria-expanded={searchOpen}
-                title="全文查找"
+                title="全文查找（Ctrl+F）"
                 onClick={() => setSearchOpen((open) => !open)}
               >
                 <ReaderIcon name="search" />
               </button>
-              <details className="epub-reader-settings">
+              <details
+                className="epub-reader-settings"
+                ref={readerSettingsDetailsRef}
+              >
                 <summary
                   className="epub-reader-sidebar-icon"
                   aria-label="阅读设置"
@@ -2906,9 +3000,18 @@ export default function EpubReader({
                     <div>
                       <input
                         id="epub-reader-search-input"
+                        ref={searchInputRef}
                         value={searchQuery}
                         maxLength={120}
-                        onChange={(event) => setSearchQuery(event.target.value)}
+                        onChange={(event) => {
+                          searchRequestRef.current += 1;
+                          viewRef.current?.clearSearch?.();
+                          setSearchBusy(false);
+                          setSearchResults([]);
+                          setSearchProgress(0);
+                          setSearchError('');
+                          setSearchQuery(event.target.value);
+                        }}
                         placeholder="输入要查找的文字"
                       />
                       <button
@@ -3334,6 +3437,7 @@ export default function EpubReader({
                     ? 'md'
                     : 'sm'
               }
+              data-expanded={selectionToolsExpanded ? 'true' : 'false'}
               style={{
                 left: `${selectionToolbarPosition?.left ?? selectionDraft.left}px`,
                 top: `${selectionToolbarPosition?.top ?? selectionDraft.top}px`,
@@ -3414,7 +3518,31 @@ export default function EpubReader({
                 </button>
                 <button
                   type="button"
-                  className="epub-reader-selection-ai"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    void navigator.clipboard
+                      .writeText(selectionDraft.text)
+                      .then(() => setSelectionCopyStatus('已复制选中文字'))
+                      .catch(() =>
+                        setSelectionCopyStatus('复制失败，请使用 Ctrl+C'),
+                      );
+                  }}
+                >
+                  复制
+                </button>
+                <button
+                  type="button"
+                  aria-expanded={selectionToolsExpanded}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() =>
+                    setSelectionToolsExpanded((expanded) => !expanded)
+                  }
+                >
+                  {selectionToolsExpanded ? '收起' : '更多'}
+                </button>
+                <button
+                  type="button"
+                  className="epub-reader-selection-ai epub-reader-selection-extra"
                   disabled={aiAnalysisBusy}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => void analyzeSelectedText()}
@@ -3425,12 +3553,44 @@ export default function EpubReader({
                 </button>
                 <button
                   type="button"
+                  className="epub-reader-selection-extra"
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={wakeAi}
                   title="在右侧终端中向 AI 提问，并可为此选区提议脚注"
                 >
                   问终端 AI
                 </button>
+                {onSendSelectionToCodeLab &&
+                  (['python', 'c', 'cpp'] as const).map((codeLanguage) => (
+                    <button
+                      key={codeLanguage}
+                      type="button"
+                      className="epub-reader-selection-extra"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => {
+                        onSendSelectionToCodeLab(
+                          codeLanguage,
+                          selectionDraft.text,
+                          {
+                            kind: 'epub',
+                            title,
+                            locator:
+                              selectionDraft.label ||
+                              `章节 ${selectionDraft.sectionIndex + 1}`,
+                            reference: selectionDraft.cfi,
+                          },
+                        );
+                        setSelectionDraft(null);
+                      }}
+                      title="把选中代码连同书籍章节定位发送到实验本"
+                    >
+                      {codeLanguage === 'python'
+                        ? '送入 Python'
+                        : codeLanguage === 'cpp'
+                          ? '送入 C++'
+                          : '送入 C'}
+                    </button>
+                  ))}
                 <button
                   type="button"
                   className="epub-reader-selection-dismiss"
@@ -3441,6 +3601,14 @@ export default function EpubReader({
                   ×
                 </button>
               </div>
+              {selectionCopyStatus && (
+                <small
+                  className="epub-reader-selection-copy-status"
+                  role="status"
+                >
+                  {selectionCopyStatus}
+                </small>
+              )}
               <div
                 className="epub-reader-ai-format-bar"
                 role="group"

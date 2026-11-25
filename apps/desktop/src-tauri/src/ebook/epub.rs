@@ -24,6 +24,7 @@ const MAX_AI_CHAPTER_TEXT_CHARS: usize = 4_000;
 const MAX_IMPORT_WARNINGS: usize = 20;
 const DC_NAMESPACE: &str = "http://purl.org/dc/elements/1.1/";
 const EPUB_NAMESPACE: &str = "http://www.idpf.org/2007/ops";
+const EPUB_LEGACY_NAMESPACE: &str = "http://www.idpf.org/2011/epub";
 const NCX_MEDIA_TYPE: &str = "application/x-dtbncx+xml";
 
 #[derive(Serialize)]
@@ -213,23 +214,73 @@ fn read_epub_navigation<R: Read + Seek>(
     let package = parse_package(&package_xml)?;
     drop(package_xml);
 
-    let mut parse_warnings = Vec::new();
-    let (nodes, chapter_count) = if let Some(nav_href) = package.nav_href.as_deref() {
-        let nav_path = resolve_package_href(&package_path, nav_href)?;
-        let nav_xml = read_zip_xml(archive, &nav_path)?;
-        parse_epub3_nav(&nav_xml, &nav_path, &mut parse_warnings)?
-    } else if let Some(ncx_href) = package.ncx_href.as_deref() {
-        let ncx_path = resolve_package_href(&package_path, ncx_href)?;
-        let ncx_xml = read_zip_xml(archive, &ncx_path)?;
-        parse_epub2_ncx(&ncx_xml, &ncx_path, &mut parse_warnings)?
-    } else {
-        return Err("这本书没有可用的 EPUB 目录（EPUB 3 nav 或 EPUB 2 NCX）。".to_string());
-    };
-
-    if nodes.is_empty() || chapter_count == 0 {
-        return Err("没有在 EPUB 目录中找到可导入的章节。".to_string());
+    let mut nav_error = None;
+    if let Some(nav_href) = package.nav_href.as_deref() {
+        let mut warnings = Vec::new();
+        let result = (|| {
+            let nav_path = resolve_package_href(&package_path, nav_href)?;
+            let nav_xml = read_zip_xml(archive, &nav_path)?;
+            parse_epub3_nav(&nav_xml, &nav_path, &mut warnings)
+        })();
+        match result {
+            Ok((nodes, chapter_count))
+                if !nodes.is_empty() && chapter_count > 0 && has_navigable_target(&nodes) =>
+            {
+                return Ok((package, nodes, chapter_count, warnings));
+            }
+            Ok(_) => nav_error = Some("EPUB 3 导航文件中没有可跳转的章节。".to_string()),
+            Err(error) => nav_error = Some(error),
+        }
     }
-    Ok((package, nodes, chapter_count, parse_warnings))
+
+    if let Some(ncx_href) = package.ncx_href.as_deref() {
+        let mut warnings = Vec::new();
+        let result = (|| {
+            let ncx_path = resolve_package_href(&package_path, ncx_href)?;
+            let ncx_xml = read_zip_xml(archive, &ncx_path)?;
+            parse_epub2_ncx(&ncx_xml, &ncx_path, &mut warnings)
+        })();
+        match result {
+            Ok((nodes, chapter_count))
+                if !nodes.is_empty() && chapter_count > 0 && has_navigable_target(&nodes) =>
+            {
+                if let Some(error) = nav_error {
+                    let mut fallback_warnings = Vec::new();
+                    push_import_warning(
+                        &mut fallback_warnings,
+                        format!("EPUB 3 目录不可用，已改用 NCX：{error}"),
+                    );
+                    for warning in warnings {
+                        push_import_warning(&mut fallback_warnings, warning);
+                    }
+                    warnings = fallback_warnings;
+                }
+                return Ok((package, nodes, chapter_count, warnings));
+            }
+            Ok(_) => {
+                let error = "EPUB 2 NCX 中没有可跳转的章节。";
+                return Err(match nav_error {
+                    Some(nav_error) => format!("{nav_error}；{error}"),
+                    None => error.to_string(),
+                });
+            }
+            Err(error) => {
+                return Err(match nav_error {
+                    Some(nav_error) => format!("{nav_error}；NCX 回退也失败：{error}"),
+                    None => error,
+                });
+            }
+        }
+    }
+
+    Err(nav_error
+        .unwrap_or_else(|| "这本书没有可用的 EPUB 目录（EPUB 3 nav 或 EPUB 2 NCX）。".to_string()))
+}
+
+fn has_navigable_target(nodes: &[OutlineNode]) -> bool {
+    nodes
+        .iter()
+        .any(|node| node.target.is_some() || has_navigable_target(&node.children))
 }
 
 fn read_zip_xml<R: Read + Seek>(archive: &mut ZipArchive<R>, name: &str) -> Result<String, String> {
@@ -308,15 +359,214 @@ fn decode_utf16(bytes: &[u8], little_endian: bool) -> Result<String, ()> {
 }
 
 fn parse_xml<'input>(xml: &'input str, description: &str) -> Result<Document<'input>, String> {
+    parse_xml_with_options(xml, description, false)
+}
+
+fn parse_navigation_xml<'input>(
+    xml: &'input str,
+    description: &str,
+) -> Result<Document<'input>, String> {
+    // EPUB permits internal DTD declarations. No external entity resolver is supplied.
+    parse_xml_with_options(xml, description, true)
+}
+
+fn parse_xml_with_options<'input>(
+    xml: &'input str,
+    description: &str,
+    allow_dtd: bool,
+) -> Result<Document<'input>, String> {
     Document::parse_with_options(
         xml,
         ParsingOptions {
-            allow_dtd: false,
+            allow_dtd,
             nodes_limit: MAX_XML_NODES,
+            entity_resolver: None,
             ..ParsingOptions::default()
         },
     )
-    .map_err(|_| format!("{description}不是有效或受支持的 XML。"))
+    .map_err(|error| match error {
+        roxmltree::Error::NodesLimitReached => {
+            format!("{description}的 XML 节点超过 {MAX_XML_NODES} 个。")
+        }
+        roxmltree::Error::DtdDetected => {
+            format!("{description}包含当前解析器不支持的 DTD 声明。")
+        }
+        _ => {
+            let position = error.pos();
+            format!(
+                "{description}的 XML 解析失败（第 {} 行、第 {} 列）：{error}。",
+                position.row, position.col
+            )
+        }
+    })
+}
+
+// Some otherwise readable books put HTML entities or bare ampersands in nav.xhtml.
+// Only repair text and quoted attribute values; leave comments, CDATA and DTDs intact.
+fn repair_common_xml_entities(xml: &str) -> Option<String> {
+    #[derive(Clone, Copy)]
+    enum Region {
+        Text,
+        Tag,
+        SingleQuoted,
+        DoubleQuoted,
+        Comment,
+        Cdata,
+        ProcessingInstruction,
+    }
+
+    fn named_entity(name: &str) -> Option<&'static str> {
+        match name.to_ascii_lowercase().as_str() {
+            "nbsp" => Some("&#160;"),
+            "mdash" => Some("&#8212;"),
+            "ndash" => Some("&#8211;"),
+            "ldquo" => Some("&#8220;"),
+            "rdquo" => Some("&#8221;"),
+            "lsquo" => Some("&#8216;"),
+            "rsquo" => Some("&#8217;"),
+            "hellip" => Some("&#8230;"),
+            "copy" => Some("&#169;"),
+            "reg" => Some("&#174;"),
+            "trade" => Some("&#8482;"),
+            "bull" => Some("&#8226;"),
+            "middot" => Some("&#183;"),
+            _ => None,
+        }
+    }
+
+    let bytes = xml.as_bytes();
+    let mut output = String::with_capacity(xml.len());
+    let mut region = Region::Text;
+    let mut i = 0;
+    let mut copied_until = 0;
+    let mut changed = false;
+    while i < bytes.len() {
+        match region {
+            Region::Text if bytes[i..].starts_with(b"<!--") => {
+                region = Region::Comment;
+                i += 4;
+            }
+            Region::Text if bytes[i..].starts_with(b"<![CDATA[") => {
+                region = Region::Cdata;
+                i += 9;
+            }
+            Region::Text if bytes[i..].starts_with(b"<!DOCTYPE") => {
+                // A DTD can contain quoted '>' characters and an internal subset.
+                let mut subset_depth = 0_usize;
+                let mut quote = None;
+                i += 9;
+                while i < bytes.len() {
+                    let byte = bytes[i];
+                    if let Some(delimiter) = quote {
+                        if byte == delimiter {
+                            quote = None;
+                        }
+                    } else {
+                        match byte {
+                            b'\'' | b'"' => quote = Some(byte),
+                            b'[' => subset_depth += 1,
+                            b']' => subset_depth = subset_depth.saturating_sub(1),
+                            b'>' if subset_depth == 0 => {
+                                i += 1;
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    i += 1;
+                }
+            }
+            Region::Text if bytes[i..].starts_with(b"<?") => {
+                region = Region::ProcessingInstruction;
+                i += 2;
+            }
+            Region::Text if bytes[i] == b'<' => {
+                region = Region::Tag;
+                i += 1;
+            }
+            Region::Tag if bytes[i] == b'\'' => {
+                region = Region::SingleQuoted;
+                i += 1;
+            }
+            Region::Tag if bytes[i] == b'"' => {
+                region = Region::DoubleQuoted;
+                i += 1;
+            }
+            Region::Tag if bytes[i] == b'>' => {
+                region = Region::Text;
+                i += 1;
+            }
+            Region::SingleQuoted if bytes[i] == b'\'' => {
+                region = Region::Tag;
+                i += 1;
+            }
+            Region::DoubleQuoted if bytes[i] == b'"' => {
+                region = Region::Tag;
+                i += 1;
+            }
+            Region::Comment if bytes[i..].starts_with(b"-->") => {
+                region = Region::Text;
+                i += 3;
+            }
+            Region::Cdata if bytes[i..].starts_with(b"]]>") => {
+                region = Region::Text;
+                i += 3;
+            }
+            Region::ProcessingInstruction if bytes[i..].starts_with(b"?>") => {
+                region = Region::Text;
+                i += 2;
+            }
+            Region::Text | Region::SingleQuoted | Region::DoubleQuoted if bytes[i] == b'&' => {
+                let start = i + 1;
+                let mut end = start;
+                let mut replacement = None;
+                if bytes.get(start).is_some_and(u8::is_ascii_alphabetic) {
+                    while bytes.get(end).is_some_and(u8::is_ascii_alphanumeric) {
+                        end += 1;
+                    }
+                    if bytes.get(end) == Some(&b';') {
+                        replacement = named_entity(&xml[start..end]).map(|value| (end + 1, value));
+                        if replacement.is_none() {
+                            i += 1; // XML predefined or an entity declared in a DTD.
+                            continue;
+                        }
+                    }
+                } else if bytes.get(start) == Some(&b'#') {
+                    end += 1;
+                    let hexadecimal = matches!(bytes.get(end), Some(b'x' | b'X'));
+                    if hexadecimal {
+                        end += 1;
+                    }
+                    let digits_start = end;
+                    while bytes.get(end).is_some_and(|byte| {
+                        if hexadecimal {
+                            byte.is_ascii_hexdigit()
+                        } else {
+                            byte.is_ascii_digit()
+                        }
+                    }) {
+                        end += 1;
+                    }
+                    if end > digits_start && bytes.get(end) == Some(&b';') {
+                        i += 1;
+                        continue;
+                    }
+                }
+                let (next, value) = replacement.unwrap_or((i + 1, "&amp;"));
+                output.push_str(&xml[copied_until..i]);
+                output.push_str(value);
+                copied_until = next;
+                i = next;
+                changed = true;
+            }
+            _ => i += 1,
+        }
+    }
+    if !changed {
+        return None;
+    }
+    output.push_str(&xml[copied_until..]);
+    Some(output)
 }
 
 fn parse_container(xml: &str) -> Result<String, String> {
@@ -409,22 +659,93 @@ fn parse_epub3_nav(
     nav_path: &str,
     warnings: &mut Vec<String>,
 ) -> Result<(Vec<OutlineNode>, usize), String> {
-    let document = parse_xml(xml, "EPUB 3 导航文件")?;
-    let toc_nav = document
+    let description = format!("EPUB 3 导航文件（{nav_path}）");
+    let document = match parse_navigation_xml(xml, &description) {
+        Ok(document) => document,
+        Err(original_error) => {
+            if let Some(repaired) = repair_common_xml_entities(xml) {
+                if let Ok(document) = parse_navigation_xml(&repaired, &description) {
+                    let result = parse_epub3_nav_document(&document, nav_path, warnings);
+                    if result.is_ok() {
+                        push_import_warning(
+                            warnings,
+                            "导航文件包含不规范的 XML 实体，已兼容读取目录。".to_string(),
+                        );
+                    }
+                    return result;
+                }
+            }
+            return Err(original_error);
+        }
+    };
+    parse_epub3_nav_document(&document, nav_path, warnings)
+}
+
+fn parse_epub3_nav_document(
+    document: &Document<'_>,
+    nav_path: &str,
+    warnings: &mut Vec<String>,
+) -> Result<(Vec<OutlineNode>, usize), String> {
+    let navs: Vec<_> = document
         .descendants()
-        .find(|node| {
-            node.is_element()
-                && node.tag_name().name() == "nav"
-                && node
-                    .attribute((EPUB_NAMESPACE, "type"))
-                    .is_some_and(|value| value.split_whitespace().any(|token| token == "toc"))
+        .filter(|node| has_local_name(*node, "nav"))
+        .collect();
+    let has_type = |node: Node<'_, '_>, namespace: &str, value: &str| {
+        node.attribute((namespace, "type"))
+            .is_some_and(|types| types.split_whitespace().any(|token| token == value))
+    };
+    let has_list = |node: Node<'_, '_>| node.children().any(|child| has_local_name(child, "ol"));
+    let toc_nav = navs
+        .iter()
+        .copied()
+        .find(|node| has_type(*node, EPUB_NAMESPACE, "toc"))
+        .or_else(|| {
+            let legacy = navs
+                .iter()
+                .copied()
+                .find(|node| has_type(*node, EPUB_LEGACY_NAMESPACE, "toc"));
+            if legacy.is_some() {
+                push_import_warning(
+                    warnings,
+                    "目录使用旧版 epub:type 命名空间，已兼容读取。".to_string(),
+                );
+            }
+            legacy
         })
         .or_else(|| {
-            document.descendants().find(|node| {
-                has_local_name(*node, "nav")
-                    && node.attribute((EPUB_NAMESPACE, "type")).is_none()
-                    && node.children().any(|child| has_local_name(child, "ol"))
-            })
+            let identified = navs.iter().copied().find(|node| {
+                has_list(*node)
+                    && !nav_declares_other_navigation(*node)
+                    && (node.attribute("id") == Some("toc")
+                        || node.attribute("role").is_some_and(|roles| {
+                            roles.split_whitespace().any(|role| role == "doc-toc")
+                        }))
+            });
+            if identified.is_some() {
+                push_import_warning(
+                    warnings,
+                    "目录未使用标准 epub:type，已按 toc 标识读取。".to_string(),
+                );
+            }
+            identified
+        })
+        .or_else(|| {
+            let mut candidates = navs.iter().copied().filter(|node| {
+                has_list(*node)
+                    && !node
+                        .attributes()
+                        .any(|attribute| attribute.name() == "type")
+            });
+            let candidate = candidates.next();
+            if candidate.is_some() && candidates.next().is_none() {
+                push_import_warning(
+                    warnings,
+                    "目录没有 epub:type 标识，已读取唯一的导航列表。".to_string(),
+                );
+                candidate
+            } else {
+                None
+            }
         })
         .ok_or_else(|| "EPUB 3 导航文件中没有目录列表。".to_string())?;
     let list = toc_nav
@@ -434,6 +755,16 @@ fn parse_epub3_nav(
     let mut count = 0;
     let nodes = parse_html_list(list, 1, &mut count, nav_path, warnings)?;
     Ok((nodes, count))
+}
+
+fn nav_declares_other_navigation(node: Node<'_, '_>) -> bool {
+    node.attributes().any(|attribute| {
+        attribute.name() == "type"
+            && attribute
+                .value()
+                .split_whitespace()
+                .any(|value| matches!(value, "landmarks" | "page-list"))
+    })
 }
 
 fn parse_html_list(
@@ -499,7 +830,33 @@ fn parse_epub2_ncx(
     ncx_path: &str,
     warnings: &mut Vec<String>,
 ) -> Result<(Vec<OutlineNode>, usize), String> {
-    let document = parse_xml(xml, "EPUB 2 NCX 目录文件")?;
+    let description = format!("EPUB 2 NCX 目录文件（{ncx_path}）");
+    let document = match parse_navigation_xml(xml, &description) {
+        Ok(document) => document,
+        Err(original_error) => {
+            if let Some(repaired) = repair_common_xml_entities(xml) {
+                if let Ok(document) = parse_navigation_xml(&repaired, &description) {
+                    let result = parse_epub2_ncx_document(&document, ncx_path, warnings);
+                    if result.is_ok() {
+                        push_import_warning(
+                            warnings,
+                            "NCX 包含不规范的 XML 实体，已兼容读取目录。".to_string(),
+                        );
+                    }
+                    return result;
+                }
+            }
+            return Err(original_error);
+        }
+    };
+    parse_epub2_ncx_document(&document, ncx_path, warnings)
+}
+
+fn parse_epub2_ncx_document(
+    document: &Document<'_>,
+    ncx_path: &str,
+    warnings: &mut Vec<String>,
+) -> Result<(Vec<OutlineNode>, usize), String> {
     let nav_map = document
         .descendants()
         .find(|node| has_local_name(*node, "navMap"))
@@ -1447,5 +1804,174 @@ fn hex_value(value: u8) -> Option<u8> {
         b'a'..=b'f' => Some(value - b'a' + 10),
         b'A'..=b'F' => Some(value - b'A' + 10),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Cursor, Write};
+    use zip::{write::SimpleFileOptions, ZipWriter};
+
+    fn epub_with_navigation(nav: &str, ncx: Option<&str>) -> ZipArchive<Cursor<Vec<u8>>> {
+        let mut cursor = Cursor::new(Vec::new());
+        {
+            let mut writer = ZipWriter::new(&mut cursor);
+            let options = SimpleFileOptions::default();
+            let container = r#"<?xml version="1.0"?><container><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
+            let package = format!(
+                r#"<?xml version="1.0"?><package><metadata><title>Test</title></metadata><manifest><item id="nav" href="nav.xhtml" properties="nav" media-type="application/xhtml+xml"/>{}</manifest><spine{}/></package>"#,
+                if ncx.is_some() {
+                    r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>"#
+                } else {
+                    ""
+                },
+                if ncx.is_some() { r#" toc="ncx""# } else { "" },
+            );
+            for (name, content) in [
+                ("META-INF/container.xml", container),
+                ("OEBPS/content.opf", package.as_str()),
+                ("OEBPS/nav.xhtml", nav),
+            ] {
+                writer.start_file(name, options).unwrap();
+                writer.write_all(content.as_bytes()).unwrap();
+            }
+            if let Some(ncx) = ncx {
+                writer.start_file("OEBPS/toc.ncx", options).unwrap();
+                writer.write_all(ncx.as_bytes()).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        cursor.set_position(0);
+        ZipArchive::new(cursor).unwrap()
+    }
+
+    #[test]
+    fn imports_valid_epub3_navigation() {
+        let nav = r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="chapter.xhtml#start">第一章</a><ol><li><a href="chapter.xhtml#section">小节</a></li></ol></li></ol></nav></body></html>"#;
+        let mut archive = epub_with_navigation(nav, None);
+        let (_, nodes, count, warnings) = read_epub_navigation(&mut archive).unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(nodes[0].label, "第一章");
+        assert_eq!(nodes[0].children[0].label, "小节");
+        assert_eq!(
+            nodes[0].target.as_ref().unwrap().path,
+            "OEBPS/chapter.xhtml"
+        );
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn repairs_common_entities_only_when_needed() {
+        let nav = r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="a.xhtml?x=1&y=2">甲&nbsp;乙 & 丙</a></li></ol></nav></body></html>"#;
+        let mut archive = epub_with_navigation(nav, None);
+        let (_, nodes, count, warnings) = read_epub_navigation(&mut archive).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(nodes[0].label, "甲 乙 & 丙");
+        assert!(warnings.iter().any(|warning| warning.contains("XML 实体")));
+    }
+
+    #[test]
+    fn entity_repair_leaves_cdata_and_comments_untouched() {
+        let xml = "<!-- &nbsp; --><nav title='A & B'><![CDATA[&nbsp;]]>甲&nbsp;乙</nav>";
+        let repaired = repair_common_xml_entities(xml).unwrap();
+        assert_eq!(
+            repaired,
+            "<!-- &nbsp; --><nav title='A &amp; B'><![CDATA[&nbsp;]]>甲&#160;乙</nav>"
+        );
+    }
+
+    #[test]
+    fn falls_back_to_ncx_when_epub3_nav_is_broken() {
+        let ncx = r#"<ncx><navMap><navPoint><navLabel><text>备用章节</text></navLabel><content src="chapter.xhtml"/></navPoint></navMap></ncx>"#;
+        let mut archive = epub_with_navigation("<html><nav>", Some(ncx));
+        let (_, nodes, count, warnings) = read_epub_navigation(&mut archive).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(nodes[0].label, "备用章节");
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("已改用 NCX")));
+    }
+
+    #[test]
+    fn falls_back_when_nav_has_labels_but_no_links() {
+        let nav = r#"<html xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><span>只有标题</span></li></ol></nav></body></html>"#;
+        let ncx = r#"<ncx><navMap><navPoint><navLabel><text>可跳转章节</text></navLabel><content src="chapter.xhtml"/></navPoint></navMap></ncx>"#;
+        let mut archive = epub_with_navigation(nav, Some(ncx));
+        let (_, nodes, count, warnings) = read_epub_navigation(&mut archive).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(nodes[0].label, "可跳转章节");
+        assert!(warnings.first().unwrap().contains("已改用 NCX"));
+    }
+
+    #[test]
+    fn chooses_toc_after_landmarks_with_legacy_epub_namespace() {
+        let nav = r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2011/epub"><body><nav epub:type="landmarks"><ol><li><a href="nav.xhtml">Table of Contents</a></li><li><a href="cover.xhtml">Cover</a></li></ol></nav><nav epub:type="toc"><ol><li><a href="chapter1.xhtml">第一章</a><ol><li><a href="chapter1.xhtml#one">1.1 小节</a><ol><li><a href="chapter1.xhtml#detail">1.1.1 细节</a></li></ol></li></ol></li><li><a href="chapter2.xhtml">第二章</a></li></ol></nav></body></html>"#;
+        let mut archive = epub_with_navigation(nav, None);
+        let (_, nodes, count, warnings) = read_epub_navigation(&mut archive).unwrap();
+        assert_eq!(count, 4);
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[0].label, "第一章");
+        assert_eq!(nodes[0].children[0].children[0].label, "1.1.1 细节");
+        assert!(warnings.iter().any(|warning| warning.contains("旧版")));
+    }
+
+    #[test]
+    fn uses_ncx_instead_of_an_unknown_typed_landmarks_list() {
+        let nav = r#"<html xmlns:epub="urn:unknown"><body><nav epub:type="landmarks"><ol><li><a href="cover.xhtml">Cover</a></li></ol></nav><nav epub:type="toc"><ol><li><a href="chapter.xhtml">Unrecognized</a></li></ol></nav></body></html>"#;
+        let ncx = r#"<ncx><navMap><navPoint><navLabel><text>NCX 章节</text></navLabel><content src="chapter.xhtml"/></navPoint></navMap></ncx>"#;
+        let mut archive = epub_with_navigation(nav, Some(ncx));
+        let (_, nodes, count, warnings) = read_epub_navigation(&mut archive).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(nodes[0].label, "NCX 章节");
+        assert!(warnings.first().unwrap().contains("已改用 NCX"));
+    }
+
+    #[test]
+    fn reads_internal_dtd_entity_without_external_resolution() {
+        let nav = r#"<!DOCTYPE html [<!ENTITY chapter "章节">]><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="chapter.xhtml">第一&chapter;</a></li></ol></nav></body></html>"#;
+        let mut archive = epub_with_navigation(nav, None);
+        let (_, nodes, count, _) = read_epub_navigation(&mut archive).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(nodes[0].label, "第一章节");
+    }
+
+    #[test]
+    fn repairs_ncx_entities_after_nav_failure() {
+        let ncx = r#"<ncx><navMap><navPoint><navLabel><text>备用&nbsp;章节 & 后记</text></navLabel><content src="chapter.xhtml"/></navPoint></navMap></ncx>"#;
+        let mut archive = epub_with_navigation("<html><nav>", Some(ncx));
+        let (_, nodes, count, warnings) = read_epub_navigation(&mut archive).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(nodes[0].label, "备用 章节 & 后记");
+        assert!(warnings.first().unwrap().contains("已改用 NCX"));
+        assert!(warnings.iter().any(|warning| warning.contains("XML 实体")));
+    }
+
+    #[test]
+    fn reports_both_navigation_errors_when_both_fail() {
+        let mut archive = epub_with_navigation("<html><nav>", Some("<ncx>"));
+        let error = match read_epub_navigation(&mut archive) {
+            Ok(_) => panic!("broken navigation should fail"),
+            Err(error) => error,
+        };
+        assert!(error.contains("OEBPS/nav.xhtml"));
+        assert!(error.contains("NCX 回退也失败"));
+        assert!(error.contains("OEBPS/toc.ncx"));
+    }
+
+    #[test]
+    #[ignore = "set SEAMIND_EPUB_SAMPLE and SEAMIND_EPUB_EXPECTED_TOC_COUNT to check a local book"]
+    fn imports_configured_epub_sample() {
+        let path = std::env::var("SEAMIND_EPUB_SAMPLE").expect("sample EPUB path");
+        let expected_count = std::env::var("SEAMIND_EPUB_EXPECTED_TOC_COUNT")
+            .expect("expected TOC count")
+            .parse::<usize>()
+            .expect("numeric TOC count");
+        let outline = import_epub_toc(path).expect("sample EPUB should import");
+        assert_eq!(outline.chapter_count, expected_count);
+        assert!(outline.markdown.lines().any(|line| line.starts_with("- ")));
+        assert!(outline.markdown.lines().any(|line| line.starts_with("  - ")));
+        assert!(outline.markdown.lines().any(|line| line.starts_with("    - ")));
+        assert!(outline.markdown.contains("seamind:epub-href="));
     }
 }

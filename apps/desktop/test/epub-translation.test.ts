@@ -274,20 +274,39 @@ describe('EPUB DOM Extraction and Injection', () => {
     // Style injected
     const style = doc.head.querySelector(`[id="${BILINGUAL_STYLE_ID}"]`);
     expect(style).not.toBeNull();
+    expect(style?.textContent).toContain('--seamind-trans-accent');
+    expect(style?.textContent).toContain(
+      '.seamind-bilingual-trans.is-heading-trans',
+    );
 
     // Node injected right after target
     const next = p.nextElementSibling;
     expect(next).not.toBeNull();
     expect(next?.classList.contains('seamind-bilingual-trans')).toBe(true);
+    expect(next?.classList.contains('is-heading-trans')).toBe(false);
     expect(next?.getAttribute('data-for-trans-idx')).toBe('0');
     expect(next?.textContent).toBe('你好，世界');
+
+    // Heading element receives heading-specific translation class
+    const h2 = doc.createElement('h2');
+    h2.textContent = '1.8 Systems Communicate Using Networks';
+    h2.setAttribute('data-trans-idx', '1');
+    doc.body.appendChild(h2);
+    injectTranslationsIntoDoc(doc as unknown as Document, [
+      { id: 0, translation: '你好，世界' },
+      { id: 1, translation: '1.8 系统通过网络与其他系统通信' },
+    ]);
+    expect(h2.nextElementSibling?.classList.contains('is-heading-trans')).toBe(
+      true,
+    );
 
     // Calling again with updated translation updates existing text without creating duplicate
     injectTranslationsIntoDoc(doc as unknown as Document, [
       { id: 0, translation: '你好，整个世界' },
+      { id: 1, translation: '1.8 系统通过网络与其他系统通信' },
     ]);
     expect(next?.textContent).toBe('你好，整个世界');
-    expect(doc.body.children.length).toBe(2);
+    expect(doc.body.children.length).toBe(4);
   });
 
   it('toggles visibility and removes translations', () => {

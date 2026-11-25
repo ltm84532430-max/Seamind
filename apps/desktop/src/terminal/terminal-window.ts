@@ -14,6 +14,7 @@ export interface StandaloneTerminalOptions {
   cli?: TerminalCliPreset;
   kind?: TerminalTabKind;
   labLanguage?: TerminalCodeLabLanguage;
+  labFileId?: string;
   theme?: Theme;
   title?: string;
 }
@@ -77,6 +78,7 @@ export function buildStandaloneTerminalUrl(
   if (options.cli) params.set('cli', options.cli);
   if (options.kind) params.set('kind', options.kind);
   if (options.labLanguage) params.set('lab', options.labLanguage);
+  if (options.labFileId) params.set('file', options.labFileId);
   if (options.theme) params.set('theme', options.theme);
   return `${base}?${params.toString()}`;
 }
@@ -120,7 +122,10 @@ export async function openStandaloneTerminalWindow(
               : '独立窗口创建失败',
         }),
       );
-      window.setTimeout(() => done({ ok: true, label }), 300);
+      window.setTimeout(
+        () => done({ ok: false, error: '窗口启动超时，请重试' }),
+        10000,
+      );
     });
   } catch (reason) {
     return {

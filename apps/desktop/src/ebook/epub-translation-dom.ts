@@ -12,25 +12,33 @@ export const BILINGUAL_STYLE_ID = 'seamind-bilingual-style';
 const BILINGUAL_CSS = `
 .seamind-bilingual-trans {
   display: block;
+  margin-top: 8px;
+  margin-bottom: 16px;
+  padding: 8px 14px;
+  border: 1px solid var(--seamind-trans-border, rgba(217, 87, 59, 0.24));
+  border-left: 3.5px solid var(--seamind-trans-accent, #d9573b);
+  border-radius: 4px 8px 8px 4px;
+  background-color: var(--seamind-trans-bg, rgba(217, 87, 59, 0.08));
+  color: var(--seamind-trans-fg, #1e293b) !important;
+  box-shadow: var(--seamind-trans-shadow, 0 2px 8px rgba(217, 87, 59, 0.07));
+  font-size: 0.94em;
+  line-height: 1.72;
+  font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 450;
+  letter-spacing: 0.02em;
+  text-align: justify;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+.seamind-bilingual-trans.is-heading-trans {
   margin-top: 6px;
   margin-bottom: 14px;
-  padding: 4px 8px 4px 12px;
-  border-left: 2.5px solid #6366f1;
-  font-size: 0.92em;
-  line-height: 1.6;
-  color: #475569;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-  font-weight: 400;
-  letter-spacing: 0.015em;
-  border-radius: 0 4px 4px 0;
-  background-color: rgba(99, 102, 241, 0.04);
-}
-:root[data-theme='dark'] .seamind-bilingual-trans,
-body.dark .seamind-bilingual-trans,
-[data-color-mode='dark'] .seamind-bilingual-trans {
-  color: #94a3b8;
-  border-left-color: #818cf8;
-  background-color: rgba(129, 140, 248, 0.06);
+  padding: 7px 14px;
+  background-color: var(--seamind-trans-heading-bg, rgba(217, 87, 59, 0.12));
+  font-size: 0.96em;
+  line-height: 1.55;
+  font-weight: 600;
+  letter-spacing: 0.025em;
 }
 .seamind-bilingual-hidden .seamind-bilingual-trans {
   display: none !important;
@@ -50,7 +58,13 @@ function isElement(element: unknown): element is HTMLElement {
 }
 
 export function injectBilingualStyles(doc: Document): void {
-  if (doc.getElementById(BILINGUAL_STYLE_ID)) return;
+  const existing = doc.getElementById(BILINGUAL_STYLE_ID);
+  if (existing) {
+    if (existing.textContent !== BILINGUAL_CSS) {
+      existing.textContent = BILINGUAL_CSS;
+    }
+    return;
+  }
   const style = doc.createElement('style');
   style.id = BILINGUAL_STYLE_ID;
   style.textContent = BILINGUAL_CSS;
@@ -108,6 +122,8 @@ export function injectTranslationsIntoDoc(
     );
     if (!targetElement) continue;
 
+    const isHeading = /^H[1-6]$/i.test(targetElement.tagName);
+
     // Check if translation block already exists
     const existing = targetElement.nextElementSibling;
     if (
@@ -115,12 +131,17 @@ export function injectTranslationsIntoDoc(
       existing.classList.contains('seamind-bilingual-trans') &&
       existing.getAttribute('data-for-trans-idx') === String(item.id)
     ) {
+      if (isHeading) {
+        existing.classList.add('is-heading-trans');
+      }
       existing.textContent = item.translation.trim();
       continue;
     }
 
     const transNode = doc.createElement('div');
-    transNode.className = 'seamind-bilingual-trans';
+    transNode.className = isHeading
+      ? 'seamind-bilingual-trans is-heading-trans'
+      : 'seamind-bilingual-trans';
     transNode.setAttribute('data-for-trans-idx', String(item.id));
     transNode.textContent = item.translation.trim();
     targetElement.insertAdjacentElement('afterend', transNode);

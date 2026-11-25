@@ -52,14 +52,9 @@ export function ExamBookNavSidebar({
       <div className="epub-exam-sidebar-header">
         <div className="epub-exam-sidebar-book-meta">
           <h2 title={bookTitle || '当前书籍'}>本书试卷</h2>
-          <div className="epub-exam-sidebar-stats">
-            <span>{bookTitle || '当前书籍'}</span>
-          </div>
-          <div className="epub-exam-sidebar-stats">
-            <span>共 {sortedBookExams.length} 套</span>
-            <span>·</span>
-            <span>已交 {submittedCount} 套</span>
-          </div>
+          <span className="epub-exam-sidebar-count">
+            {submittedCount}/{sortedBookExams.length} 套
+          </span>
         </div>
         <button
           type="button"
@@ -74,6 +69,12 @@ export function ExamBookNavSidebar({
 
       {!collapsed && (
         <>
+          <div
+            className="epub-exam-sidebar-book-banner"
+            title={bookTitle || '当前书籍'}
+          >
+            <span>《{bookTitle || '当前书籍'}》</span>
+          </div>
           <div className="epub-exam-sidebar-search">
             <input
               type="text"

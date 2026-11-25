@@ -1,5 +1,7 @@
 import { Util, type PDFDocumentProxy, type PDFPageProxy } from 'pdfjs-dist';
 import type { PaperAnnotationRect } from './types';
+import { bookmarkKey, preferenceKey } from './paper-reader-keys';
+export { bookmarkKey, preferenceKey } from './paper-reader-keys';
 
 export interface RawTextBox {
   str: string;
@@ -614,12 +616,6 @@ export const DEFAULT_PREFERENCES: ReaderPreferences = {
 
 export const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
-
-export const preferenceKey = (paperId: string, sha256: string) =>
-  `seamind:paper-reader:v1:${encodeURIComponent(paperId)}:${sha256}`;
-
-export const bookmarkKey = (paperId: string, sha256: string) =>
-  `seamind:paper-bookmarks:v1:${encodeURIComponent(paperId)}:${sha256}`;
 
 export function readPreferences(
   paperId: string,

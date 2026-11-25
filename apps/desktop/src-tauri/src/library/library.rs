@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeSet, HashSet},
     fs,
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     net::IpAddr,
     path::{Component, Path, PathBuf},
     sync::{mpsc, Mutex},
@@ -40,6 +40,7 @@ const MAX_GENERATED_HTML_ASSET_BYTES: usize = 256 * 1024;
 const MAX_GENERATED_HTML_ASSETS: usize = 8;
 const MAX_DOCUMENTS: usize = 50_000;
 const MAX_EPUB_BOOKS: usize = 10_000;
+const MAX_PDF_BOOKS: usize = 10_000;
 const MAX_PLANTUML_FILES: usize = 10_000;
 const MAX_PLANTUML_BYTES: u64 = 50_000;
 const MAX_TEXT_DOCUMENTS: usize = 10_000;
@@ -93,6 +94,23 @@ pub struct EpubBookDocument {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PdfBookDocument {
+    pub relative_path: String,
+    pub title: String,
+    pub category: String,
+    pub file_size: u64,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenedPdfBook {
+    pub path: String,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PlantUmlDocument {
     pub relative_path: String,
     pub title: String,
@@ -127,6 +145,7 @@ pub struct LibrarySnapshot {
     pub root_path: Option<String>,
     pub documents: Vec<MapDocument>,
     pub books: Vec<EpubBookDocument>,
+    pub pdf_books: Vec<PdfBookDocument>,
     pub plantuml_files: Vec<PlantUmlDocument>,
     pub text_documents: Vec<TextDocument>,
     pub categories: Vec<String>,
@@ -491,6 +510,30 @@ pub fn open_epub_book(app: AppHandle, relative_path: String) -> Result<String, S
 }
 
 #[tauri::command]
+pub fn open_pdf_book(app: AppHandle, relative_path: String) -> Result<OpenedPdfBook, String> {
+    let root = require_root(&app)?;
+    let relative = validate_pdf_path(&relative_path)?;
+    let path = ensure_existing_inside_root(&root, &root.join(&relative))?;
+    if !path.is_file() {
+        return Err("找不到 PDF 电子书文件。".to_string());
+    }
+    let mut file = fs::File::open(&path).map_err(|error| format!("无法打开 PDF 文件：{error}"))?;
+    if !pdf_header_is_present(&mut file)? {
+        return Err("文件不是有效的 PDF。".to_string());
+    }
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher)
+        .map_err(|error| format!("无法校验 PDF 文件：{error}"))?;
+    app.asset_protocol_scope()
+        .allow_file(&path)
+        .map_err(|error| format!("无法授权读取 PDF 文件：{error}"))?;
+    Ok(OpenedPdfBook {
+        path: path.to_string_lossy().into_owned(),
+        sha256: format!("{:x}", hasher.finalize()),
+    })
+}
+
+#[tauri::command]
 pub fn delete_epub_book(app: AppHandle, relative_path: String) -> Result<(), String> {
     let root = require_root(&app)?;
     let relative = validate_epub_path(&relative_path)?;
@@ -504,6 +547,20 @@ pub fn delete_epub_book(app: AppHandle, relative_path: String) -> Result<(), Str
     fs::remove_file(&path).map_err(|error| format!("无法删除 EPUB 文件：{error}"))?;
     crate::epub_exam::delete_epub_exams_for_book(&app, &relative_path)?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn delete_pdf_book(app: AppHandle, relative_path: String) -> Result<(), String> {
+    let root = require_root(&app)?;
+    let relative = validate_pdf_path(&relative_path)?;
+    if !relative.starts_with("books") {
+        return Err("只能删除书架中的 PDF 文件。".to_string());
+    }
+    let path = ensure_existing_inside_root(&root, &root.join(&relative))?;
+    if !path.is_file() {
+        return Err("找不到要删除的 PDF 文件。".to_string());
+    }
+    fs::remove_file(&path).map_err(|error| format!("无法删除 PDF 文件：{error}"))
 }
 
 #[tauri::command]
@@ -944,6 +1001,65 @@ pub fn import_epub_book(app: AppHandle, source_path: String) -> Result<EpubBookD
 
     Ok(EpubBookDocument {
         relative_path,
+        title,
+        category: category_from_relative(relative),
+        file_size: metadata.len(),
+        updated_at: modified_timestamp(&destination),
+    })
+}
+
+#[tauri::command]
+pub fn import_pdf_book(app: AppHandle, source_path: String) -> Result<PdfBookDocument, String> {
+    let root = require_root(&app)?;
+    let source = PathBuf::from(source_path);
+    if !source.is_file()
+        || !source
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+    {
+        return Err("请选择有效的 PDF 电子书文件。".to_string());
+    }
+    let mut source_file = fs::File::open(&source).map_err(|error| format!("无法读取 PDF：{error}"))?;
+    if !pdf_header_is_present(&mut source_file)? {
+        return Err("文件不是有效的 PDF。".to_string());
+    }
+    let source_name = source
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("未命名 PDF");
+    let title = safe_file_stem(source_name)?;
+    let books_directory = root.join("books");
+    fs::create_dir_all(&books_directory)
+        .map_err(|error| format!("无法创建电子书书架目录：{error}"))?;
+    let mut destination = books_directory.join(format!("{title}.pdf"));
+    if destination.exists() {
+        let mut available = None;
+        for number in 2..=9_999 {
+            let candidate = books_directory.join(format!("{title} ({number}).pdf"));
+            if !candidate.exists() {
+                available = Some(candidate);
+                break;
+            }
+        }
+        destination = available.ok_or_else(|| "同名 PDF 过多，无法导入。".to_string())?;
+    }
+    let temporary = books_directory.join(format!(".import-{}.tmp", Uuid::new_v4().simple()));
+    if let Err(error) = fs::copy(&source, &temporary) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!("无法复制 PDF 到书架：{error}"));
+    }
+    if let Err(error) = fs::rename(&temporary, &destination) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!("无法完成 PDF 导入：{error}"));
+    }
+    let relative = destination
+        .strip_prefix(&root)
+        .map_err(|_| "PDF 保存位置超出了文件库。".to_string())?;
+    let metadata = fs::metadata(&destination)
+        .map_err(|error| format!("无法读取已导入 PDF 的信息：{error}"))?;
+    Ok(PdfBookDocument {
+        relative_path: path_to_relative_string(relative),
         title,
         category: category_from_relative(relative),
         file_size: metadata.len(),
@@ -2257,6 +2373,7 @@ fn snapshot_for(app: &AppHandle, root: Option<PathBuf>) -> Result<LibrarySnapsho
             root_path: None,
             documents: Vec::new(),
             books: Vec::new(),
+            pdf_books: Vec::new(),
             plantuml_files: Vec::new(),
             text_documents: Vec::new(),
             categories: Vec::new(),
@@ -2265,7 +2382,8 @@ fn snapshot_for(app: &AppHandle, root: Option<PathBuf>) -> Result<LibrarySnapsho
         });
     };
     fs::create_dir_all(&root).map_err(|error| format!("无法访问文件库目录：{error}"))?;
-    let (documents, books, plantuml_files, text_documents, categories) = scan_library(&root)?;
+    let (documents, books, pdf_books, plantuml_files, text_documents, categories) =
+        scan_library(&root)?;
     let scopes = read_category_scopes(&root)?;
     let (document_categories, mindmap_categories) = scoped_categories(
         &root,
@@ -2280,6 +2398,7 @@ fn snapshot_for(app: &AppHandle, root: Option<PathBuf>) -> Result<LibrarySnapsho
         root_path: Some(root.to_string_lossy().into_owned()),
         documents,
         books,
+        pdf_books,
         plantuml_files,
         text_documents,
         categories,
@@ -2824,6 +2943,7 @@ fn upsert_with_connection(
 type ScannedLibrary = (
     Vec<MapDocument>,
     Vec<EpubBookDocument>,
+    Vec<PdfBookDocument>,
     Vec<PlantUmlDocument>,
     Vec<TextDocument>,
     Vec<String>,
@@ -2832,6 +2952,7 @@ type ScannedLibrary = (
 fn scan_library(root: &Path) -> Result<ScannedLibrary, String> {
     let mut documents = Vec::new();
     let mut books = Vec::new();
+    let mut pdf_books = Vec::new();
     let mut plantuml_files = Vec::new();
     let mut text_documents = Vec::new();
     let mut categories = Vec::new();
@@ -2840,6 +2961,7 @@ fn scan_library(root: &Path) -> Result<ScannedLibrary, String> {
         root,
         &mut documents,
         &mut books,
+        &mut pdf_books,
         &mut plantuml_files,
         &mut text_documents,
         &mut categories,
@@ -2860,11 +2982,12 @@ fn scan_library(root: &Path) -> Result<ScannedLibrary, String> {
     }
     documents.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
     books.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    pdf_books.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
     plantuml_files.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
     text_documents.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
     categories.sort_by_key(|category| category.to_lowercase());
     categories.dedup();
-    Ok((documents, books, plantuml_files, text_documents, categories))
+    Ok((documents, books, pdf_books, plantuml_files, text_documents, categories))
 }
 
 fn scan_directory(
@@ -2872,6 +2995,7 @@ fn scan_directory(
     directory: &Path,
     documents: &mut Vec<MapDocument>,
     books: &mut Vec<EpubBookDocument>,
+    pdf_books: &mut Vec<PdfBookDocument>,
     plantuml_files: &mut Vec<PlantUmlDocument>,
     text_documents: &mut Vec<TextDocument>,
     categories: &mut Vec<String>,
@@ -2898,6 +3022,7 @@ fn scan_directory(
                 &path,
                 documents,
                 books,
+                pdf_books,
                 plantuml_files,
                 text_documents,
                 categories,
@@ -3015,6 +3140,37 @@ fn scan_directory(
             books.push(EpubBookDocument {
                 relative_path,
                 title,
+                category: category_from_relative(relative),
+                file_size,
+                updated_at: modified_timestamp(&path),
+            });
+        } else if file_type.is_file()
+            && path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+            && path.strip_prefix(root).is_ok_and(|relative| relative.starts_with("books"))
+        {
+            if pdf_books.len() >= MAX_PDF_BOOKS {
+                return Err(format!(
+                    "文件库超过 {} 本 PDF 电子书，已停止索引。",
+                    MAX_PDF_BOOKS
+                ));
+            }
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|_| "PDF 文件超出了文件库位置。".to_string())?;
+            let file_size = entry
+                .metadata()
+                .map_err(|error| format!("无法读取 PDF 文件属性：{error}"))?
+                .len();
+            pdf_books.push(PdfBookDocument {
+                relative_path: path_to_relative_string(relative),
+                title: path
+                    .file_stem()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("未命名 PDF")
+                    .to_string(),
                 category: category_from_relative(relative),
                 file_size,
                 updated_at: modified_timestamp(&path),
@@ -3439,6 +3595,44 @@ fn validate_epub_path(value: &str) -> Result<PathBuf, String> {
         return Err("文件库只支持 EPUB 电子书阅读。".to_string());
     }
     Ok(path.to_path_buf())
+}
+
+fn validate_pdf_path(value: &str) -> Result<PathBuf, String> {
+    let path = Path::new(value);
+    if path.as_os_str().is_empty() || path.is_absolute() {
+        return Err("PDF 电子书路径无效。".to_string());
+    }
+    for component in path.components() {
+        match component {
+            Component::Normal(name) => {
+                let name = name
+                    .to_str()
+                    .ok_or_else(|| "PDF 电子书路径包含无效字符。".to_string())?;
+                validate_name(name)?;
+            }
+            _ => return Err("PDF 电子书路径不能离开文件库目录。".to_string()),
+        }
+    }
+    if !path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+    {
+        return Err("文件库只支持 PDF 电子书阅读。".to_string());
+    }
+    Ok(path.to_path_buf())
+}
+
+fn pdf_header_is_present(file: &mut fs::File) -> Result<bool, String> {
+    let mut prefix = [0_u8; 1024];
+    let length = file
+        .read(&mut prefix)
+        .map_err(|error| format!("无法读取 PDF 文件头：{error}"))?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| format!("无法重新读取 PDF：{error}"))?;
+    Ok(prefix[..length]
+        .windows(5)
+        .any(|window| window == b"%PDF-"))
 }
 
 fn ensure_existing_inside_root(root: &Path, path: &Path) -> Result<PathBuf, String> {
@@ -4008,7 +4202,8 @@ mod tests {
             mindmap_categories: Vec::new(),
         };
         write_category_scopes(&scratch.0, &scopes).unwrap();
-        let (documents, _books, plantuml, text, categories) = scan_library(&scratch.0).unwrap();
+        let (documents, _books, _pdf_books, plantuml, text, categories) =
+            scan_library(&scratch.0).unwrap();
         let loaded = read_category_scopes(&scratch.0).unwrap();
         let (doc, map) = scoped_categories(
             &scratch.0,
@@ -4283,6 +4478,7 @@ mod tests {
             root_path: Some("/library".into()),
             documents: Vec::new(),
             books: Vec::new(),
+            pdf_books: Vec::new(),
             plantuml_files: Vec::new(),
             text_documents: vec![diagram.clone()],
             categories: Vec::new(),
@@ -4379,8 +4575,10 @@ mod tests {
         scratch.write("图表/手写.mmd", "flowchart LR\n  A --> B\n");
         scratch.write("图表/时序.puml", "@startuml\n@enduml\n");
         scratch.write("书/书.epub", "x");
+        scratch.write("books/手册.pdf", "%PDF-1.4\n");
+        scratch.write("文档/附件.pdf", "%PDF-1.4\n");
 
-        let (documents, books, plantuml_files, text_documents, categories) =
+        let (documents, books, pdf_books, plantuml_files, text_documents, categories) =
             scan_library(&scratch.0).unwrap();
         let kind_of = |title: &str| {
             documents
@@ -4393,6 +4591,8 @@ mod tests {
         assert_eq!(kind_of("说明").as_deref(), Some("doc"));
         assert_eq!(kind_of("无头").as_deref(), Some("doc"));
         assert_eq!(books.len(), 1);
+        assert_eq!(pdf_books.len(), 1);
+        assert_eq!(pdf_books[0].title, "手册");
         assert_eq!(plantuml_files.len(), 1);
         let mut titles: Vec<_> = text_documents.iter().map(|d| d.title.clone()).collect();
         titles.sort();
@@ -4403,6 +4603,26 @@ mod tests {
         for category in ["导图", "文档", "图表", "书"] {
             assert!(categories.contains(&category.to_string()), "{category}");
         }
+    }
+
+    #[test]
+    fn pdf_book_paths_reject_traversal_and_other_extensions() {
+        assert!(validate_pdf_path("books/guide.pdf").is_ok());
+        assert!(validate_pdf_path("../outside.pdf").is_err());
+        assert!(validate_pdf_path("books/guide.epub").is_err());
+        assert!(validate_pdf_path("C:\\outside.pdf").is_err());
+    }
+
+    #[test]
+    fn pdf_header_check_accepts_a_header_after_initial_padding() {
+        let scratch = Scratch::new();
+        scratch.write("books/padded.pdf", "\n%PDF-1.7\n");
+        scratch.write("books/not-pdf.pdf", "not a PDF");
+        let mut valid = fs::File::open(scratch.0.join("books/padded.pdf")).unwrap();
+        assert!(pdf_header_is_present(&mut valid).unwrap());
+        assert_eq!(valid.stream_position().unwrap(), 0);
+        let mut invalid = fs::File::open(scratch.0.join("books/not-pdf.pdf")).unwrap();
+        assert!(!pdf_header_is_present(&mut invalid).unwrap());
     }
 
     #[test]

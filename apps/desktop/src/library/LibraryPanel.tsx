@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
 import { createPortal } from 'react-dom';
 import type { FormEvent } from 'react';
 import type {
@@ -35,6 +42,8 @@ export interface LibraryPanelProps {
   /** The .mmd diagram open in the diagram workbench, if any. */
   selectedTextPath?: string | null;
   collapsed: boolean;
+  sidebarWidth?: number;
+  onSidebarWidthChange?: (width: number) => void;
   shortcutActive?: boolean;
   categoryFilter: string;
   query: string;
@@ -183,6 +192,8 @@ export default function LibraryPanel({
   selectedPlantUmlPath = null,
   selectedTextPath = null,
   collapsed,
+  sidebarWidth = 264,
+  onSidebarWidthChange,
   shortcutActive = false,
   categoryFilter,
   query,
@@ -235,6 +246,54 @@ export default function LibraryPanel({
   const menuRef = useRef<HTMLDivElement>(null);
   const folderContextMenuRef = useRef<HTMLDivElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
+  const resizeDragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startWidth: number;
+    latestWidth: number;
+  } | null>(null);
+
+  const clampSidebarWidth = (value: number) =>
+    Math.min(420, Math.max(210, Math.round(value)));
+
+  const handleResizerPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0 || !onSidebarWidthChange) return;
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      resizeDragRef.current = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startWidth: sidebarWidth,
+        latestWidth: sidebarWidth,
+      };
+    },
+    [onSidebarWidthChange, sidebarWidth],
+  );
+
+  const handleResizerPointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const drag = resizeDragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId || !onSidebarWidthChange)
+        return;
+      const nextWidth = clampSidebarWidth(
+        drag.startWidth + (event.clientX - drag.startX),
+      );
+      drag.latestWidth = nextWidth;
+      onSidebarWidthChange(nextWidth);
+    },
+    [onSidebarWidthChange],
+  );
+
+  const finishResize = useCallback((pointerId: number) => {
+    const drag = resizeDragRef.current;
+    if (!drag || drag.pointerId !== pointerId) return;
+    resizeDragRef.current = null;
+  }, []);
+
+  const resetSidebarWidth = useCallback(() => {
+    onSidebarWidthChange?.(264);
+  }, [onSidebarWidthChange]);
 
   // Close create menu when clicking outside
   useEffect(() => {
@@ -404,6 +463,27 @@ export default function LibraryPanel({
       ),
     [snapshot?.mindmapCategories, sortedDocuments, visibleBooks],
   );
+
+  const allFolderPaths = useMemo(() => {
+    const paths: string[] = [];
+    const walk = (nodes: readonly LibraryFolderNode[]) => {
+      for (const node of nodes) {
+        paths.push(node.path);
+        walk(node.children);
+      }
+    };
+    walk(folderTree);
+    return paths;
+  }, [folderTree]);
+
+  const toggleAllFolders = useCallback(() => {
+    if (activeTab !== 'files') {
+      setActiveTab('files');
+    }
+    setCollapsedFolders((prev) =>
+      prev.size > 0 ? new Set<string>() : new Set(allFolderPaths),
+    );
+  }, [activeTab, allFolderPaths]);
 
   const toggleFolder = (cat: string) => {
     setCollapsedFolders((prev) => {
@@ -634,7 +714,7 @@ export default function LibraryPanel({
                 },
                 {
                   key: 'tab-outline',
-                  label: `大纲 (${outlineItems.length})`,
+                  label: `当前导图大纲 (${outlineItems.length})`,
                   active: activeTab === 'outline',
                   icon: <RailOutlineIcon />,
                   onClick: () => {
@@ -700,9 +780,13 @@ export default function LibraryPanel({
       className="library-sidebar"
       aria-label="思维导图导航与目录"
     >
-      {/* 顶栏：Tab 标签页与折叠控制 */}
+      {/* 顶栏：仅保留「文档 / 导图」切换与右侧展开全部/收起侧栏，不突兀跳出大纲标签 */}
       <div className="library-header">
-        <div className="library-tabs" role="tablist">
+        <div
+          className="library-tabs"
+          role="tablist"
+          aria-label="知识库模式切换"
+        >
           {onSwitchToDocuments && (
             <button
               type="button"
@@ -719,38 +803,62 @@ export default function LibraryPanel({
           <button
             type="button"
             role="tab"
-            aria-selected={activeTab === 'files'}
-            className={`library-tab${activeTab === 'files' ? ' is-active' : ''}`}
+            aria-selected={true}
+            className="library-tab is-active"
             onClick={() => setActiveTab('files')}
           >
             <span>导图</span>
             <span className="library-tab-badge">{documents.length}</span>
           </button>
+        </div>
+        <div className="library-head-tools">
           <button
             type="button"
-            role="tab"
-            aria-selected={activeTab === 'outline'}
-            className={`library-tab${activeTab === 'outline' ? ' is-active' : ''}`}
-            onClick={() => setActiveTab('outline')}
+            className="kb-icon-btn"
+            title={collapsedFolders.size > 0 ? '展开全部目录' : '折叠全部目录'}
+            aria-label="展开或折叠全部目录"
+            onClick={toggleAllFolders}
           >
-            <span>大纲</span>
-            <span className="library-tab-badge">{outlineItems.length}</span>
+            <svg
+              className="kb-svg-icon"
+              viewBox="0 0 16 16"
+              fill="none"
+              aria-hidden="true"
+            >
+              {collapsedFolders.size > 0 ? (
+                <path
+                  d="m5.2 6 2.8-2.6L10.8 6M5.2 10l2.8 2.6L10.8 10"
+                  stroke="currentColor"
+                  strokeWidth="1.35"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              ) : (
+                <path
+                  d="m5.2 3.6 2.8 2.6 2.8-2.6M5.2 12.4 8 9.8l2.8 2.6"
+                  stroke="currentColor"
+                  strokeWidth="1.35"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              )}
+            </svg>
           </button>
+          <SidebarCollapseButton
+            collapsed={false}
+            onClick={onToggleCollapse}
+            title="收起侧边栏 (快捷键 Ctrl+B)"
+            ariaLabel="收起侧边栏"
+            ariaControls="library-content-body"
+            className="library-collapse-button"
+          />
         </div>
-        <SidebarCollapseButton
-          collapsed={false}
-          onClick={onToggleCollapse}
-          title="收起侧边栏 (快捷键 Ctrl+B)"
-          ariaLabel="收起侧边栏"
-          ariaControls="library-content-body"
-          className="library-collapse-button"
-        />
       </div>
 
       <div className="library-content-body" id="library-content-body">
         {activeTab === 'files' ? (
           <>
-            {/* 操作条：新建、阅读 EPUB 与重建索引 */}
+            {/* 操作条：新建、当前导图大纲切换与刷新索引 */}
             <div className="library-actions-bar">
               <div className="library-new-btn-group" ref={menuRef}>
                 <button
@@ -914,6 +1022,15 @@ export default function LibraryPanel({
                   </div>
                 )}
               </div>
+              <button
+                type="button"
+                className="library-icon-btn"
+                onClick={() => setActiveTab('outline')}
+                title={`查看当前导图结构大纲（${outlineItems.length} 个节点）`}
+                aria-label="查看当前导图大纲"
+              >
+                <RailOutlineIcon />
+              </button>
               <button
                 type="button"
                 className="library-icon-btn"
@@ -1155,8 +1272,20 @@ export default function LibraryPanel({
             </div>
           </>
         ) : (
-          /* 大纲速览 Tab */
+          /* 大纲速览视图（可一键返回导图文件树） */
           <div className="library-outline-pane">
+            <div className="library-outline-head">
+              <button
+                type="button"
+                className="library-outline-back-btn"
+                onClick={() => setActiveTab('files')}
+              >
+                <span>← 返回文件列表</span>
+              </button>
+              <span className="library-outline-head-title">
+                导图大纲 ({outlineItems.length})
+              </span>
+            </div>
             <div className="outline-filter-bar">
               <svg
                 viewBox="0 0 16 16"
@@ -1243,6 +1372,21 @@ export default function LibraryPanel({
           </div>
         )}
       </div>
+      {onSidebarWidthChange && (
+        <div
+          className="knowledge-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="拖拽调整导图侧边栏宽度"
+          title="拖拽调节宽度，双击恢复默认宽度"
+          onPointerDown={handleResizerPointerDown}
+          onPointerMove={handleResizerPointerMove}
+          onPointerUp={(event) => finishResize(event.pointerId)}
+          onPointerCancel={(event) => finishResize(event.pointerId)}
+          onLostPointerCapture={(event) => finishResize(event.pointerId)}
+          onDoubleClick={resetSidebarWidth}
+        />
+      )}
 
       {/* 删除二次确认弹层 */}
       {deleteConfirmation && (

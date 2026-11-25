@@ -23,6 +23,7 @@ interface PaperPdfPageProps {
   translationDisplayMode?: PaperTranslationDisplayMode;
   activeTranslatedBlockId?: number | null;
   onSelectTranslatedBlock?: (pageNumber: number, blockId: number) => void;
+  onSizeMeasured?: (pageNumber: number, height: number) => void;
 }
 
 const DEFAULT_HIGHLIGHT = '#f4d35e';
@@ -42,6 +43,7 @@ export const PaperPdfPage: React.FC<PaperPdfPageProps> = ({
   translationDisplayMode = 'off',
   activeTranslatedBlockId = null,
   onSelectTranslatedBlock,
+  onSizeMeasured,
 }) => {
   const [peekingBlockIds, setPeekingBlockIds] = useState<
     Record<number, boolean>
@@ -94,6 +96,7 @@ export const PaperPdfPage: React.FC<PaperPdfPageProps> = ({
           width: naturalViewport.width,
           height: naturalViewport.height,
         });
+        onSizeMeasured?.(pageNumber, naturalViewport.height);
         pageContainer.style.setProperty('--total-scale-factor', String(scale));
         const outputScale = Math.min(window.devicePixelRatio || 1, 2);
         canvas.width = Math.floor(viewport.width * outputScale);
@@ -147,7 +150,7 @@ export const PaperPdfPage: React.FC<PaperPdfPageProps> = ({
         textLayerContainer.replaceChildren();
       }
     };
-  }, [lazy, pageNumber, pdf, retry, scale, shouldRender]);
+  }, [lazy, onSizeMeasured, pageNumber, pdf, retry, scale, shouldRender]);
 
   const width = Math.max(1, pageBaseSize.width * scale);
   const height = Math.max(1, pageBaseSize.height * scale);

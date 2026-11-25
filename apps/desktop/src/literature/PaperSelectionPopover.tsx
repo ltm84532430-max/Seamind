@@ -22,6 +22,7 @@ interface PaperSelectionPopoverProps {
   onQuickHighlight: (withTranslation?: boolean) => void;
   onOpenAnnotationNote: (withTranslation?: boolean) => void;
   onCopyTranslation: () => void;
+  onSendToCodeLab?: (language: 'python' | 'c' | 'cpp') => void;
   onClose: () => void;
 }
 
@@ -37,6 +38,7 @@ export const PaperSelectionPopover: React.FC<PaperSelectionPopoverProps> = ({
   onQuickHighlight,
   onOpenAnnotationNote,
   onCopyTranslation,
+  onSendToCodeLab,
   onClose,
 }) => {
   const autoIsWord = isShortTermSelection(selectedText);
@@ -47,7 +49,8 @@ export const PaperSelectionPopover: React.FC<PaperSelectionPopoverProps> = ({
         ? 'word'
         : 'passage';
 
-  const cardWidth = translation || translating || error ? 360 : 284;
+  const cardWidth =
+    translation || translating || error ? 360 : onSendToCodeLab ? 340 : 284;
   const clampedLeft = Math.min(
     Math.max(12, anchor.centerX - cardWidth / 2),
     Math.max(12, anchor.stageWidth - cardWidth - 12),
@@ -111,6 +114,26 @@ export const PaperSelectionPopover: React.FC<PaperSelectionPopoverProps> = ({
         <button type="button" onClick={() => onOpenAnnotationNote(false)}>
           批注
         </button>
+        {onSendToCodeLab && (
+          <details className="paper-selection-code-menu">
+            <summary>实验本</summary>
+            <div>
+              {(['python', 'c', 'cpp'] as const).map((language) => (
+                <button
+                  key={language}
+                  type="button"
+                  onClick={() => onSendToCodeLab(language)}
+                >
+                  {language === 'python'
+                    ? '送入 Python'
+                    : language === 'cpp'
+                      ? '送入 C++'
+                      : '送入 C'}
+                </button>
+              ))}
+            </div>
+          </details>
+        )}
         <button
           type="button"
           className="is-close"

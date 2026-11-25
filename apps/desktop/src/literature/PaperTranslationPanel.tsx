@@ -8,6 +8,7 @@ import type {
 } from './paper-translation-store';
 
 export interface PaperTranslationSidebarProps {
+  allowDualPdf?: boolean;
   visiblePages: number[];
   pageNumber: number;
   displayMode: PaperTranslationDisplayMode;
@@ -58,6 +59,7 @@ const DISPLAY_MODE_OPTIONS: Array<{
 export const PaperTranslationSidebar: React.FC<
   PaperTranslationSidebarProps
 > = ({
+  allowDualPdf = true,
   visiblePages,
   pageNumber,
   displayMode,
@@ -253,53 +255,55 @@ export const PaperTranslationSidebar: React.FC<
         })}
       </div>
 
-      <div className="paper-translation-dualpdf-box">
-        <div className="paper-translation-dualpdf-head">
-          <strong>双语重排 PDF（公式保真 · Phase 3）</strong>
-          <button
-            type="button"
-            disabled={checkingPdf2Zh || generatingDualPdf}
-            onClick={onCheckPdf2Zh}
-          >
-            {checkingPdf2Zh ? '检测中…' : '检测环境'}
-          </button>
-        </div>
-
-        {pdf2ZhStatus && (
-          <p className="paper-translation-dualpdf-status">
-            {pdf2ZhStatus.available
-              ? `引擎就绪：${pdf2ZhStatus.engine} (${pdf2ZhStatus.version ?? 'installed'})`
-              : pdf2ZhStatus.message}
-          </p>
-        )}
-
-        {dualPdfError && (
-          <div className="paper-translation-error">{dualPdfError}</div>
-        )}
-
-        <div className="paper-translation-dualpdf-actions">
-          <button
-            type="button"
-            disabled={generatingDualPdf || pdf2ZhStatus?.available === false}
-            onClick={() => onGenerateDualPdf(false)}
-          >
-            {generatingDualPdf
-              ? '正在生成双语 PDF…'
-              : dualPdfResult
-                ? '重新/加载双语 PDF'
-                : '生成双语重排 PDF'}
-          </button>
-          {dualPdfResult && (
+      {allowDualPdf && (
+        <div className="paper-translation-dualpdf-box">
+          <div className="paper-translation-dualpdf-head">
+            <strong>双语重排 PDF（公式保真 · Phase 3）</strong>
             <button
               type="button"
-              className={viewingDualPdf ? 'is-active' : ''}
-              onClick={onToggleDualPdf}
+              disabled={checkingPdf2Zh || generatingDualPdf}
+              onClick={onCheckPdf2Zh}
             >
-              {viewingDualPdf ? '切回原版 PDF' : '查看双语 PDF'}
+              {checkingPdf2Zh ? '检测中…' : '检测环境'}
             </button>
+          </div>
+
+          {pdf2ZhStatus && (
+            <p className="paper-translation-dualpdf-status">
+              {pdf2ZhStatus.available
+                ? `引擎就绪：${pdf2ZhStatus.engine} (${pdf2ZhStatus.version ?? 'installed'})`
+                : pdf2ZhStatus.message}
+            </p>
           )}
+
+          {dualPdfError && (
+            <div className="paper-translation-error">{dualPdfError}</div>
+          )}
+
+          <div className="paper-translation-dualpdf-actions">
+            <button
+              type="button"
+              disabled={generatingDualPdf || pdf2ZhStatus?.available === false}
+              onClick={() => onGenerateDualPdf(false)}
+            >
+              {generatingDualPdf
+                ? '正在生成双语 PDF…'
+                : dualPdfResult
+                  ? '重新/加载双语 PDF'
+                  : '生成双语重排 PDF'}
+            </button>
+            {dualPdfResult && (
+              <button
+                type="button"
+                className={viewingDualPdf ? 'is-active' : ''}
+                onClick={onToggleDualPdf}
+              >
+                {viewingDualPdf ? '切回原版 PDF' : '查看双语 PDF'}
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };

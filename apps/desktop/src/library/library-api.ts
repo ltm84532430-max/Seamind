@@ -9,6 +9,8 @@ import type {
   DocumentVersion,
   DocumentVersionSnapshot,
   EpubBookDocument,
+  PdfBookDocument,
+  OpenedPdfBook,
   KnowledgeHeatmapDayEntry,
   KnowledgeHeatmapSummary,
   LibrarySnapshot,
@@ -58,6 +60,12 @@ export const libraryApi = {
     invoke<EpubBookDocument>('import_epub_book', args),
   deleteEpubBook: (args: { relativePath: string }) =>
     invoke<void>('delete_epub_book', args),
+  openPdfBook: (args: { relativePath: string }) =>
+    invoke<OpenedPdfBook>('open_pdf_book', args),
+  importPdfBook: (args: { sourcePath: string }) =>
+    invoke<PdfBookDocument>('import_pdf_book', args),
+  deletePdfBook: (args: { relativePath: string }) =>
+    invoke<void>('delete_pdf_book', args),
   openPlantUml: (args: { relativePath: string }) =>
     invoke<string>('open_plantuml_document', args),
   savePlantUml: (args: { relativePath: string; source: string }) =>

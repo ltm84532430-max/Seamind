@@ -1693,7 +1693,7 @@ export const TerminalAgentView = forwardRef<
                   onClick={() => insertTokenIntoComposer('#last-error')}
                   title="检测到相邻窗格近期出现报错，点击附带错误现场"
                 >
-                  ⚡ + #last-error 报错现场
+                  + #last-error 报错现场
                 </button>
               )}
               <button

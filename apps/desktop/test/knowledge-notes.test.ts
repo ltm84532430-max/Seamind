@@ -5,7 +5,10 @@ import {
   parseWikilinkTarget,
 } from '../src/knowledge/knowledge-markdown';
 import {
+  buildKnowledgeFolderTree,
   groupKnowledgeNotes,
+  isInternalAssetCategory,
+  resolveNewKnowledgeCategoryPath,
   UNFILED_FOLDER,
 } from '../src/knowledge/knowledge-notes';
 
@@ -193,5 +196,82 @@ describe('knowledge-markdown bidirectional links & transclusion', () => {
       'net/spanning-tree.md',
     );
     expect(result.relatedNotes[0].sharedTags).toEqual(['以太网']);
+  });
+});
+
+describe('knowledge folder tree & subfolder selection resolution', () => {
+  it('filters out internal assets directories from categories and notes', () => {
+    expect(isInternalAssetCategory('assets')).toBe(true);
+    expect(
+      isInternalAssetCategory('assets/0e44bb0c-a197-57ba-9111-1234567890ab'),
+    ).toBe(true);
+    expect(isInternalAssetCategory('量化')).toBe(false);
+
+    const groups = groupKnowledgeNotes(
+      [
+        note({
+          relativePath: 'quant/tick.md',
+          title: '纳秒整数时间戳列',
+          category: '量化',
+        }),
+        note({
+          relativePath: 'assets/0e44bb0c/note.md',
+          title: '内部资源',
+          category: 'assets/0e44bb0c',
+        }),
+      ],
+      '',
+      ['量化', 'assets', 'assets/0e44bb0c'],
+    );
+    expect(groups.map((g) => g.name)).toEqual(['量化']);
+  });
+
+  it('creates a subfolder when a folder is selected, or a root folder when selection is blank', () => {
+    expect(resolveNewKnowledgeCategoryPath('高频策略', '量化')).toBe(
+      '量化/高频策略',
+    );
+    expect(resolveNewKnowledgeCategoryPath('量化/高频策略', '量化')).toBe(
+      '量化/高频策略',
+    );
+    expect(resolveNewKnowledgeCategoryPath('全新目录', null)).toBe('全新目录');
+    expect(resolveNewKnowledgeCategoryPath('全新目录', UNFILED_FOLDER)).toBe(
+      '全新目录',
+    );
+  });
+
+  it('builds a hierarchical folder tree with nested children and aggregated note counts', () => {
+    const groups = groupKnowledgeNotes(
+      [
+        note({
+          relativePath: 'quant/tick.md',
+          title: '纳秒整数时间戳列',
+          category: '量化',
+        }),
+        note({
+          relativePath: 'quant/hft/orderflow.md',
+          title: '订单流实现',
+          category: '量化/高频策略',
+        }),
+        note({
+          relativePath: 'unfiled.md',
+          title: '随手记',
+          category: '',
+        }),
+      ],
+      '',
+      ['量化', '量化/高频策略', '量化/期权定价'],
+    );
+
+    const tree = buildKnowledgeFolderTree(groups);
+    expect(tree.map((node) => node.path)).toEqual(['量化', UNFILED_FOLDER]);
+    expect(tree[0].totalNotesCount).toBe(2);
+    expect(tree[0].notes.map((n) => n.title)).toEqual(['纳秒整数时间戳列']);
+    expect(tree[0].children.map((c) => c.path)).toEqual([
+      '量化/高频策略',
+      '量化/期权定价',
+    ]);
+    expect(tree[0].children[0].name).toBe('高频策略');
+    expect(tree[0].children[0].totalNotesCount).toBe(1);
+    expect(tree[0].children[1].totalNotesCount).toBe(0);
   });
 });

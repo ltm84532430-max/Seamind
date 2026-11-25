@@ -1,0 +1,36 @@
+.reader-chrome-header {
+  display: flex;
+  min-height: 52px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--line, #dfe4e7);
+}
+.reader-chrome-heading {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+.reader-chrome-heading > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reader-chrome-eyebrow {
+  color: var(--muted, #89959c);
+  font: 10px var(--mono, monospace);
+  letter-spacing: 0.04em;
+}
+.reader-chrome-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+.reader-chrome-actions button:focus-visible,
+.reader-chrome-actions summary:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}

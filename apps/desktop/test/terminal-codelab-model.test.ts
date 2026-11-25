@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   assembleCCellProgram,
+  duplicateCodeLabCell,
   exportCodeLabToMarkdown,
+  formatCellStudyExportMarkdown,
   formatDurationCompact,
   hasCMainFunction,
   moveCodeLabCell,
@@ -187,5 +189,62 @@ describe('terminal code lab model', () => {
     expect(formatDurationCompact(42)).toBe('42 ms');
     expect(formatDurationCompact(1540)).toBe('1.54 s');
     expect(formatDurationCompact(75_500)).toBe('1m 15.5s');
+  });
+
+  it('duplicates a cell right below itself with a fresh cell id and preserved origin', () => {
+    const cells: CodeLabCell[] = [
+      {
+        id: 'cell-1',
+        kind: 'code',
+        language: 'python',
+        source: 'print(42)',
+        stdinInput: '',
+        executionCount: 1,
+        status: 'success',
+        outputs: [{ kind: 'stream', name: 'stdout', text: '42\n' }],
+        origin: {
+          kind: 'epub',
+          title: 'CSAPP',
+          locator: '第 2 章',
+          reference: 'books/csapp.epub',
+        },
+      },
+    ];
+    const { cells: next, duplicatedCellId } = duplicateCodeLabCell(
+      cells,
+      'cell-1',
+    );
+    expect(next.length).toBe(2);
+    expect(duplicatedCellId).toBeTruthy();
+    expect(next[1].id).toBe(duplicatedCellId);
+    expect(next[1].id).not.toBe('cell-1');
+    expect(next[1].source).toBe('print(42)');
+    expect(next[1].origin).toEqual(cells[0].origin);
+  });
+
+  it('formats single-cell study export markdown with source origin, code, and outputs', () => {
+    const cell: CodeLabCell = {
+      id: 'cell-study',
+      kind: 'code',
+      language: 'python',
+      source: 'x = 6 * 7\nprint(x)',
+      stdinInput: '',
+      executionCount: 3,
+      status: 'success',
+      outputs: [{ kind: 'stream', name: 'stdout', text: '42\n' }],
+      origin: {
+        kind: 'pdf',
+        title: 'Deep Learning',
+        locator: 'Page 18',
+        reference: 'papers/dl.pdf#page=18',
+      },
+    };
+    const md = formatCellStudyExportMarkdown('梯度验证.ipynb', cell, 0);
+    expect(md).toContain('## 梯度验证.ipynb · 单元格 #1');
+    expect(md).toContain(
+      '> 来源（PDF）：Deep Learning · Page 18 (`papers/dl.pdf#page=18`)',
+    );
+    expect(md).toContain('```python\nx = 6 * 7\nprint(x)\n```');
+    expect(md).toContain('```text\n42\n```');
   });
 });

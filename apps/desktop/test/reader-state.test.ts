@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  applyReaderSettings,
+  getReaderTranslationTheme,
   loadReaderSettings,
   normalizeTocLabel,
   resolveTocHierarchy,
@@ -55,5 +57,38 @@ describe('reader state', () => {
       flow: 'scrolled',
     });
     vi.unstubAllGlobals();
+  });
+
+  it('provides distinct high-contrast translation palettes per theme and injects CSS variables into renderer', () => {
+    const lightTrans = getReaderTranslationTheme('light', 'light');
+    const sepiaTrans = getReaderTranslationTheme('sepia', 'light');
+    const darkTrans = getReaderTranslationTheme('dark', 'dark');
+    const navyTrans = getReaderTranslationTheme('dark', 'navy');
+    const purpleTrans = getReaderTranslationTheme('dark', 'purple');
+
+    expect(lightTrans.accent).toBe('#d9573b');
+    expect(sepiaTrans.accent).toBe('#b45309');
+    expect(darkTrans.accent).toBe('#fb923c');
+    expect(navyTrans.accent).toBe('#38bdf8');
+    expect(purpleTrans.accent).toBe('#c084fc');
+
+    let injectedCss = '';
+    applyReaderSettings(
+      {
+        renderer: {
+          setAttribute: () => {},
+          setStyles: (css: string) => {
+            injectedCss = css;
+          },
+        },
+      },
+      { fontSize: 18, lineHeight: 1.6, palette: 'dark', flow: 'paginated' },
+      'navy',
+    );
+    expect(injectedCss).toContain('--seamind-trans-accent: #38bdf8;');
+    expect(injectedCss).toContain('--seamind-trans-fg: #f0f9ff;');
+    expect(injectedCss).toContain(
+      '--seamind-trans-bg: rgba(56, 189, 248, 0.14);',
+    );
   });
 });

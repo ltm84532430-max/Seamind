@@ -3724,6 +3724,17 @@
   user-select: none;
 }
 
+.ebook-book-add-label {
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.ebook-book-add-hint {
+  font-size: 10px;
+  opacity: 0.78;
+}
+
 .ebook-book-add-busy-text {
   font-size: 11px;
   color: inherit;
@@ -4438,4 +4449,162 @@
   border-color: #db7459;
   background: #b9573e;
   color: #fff;
+}
+
+/* Reading chrome keeps study actions available without occupying the page header. */
+.epub-reader-header {
+  min-height: 52px;
+  gap: 12px;
+  padding-block: 6px;
+}
+.epub-reader-book-heading strong {
+  font-size: 14px;
+}
+.epub-reader-author,
+.epub-reader-location {
+  font-size: 11px;
+}
+.epub-reader-study-menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+.epub-reader-study-menu > summary {
+  display: flex;
+  align-items: center;
+  list-style: none;
+  white-space: nowrap;
+}
+.epub-reader-study-menu > summary::-webkit-details-marker {
+  display: none;
+}
+.epub-reader-study-menu-panel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(268px, calc(100vw - 24px));
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid #dfe4e7;
+  background: #fff;
+}
+.epub-reader-study-menu-panel > .epub-reader-tool,
+.epub-reader-study-menu-panel > .resource-task-links,
+.epub-reader-study-menu-panel > .epub-reader-bilingual-group {
+  width: 100%;
+}
+.epub-reader-study-menu-panel > .epub-reader-tool {
+  text-align: left;
+}
+.epub-reader-study-menu-panel .resource-task-links select {
+  width: 100%;
+}
+.epub-reader-toc-item {
+  min-height: 38px;
+  align-items: flex-start;
+  padding-block: 6px;
+  font-size: 13px;
+  line-height: 1.35;
+  text-overflow: initial;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.epub-reader-toc-label {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.epub-reader-footer {
+  min-height: 46px;
+}
+.epub-reader-selection-toolbar[data-expanded='false']
+  .epub-reader-selection-styles,
+.epub-reader-selection-toolbar[data-expanded='false']
+  .epub-reader-selection-colors,
+.epub-reader-selection-toolbar[data-expanded='false']
+  .epub-reader-selection-extra,
+.epub-reader-selection-toolbar[data-expanded='false']
+  .epub-reader-ai-format-bar,
+.epub-reader-selection-toolbar[data-expanded='false']
+  .epub-reader-ai-prompt-bar,
+.epub-reader-selection-toolbar[data-expanded='false']
+  .epub-reader-ai-disclosure {
+  display: none;
+}
+.epub-reader-selection-toolbar[data-expanded='false']
+  .epub-reader-selection-quote-text {
+  max-height: 40px;
+}
+.epub-reader-selection-copy-status {
+  color: #397f68;
+  font-size: 11px;
+}
+
+.ebook-pdf-book-cover {
+  border-color: #b9c7ce;
+  background: #dce6e9;
+  color: #23333c;
+}
+.ebook-pdf-book-cover img {
+  object-fit: contain;
+  background: #fff;
+}
+.ebook-book-cover.ebook-pdf-book-cover.cover-1,
+.ebook-book-cover.ebook-pdf-book-cover.cover-2,
+.ebook-book-cover.ebook-pdf-book-cover.cover-3,
+.ebook-book-cover.ebook-pdf-book-cover.cover-4,
+.ebook-book-cover.ebook-pdf-book-cover.cover-5 {
+  border-color: #b9c7ce;
+  background: #dce6e9;
+  color: #23333c;
+}
+.ebook-pdf-book-footer {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  color: #77848c;
+  font-size: 10px;
+}
+.ebook-pdf-delete {
+  border: 0;
+  background: transparent;
+  color: #77848c;
+  font: inherit;
+  cursor: pointer;
+}
+.ebook-pdf-delete:hover,
+.ebook-pdf-delete:focus-visible {
+  color: #bf563e;
+}
+.ebook-shelf-empty-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+.ebook-shelf-toolbar-controls > .ebook-shelf-refresh-button {
+  white-space: nowrap;
+}
+.ebook-shelf-toolbar-controls {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-pdf-book-cover {
+  border-color: #4b606c;
+  background: #25343d;
+  color: #dce5e9;
+}
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-pdf-book-footer,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .ebook-pdf-delete {
+  color: #9aa8b0;
+}
+.app-shell[data-theme='dark'] .epub-reader-study-menu-panel,
+.epub-reader[data-theme='dark'] .epub-reader-study-menu-panel {
+  border-color: #3c484f;
+  background: #202a30;
 }

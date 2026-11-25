@@ -249,6 +249,23 @@ export function isEpubPath(path: string): boolean {
   return path.trim().toLowerCase().endsWith('.epub');
 }
 
+export function isPdfPath(path: string): boolean {
+  return path.trim().toLowerCase().endsWith('.pdf');
+}
+
+export function classifyBookDrop(
+  paths: string[],
+  inBookWorkspace: boolean,
+): 'books' | 'epub' | null {
+  if (
+    inBookWorkspace &&
+    paths.some((path) => isPdfPath(path) || isEpubPath(path))
+  )
+    return 'books';
+  if (paths.some(isEpubPath)) return 'epub';
+  return null;
+}
+
 export function normalizeLibraryPath(path: string): string {
   return path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
 }

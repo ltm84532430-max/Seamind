@@ -361,21 +361,22 @@ select option {
 }
 
 .app-shell {
+  --topbar-height: 36px;
   height: 100%;
   display: grid;
-  grid-template-rows: 52px minmax(0, 1fr) 29px;
+  grid-template-rows: var(--topbar-height, 36px) minmax(0, 1fr) 29px;
   background: #fff;
 }
 .topbar {
-  height: 52px;
-  min-height: 52px;
-  max-height: 52px;
+  height: var(--topbar-height, 36px);
+  min-height: var(--topbar-height, 36px);
+  max-height: var(--topbar-height, 36px);
   box-sizing: border-box;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  column-gap: 12px;
-  padding: 0 12px 0 0;
+  column-gap: 10px;
+  padding: 0 10px 0 0;
   border-bottom: 1px solid var(--line);
   background: #fff;
   user-select: none;
@@ -390,15 +391,15 @@ select option {
 }
 .brand-lockup {
   gap: 10px;
-  height: 36px;
+  height: 30px;
   min-width: 0;
 }
 .brand-mark {
   position: relative;
-  width: 32px;
-  height: 32px;
-  min-width: 32px;
-  min-height: 32px;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
   box-sizing: border-box;
   display: inline-flex;
   align-items: center;
@@ -410,12 +411,12 @@ select option {
   flex: 0 0 auto;
 }
 .brand-mark svg {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   display: block;
 }
 .brand-name {
-  font-size: 13.5px;
+  font-size: 13px;
   line-height: 1.2;
   font-weight: 700;
   letter-spacing: -0.2px;
@@ -441,14 +442,14 @@ select option {
 .topbar-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
-  height: 30px;
+  gap: 5px;
+  height: 26px;
   flex: 0 0 auto;
   grid-column: 3;
   justify-self: end;
 }
 .sync-state {
-  height: 30px;
+  height: 26px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -469,13 +470,13 @@ select option {
   flex: 0 0 6px;
 }
 .phase-badge {
-  height: 30px;
-  min-height: 30px;
+  height: 26px;
+  min-height: 26px;
   box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0 10px;
+  padding: 0 9px;
   border: 1px solid #e5e8ea;
   border-radius: 4px;
   color: #59636d;
@@ -489,9 +490,9 @@ select option {
   user-select: none;
 }
 .settings-button {
-  width: 76px;
-  height: 30px;
-  min-height: 30px;
+  width: 72px;
+  height: 26px;
+  min-height: 26px;
   box-sizing: border-box;
   display: inline-flex;
   align-items: center;
@@ -501,7 +502,7 @@ select option {
   border-radius: 0;
   color: #515b65;
   background: #fff;
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 550;
   line-height: 1;
   white-space: nowrap;
@@ -516,10 +517,10 @@ select option {
   background: #fafafa;
 }
 .theme-toggle-button {
-  width: 30px;
-  height: 30px;
-  min-width: 30px;
-  min-height: 30px;
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  min-height: 26px;
   box-sizing: border-box;
   display: inline-flex;
   flex: 0 0 auto;
@@ -8263,20 +8264,20 @@ select option {
 
 .terminal-toggle-button {
   width: auto;
-  min-width: 58px;
-  height: 30px;
-  min-height: 30px;
+  min-width: 56px;
+  height: 26px;
+  min-height: 26px;
   box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 5px;
-  padding: 0 9px;
+  padding: 0 8px;
   border: 1px solid #e0e4e7;
   border-radius: 0;
   color: #515b65;
   background: #fff;
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 550;
   line-height: 1;
   white-space: nowrap;
@@ -8288,9 +8289,9 @@ select option {
 }
 
 .terminal-popout-topbar-button {
-  width: 28px;
-  height: 30px;
-  min-height: 30px;
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
   margin-left: -1px;
   box-sizing: border-box;
   display: inline-flex;
@@ -10392,13 +10393,13 @@ select option {
   flex: 0 0 auto;
   width: auto;
   height: 100%;
-  min-width: 0;
+  min-width: 68px;
   box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 5px;
-  padding: 0 13px;
+  padding: 0 18px;
   border: 0;
   border-right: 1px solid var(--line, #e4e7ea);
   border-radius: 0;
@@ -10406,8 +10407,9 @@ select option {
   background: transparent;
   cursor: pointer;
   font: inherit;
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 500;
+  letter-spacing: 0.02em;
   line-height: 1;
   white-space: nowrap;
   transition:
@@ -12239,10 +12241,10 @@ select option {
 
 .app-shell.is-reader-knowledge {
   grid-template-columns:
-    minmax(0, calc((100% - 3px) * 0.52))
+    minmax(0, calc((100% - 3px) * var(--reader-knowledge-wide-ratio, 0.5)))
     3px
     minmax(0, 1fr);
-  grid-template-rows: 52px minmax(0, 1fr) 29px;
+  grid-template-rows: var(--topbar-height, 36px) minmax(0, 1fr) 29px;
 }
 .app-shell.is-reader-knowledge > .topbar {
   grid-column: 1 / -1;
@@ -12268,17 +12270,20 @@ select option {
 }
 
 .app-shell.is-reader-knowledge.is-reader-knowledge-wide {
-  grid-template-columns: minmax(0, 0.32fr) 3px minmax(0, 0.68fr);
+  grid-template-columns:
+    minmax(0, calc((100% - 3px) * var(--reader-galaxy-wide-ratio, 0.34)))
+    3px
+    minmax(0, 1fr);
 }
 
 .app-shell.is-reader-knowledge.is-reader-split {
   grid-template-columns:
-    minmax(0, 0.4fr)
+    minmax(0, calc((100% - 6px) * var(--reader-knowledge-wide-ratio, 0.38)))
     3px
-    minmax(0, 0.3fr)
+    minmax(0, 1fr)
     3px
-    minmax(0, 0.3fr);
-  grid-template-rows: 52px minmax(0, 1fr) 29px;
+    minmax(0, 1fr);
+  grid-template-rows: var(--topbar-height, 36px) minmax(0, 1fr) 29px;
 }
 .app-shell.is-reader-knowledge.is-reader-split > .topbar {
   grid-column: 1 / -1;
@@ -12315,7 +12320,7 @@ select option {
     minmax(0, calc((100% - 3px) * var(--reader-split-wide-ratio, 0.45)))
     3px
     minmax(0, 1fr);
-  grid-template-rows: 52px minmax(0, 1fr) 29px;
+  grid-template-rows: var(--topbar-height, 36px) minmax(0, 1fr) 29px;
 }
 .app-shell.is-reader-split > .topbar {
   grid-column: 1 / -1;
@@ -12362,7 +12367,7 @@ select option {
 }
 .reader-split-divider {
   position: relative;
-  z-index: 8;
+  z-index: 20;
   min-width: 3px;
   width: 3px;
   min-height: 3px;
@@ -12371,6 +12376,12 @@ select option {
   touch-action: none;
   user-select: none;
   transition: background-color 0.15s ease;
+}
+.reader-split-divider::before {
+  position: absolute;
+  inset: 0 -6px;
+  content: '';
+  cursor: col-resize;
 }
 .reader-split-divider::after {
   position: absolute;
@@ -12384,14 +12395,289 @@ select option {
   opacity: 0.6;
 }
 .reader-split-divider:hover,
-.reader-split-divider:focus-visible {
-  background: color-mix(in srgb, var(--accent) 18%, var(--line));
+.reader-split-divider:focus-visible,
+.reader-split-divider.is-dragging {
+  background: color-mix(in srgb, var(--accent) 42%, var(--line));
   outline: none;
 }
 .reader-split-divider:hover::after,
-.reader-split-divider:focus-visible::after {
+.reader-split-divider:focus-visible::after,
+.reader-split-divider.is-dragging::after {
+  background: var(--accent);
   border-color: var(--accent);
   opacity: 1;
+}
+.app-shell.is-split-dragging {
+  cursor: col-resize;
+  user-select: none;
+}
+.app-shell.is-split-dragging foliate-view,
+.app-shell.is-split-dragging iframe,
+.app-shell.is-split-dragging video,
+.app-shell.is-split-dragging .book-galaxy-container {
+  pointer-events: none !important;
+  user-select: none !important;
+}
+
+/* ==========================================================================
+   Universal Dual-Workspace Split View (All Workspaces Compatible)
+   ========================================================================== */
+.app-shell.is-universal-split {
+  grid-template-columns:
+    minmax(0, calc((100% - 4px) * var(--universal-split-ratio, 0.5)))
+    4px
+    minmax(0, 1fr);
+  grid-template-rows: var(--topbar-height, 36px) minmax(0, 1fr) 29px;
+}
+
+.app-shell.is-universal-split.is-terminal-open {
+  grid-template-rows:
+    var(--topbar-height, 36px) minmax(0, 1fr) minmax(
+      160px,
+      var(--terminal-height, 280px)
+    )
+    29px;
+}
+
+.app-shell.is-universal-split > .topbar {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+
+.app-shell.is-universal-split > .is-split-pane-primary {
+  grid-column: 1 !important;
+  grid-row: 2 !important;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.app-shell.is-universal-split > .universal-split-divider {
+  grid-column: 2 !important;
+  grid-row: 2 !important;
+  min-width: 4px;
+  width: 4px;
+  z-index: 30;
+}
+
+.app-shell.is-universal-split > .is-split-pane-secondary {
+  grid-column: 3 !important;
+  grid-row: 2 !important;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.app-shell.is-universal-split > .is-split-pane-focused {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.app-shell.is-universal-split > .workspace {
+  --col-library: 180px;
+  --col-source: minmax(190px, 28%);
+  --col-ai: 240px;
+}
+
+.app-shell.is-universal-split > .workspace.is-library-collapsed {
+  --col-library: 42px;
+}
+
+.app-shell.is-universal-split > .workspace.is-source-collapsed {
+  --col-source: 42px;
+}
+
+.app-shell.is-universal-split > .workspace.is-ai-collapsed {
+  --col-ai: 42px;
+}
+
+.app-shell.is-universal-split .exam-center-body {
+  grid-template-columns: 156px minmax(0, 1fr) 236px;
+}
+
+.task-workspace-stage,
+.literature-workspace-stage,
+.feed-workspace-stage,
+.knowledge-workspace-stage,
+.player-workspace-stage {
+  grid-row: 2;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+}
+
+/* Topbar Split Pagination Controls */
+.workspace-switcher button.is-split-secondary {
+  color: #0284c7;
+  background: rgba(2, 132, 199, 0.06);
+  box-shadow: inset 0 -2px 0 #0284c7;
+  font-weight: 600;
+}
+
+.workspace-split-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 14px;
+  padding: 0 3px;
+  font: 700 9px/1 var(--mono);
+  border: 1px solid currentColor;
+  opacity: 0.88;
+}
+
+.workspace-split-tag.is-left {
+  color: var(--accent);
+}
+
+.workspace-split-tag.is-right {
+  color: #0284c7;
+}
+
+.topbar-split-controls {
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 8px;
+  gap: 5px;
+  border-right: 1px solid var(--line, #e4e7ea);
+  flex: 0 0 auto;
+}
+
+.topbar-split-toggle-btn {
+  height: 24px !important;
+  min-width: 0 !important;
+  padding: 0 9px !important;
+  border: 1px solid var(--line, #dce2e5) !important;
+  background: #f8fafb !important;
+  color: #4b5563 !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  gap: 5px !important;
+}
+
+.topbar-split-toggle-btn:hover {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+  background: #ffffff !important;
+}
+
+.topbar-split-toggle-btn.is-active {
+  border-color: var(--accent) !important;
+  background: rgba(217, 87, 59, 0.1) !important;
+  color: var(--accent) !important;
+  box-shadow: none !important;
+}
+
+.topbar-split-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+}
+
+.topbar-split-slot {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  border: 1px solid var(--line, #dce2e5);
+  background: #ffffff;
+}
+
+.topbar-split-slot.is-focused {
+  border-color: var(--accent);
+}
+
+.topbar-split-slot.is-right.is-focused {
+  border-color: #0284c7;
+}
+
+.topbar-split-slot-label {
+  height: 22px !important;
+  min-width: 0 !important;
+  padding: 0 6px !important;
+  border: 0 !important;
+  border-right: 1px solid var(--line, #e4e7ea) !important;
+  font: 700 10px/1 var(--mono) !important;
+  color: #64748b !important;
+  background: #f8fafc !important;
+  cursor: pointer;
+}
+
+.topbar-split-slot.is-focused .topbar-split-slot-label {
+  color: var(--accent) !important;
+  background: rgba(217, 87, 59, 0.1) !important;
+}
+
+.topbar-split-slot.is-right.is-focused .topbar-split-slot-label {
+  color: #0284c7 !important;
+  background: rgba(2, 132, 199, 0.1) !important;
+}
+
+.topbar-split-select {
+  height: 22px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--ink, #1e293b);
+  font: 600 11px var(--ui-font);
+  outline: none;
+  cursor: pointer;
+}
+
+.topbar-split-action-btn {
+  height: 24px !important;
+  min-width: 24px !important;
+  padding: 0 6px !important;
+  border: 1px solid var(--line, #dce2e5) !important;
+  background: #ffffff !important;
+  color: #52606d !important;
+  font-size: 11px !important;
+}
+
+.topbar-split-action-btn:hover {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .workspace-switcher
+  button.is-split-secondary {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.1);
+  box-shadow: inset 0 -2px 0 #38bdf8;
+}
+
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .workspace-split-tag.is-right {
+  color: #38bdf8;
+}
+
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .topbar-split-toggle-btn,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .topbar-split-slot,
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .topbar-split-action-btn {
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  background: rgba(255, 255, 255, 0.04) !important;
+  color: #cbd5e1 !important;
+}
+
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .topbar-split-slot-label {
+  border-right-color: rgba(255, 255, 255, 0.12) !important;
+  background: rgba(255, 255, 255, 0.05) !important;
+  color: #94a3b8 !important;
+}
+
+.app-shell:is([data-theme='dark'], [data-theme='navy'], [data-theme='purple'])
+  .topbar-split-select {
+  color: #e2e8f0;
+  background: #1a2228;
 }
 @media (max-width: 1100px) {
   .app-shell.is-reader-split {
@@ -14001,7 +14287,10 @@ select option {
 }
 .app-shell.is-terminal-open {
   grid-template-rows:
-    52px minmax(0, 1fr) minmax(160px, var(--terminal-height, 280px))
+    var(--topbar-height, 36px) minmax(0, 1fr) minmax(
+      160px,
+      var(--terminal-height, 280px)
+    )
     29px;
 }
 .app-shell.is-terminal-open > .statusbar {
@@ -14063,7 +14352,10 @@ select option {
 }
 .app-shell.is-reader-split.is-terminal-open {
   grid-template-rows:
-    52px minmax(0, 1fr) minmax(160px, var(--terminal-height, 280px))
+    var(--topbar-height, 36px) minmax(0, 1fr) minmax(
+      160px,
+      var(--terminal-height, 280px)
+    )
     29px;
 }
 .app-shell.is-reader-split.is-terminal-open > .seamind-terminal-drawer {
@@ -14101,7 +14393,7 @@ select option {
       320px,
       var(--terminal-width, 440px)
     );
-  grid-template-rows: 52px minmax(0, 1fr) 29px;
+  grid-template-rows: var(--topbar-height, 36px) minmax(0, 1fr) 29px;
 }
 .app-shell.is-terminal-right > .ebook-workspace-stage {
   grid-column: 1;
@@ -14181,7 +14473,7 @@ select option {
     minmax(0, 1fr)
     3px
     minmax(320px, var(--terminal-side-width, 440px));
-  grid-template-rows: 52px minmax(0, 1fr) 29px;
+  grid-template-rows: var(--topbar-height, 36px) minmax(0, 1fr) 29px;
 }
 .app-shell.is-reader-split.is-terminal-right > .topbar {
   grid-column: 1 / -1;
@@ -14212,12 +14504,32 @@ select option {
 }
 .app-shell.is-reader-knowledge.is-terminal-right {
   grid-template-columns:
-    minmax(0, calc((100% - var(--terminal-side-width, 440px) - 6px) * 0.52))
+    minmax(
+      0,
+      calc(
+        (100% - var(--terminal-side-width, 440px) - 6px) *
+          var(--reader-knowledge-wide-ratio, 0.5)
+      )
+    )
     3px
     minmax(0, 1fr)
     3px
     minmax(320px, var(--terminal-side-width, 440px));
-  grid-template-rows: 52px minmax(0, 1fr) 29px;
+  grid-template-rows: var(--topbar-height, 36px) minmax(0, 1fr) 29px;
+}
+.app-shell.is-reader-knowledge.is-reader-knowledge-wide.is-terminal-right {
+  grid-template-columns:
+    minmax(
+      0,
+      calc(
+        (100% - var(--terminal-side-width, 440px) - 6px) *
+          var(--reader-galaxy-wide-ratio, 0.34)
+      )
+    )
+    3px
+    minmax(0, 1fr)
+    3px
+    minmax(320px, var(--terminal-side-width, 440px));
 }
 .app-shell.is-reader-knowledge.is-terminal-right > .topbar {
   grid-column: 1 / -1;
@@ -14254,7 +14566,7 @@ select option {
     minmax(0, 0.2fr)
     3px
     minmax(300px, var(--terminal-side-width, 400px));
-  grid-template-rows: 52px minmax(0, 1fr) 29px;
+  grid-template-rows: var(--topbar-height, 36px) minmax(0, 1fr) 29px;
 }
 .app-shell.is-reader-knowledge.is-reader-split.is-terminal-right > .topbar {
   grid-column: 1 / -1;
@@ -15686,23 +15998,17 @@ select option {
    Terminal Workspace App-Shell Chrome Harmonization (Zed + Ghostty Flat)
    ========================================================================== */
 .app-shell.is-terminal-workspace {
-  grid-template-rows: 44px minmax(0, 1fr);
+  grid-template-rows: var(--topbar-height, 36px) minmax(0, 1fr);
 }
 
 .app-shell.is-terminal-workspace .topbar {
-  height: 44px;
-  min-height: 44px;
-  max-height: 44px;
+  height: var(--topbar-height, 36px);
+  min-height: var(--topbar-height, 36px);
+  max-height: var(--topbar-height, 36px);
 }
 
 .app-shell.is-terminal-workspace .statusbar {
   display: none;
-}
-
-.app-shell.is-terminal-workspace .workspace-switcher button {
-  border-right: 0;
-  padding: 0 14px;
-  font-size: 13px;
 }
 
 .app-shell.is-terminal-workspace[data-theme='dark'] {
@@ -15722,7 +16028,7 @@ select option {
 
 .app-shell.is-terminal-workspace[data-theme='dark'] .workspace-switcher button {
   color: #889390;
-  border-right-color: transparent;
+  border-right-color: #252b2f;
 }
 
 .app-shell.is-terminal-workspace[data-theme='dark']
@@ -15738,21 +16044,6 @@ select option {
   color: #d9dedc;
   background: #101315;
   box-shadow: inset 0 -2px 0 #93b7a1;
-}
-
-.app-shell.is-terminal-workspace[data-theme='dark'] .topbar-actions button {
-  border-color: transparent;
-  background: transparent;
-  color: #889390;
-  font-size: 12.5px;
-}
-
-.app-shell.is-terminal-workspace[data-theme='dark']
-  .topbar-actions
-  button:hover {
-  border-color: transparent;
-  background: rgba(255, 255, 255, 0.05);
-  color: #d9dedc;
 }
 
 .app-shell.is-terminal-workspace[data-theme='dark']

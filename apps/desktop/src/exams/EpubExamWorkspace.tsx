@@ -626,7 +626,7 @@ function EpubExamWorkspaceInner({
                   分栏
                 </button>
               </div>
-              {displayMode === 'paper' && (
+              {displayMode === 'paper' ? (
                 <div className="epub-exam-paper-tools">
                   <button
                     type="button"
@@ -660,39 +660,48 @@ function EpubExamWorkspaceInner({
                     打印 / 导出 PDF
                   </button>
                 </div>
-              )}
-              {displayMode !== 'paper' && (
-                <nav className="epub-exam-page-nav" aria-label="试卷翻页">
+              ) : (
+                <div className="epub-exam-paper-tools">
                   <button
                     type="button"
-                    onClick={() => {
-                      setPageIndex((index) => Math.max(0, index - pageStep));
-                      resetLeafScrolls();
-                    }}
-                    disabled={pageIndex === 0}
+                    className={isZenMode ? 'is-active' : ''}
+                    onClick={toggleZenMode}
+                    title="专注做卷（快捷键 F，一键收起/恢复两侧栏）"
                   >
-                    上一页
+                    {isZenMode ? '退出专注' : '专注做卷'}
                   </button>
-                  <span>
-                    {Math.min(pageIndex + 1, questionsList.length)}
-                    {pageStep === 2 && pageIndex + 1 < questionsList.length
-                      ? `–${pageIndex + 2}`
-                      : ''}{' '}
-                    / {questionsList.length}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPageIndex((index) =>
-                        Math.min(questionsList.length - 1, index + pageStep),
-                      );
-                      resetLeafScrolls();
-                    }}
-                    disabled={pageIndex + pageStep >= questionsList.length}
-                  >
-                    下一页
-                  </button>
-                </nav>
+                  <nav className="epub-exam-page-nav" aria-label="试卷翻页">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPageIndex((index) => Math.max(0, index - pageStep));
+                        resetLeafScrolls();
+                      }}
+                      disabled={pageIndex === 0}
+                    >
+                      上一页
+                    </button>
+                    <span>
+                      {Math.min(pageIndex + 1, questionsList.length)}
+                      {pageStep === 2 && pageIndex + 1 < questionsList.length
+                        ? `–${pageIndex + 2}`
+                        : ''}{' '}
+                      / {questionsList.length}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPageIndex((index) =>
+                          Math.min(questionsList.length - 1, index + pageStep),
+                        );
+                        resetLeafScrolls();
+                      }}
+                      disabled={pageIndex + pageStep >= questionsList.length}
+                    >
+                      下一页
+                    </button>
+                  </nav>
+                </div>
               )}
             </div>
 
@@ -761,44 +770,45 @@ function EpubExamWorkspaceInner({
                 scrollLockNonce={scrollLockNonce}
               />
             ) : (
-              <div className={`epub-exam-book-spread is-${displayMode}`}>
-                {(pageStep === 2
-                  ? [pageIndex, pageIndex + 1]
-                  : [pageIndex]
-                ).map((index) => {
-                  const question = questionsList[index];
-                  if (!question) {
+              <div
+                className={`epub-exam-book-spread is-${displayMode}${
+                  displayMode === 'spread' &&
+                  (pageStep === 2
+                    ? [pageIndex, pageIndex + 1]
+                    : [pageIndex]
+                  ).filter((idx) => Boolean(questionsList[idx])).length === 1
+                    ? ' is-single-leaf'
+                    : ''
+                }`}
+              >
+                {(pageStep === 2 ? [pageIndex, pageIndex + 1] : [pageIndex])
+                  .filter((index) => Boolean(questionsList[index]))
+                  .map((index) => {
+                    const question = questionsList[index];
+                    if (!question) return null;
                     return (
-                      <div
-                        className="epub-exam-leaf is-blank"
-                        key={`blank-${index}`}
-                        aria-hidden="true"
+                      <EpubExamQuestion
+                        key={question.id}
+                        question={question}
+                        index={index}
+                        answer={answers[question.id]}
+                        submitted={examSubmitted}
+                        busy={busy}
+                        review={selfReviews[question.id]}
+                        grade={grades[question.id]}
+                        codeResult={codeResults[question.id]}
+                        codeBusy={codeBusyId === question.id}
+                        showPrompt
+                        showAnswer={displayMode === 'spread'}
+                        onAnswer={(value) => editAnswer(question.id, value)}
+                        onReview={(value) => editReview(question.id, value)}
+                        onRunCode={() => void runCode(question.id)}
+                        onOverride={(earned) =>
+                          void overrideGrade(question.id, earned)
+                        }
                       />
                     );
-                  }
-                  return (
-                    <EpubExamQuestion
-                      key={question.id}
-                      question={question}
-                      index={index}
-                      answer={answers[question.id]}
-                      submitted={examSubmitted}
-                      busy={busy}
-                      review={selfReviews[question.id]}
-                      grade={grades[question.id]}
-                      codeResult={codeResults[question.id]}
-                      codeBusy={codeBusyId === question.id}
-                      showPrompt
-                      showAnswer={displayMode === 'spread'}
-                      onAnswer={(value) => editAnswer(question.id, value)}
-                      onReview={(value) => editReview(question.id, value)}
-                      onRunCode={() => void runCode(question.id)}
-                      onOverride={(earned) =>
-                        void overrideGrade(question.id, earned)
-                      }
-                    />
-                  );
-                })}
+                  })}
                 {displayMode === 'workspace' && questionsList[pageIndex] && (
                   <EpubExamQuestion
                     key={`work-${questionsList[pageIndex].id}`}

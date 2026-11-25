@@ -126,11 +126,12 @@ function urgencyBucket(urgency: ReviewUrgency): BucketKey {
 }
 
 function clusterOrbitRadius(index: number, total: number): number {
-  if (total <= 4) return 310;
-  if (total <= 8) return 340;
-  if (total <= 16) return index % 2 === 0 ? 330 : 490;
+  if (total <= 2) return 175;
+  if (total <= 4) return 195;
+  if (total <= 8) return 225;
+  if (total <= 16) return index % 2 === 0 ? 215 : 330;
   const tier = index % 3;
-  return tier === 0 ? 330 : tier === 1 ? 480 : 630;
+  return tier === 0 ? 215 : tier === 1 ? 320 : 425;
 }
 
 function placeInFan(
@@ -349,7 +350,7 @@ export function buildExamGalaxyGraph(
     );
 
     sortedExams.forEach((item, eIdx) => {
-      const pos = placeInFan(cx, cy, angle, eIdx, sortedExams.length, 142, 52);
+      const pos = placeInFan(cx, cy, angle, eIdx, sortedExams.length, 86, 40);
       const color = URGENCY_COLOR[item.schedule.urgency];
       const title =
         item.exam.sourceSectionLabel || item.exam.bookTitle || '未命名试卷';
@@ -363,7 +364,7 @@ export function buildExamGalaxyGraph(
         parentId: group.id,
         x: pos.x,
         y: pos.y,
-        orbitRadius: 142,
+        orbitRadius: 86,
         orbitAngle: angle,
         radius: planetRadiusOf(item.exam),
         label: title,

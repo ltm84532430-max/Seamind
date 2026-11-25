@@ -35,6 +35,19 @@ export interface EpubBookDocument {
   updatedAt: number;
 }
 
+export interface PdfBookDocument {
+  relativePath: string;
+  title: string;
+  category: string;
+  fileSize: number;
+  updatedAt: number;
+}
+
+export interface OpenedPdfBook {
+  path: string;
+  sha256: string;
+}
+
 export interface PlantUmlDocument {
   relativePath: string;
   title: string;
@@ -65,6 +78,7 @@ export interface LibrarySnapshot {
   rootPath: string | null;
   documents: MapDocument[];
   books: EpubBookDocument[];
+  pdfBooks: PdfBookDocument[];
   plantumlFiles: PlantUmlDocument[];
   textDocuments: TextDocument[];
   categories: string[];

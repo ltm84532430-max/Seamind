@@ -8,9 +8,17 @@ import {
   type FormEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
+import { createPortal } from 'react-dom';
 import type { MapDocument } from '../library/library';
 import type { Theme } from '../app/app-storage';
-import { UNFILED_FOLDER } from './knowledge-notes';
+import {
+  buildKnowledgeFolderTree,
+  isInternalAssetCategory,
+  normalizeKnowledgeFolderPath,
+  resolveNewKnowledgeCategoryPath,
+  UNFILED_FOLDER,
+  type KnowledgeFolderTreeNode,
+} from './knowledge-notes';
 import {
   groupKnowledgeBySource,
   knowledgeOrigin,
@@ -65,6 +73,7 @@ export interface KnowledgeWorkspaceProps {
   onChooseRoot(): void;
   onRefresh(): void;
   onCreateCategory(category: string): Promise<boolean>;
+  onRenameFolder?(path: string, newName: string): Promise<boolean>;
   onOpenNote(note: MapDocument, options?: OpenKnowledgeNoteOptions): void;
   onCreateNote(
     folder: string,
@@ -585,6 +594,7 @@ export default function KnowledgeWorkspace({
   onChooseRoot,
   onRefresh,
   onCreateCategory,
+  onRenameFolder,
   onOpenNote,
   onCreateNote,
   onDeleteNote,
@@ -595,7 +605,11 @@ export default function KnowledgeWorkspace({
   const [activeSource, setActiveSource] =
     useState<KnowledgeSourcePage>(readSourcePage);
   const [globalSearch, setGlobalSearch] = useState(false);
-  const [activeFolder, setActiveFolder] = useState(UNFILED_FOLDER);
+  const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
+  const setActiveFolder = useCallback((folder: string | null) => {
+    const clean = folder ? normalizeKnowledgeFolderPath(folder) : '';
+    setSelectedFolder(clean && clean !== UNFILED_FOLDER ? clean : null);
+  }, []);
   const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() =>
     readCollapsedFolders(),
   );
@@ -612,15 +626,30 @@ export default function KnowledgeWorkspace({
   const [pendingDeletePath, setPendingDeletePath] = useState<string | null>(
     null,
   );
-  const [templateMenuOpen, setTemplateMenuOpen] = useState(false);
+  const [fabMenuOpen, setFabMenuOpen] = useState(false);
   const [creatingCategory, setCreatingCategory] = useState(false);
   const [categoryInput, setCategoryInput] = useState('');
   const [categorySubmitting, setCategorySubmitting] = useState(false);
+  const [folderContextMenu, setFolderContextMenu] = useState<{
+    path: string;
+    name: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [renamingFolder, setRenamingFolder] = useState<{
+    path: string;
+    name: string;
+  } | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [renameError, setRenameError] = useState('');
+  const [renamePending, setRenamePending] = useState(false);
   const [openSwitcherPane, setOpenSwitcherPane] = useState<number | null>(null);
   const [syncScrollEnabled, setSyncScrollEnabled] = useState(false);
   const [isDraggingSplitRatio, setIsDraggingSplitRatio] = useState(false);
 
-  const splitMenuRef = useRef<HTMLDivElement>(null);
+  const fabContainerRef = useRef<HTMLDivElement>(null);
+  const folderContextMenuRef = useRef<HTMLDivElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
   const switcherMenuRef = useRef<HTMLDivElement>(null);
   const splitStageRef = useRef<HTMLElement>(null);
   const syncingScrollLockRef = useRef(false);
@@ -658,7 +687,8 @@ export default function KnowledgeWorkspace({
           category !== '读书笔记' &&
           !category.startsWith('读书笔记/') &&
           category !== '视频笔记' &&
-          !category.startsWith('视频笔记/'),
+          !category.startsWith('视频笔记/') &&
+          !isInternalAssetCategory(category),
       ),
     [categories],
   );
@@ -681,6 +711,8 @@ export default function KnowledgeWorkspace({
       activeSource === 'manual' ? manualCategories : [],
     );
   }, [documents, activeSource, query, manualCategories, globalSearch]);
+
+  const folderTree = useMemo(() => buildKnowledgeFolderTree(groups), [groups]);
 
   // 识别同一视频/同名重复文档，生成去重与版本元数据
   const duplicateNotesMap = useMemo(() => {
@@ -768,30 +800,35 @@ export default function KnowledgeWorkspace({
   const allFolderNames = useMemo(() => {
     const names = new Set<string>([UNFILED_FOLDER]);
     for (const raw of manualCategories) {
-      const clean = raw.trim();
-      if (clean) names.add(clean);
+      const clean = normalizeKnowledgeFolderPath(raw);
+      if (clean && !isInternalAssetCategory(clean)) names.add(clean);
     }
     for (const note of docNotes.filter(
       (doc) => knowledgeOrigin(doc) === 'manual',
     )) {
-      const clean = note.category.trim();
-      if (clean) names.add(clean);
+      const clean = normalizeKnowledgeFolderPath(note.category);
+      if (clean && !isInternalAssetCategory(clean)) names.add(clean);
     }
     return [...names].sort((a, b) => a.localeCompare(b, 'zh-CN'));
   }, [manualCategories, docNotes]);
 
+  const effectiveSelectedFolder = useMemo(() => {
+    if (!selectedFolder) return null;
+    const clean = normalizeKnowledgeFolderPath(selectedFolder);
+    if (!clean || clean === UNFILED_FOLDER) return null;
+    return clean;
+  }, [selectedFolder]);
+
   const effectiveFolder = useMemo(() => {
-    if (allFolderNames.includes(activeFolder)) return activeFolder;
-    if (activeDocument?.kind === 'doc' && activeDocument.category.trim()) {
-      return activeDocument.category.trim();
-    }
+    if (effectiveSelectedFolder) return effectiveSelectedFolder;
     return UNFILED_FOLDER;
-  }, [activeDocument, activeFolder, allFolderNames]);
+  }, [effectiveSelectedFolder]);
 
   useEffect(() => {
     if (activeDocument?.kind === 'doc') {
-      const folder = activeDocument.category.trim() || UNFILED_FOLDER;
-      setActiveFolder(folder);
+      const folder =
+        normalizeKnowledgeFolderPath(activeDocument.category) || UNFILED_FOLDER;
+      setSelectedFolder(folder !== UNFILED_FOLDER ? folder : null);
       setActiveSource(
         knowledgeOrigin({
           origin: activeDocument.origin,
@@ -892,6 +929,10 @@ export default function KnowledgeWorkspace({
       split.showOverview(true);
     }
     setActiveSource(source);
+    setSelectedFolder(null);
+    setFabMenuOpen(false);
+    setCreatingCategory(false);
+    setFolderContextMenu(null);
     setQuery('');
     setGlobalSearch(false);
     setPendingDeletePath(null);
@@ -916,19 +957,23 @@ export default function KnowledgeWorkspace({
     [groups],
   );
 
-  // Dismiss template menu on outside click or Escape
+  // Dismiss FAB menu on outside click or Escape
   useEffect(() => {
-    if (!templateMenuOpen) return;
+    if (!fabMenuOpen && !creatingCategory) return;
     const handlePointerDown = (event: MouseEvent) => {
       if (
-        splitMenuRef.current &&
-        !splitMenuRef.current.contains(event.target as Node)
+        fabContainerRef.current &&
+        !fabContainerRef.current.contains(event.target as Node)
       ) {
-        setTemplateMenuOpen(false);
+        setFabMenuOpen(false);
+        setCreatingCategory(false);
       }
     };
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setTemplateMenuOpen(false);
+      if (event.key === 'Escape') {
+        setFabMenuOpen(false);
+        setCreatingCategory(false);
+      }
     };
     window.addEventListener('mousedown', handlePointerDown);
     window.addEventListener('keydown', handleKeyDown);
@@ -936,13 +981,49 @@ export default function KnowledgeWorkspace({
       window.removeEventListener('mousedown', handlePointerDown);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [templateMenuOpen]);
+  }, [fabMenuOpen, creatingCategory]);
+
+  // Dismiss folder context menu on outside click, scroll, or Escape
+  useEffect(() => {
+    if (!folderContextMenu) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (
+        folderContextMenuRef.current &&
+        !folderContextMenuRef.current.contains(event.target as Node)
+      ) {
+        setFolderContextMenu(null);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setFolderContextMenu(null);
+      }
+    };
+    const handleScroll = () => setFolderContextMenu(null);
+    window.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('scroll', handleScroll, true);
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('scroll', handleScroll, true);
+    };
+  }, [folderContextMenu]);
 
   useEffect(() => {
     if (creatingCategory) {
       window.requestAnimationFrame(() => categoryInputRef.current?.focus());
     }
   }, [creatingCategory]);
+
+  useEffect(() => {
+    if (renamingFolder) {
+      window.requestAnimationFrame(() => {
+        renameInputRef.current?.focus();
+        renameInputRef.current?.select();
+      });
+    }
+  }, [renamingFolder]);
 
   const toggleSidebarCollapsed = useCallback(() => {
     setSidebarCollapsed((prev) => {
@@ -987,7 +1068,16 @@ export default function KnowledgeWorkspace({
   useEffect(() => {
     if (!active || !rootPath) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (pendingDeletePath || creatingCategory) return;
+      if (pendingDeletePath || creatingCategory || renamingFolder) return;
+      if (
+        event.key === 'Escape' &&
+        !fabMenuOpen &&
+        !folderContextMenu &&
+        selectedFolder !== null
+      ) {
+        setSelectedFolder(null);
+        return;
+      }
       if (
         event.altKey &&
         !event.ctrlKey &&
@@ -1076,70 +1166,164 @@ export default function KnowledgeWorkspace({
     active,
     activePanePaths,
     creatingCategory,
+    fabMenuOpen,
+    folderContextMenu,
     hasDocStage,
     pendingDeletePath,
+    renamingFolder,
     rootPath,
+    selectedFolder,
     split,
     splitState.splitMode,
     splitState.tabs,
     visibleCount,
   ]);
 
-  const toggleFolder = useCallback((folderName: string) => {
-    setActiveFolder(folderName);
-    setCollapsedFolders((prev) => {
-      const next = new Set(prev);
-      if (next.has(folderName)) next.delete(folderName);
-      else next.add(folderName);
-      writeCollapsedFolders(next);
-      return next;
-    });
-  }, []);
+  const toggleFolder = useCallback(
+    (folderPath: string) => {
+      setActiveFolder(folderPath);
+      setCollapsedFolders((prev) => {
+        const next = new Set(prev);
+        if (next.has(folderPath)) next.delete(folderPath);
+        else next.add(folderPath);
+        writeCollapsedFolders(next);
+        return next;
+      });
+    },
+    [setActiveFolder],
+  );
+
+  const allTreeFolderPaths = useMemo(() => {
+    const paths: string[] = [];
+    const walk = (nodes: readonly KnowledgeFolderTreeNode<MapDocument>[]) => {
+      for (const node of nodes) {
+        paths.push(node.path);
+        walk(node.children);
+      }
+    };
+    walk(folderTree);
+    return paths;
+  }, [folderTree]);
 
   const toggleAllFolders = useCallback(() => {
     setCollapsedFolders((prev) => {
       const next =
-        prev.size > 0 ? new Set<string>() : new Set(groups.map((g) => g.name));
+        prev.size > 0 ? new Set<string>() : new Set(allTreeFolderPaths);
       writeCollapsedFolders(next);
       return next;
     });
-  }, [groups]);
+  }, [allTreeFolderPaths]);
 
   const openCategoryCreator = useCallback(() => {
     if (sidebarCollapsed) {
       setSidebarCollapsed(false);
       writeSidebarCollapsed(false);
     }
+    setFabMenuOpen(true);
     setCreatingCategory(true);
   }, [sidebarCollapsed]);
 
   const submitCategory = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const clean = categoryInput
-      .trim()
-      .replaceAll('\\', '/')
-      .split('/')
-      .map((part) => part.trim())
-      .filter(Boolean)
-      .join('/');
-    if (!clean || categorySubmitting) return;
+    const targetCategory = resolveNewKnowledgeCategoryPath(
+      categoryInput,
+      effectiveSelectedFolder,
+    );
+    if (!targetCategory || categorySubmitting) return;
     setCategorySubmitting(true);
     try {
-      const created = await onCreateCategory(clean);
+      if (activeSource !== 'manual') {
+        setActiveSource('manual');
+      }
+      const created = await onCreateCategory(targetCategory);
       if (created) {
-        setActiveFolder(clean);
+        setSelectedFolder(targetCategory);
         setCollapsedFolders((prev) => {
-          if (!prev.has(clean)) return prev;
           const next = new Set(prev);
-          next.delete(clean);
+          const segments = targetCategory.split('/');
+          let prefix = '';
+          for (const seg of segments) {
+            prefix = prefix ? `${prefix}/${seg}` : seg;
+            next.delete(prefix);
+          }
           writeCollapsedFolders(next);
           return next;
         });
         setCategoryInput('');
         setCreatingCategory(false);
+        setFabMenuOpen(false);
       }
     } finally {
       setCategorySubmitting(false);
+    }
+  };
+
+  const openFolderRenameModal = useCallback(
+    (folderPath: string, folderName: string) => {
+      setFolderContextMenu(null);
+      setRenamingFolder({ path: folderPath, name: folderName });
+      setRenameValue(folderName);
+      setRenameError('');
+    },
+    [],
+  );
+
+  const submitFolderRename = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!renamingFolder || !onRenameFolder || renamePending) return;
+    const cleanName = renameValue
+      .trim()
+      .replaceAll('\\', '/')
+      .split('/')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .join('');
+    if (!cleanName) {
+      setRenameError('文件夹名称不能为空');
+      return;
+    }
+    if (cleanName === renamingFolder.name) {
+      setRenamingFolder(null);
+      return;
+    }
+    setRenamePending(true);
+    setRenameError('');
+    try {
+      const oldPath = renamingFolder.path;
+      const parentPrefix = oldPath.includes('/')
+        ? oldPath.slice(0, oldPath.lastIndexOf('/'))
+        : '';
+      const newPath = parentPrefix ? `${parentPrefix}/${cleanName}` : cleanName;
+      const ok = await onRenameFolder(oldPath, cleanName);
+      if (!ok) {
+        setRenameError('重命名失败，请检查名称是否冲突或包含非法字符');
+        return;
+      }
+      setSelectedFolder((prev) => {
+        if (!prev) return prev;
+        if (prev === oldPath) return newPath;
+        if (prev.startsWith(`${oldPath}/`)) {
+          return `${newPath}${prev.slice(oldPath.length)}`;
+        }
+        return prev;
+      });
+      setCollapsedFolders((prev) => {
+        const next = new Set<string>();
+        for (const item of prev) {
+          if (item === oldPath) {
+            next.add(newPath);
+          } else if (item.startsWith(`${oldPath}/`)) {
+            next.add(`${newPath}${item.slice(oldPath.length)}`);
+          } else {
+            next.add(item);
+          }
+        }
+        writeCollapsedFolders(next);
+        return next;
+      });
+      setRenamingFolder(null);
+    } finally {
+      setRenamePending(false);
     }
   };
 
@@ -1185,6 +1369,296 @@ export default function KnowledgeWorkspace({
     setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
     persistSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
   }, []);
+
+  const handleCreateNoteFromFab = useCallback(
+    (template?: KnowledgeNoteTemplate) => {
+      if (activeSource !== 'manual') {
+        setActiveSource('manual');
+      }
+      setFabMenuOpen(false);
+      setCreatingCategory(false);
+      onCreateNote(effectiveFolder, template);
+    },
+    [activeSource, effectiveFolder, onCreateNote],
+  );
+
+  const renderFolderNode = (
+    node: KnowledgeFolderTreeNode<MapDocument>,
+  ): React.ReactNode => {
+    const isCollapsed = collapsedFolders.has(node.path);
+    const isSelected = selectedFolder === node.path;
+    const canManageFolder =
+      activeSource === 'manual' &&
+      !globalSearch &&
+      node.path !== UNFILED_FOLDER;
+    const dupCopies = folderDuplicateCopies.get(node.path) ?? [];
+
+    return (
+      <section
+        className={`knowledge-group${isCollapsed ? ' is-collapsed' : ''}${node.depth > 0 ? ' is-subfolder' : ''}`}
+        key={node.path}
+      >
+        <div
+          className={`knowledge-folder-row${isSelected ? ' is-selected' : ''}`}
+          style={
+            node.depth > 0 ? { paddingLeft: `${node.depth * 14}px` } : undefined
+          }
+          onContextMenu={(event) => {
+            if (!canManageFolder) return;
+            event.preventDefault();
+            event.stopPropagation();
+            setSelectedFolder(node.path);
+            setFolderContextMenu({
+              path: node.path,
+              name: node.name,
+              x: Math.min(event.clientX, window.innerWidth - 210),
+              y: Math.min(event.clientY, window.innerHeight - 180),
+            });
+          }}
+        >
+          <button
+            type="button"
+            className="knowledge-folder-toggle"
+            aria-expanded={!isCollapsed}
+            title={
+              canManageFolder
+                ? `${node.path}（点击选中目录 · 右键重命名或新建子目录）`
+                : node.path
+            }
+            onClick={() => toggleFolder(node.path)}
+          >
+            <ChevronRightIcon expanded={!isCollapsed} />
+            <FolderIcon />
+            <span className="knowledge-folder-name">{node.name}</span>
+            <span className="knowledge-folder-count">
+              {node.totalNotesCount}
+            </span>
+          </button>
+          {dupCopies.length > 0 && (
+            <button
+              type="button"
+              className="knowledge-folder-clean-dup"
+              title={`该分类有 ${dupCopies.length} 篇同视频历史副本，点击一键清理，仅保留最新版`}
+              onClick={(event) => {
+                event.stopPropagation();
+                handleCleanFolderDuplicates(dupCopies);
+              }}
+            >
+              清理 {dupCopies.length} 副本
+            </button>
+          )}
+          {activeSource === 'manual' && !globalSearch && (
+            <button
+              type="button"
+              className="knowledge-folder-add"
+              title={`在「${node.path}」中新建笔记`}
+              aria-label={`在 ${node.path} 中新建笔记`}
+              onClick={(event) => {
+                event.stopPropagation();
+                setActiveFolder(node.path);
+                if (collapsedFolders.has(node.path)) {
+                  setCollapsedFolders((prev) => {
+                    const next = new Set(prev);
+                    next.delete(node.path);
+                    writeCollapsedFolders(next);
+                    return next;
+                  });
+                }
+                onCreateNote(node.path);
+              }}
+            >
+              <PlusIcon />
+            </button>
+          )}
+        </div>
+
+        {!isCollapsed && (
+          <div
+            className={
+              node.depth > 0
+                ? 'knowledge-folder-children'
+                : 'knowledge-folder-notes'
+            }
+          >
+            {node.children.length > 0 &&
+              node.children.map((child) => renderFolderNode(child))}
+
+            {node.notes.length === 0 && node.children.length === 0 ? (
+              <div className="knowledge-folder-empty">
+                <span>空分类</span>
+                {activeSource === 'manual' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveFolder(node.path);
+                      onCreateNote(node.path);
+                    }}
+                  >
+                    新建首篇
+                  </button>
+                )}
+              </div>
+            ) : (
+              node.notes.map((note) => {
+                const normPath = normalizeKnowledgePath(note.relativePath);
+                const paneSlots = activePanePaths.reduce<number[]>(
+                  (acc, p, idx) => {
+                    if (p === normPath) acc.push(idx);
+                    return acc;
+                  },
+                  [],
+                );
+                const isFocusedActive =
+                  hasDocStage && split.focusedPath === normPath;
+                const isSplitVisible =
+                  hasDocStage && !isFocusedActive && paneSlots.length > 0;
+                const isNoteDirty = split.documentsByPath[normPath]
+                  ? isDirty(split.documentsByPath[normPath])
+                  : false;
+                const isDeleting = pendingDeletePath === note.relativePath;
+
+                return (
+                  <div
+                    className={`knowledge-note-row${isFocusedActive ? ' is-active' : ''}${isSplitVisible ? ' is-split-visible' : ''}${isDeleting ? ' is-confirming' : ''}`}
+                    key={note.relativePath}
+                  >
+                    <button
+                      type="button"
+                      className="knowledge-note-main"
+                      title={`${note.title}\n${note.relativePath}\n点击打开 · Alt+点击在分栏打开`}
+                      onClick={(event) => {
+                        setActiveFolder(node.path);
+                        onOpenNote(note, {
+                          split: event.altKey || event.ctrlKey || event.metaKey,
+                        });
+                      }}
+                    >
+                      <div className="knowledge-note-line">
+                        <NoteIcon />
+                        <strong className="knowledge-note-title">
+                          {note.title}
+                        </strong>
+                        {isNoteDirty && (
+                          <span
+                            className="knowledge-note-dirty-dot"
+                            aria-label="未保存"
+                            title="有未保存修改"
+                          />
+                        )}
+                        {hasDocStage &&
+                          visibleCount > 1 &&
+                          paneSlots.length > 0 && (
+                            <span className="knowledge-note-pane-tag">
+                              {paneSlots.map((s) => `P${s + 1}`).join('·')}
+                            </span>
+                          )}
+                      </div>
+                      <div className="knowledge-note-sub">
+                        {note.updatedAt > 0 && (
+                          <span className="knowledge-note-date">
+                            {formatRelativeDate(note.updatedAt)}
+                          </span>
+                        )}
+                        {duplicateNotesMap.get(note.relativePath)
+                          ?.isDuplicate && (
+                          <span
+                            className={`knowledge-dup-chip ${
+                              duplicateNotesMap.get(note.relativePath)!.isLatest
+                                ? 'is-latest'
+                                : 'is-copy'
+                            }`}
+                            title={
+                              duplicateNotesMap.get(note.relativePath)!.isLatest
+                                ? `该视频共有 ${duplicateNotesMap.get(note.relativePath)!.total} 份笔记，此篇为最新版`
+                                : `该视频共有 ${duplicateNotesMap.get(note.relativePath)!.total} 份笔记，此篇为历史副本 (${duplicateNotesMap.get(note.relativePath)!.index}/${duplicateNotesMap.get(note.relativePath)!.total})`
+                            }
+                          >
+                            {duplicateNotesMap.get(note.relativePath)!.isLatest
+                              ? '最新版'
+                              : `副本 ${duplicateNotesMap.get(note.relativePath)!.index}/${duplicateNotesMap.get(note.relativePath)!.total}`}
+                          </span>
+                        )}
+                        {note.tags && note.tags.length > 0 && (
+                          <span className="knowledge-note-tags">
+                            {note.tags.slice(0, 2).map((tag) => (
+                              <span key={tag} className="knowledge-tag-chip">
+                                #{tag}
+                              </span>
+                            ))}
+                            {note.tags.length > 2 && (
+                              <span className="knowledge-tag-overflow">
+                                +{note.tags.length - 2}
+                              </span>
+                            )}
+                          </span>
+                        )}
+                      </div>
+                    </button>
+
+                    <div className="knowledge-note-actions">
+                      {isDeleting ? (
+                        <div className="knowledge-delete-bar">
+                          <button
+                            type="button"
+                            className="knowledge-delete-confirm-btn"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setPendingDeletePath(null);
+                              onDeleteNote(note);
+                            }}
+                          >
+                            删除
+                          </button>
+                          <button
+                            type="button"
+                            className="knowledge-delete-cancel-btn"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setPendingDeletePath(null);
+                            }}
+                          >
+                            取消
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            className="knowledge-note-split"
+                            title="在分栏中并排打开 (Alt+点击)"
+                            aria-label={`在分栏中打开 ${note.title}`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setActiveFolder(node.path);
+                              onOpenNote(note, { split: true });
+                            }}
+                          >
+                            <SplitColumnsIcon />
+                          </button>
+                          <button
+                            type="button"
+                            className="knowledge-note-trash"
+                            title={`删除「${note.title}」`}
+                            aria-label={`删除笔记 ${note.title}`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setPendingDeletePath(note.relativePath);
+                            }}
+                          >
+                            <TrashIcon />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        )}
+      </section>
+    );
+  };
 
   return (
     <div
@@ -1261,7 +1735,7 @@ export default function KnowledgeWorkspace({
                 items: groups.map((group) => ({
                   key: `group:${group.name}`,
                   label: `${group.name} (${group.notes.length} 篇)`,
-                  active: effectiveFolder === group.name,
+                  active: selectedFolder === group.name,
                   thumb: {
                     name: group.name,
                     shape: 'square',
@@ -1291,26 +1765,24 @@ export default function KnowledgeWorkspace({
               },
             ]}
             footerItems={[
-              ...(activeSource === 'manual'
-                ? [
-                    {
-                      key: 'new-note',
-                      label: rootPath
-                        ? `在「${effectiveFolder}」中新建笔记`
-                        : '请先选择文件库目录',
-                      icon: <RailPlusIcon />,
-                      disabled: !rootPath,
-                      onClick: () => onCreateNote(effectiveFolder),
-                    },
-                    {
-                      key: 'new-category',
-                      label: '新建分类文件夹',
-                      icon: <RailFolderIcon />,
-                      disabled: !rootPath,
-                      onClick: openCategoryCreator,
-                    },
-                  ]
-                : []),
+              {
+                key: 'new-note',
+                label: rootPath
+                  ? `在「${effectiveFolder}」中新建笔记`
+                  : '请先选择文件库目录',
+                icon: <RailPlusIcon />,
+                disabled: !rootPath,
+                onClick: () => handleCreateNoteFromFab(),
+              },
+              {
+                key: 'new-category',
+                label: effectiveSelectedFolder
+                  ? `在「${effectiveSelectedFolder}」下新建子文件夹`
+                  : '新建根目录文件夹',
+                icon: <RailFolderIcon />,
+                disabled: !rootPath,
+                onClick: openCategoryCreator,
+              },
               ...(hasDocStage
                 ? [
                     {
@@ -1326,7 +1798,14 @@ export default function KnowledgeWorkspace({
         </aside>
       ) : (
         <aside className="knowledge-sidebar" aria-label="知识库文档导航">
-          <header className="knowledge-sidebar-head">
+          <header
+            className="knowledge-sidebar-head"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) {
+                setSelectedFolder(null);
+              }
+            }}
+          >
             <div
               className="knowledge-sidebar-mode-tabs"
               role="tablist"
@@ -1398,114 +1877,14 @@ export default function KnowledgeWorkspace({
           )}
 
           {rootPath && (
-            <div className="knowledge-toolbar">
-              {activeSource === 'manual' && (
-                <div className="knowledge-action-row">
-                  <div className="knowledge-new-split" ref={splitMenuRef}>
-                    <button
-                      type="button"
-                      className="knowledge-new-main"
-                      title={`在「${effectiveFolder}」中新建空白笔记`}
-                      onClick={() => onCreateNote(effectiveFolder)}
-                    >
-                      <PlusIcon />
-                      <span>新建笔记</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="knowledge-new-caret"
-                      title="从模板新建笔记"
-                      aria-label="选择笔记模板"
-                      aria-expanded={templateMenuOpen}
-                      onClick={() => setTemplateMenuOpen((open) => !open)}
-                    >
-                      <ChevronDownIcon />
-                    </button>
-
-                    {templateMenuOpen && (
-                      <div
-                        className="knowledge-template-menu"
-                        role="menu"
-                        aria-label="新建笔记模板"
-                      >
-                        <div className="knowledge-template-menu-head">
-                          目标分类：{effectiveFolder}
-                        </div>
-                        {KNOWLEDGE_NOTE_TEMPLATES.map((template) => (
-                          <button
-                            key={template.id}
-                            type="button"
-                            role="menuitem"
-                            className="knowledge-template-option"
-                            onClick={() => {
-                              setTemplateMenuOpen(false);
-                              onCreateNote(effectiveFolder, template);
-                            }}
-                          >
-                            <strong>{template.label}</strong>
-                            <span>{template.description}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  <button
-                    type="button"
-                    className={`knowledge-secondary-btn${creatingCategory ? ' is-active' : ''}`}
-                    title="新建分类文件夹"
-                    aria-label="新建分类文件夹"
-                    onClick={() => setCreatingCategory((open) => !open)}
-                  >
-                    <FolderPlusIcon />
-                    <span>分类</span>
-                  </button>
-                </div>
-              )}
-
-              {activeSource === 'manual' && creatingCategory && (
-                <form
-                  className="knowledge-category-form"
-                  onSubmit={(event) => void submitCategory(event)}
-                >
-                  <input
-                    ref={categoryInputRef}
-                    type="text"
-                    value={categoryInput}
-                    maxLength={80}
-                    placeholder="分类名，支持 多级/子目录"
-                    aria-label="新分类名称"
-                    disabled={categorySubmitting}
-                    onChange={(event) => setCategoryInput(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Escape') {
-                        setCreatingCategory(false);
-                        setCategoryInput('');
-                      }
-                    }}
-                  />
-                  <div className="knowledge-category-form-actions">
-                    <button
-                      type="submit"
-                      className="kb-mini-btn is-primary"
-                      disabled={!categoryInput.trim() || categorySubmitting}
-                    >
-                      创建
-                    </button>
-                    <button
-                      type="button"
-                      className="kb-mini-btn"
-                      onClick={() => {
-                        setCreatingCategory(false);
-                        setCategoryInput('');
-                      }}
-                    >
-                      取消
-                    </button>
-                  </div>
-                </form>
-              )}
-
+            <div
+              className="knowledge-toolbar"
+              onMouseDown={(event) => {
+                if (event.target === event.currentTarget) {
+                  setSelectedFolder(null);
+                }
+              }}
+            >
               <div className="knowledge-search-box">
                 <SearchIcon />
                 <input
@@ -1555,7 +1934,14 @@ export default function KnowledgeWorkspace({
             ))}
           </nav>
 
-          <div className="knowledge-groups">
+          <div
+            className="knowledge-groups"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) {
+                setSelectedFolder(null);
+              }
+            }}
+          >
             {!rootPath ? (
               <div className="knowledge-sidebar-empty">
                 <p>尚未绑定本地文件库目录。</p>
@@ -1571,281 +1957,18 @@ export default function KnowledgeWorkspace({
               </div>
             ) : (
               <>
-                {groups.map((group) => {
-                  const isCollapsed = collapsedFolders.has(group.name);
-                  const isSelected = effectiveFolder === group.name;
+                {folderTree.map((node) => renderFolderNode(node))}
 
-                  return (
-                    <section
-                      className={`knowledge-group${isCollapsed ? ' is-collapsed' : ''}`}
-                      key={group.name}
-                    >
-                      <div
-                        className={`knowledge-folder-row${isSelected ? ' is-selected' : ''}`}
-                      >
-                        <button
-                          type="button"
-                          className="knowledge-folder-toggle"
-                          aria-expanded={!isCollapsed}
-                          onClick={() => toggleFolder(group.name)}
-                        >
-                          <ChevronRightIcon expanded={!isCollapsed} />
-                          <FolderIcon />
-                          <span className="knowledge-folder-name">
-                            {group.name}
-                          </span>
-                          <span className="knowledge-folder-count">
-                            {group.notes.length}
-                          </span>
-                        </button>
-                        {(folderDuplicateCopies.get(group.name)?.length ?? 0) >
-                          0 && (
-                          <button
-                            type="button"
-                            className="knowledge-folder-clean-dup"
-                            title={`该分类有 ${folderDuplicateCopies.get(group.name)!.length} 篇同视频历史副本，点击一键清理，仅保留最新版`}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              handleCleanFolderDuplicates(
-                                folderDuplicateCopies.get(group.name)!,
-                              );
-                            }}
-                          >
-                            清理 {folderDuplicateCopies.get(group.name)!.length}{' '}
-                            副本
-                          </button>
-                        )}
-                        {activeSource === 'manual' && !globalSearch && (
-                          <button
-                            type="button"
-                            className="knowledge-folder-add"
-                            title={`在「${group.name}」中新建笔记`}
-                            aria-label={`在 ${group.name} 中新建笔记`}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              setActiveFolder(group.name);
-                              if (collapsedFolders.has(group.name)) {
-                                setCollapsedFolders((prev) => {
-                                  const next = new Set(prev);
-                                  next.delete(group.name);
-                                  writeCollapsedFolders(next);
-                                  return next;
-                                });
-                              }
-                              onCreateNote(group.name);
-                            }}
-                          >
-                            <PlusIcon />
-                          </button>
-                        )}
-                      </div>
-
-                      {!isCollapsed && (
-                        <div className="knowledge-folder-notes">
-                          {group.notes.length === 0 ? (
-                            <div className="knowledge-folder-empty">
-                              <span>空分类</span>
-                              {activeSource === 'manual' && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setActiveFolder(group.name);
-                                    onCreateNote(group.name);
-                                  }}
-                                >
-                                  新建首篇
-                                </button>
-                              )}
-                            </div>
-                          ) : (
-                            group.notes.map((note) => {
-                              const normPath = normalizeKnowledgePath(
-                                note.relativePath,
-                              );
-                              const paneSlots = activePanePaths.reduce<
-                                number[]
-                              >((acc, p, idx) => {
-                                if (p === normPath) acc.push(idx);
-                                return acc;
-                              }, []);
-                              const isFocusedActive =
-                                hasDocStage && split.focusedPath === normPath;
-                              const isSplitVisible =
-                                hasDocStage &&
-                                !isFocusedActive &&
-                                paneSlots.length > 0;
-                              const isNoteDirty = split.documentsByPath[
-                                normPath
-                              ]
-                                ? isDirty(split.documentsByPath[normPath])
-                                : false;
-                              const isDeleting =
-                                pendingDeletePath === note.relativePath;
-
-                              return (
-                                <div
-                                  className={`knowledge-note-row${isFocusedActive ? ' is-active' : ''}${isSplitVisible ? ' is-split-visible' : ''}${isDeleting ? ' is-confirming' : ''}`}
-                                  key={note.relativePath}
-                                >
-                                  <button
-                                    type="button"
-                                    className="knowledge-note-main"
-                                    title={`${note.title}\n${note.relativePath}\n点击打开 · Alt+点击在分栏打开`}
-                                    onClick={(event) =>
-                                      onOpenNote(note, {
-                                        split:
-                                          event.altKey ||
-                                          event.ctrlKey ||
-                                          event.metaKey,
-                                      })
-                                    }
-                                  >
-                                    <div className="knowledge-note-line">
-                                      <NoteIcon />
-                                      <strong className="knowledge-note-title">
-                                        {note.title}
-                                      </strong>
-                                      {isNoteDirty && (
-                                        <span
-                                          className="knowledge-note-dirty-dot"
-                                          aria-label="未保存"
-                                          title="有未保存修改"
-                                        />
-                                      )}
-                                      {hasDocStage &&
-                                        visibleCount > 1 &&
-                                        paneSlots.length > 0 && (
-                                          <span className="knowledge-note-pane-tag">
-                                            {paneSlots
-                                              .map((s) => `P${s + 1}`)
-                                              .join('·')}
-                                          </span>
-                                        )}
-                                    </div>
-                                    <div className="knowledge-note-sub">
-                                      {note.updatedAt > 0 && (
-                                        <span className="knowledge-note-date">
-                                          {formatRelativeDate(note.updatedAt)}
-                                        </span>
-                                      )}
-                                      {duplicateNotesMap.get(note.relativePath)
-                                        ?.isDuplicate && (
-                                        <span
-                                          className={`knowledge-dup-chip ${
-                                            duplicateNotesMap.get(
-                                              note.relativePath,
-                                            )!.isLatest
-                                              ? 'is-latest'
-                                              : 'is-copy'
-                                          }`}
-                                          title={
-                                            duplicateNotesMap.get(
-                                              note.relativePath,
-                                            )!.isLatest
-                                              ? `该视频共有 ${duplicateNotesMap.get(note.relativePath)!.total} 份笔记，此篇为最新版`
-                                              : `该视频共有 ${duplicateNotesMap.get(note.relativePath)!.total} 份笔记，此篇为历史副本 (${duplicateNotesMap.get(note.relativePath)!.index}/${duplicateNotesMap.get(note.relativePath)!.total})`
-                                          }
-                                        >
-                                          {duplicateNotesMap.get(
-                                            note.relativePath,
-                                          )!.isLatest
-                                            ? '最新版'
-                                            : `副本 ${duplicateNotesMap.get(note.relativePath)!.index}/${duplicateNotesMap.get(note.relativePath)!.total}`}
-                                        </span>
-                                      )}
-                                      {note.tags && note.tags.length > 0 && (
-                                        <span className="knowledge-note-tags">
-                                          {note.tags.slice(0, 2).map((tag) => (
-                                            <span
-                                              key={tag}
-                                              className="knowledge-tag-chip"
-                                            >
-                                              #{tag}
-                                            </span>
-                                          ))}
-                                          {note.tags.length > 2 && (
-                                            <span className="knowledge-tag-overflow">
-                                              +{note.tags.length - 2}
-                                            </span>
-                                          )}
-                                        </span>
-                                      )}
-                                    </div>
-                                  </button>
-
-                                  <div className="knowledge-note-actions">
-                                    {isDeleting ? (
-                                      <div className="knowledge-delete-bar">
-                                        <button
-                                          type="button"
-                                          className="knowledge-delete-confirm-btn"
-                                          onClick={(event) => {
-                                            event.stopPropagation();
-                                            setPendingDeletePath(null);
-                                            onDeleteNote(note);
-                                          }}
-                                        >
-                                          删除
-                                        </button>
-                                        <button
-                                          type="button"
-                                          className="knowledge-delete-cancel-btn"
-                                          onClick={(event) => {
-                                            event.stopPropagation();
-                                            setPendingDeletePath(null);
-                                          }}
-                                        >
-                                          取消
-                                        </button>
-                                      </div>
-                                    ) : (
-                                      <>
-                                        <button
-                                          type="button"
-                                          className="knowledge-note-split"
-                                          title="在分栏中并排打开 (Alt+点击)"
-                                          aria-label={`在分栏中打开 ${note.title}`}
-                                          onClick={(event) => {
-                                            event.stopPropagation();
-                                            onOpenNote(note, { split: true });
-                                          }}
-                                        >
-                                          <SplitColumnsIcon />
-                                        </button>
-                                        <button
-                                          type="button"
-                                          className="knowledge-note-trash"
-                                          title={`删除「${note.title}」`}
-                                          aria-label={`删除笔记 ${note.title}`}
-                                          onClick={(event) => {
-                                            event.stopPropagation();
-                                            setPendingDeletePath(
-                                              note.relativePath,
-                                            );
-                                          }}
-                                        >
-                                          <TrashIcon />
-                                        </button>
-                                      </>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
-                      )}
-                    </section>
-                  );
-                })}
-
-                {groups.length === 0 && (
-                  <div className="knowledge-sidebar-empty">
+                {folderTree.length === 0 && (
+                  <div
+                    className="knowledge-sidebar-empty"
+                    onMouseDown={() => setSelectedFolder(null)}
+                  >
                     <p>
                       {query.trim()
                         ? '没有匹配的笔记或分类'
                         : activeSource === 'manual'
-                          ? '暂无我的笔记，可点击上方新建笔记。'
+                          ? '暂无我的笔记，可点击右下角 + 新建笔记或文件夹。'
                           : '当前来源暂无笔记。'}
                     </p>
                     {query.trim() && (
@@ -1863,6 +1986,366 @@ export default function KnowledgeWorkspace({
             )}
           </div>
 
+          {rootPath && (
+            <div className="knowledge-fab-container" ref={fabContainerRef}>
+              {(fabMenuOpen || creatingCategory) && (
+                <div
+                  className="knowledge-fab-popover"
+                  role="dialog"
+                  aria-label="新建笔记或文件夹"
+                >
+                  <div className="knowledge-fab-context-bar">
+                    <div className="knowledge-fab-context-main">
+                      <span
+                        className={`knowledge-fab-context-dot${effectiveSelectedFolder ? ' is-scoped' : ''}`}
+                        aria-hidden="true"
+                      />
+                      <span className="knowledge-fab-context-label">
+                        {effectiveSelectedFolder ? (
+                          <>
+                            目标目录：<strong>{effectiveSelectedFolder}</strong>
+                          </>
+                        ) : (
+                          <>
+                            目标位置：<strong>根目录（顶级）</strong>
+                          </>
+                        )}
+                      </span>
+                    </div>
+                    {effectiveSelectedFolder && (
+                      <button
+                        type="button"
+                        className="knowledge-fab-clear-sel"
+                        title="清除目录选中状态，切换为根目录新建"
+                        onClick={() => setSelectedFolder(null)}
+                      >
+                        × 置空
+                      </button>
+                    )}
+                  </div>
+
+                  {creatingCategory ? (
+                    <form
+                      className="knowledge-fab-folder-form"
+                      onSubmit={(event) => void submitCategory(event)}
+                    >
+                      <div className="knowledge-fab-folder-prefix">
+                        <FolderPlusIcon />
+                        <span>
+                          {effectiveSelectedFolder
+                            ? `${effectiveSelectedFolder} /`
+                            : '根目录 /'}
+                        </span>
+                      </div>
+                      <input
+                        ref={categoryInputRef}
+                        type="text"
+                        className="knowledge-fab-folder-input"
+                        value={categoryInput}
+                        maxLength={80}
+                        placeholder={
+                          effectiveSelectedFolder
+                            ? '输入子文件夹名称（支持 a/b）…'
+                            : '输入全新根目录名称（支持 a/b）…'
+                        }
+                        aria-label="新文件夹名称"
+                        disabled={categorySubmitting}
+                        onChange={(event) =>
+                          setCategoryInput(event.target.value)
+                        }
+                        onKeyDown={(event) => {
+                          if (event.key === 'Escape') {
+                            event.stopPropagation();
+                            setCreatingCategory(false);
+                            setCategoryInput('');
+                          }
+                        }}
+                      />
+                      <div className="knowledge-category-form-actions">
+                        <button
+                          type="button"
+                          className="kb-mini-btn"
+                          onClick={() => {
+                            setCreatingCategory(false);
+                            setCategoryInput('');
+                          }}
+                        >
+                          返回
+                        </button>
+                        <button
+                          type="submit"
+                          className="kb-mini-btn is-primary"
+                          disabled={!categoryInput.trim() || categorySubmitting}
+                        >
+                          {effectiveSelectedFolder
+                            ? '创建子目录'
+                            : '创建根目录'}
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <>
+                      <div className="knowledge-fab-actions-list">
+                        <button
+                          type="button"
+                          className="knowledge-fab-action-item"
+                          onClick={() => handleCreateNoteFromFab()}
+                        >
+                          <span className="knowledge-fab-action-icon">
+                            <NoteIcon />
+                          </span>
+                          <span className="knowledge-fab-action-body">
+                            <strong>新建笔记</strong>
+                            <span>
+                              在「{effectiveFolder}」下创建 Markdown 文档
+                            </span>
+                          </span>
+                          <span
+                            className="knowledge-fab-action-arrow"
+                            aria-hidden="true"
+                          >
+                            →
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          className="knowledge-fab-action-item"
+                          onClick={() => setCreatingCategory(true)}
+                        >
+                          <span className="knowledge-fab-action-icon is-folder">
+                            <FolderPlusIcon />
+                          </span>
+                          <span className="knowledge-fab-action-body">
+                            <strong>
+                              {effectiveSelectedFolder
+                                ? '新建子文件夹'
+                                : '新建根目录文件夹'}
+                            </strong>
+                            <span>
+                              {effectiveSelectedFolder
+                                ? `在「${effectiveSelectedFolder}」下生成子目录`
+                                : '当前未选中目录，生成全新顶级目录'}
+                            </span>
+                          </span>
+                          <span
+                            className="knowledge-fab-action-arrow"
+                            aria-hidden="true"
+                          >
+                            →
+                          </span>
+                        </button>
+                      </div>
+
+                      <div
+                        className="knowledge-fab-template-drawer"
+                        aria-label="从模板快速新建笔记"
+                      >
+                        <div className="knowledge-fab-template-head">
+                          <span>从模板快速起笔</span>
+                          <small>{effectiveFolder}</small>
+                        </div>
+                        <div className="knowledge-fab-templates">
+                          {KNOWLEDGE_NOTE_TEMPLATES.map((template) => (
+                            <button
+                              key={template.id}
+                              type="button"
+                              className="knowledge-fab-template-chip"
+                              title={`${template.description}（新建至 ${effectiveFolder}）`}
+                              onClick={() => handleCreateNoteFromFab(template)}
+                            >
+                              {template.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              <div className="knowledge-fab-trigger-row">
+                {effectiveSelectedFolder &&
+                  !fabMenuOpen &&
+                  !creatingCategory && (
+                    <button
+                      type="button"
+                      className="knowledge-fab-scope-pill"
+                      title={`当前已选中「${effectiveSelectedFolder}」，点击取消选中恢复根目录状态`}
+                      onClick={() => setSelectedFolder(null)}
+                    >
+                      <FolderIcon />
+                      <span>{effectiveSelectedFolder}</span>
+                      <i aria-hidden="true">×</i>
+                    </button>
+                  )}
+
+                <button
+                  type="button"
+                  className={`knowledge-fab-btn${fabMenuOpen || creatingCategory ? ' is-open' : ''}${effectiveSelectedFolder ? ' is-scoped' : ''}`}
+                  title={
+                    effectiveSelectedFolder
+                      ? `新建笔记或在「${effectiveSelectedFolder}」下新建子目录`
+                      : '新建笔记或全新根目录文件夹'
+                  }
+                  aria-label="新建笔记或文件夹"
+                  aria-expanded={fabMenuOpen || creatingCategory}
+                  onClick={() => {
+                    if (creatingCategory) {
+                      setCreatingCategory(false);
+                      setFabMenuOpen(false);
+                    } else {
+                      setFabMenuOpen((open) => !open);
+                    }
+                  }}
+                >
+                  <PlusIcon />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {folderContextMenu &&
+            createPortal(
+              <div
+                ref={folderContextMenuRef}
+                className="knowledge-folder-context-menu"
+                role="menu"
+                aria-label={`文件夹 ${folderContextMenu.path} 操作菜单`}
+                style={{
+                  left: `${folderContextMenu.x}px`,
+                  top: `${folderContextMenu.y}px`,
+                }}
+              >
+                <div className="knowledge-folder-context-head">
+                  <FolderIcon />
+                  <span>{folderContextMenu.path}</span>
+                </div>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    const targetPath = folderContextMenu.path;
+                    setFolderContextMenu(null);
+                    setSelectedFolder(targetPath);
+                    onCreateNote(targetPath);
+                  }}
+                >
+                  <NoteIcon />
+                  <span>在此新建笔记</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    const targetPath = folderContextMenu.path;
+                    setFolderContextMenu(null);
+                    setSelectedFolder(targetPath);
+                    setFabMenuOpen(true);
+                    setCreatingCategory(true);
+                  }}
+                >
+                  <FolderPlusIcon />
+                  <span>在此新建子文件夹…</span>
+                </button>
+                {onRenameFolder && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() =>
+                      openFolderRenameModal(
+                        folderContextMenu.path,
+                        folderContextMenu.name,
+                      )
+                    }
+                  >
+                    <FolderIcon />
+                    <span>重命名文件夹…</span>
+                  </button>
+                )}
+                <div
+                  className="knowledge-folder-context-sep"
+                  role="separator"
+                />
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setFolderContextMenu(null);
+                    setSelectedFolder(null);
+                  }}
+                >
+                  <span>取消选中（恢复根目录态）</span>
+                </button>
+              </div>,
+              document.body,
+            )}
+
+          {renamingFolder &&
+            createPortal(
+              <div
+                className="knowledge-rename-modal-backdrop"
+                onMouseDown={(event) => {
+                  if (event.target === event.currentTarget && !renamePending) {
+                    setRenamingFolder(null);
+                  }
+                }}
+              >
+                <form
+                  className="knowledge-rename-modal-card"
+                  onSubmit={(event) => void submitFolderRename(event)}
+                >
+                  <h3>重命名文件夹</h3>
+                  <p className="knowledge-rename-modal-path">
+                    当前路径：{renamingFolder.path}
+                  </p>
+                  <input
+                    ref={renameInputRef}
+                    type="text"
+                    className="knowledge-rename-modal-input"
+                    value={renameValue}
+                    maxLength={80}
+                    disabled={renamePending}
+                    placeholder="输入新的文件夹名称"
+                    aria-label="新的文件夹名称"
+                    onChange={(event) => {
+                      setRenameValue(event.target.value);
+                      if (renameError) setRenameError('');
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape' && !renamePending) {
+                        event.stopPropagation();
+                        setRenamingFolder(null);
+                      }
+                    }}
+                  />
+                  {renameError && (
+                    <p className="knowledge-rename-modal-error" role="alert">
+                      {renameError}
+                    </p>
+                  )}
+                  <div className="knowledge-rename-modal-actions">
+                    <button
+                      type="button"
+                      className="kb-mini-btn"
+                      disabled={renamePending}
+                      onClick={() => setRenamingFolder(null)}
+                    >
+                      取消
+                    </button>
+                    <button
+                      type="submit"
+                      className="kb-mini-btn is-primary"
+                      disabled={!renameValue.trim() || renamePending}
+                    >
+                      {renamePending ? '重命名中…' : '确认重命名'}
+                    </button>
+                  </div>
+                </form>
+              </div>,
+              document.body,
+            )}
+
           <div
             className="knowledge-resizer"
             role="separator"
@@ -1873,6 +2356,7 @@ export default function KnowledgeWorkspace({
             onPointerMove={handleResizerPointerMove}
             onPointerUp={(event) => finishResize(event.pointerId)}
             onPointerCancel={(event) => finishResize(event.pointerId)}
+            onPointerLeave={() => undefined}
             onLostPointerCapture={(event) => finishResize(event.pointerId)}
             onDoubleClick={resetSidebarWidth}
           />

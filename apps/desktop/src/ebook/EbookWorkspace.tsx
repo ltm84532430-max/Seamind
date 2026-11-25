@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
-import type { EpubBookDocument, LibrarySnapshot } from '../library/library';
+import type {
+  EpubBookDocument,
+  LibrarySnapshot,
+  PdfBookDocument,
+} from '../library/library';
+import { getPdfBookSummary } from './pdf-book-store';
+import PdfBookCover from './PdfBookCover';
 import type { EpubExamSummary } from '../exams/epub-exams';
 import { listEpubExams } from '../exams/epub-exams';
 import {
@@ -28,25 +34,34 @@ export default function EbookWorkspace({
   snapshot,
   busy,
   onImport,
+  bookImportResetPending,
+  onBookImportShown,
   onRefresh,
   onChooseRoot,
   onOpenBook,
+  onOpenPdfBook,
   onCreateTask,
   onDeleteBook,
+  onDeletePdfBook,
   onOpenExams,
 }: {
   active: boolean;
   snapshot: LibrarySnapshot | null;
   busy: boolean;
   onImport: () => void;
+  bookImportResetPending: boolean;
+  onBookImportShown: () => void;
   onRefresh: () => void;
   onChooseRoot: () => void;
   onOpenBook: (book: EpubBookDocument) => void;
+  onOpenPdfBook: (book: PdfBookDocument) => void;
   onCreateTask: (book: EpubBookDocument) => void;
   onDeleteBook: (book: EpubBookDocument) => Promise<void>;
+  onDeletePdfBook: (book: PdfBookDocument) => Promise<void>;
   onOpenExams: (bookKey: string) => void;
 }) {
   const books = snapshot?.books ?? [];
+  const pdfBooks = snapshot?.pdfBooks ?? [];
   const [query, setQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [categoryError, setCategoryError] = useState('');
@@ -58,6 +73,8 @@ export default function EbookWorkspace({
   const [deleteTarget, setDeleteTarget] = useState<EpubBookDocument | null>(
     null,
   );
+  const [pdfDeleteTarget, setPdfDeleteTarget] =
+    useState<PdfBookDocument | null>(null);
   const [deleteError, setDeleteError] = useState('');
   const [deletingPath, setDeletingPath] = useState('');
   const [openMenuPath, setOpenMenuPath] = useState('');
@@ -78,6 +95,14 @@ export default function EbookWorkspace({
   });
   const [dashboardRevision, setDashboardRevision] = useState(0);
   const [exams, setExams] = useState<EpubExamSummary[]>([]);
+
+  useEffect(() => {
+    if (!bookImportResetPending) return;
+    setQuery('');
+    setCategoryFilter('all');
+    setSortBy('added');
+    onBookImportShown();
+  }, [bookImportResetPending, onBookImportShown]);
 
   useEffect(() => {
     let active = true;
@@ -189,6 +214,38 @@ export default function EbookWorkspace({
         b.book.updatedAt - a.book.updatedAt,
     );
   }, [books, categoryFilter, dashboardRevision, query, sortBy]);
+
+  const visiblePdfBooks = useMemo(() => {
+    if (categoryFilter !== 'all' && categoryFilter !== '__uncategorized__')
+      return [];
+    const search = query.trim().toLocaleLowerCase();
+    const rows = pdfBooks.filter(
+      (book) =>
+        !search ||
+        [book.title, book.relativePath, book.category].some((value) =>
+          value.toLocaleLowerCase().includes(search),
+        ),
+    );
+    if (sortBy === 'title')
+      return rows.sort((a, b) => a.title.localeCompare(b.title, 'zh-CN'));
+    if (sortBy === 'recent') {
+      return rows.sort(
+        (a, b) =>
+          (getPdfBookSummary(snapshot?.rootPath ?? '', b.relativePath)
+            ?.updatedAt ?? b.updatedAt) -
+          (getPdfBookSummary(snapshot?.rootPath ?? '', a.relativePath)
+            ?.updatedAt ?? a.updatedAt),
+      );
+    }
+    return rows.sort((a, b) => b.updatedAt - a.updatedAt);
+  }, [
+    pdfBooks,
+    snapshot?.rootPath,
+    categoryFilter,
+    query,
+    sortBy,
+    dashboardRevision,
+  ]);
 
   const categoryGroups = useMemo(() => {
     const groups = new Map<string, typeof visibleBooks>();
@@ -393,7 +450,7 @@ export default function EbookWorkspace({
               选择文件库位置
             </button>
           </section>
-        ) : books.length ? (
+        ) : books.length || pdfBooks.length ? (
           <>
             <div className="ebook-shelf-toolbar">
               <label className="ebook-shelf-search">
@@ -415,6 +472,14 @@ export default function EbookWorkspace({
                 )}
               </label>
               <div className="ebook-shelf-toolbar-controls">
+                <button
+                  type="button"
+                  className="ebook-shelf-refresh-button"
+                  onClick={onImport}
+                  disabled={busy}
+                >
+                  添加电子书
+                </button>
                 <label className="ebook-shelf-sort">
                   <span>排序</span>
                   <select
@@ -479,7 +544,7 @@ export default function EbookWorkspace({
               </header>
             )}
 
-            {visibleBooks.length ? (
+            {visibleBooks.length || visiblePdfBooks.length ? (
               <section className="ebook-shelf-grid" aria-label="已导入的电子书">
                 {categoryFilter === 'all' &&
                   categoryGroups.map(({ category, books: groupedBooks }) => {
@@ -672,6 +737,54 @@ export default function EbookWorkspace({
                     </article>
                   );
                 })}
+                {visiblePdfBooks.map((book, index) => {
+                  const progress = getPdfBookSummary(
+                    snapshot.rootPath!,
+                    book.relativePath,
+                  );
+                  return (
+                    <article
+                      className="ebook-book-card ebook-pdf-book-card"
+                      key={`pdf:${book.relativePath}`}
+                    >
+                      <button
+                        type="button"
+                        className="ebook-book-open"
+                        onClick={() => onOpenPdfBook(book)}
+                        title={`阅读 PDF：${book.title}`}
+                      >
+                        <PdfBookCover
+                          rootPath={snapshot.rootPath!}
+                          book={book}
+                          colorIndex={index}
+                        />
+                        <span className="ebook-book-title">{book.title}</span>
+                        <span className="ebook-book-meta">
+                          PDF · {book.category || formatBookSize(book.fileSize)}
+                        </span>
+                        <span className="ebook-book-date">
+                          {progress
+                            ? `读至第 ${progress.pageNumber} 页`
+                            : `${formatBookSize(book.fileSize)} · ${formatBookDate(book.updatedAt)}`}
+                        </span>
+                      </button>
+                      <div className="ebook-book-card-footer ebook-pdf-book-footer">
+                        <span>PDF 阅读</span>
+                        <button
+                          type="button"
+                          className="ebook-pdf-delete"
+                          onClick={() => {
+                            setPdfDeleteTarget(book);
+                            setDeleteError('');
+                          }}
+                          aria-label={`删除 PDF《${book.title}》`}
+                        >
+                          删除
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
                 <button
                   type="button"
                   className="ebook-book-card ebook-book-add-card"
@@ -679,13 +792,17 @@ export default function EbookWorkspace({
                   disabled={busy || !snapshot?.rootPath}
                   title={
                     snapshot?.rootPath
-                      ? '导入 EPUB 文件到书架'
+                      ? '选择或拖入 EPUB、PDF 文件到书架'
                       : '请先选择文件库位置'
                   }
-                  aria-label="导入 EPUB 文件到书架"
+                  aria-label="添加电子书到书架，支持 EPUB 和 PDF"
                 >
                   <div className="ebook-book-add-cover" aria-hidden="true">
                     <span className="ebook-book-add-plus">＋</span>
+                    <span className="ebook-book-add-label">添加电子书</span>
+                    <span className="ebook-book-add-hint">
+                      EPUB · PDF · 可拖入
+                    </span>
                     {busy && (
                       <span className="ebook-book-add-busy-text">导入中…</span>
                     )}
@@ -708,10 +825,12 @@ export default function EbookWorkspace({
               ＋
             </div>
             <h2>书架还是空的</h2>
-            <p>选择 EPUB 文件后会复制到当前文件库，并显示在这里。</p>
-            <button type="button" onClick={onImport} disabled={busy}>
-              导入第一本电子书
-            </button>
+            <p>选择或拖入 EPUB、PDF 文件后会复制到当前文件库。</p>
+            <div className="ebook-shelf-empty-actions">
+              <button type="button" onClick={onImport} disabled={busy}>
+                添加电子书（EPUB / PDF）
+              </button>
+            </div>
           </section>
         )}
 
@@ -758,6 +877,67 @@ export default function EbookWorkspace({
                   className="is-danger"
                   onClick={() => void confirmDelete()}
                   disabled={Boolean(deletingPath)}
+                >
+                  {deletingPath ? '正在删除…' : '确认删除'}
+                </button>
+              </div>
+            </section>
+          </div>
+        )}
+        {pdfDeleteTarget && (
+          <div
+            className="ebook-delete-backdrop"
+            role="presentation"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget && !deletingPath)
+                setPdfDeleteTarget(null);
+            }}
+          >
+            <section
+              className="ebook-delete-dialog"
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="ebook-pdf-delete-title"
+            >
+              <h2 id="ebook-pdf-delete-title">删除这本 PDF？</h2>
+              <p>
+                “{pdfDeleteTarget.title}”会从书架移除，同时清除这本 PDF
+                在书架里的阅读位置、书签和批注。
+              </p>
+              {deleteError && (
+                <p className="ebook-delete-error" role="alert">
+                  {deleteError}
+                </p>
+              )}
+              <div>
+                <button
+                  type="button"
+                  disabled={Boolean(deletingPath)}
+                  onClick={() => setPdfDeleteTarget(null)}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className="is-danger"
+                  disabled={Boolean(deletingPath)}
+                  onClick={() => {
+                    const target = pdfDeleteTarget;
+                    setDeletingPath(target.relativePath);
+                    void onDeletePdfBook(target)
+                      .then(() => {
+                        setPdfDeleteTarget(null);
+                        setDashboardRevision((value) => value + 1);
+                      })
+                      .catch((error) =>
+                        setDeleteError(
+                          error instanceof Error
+                            ? error.message
+                            : String(error),
+                        ),
+                      )
+                      .finally(() => setDeletingPath(''));
+                  }}
                 >
                   {deletingPath ? '正在删除…' : '确认删除'}
                 </button>

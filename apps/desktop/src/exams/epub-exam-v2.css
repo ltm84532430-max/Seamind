@@ -277,27 +277,27 @@
 .epub-exam-stage-inner > .epub-exam-page-header,
 .epub-exam-analytics-header {
   display: flex;
-  flex: 0 0 80px;
-  height: 80px;
-  align-items: flex-start;
+  flex: 0 0 46px;
+  height: 46px;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
   margin: 0;
-  padding: 12px 16px;
+  padding: 0 14px;
   border-bottom: 0;
   background: var(--exam-surface);
   box-shadow: inset 0 -1px 0 var(--exam-grid-line);
 }
 
 .epub-exam-stage-inner > .epub-exam-page-header {
-  gap: 16px;
+  gap: 12px;
 }
 
 .epub-exam-sidebar.is-collapsed .epub-exam-sidebar-header,
 .epub-exam-analytics.is-collapsed .epub-exam-analytics-header {
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
-  padding: 12px 8px;
+  padding: 0 8px;
 }
 
 .epub-exam-sidebar.is-collapsed .epub-exam-sidebar-book-meta,
@@ -311,6 +311,46 @@
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.epub-exam-sidebar-count {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--exam-border);
+  border-radius: 3px;
+  background: var(--exam-subtle);
+  color: var(--exam-muted);
+  font:
+    600 10.5px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    monospace;
+}
+
+.epub-exam-sidebar-book-banner {
+  flex: 0 0 28px;
+  height: 28px;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
+  background: var(--exam-subtle);
+  color: var(--exam-muted);
+  font-size: 11px;
+  font-weight: 500;
+  box-shadow: inset 0 -1px 0 var(--exam-grid-line);
+  overflow: hidden;
+}
+
+.epub-exam-sidebar-book-banner > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .epub-exam-sidebar-kicker,
@@ -328,8 +368,8 @@
 .epub-exam-analytics-title h2 {
   max-width: none;
   height: 20px;
-  margin: 2px 0 0;
-  font-size: 16px;
+  margin: 0;
+  font-size: 14px;
   font-weight: 700;
   line-height: 20px;
   color: var(--exam-ink);
@@ -686,8 +726,8 @@
 
 .epub-exam-office-line {
   height: 16px;
-  margin: 4px 0 0;
-  font-size: 12px;
+  margin: 0;
+  font-size: 11.5px;
   line-height: 16px;
   color: var(--exam-muted);
   white-space: nowrap;
@@ -766,10 +806,10 @@
 
 /* View Toolbar */
 .epub-exam-stage-inner > .epub-exam-view-toolbar {
-  flex: 0 0 48px;
-  height: 48px;
+  flex: 0 0 38px;
+  height: 38px;
   margin: 0;
-  padding: 8px 16px;
+  padding: 4px 14px;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -781,18 +821,18 @@
 .epub-exam-workspace-shell.is-paper-mode
   .epub-exam-stage-inner
   > .epub-exam-page-header {
-  flex: 0 0 64px;
-  height: 64px;
-  padding: 10px 16px;
+  flex: 0 0 46px;
+  height: 46px;
+  padding: 0 14px;
 }
 
 .epub-exam-workspace-shell.is-paper-mode
   .epub-exam-stage-inner
   > .epub-exam-view-toolbar {
   flex: 0 0 auto;
-  min-height: 42px;
+  min-height: 38px;
   height: auto;
-  padding: 6px 16px;
+  padding: 4px 14px;
   flex-wrap: wrap;
 }
 
@@ -837,9 +877,14 @@
   justify-content: stretch;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-template-rows: minmax(0, 1fr);
-  gap: 16px;
-  padding: 16px;
+  gap: 14px;
+  padding: 14px;
   overflow: hidden;
+}
+
+.epub-exam-stage-inner > .epub-exam-book-spread.is-single-leaf {
+  grid-template-columns: minmax(0, 820px);
+  justify-content: center;
 }
 
 .epub-exam-leaf-shell {
@@ -856,7 +901,8 @@
   width: 0;
   min-width: 0;
   flex: 1;
-  border-right: 0;
+  border-radius: 6px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
 }
 
 .epub-exam-leaf-shell > .exam-scroll-minimap-host {
@@ -874,7 +920,7 @@
   align-self: stretch;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 28px 32px;
+  padding: 22px 26px;
   background: var(--exam-surface);
   color: var(--exam-body);
   border: 1px solid var(--exam-border);
@@ -890,10 +936,72 @@
   justify-content: space-between;
   align-items: center;
   gap: 8px;
-  padding-bottom: 12px;
+  padding-bottom: 10px;
   border-bottom: 1px solid var(--exam-border-subtle);
   color: var(--exam-muted);
   font-size: 12px;
+}
+
+.epub-exam-leaf-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.epub-exam-q-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 4px;
+  background: var(--exam-accent-soft);
+  border: 1px solid var(--exam-accent);
+  color: var(--exam-accent-ink);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.epub-exam-q-type {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 4px;
+  background: var(--exam-subtle);
+  border: 1px solid var(--exam-border);
+  color: var(--exam-body);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.epub-exam-q-points {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--exam-muted);
+}
+
+.epub-exam-option-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--exam-border);
+  background: var(--exam-subtle);
+  color: var(--exam-ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11.5px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.epub-exam-option-item.is-selected .epub-exam-option-key {
+  border-color: var(--exam-accent);
+  background: var(--exam-accent);
+  color: #fff;
 }
 
 .epub-exam-leaf-prompt {

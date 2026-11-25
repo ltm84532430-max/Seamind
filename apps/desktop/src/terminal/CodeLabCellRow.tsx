@@ -14,7 +14,9 @@ import {
   LabChevronDownIcon,
   LabCopyIcon,
   LabEditIcon,
+  LabNoteIcon,
   LabPlayIcon,
+  LabPlusIcon,
   LabSparkIcon,
   LabTerminalOutIcon,
   LabTrashIcon,
@@ -93,7 +95,7 @@ const GuardedTextOutput = memo(function GuardedTextOutput({
   );
 });
 
-const CellOutputList = memo(function CellOutputList({
+export const CellOutputList = memo(function CellOutputList({
   cellId,
   outputs,
   durationMs,
@@ -101,6 +103,9 @@ const CellOutputList = memo(function CellOutputList({
   theme,
   onClearOutputs,
   onZoomImage,
+  onPinOutput,
+  pinned = false,
+  stale = false,
 }: {
   cellId: string;
   outputs: CodeLabOutputItem[];
@@ -109,6 +114,9 @@ const CellOutputList = memo(function CellOutputList({
   theme: Theme;
   onClearOutputs: (cellId: string) => void;
   onZoomImage: (src: string) => void;
+  onPinOutput?: (cellId: string) => void;
+  pinned?: boolean;
+  stale?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -150,8 +158,20 @@ const CellOutputList = memo(function CellOutputList({
           <span className="codelab-outputs-count">
             {outputs.length} 项{collapsed ? ' · 已折叠' : ''}
           </span>
+          {stale && <span className="codelab-outputs-stale">需要重新运行</span>}
         </button>
         <div className="codelab-outputs-tools">
+          {onPinOutput && (
+            <button
+              type="button"
+              className={`codelab-output-pin-btn${pinned ? ' is-active' : ''}`}
+              onClick={() => onPinOutput(cellId)}
+              aria-pressed={pinned}
+              title={pinned ? '取消固定输出' : '固定输出到右侧'}
+            >
+              {pinned ? '取消固定' : '固定到右侧'}
+            </button>
+          )}
           {plainCopyText && (
             <button
               type="button"
@@ -261,8 +281,16 @@ export interface CodeLabCellRowProps {
   onSendToAgent: (cellId: string) => void;
   onMoveCell: (cellId: string, direction: 'up' | 'down') => void;
   onDeleteCell: (cellId: string) => void;
+  onDuplicateCell?: (cellId: string) => void;
+  onInsertCellBelow?: (cellId: string, kind: 'code' | 'markdown') => void;
+  onExportCellToStudy?: (
+    cellId: string,
+    target: 'knowledge' | 'mindmap',
+  ) => void;
   onClearOutputs: (cellId: string) => void;
   onZoomImage: (src: string) => void;
+  onPinOutput: (cellId: string) => void;
+  pinnedOutputCellId: string | null;
 }
 
 export const CodeLabCellRow = memo(function CodeLabCellRow({
@@ -291,10 +319,16 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
   onSendToAgent,
   onMoveCell,
   onDeleteCell,
+  onDuplicateCell,
+  onInsertCellBelow,
+  onExportCellToStudy,
   onClearOutputs,
   onZoomImage,
+  onPinOutput,
+  pinnedOutputCellId,
 }: CodeLabCellRowProps) {
   const [langMenuOpen, setLangMenuOpen] = useState(false);
+  const [copiedSource, setCopiedSource] = useState(false);
   const langMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -322,11 +356,12 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
     : cell.status === 'running'
       ? '[*]'
       : cell.executionCount !== null
-        ? `[${String(cell.executionCount).padStart(2, '0')}]`
-        : '[  ]';
+        ? `[${cell.executionCount}]`
+        : `[${index + 1}]`;
 
   return (
     <article
+      data-cell-id={cell.id}
       className={`codelab-cell is-${cell.kind} is-${cell.status}${isFocused ? ' is-cell-focused' : ''}${isMarkdownPreview ? ' is-md-preview-mode' : ''}`}
       onMouseDown={() => onSelectCell(cell.id)}
     >
@@ -334,11 +369,8 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
         <div className="codelab-cell-progress" aria-hidden="true" />
       )}
 
-      {/* Stable execution rail */}
+      {/* Slim 36px execution rail: [n] + status dot; hover reveals Run button */}
       <div className="codelab-cell-gutter">
-        <span className="codelab-cell-idx">
-          {String(index + 1).padStart(2, '0')}
-        </span>
         {!isMarkdown ? (
           <button
             type="button"
@@ -348,22 +380,28 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
               onRunCell(cell.id, false);
             }}
             disabled={cell.status === 'running'}
-            title="运行此格 (Ctrl+Enter)"
+            title={`运行第 ${index + 1} 格 (Ctrl+Enter)`}
             aria-label={`运行第 ${index + 1} 格`}
           >
-            <LabPlayIcon size={13} />
+            <span className="codelab-cell-prompt">{execLabel}</span>
+            <span className="codelab-gutter-play-glyph" aria-hidden="true">
+              <LabPlayIcon size={12} />
+            </span>
           </button>
         ) : (
           <span className="codelab-cell-prompt is-md">MD</span>
         )}
         {!isMarkdown && (
-          <span className="codelab-cell-prompt">{execLabel}</span>
+          <span
+            className={`codelab-gutter-status-dot is-${cell.status}`}
+            aria-hidden="true"
+          />
         )}
       </div>
 
       {/* Main Paper-Stream Content */}
       <div className="codelab-cell-body">
-        {/* Cell actions stay above the editor, without covering code */}
+        {/* Cell actions stay above the editor, revealed on hover/selection */}
         <div
           className={`codelab-cell-float-bar${langMenuOpen ? ' is-pinned' : ''}`}
           role="toolbar"
@@ -490,6 +528,70 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
             </>
           )}
 
+          <button
+            type="button"
+            className="codelab-float-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              const src = liveSourceMapRef.current.get(cell.id) ?? cell.source;
+              void navigator.clipboard?.writeText(src).then(() => {
+                setCopiedSource(true);
+                window.setTimeout(() => setCopiedSource(false), 1200);
+              });
+            }}
+            title="复制单元格源码"
+            aria-label="复制单元格源码"
+          >
+            {copiedSource ? (
+              <LabCheckIcon size={11} />
+            ) : (
+              <LabCopyIcon size={11} />
+            )}
+          </button>
+
+          {onDuplicateCell && (
+            <button
+              type="button"
+              className="codelab-float-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDuplicateCell(cell.id);
+              }}
+              title="在下方克隆此单元格"
+              aria-label="在下方克隆此单元格"
+            >
+              <span>克隆</span>
+            </button>
+          )}
+
+          {onExportCellToStudy &&
+            (cell.outputs.length > 0 || Boolean(cell.origin) || isMarkdown) && (
+              <>
+                <button
+                  type="button"
+                  className="codelab-float-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onExportCellToStudy(cell.id, 'knowledge');
+                  }}
+                  title="将此格代码、结果与来源保存到知识库笔记"
+                >
+                  <span>记入知识库</span>
+                </button>
+                <button
+                  type="button"
+                  className="codelab-float-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onExportCellToStudy(cell.id, 'mindmap');
+                  }}
+                  title="将此格结论、代码与来源追加到当前思维导图"
+                >
+                  <span>追加导图</span>
+                </button>
+              </>
+            )}
+
           {index > 0 && (
             <button
               type="button"
@@ -535,6 +637,19 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
         </div>
 
         {/* Cell Editor or Seamless Markdown Research Prose */}
+        {cell.origin && (
+          <div className="codelab-cell-origin" title={cell.origin.reference}>
+            <span>
+              {cell.origin.kind === 'epub'
+                ? 'EPUB'
+                : cell.origin.kind === 'pdf'
+                  ? 'PDF'
+                  : '思维导图'}
+            </span>
+            <strong>{cell.origin.title}</strong>
+            <span>{cell.origin.locator}</span>
+          </div>
+        )}
         {isMarkdownPreview ? (
           <div
             className="codelab-md-preview"
@@ -587,16 +702,65 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
         )}
 
         {/* Structured Output Well */}
-        {cell.outputs.length > 0 && (
-          <CellOutputList
-            cellId={cell.id}
-            outputs={cell.outputs}
-            durationMs={cell.durationMs}
-            stage={cell.stage}
-            theme={theme}
-            onClearOutputs={onClearOutputs}
-            onZoomImage={onZoomImage}
-          />
+        {cell.outputs.length > 0 &&
+          (pinnedOutputCellId === cell.id ? (
+            <div className="codelab-output-docked-note">
+              <span>
+                输出已固定到侧栏 · {cell.outputs.length} 项 ·{' '}
+                {formatDurationCompact(cell.durationMs)}
+              </span>
+              <button type="button" onClick={() => onPinOutput(cell.id)}>
+                取消固定
+              </button>
+            </div>
+          ) : (
+            <CellOutputList
+              cellId={cell.id}
+              outputs={cell.outputs}
+              durationMs={cell.durationMs}
+              stage={cell.stage}
+              theme={theme}
+              onClearOutputs={onClearOutputs}
+              onZoomImage={onZoomImage}
+              onPinOutput={onPinOutput}
+              stale={Boolean(
+                cell.lastExecutedSource !== undefined &&
+                cell.lastExecutedSource !== cell.source,
+              )}
+            />
+          ))}
+
+        {/* Quiet hover inter-cell insertion affordance */}
+        {onInsertCellBelow && (
+          <div
+            className="codelab-cell-insert-divider"
+            aria-label="在此单元格下方插入"
+          >
+            <button
+              type="button"
+              className="codelab-cell-insert-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                onInsertCellBelow(cell.id, 'code');
+              }}
+              title="在此格下方插入代码格"
+            >
+              <LabPlusIcon size={10} />
+              <span>代码</span>
+            </button>
+            <button
+              type="button"
+              className="codelab-cell-insert-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                onInsertCellBelow(cell.id, 'markdown');
+              }}
+              title="在此格下方插入笔记格"
+            >
+              <LabNoteIcon size={10} />
+              <span>笔记</span>
+            </button>
+          </div>
         )}
       </div>
     </article>

@@ -199,7 +199,7 @@ class MarkdownMinimapView implements MarkdownMinimapController {
       Math.floor((activeLine * rowCount) / lineCount),
     );
 
-    // Keep the cursor indicator behind the miniature text so it never hides
+    // Keep the cursor indicator behind the miniature structure bars so it never hides
     // the source content represented by the minimap.
     context.globalAlpha = 0.16;
     context.fillStyle = accentColor || '#d9573b';
@@ -211,10 +211,6 @@ class MarkdownMinimapView implements MarkdownMinimapController {
     );
     context.globalAlpha = 1;
 
-    const fontSize = Math.max(1.8, Math.min(2.8, rowHeight * 0.88));
-    context.font = `${fontSize}px ui-monospace, SFMono-Regular, Consolas, monospace`;
-    context.textBaseline = 'middle';
-
     for (let row = 0; row < rowCount; row += 1) {
       const lineNumber = Math.min(
         lineCount,
@@ -224,33 +220,56 @@ class MarkdownMinimapView implements MarkdownMinimapController {
       const trimmed = content.trim();
       if (!trimmed) continue;
 
+      const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)$/);
+      const isHeading = Boolean(headingMatch);
+      const headingDepth = headingMatch ? headingMatch[1].length : 0;
+      const isCode = /^(?:```|~~~)/.test(trimmed);
       const leadingWhitespace = content.match(/^\s*/)?.[0].length || 0;
-      const indent = Math.min(10, leadingWhitespace * 1.25);
-      const maxWidth = Math.max(1, availableWidth - indent);
-      const color =
-        lineNumber - 1 === activeLine
-          ? accentColor
-          : /^#{1,6}\s/.test(trimmed)
-            ? headingColor
-            : /^(?:```|~~~)/.test(trimmed)
-              ? codeColor
-              : lineColor;
+      const indent = isHeading
+        ? Math.min(14, (headingDepth - 1) * 3)
+        : Math.min(12, leadingWhitespace * 1.25);
+      const maxWidth = Math.max(4, availableWidth - indent);
+      const isCurrentActive = lineNumber - 1 === activeLine;
+      const color = isCurrentActive
+        ? accentColor
+        : isHeading
+          ? headingColor
+          : isCode
+            ? codeColor
+            : lineColor;
       context.fillStyle = color || '#8c9aa5';
 
-      // VS Code style natural line rendering:
-      // Clip to maxWidth instead of horizontally squishing characters into maxWidth.
-      // This preserves normal character aspect ratio and variable natural line lengths.
-      context.save();
-      context.beginPath();
-      context.rect(xInset + indent, row * rowHeight, maxWidth, rowHeight);
-      context.clip();
-      context.fillText(
-        trimmed,
-        xInset + indent,
-        row * rowHeight + rowHeight / 2,
-      );
-      context.restore();
+      // Render clear structural wireframe bars instead of 2px fillText white dots
+      // so headings and paragraph structure form a legible document framework.
+      const y = row * rowHeight;
+      if (isHeading) {
+        const barH = Math.max(2, Math.min(3.2, rowHeight * 0.92));
+        const textLen = (headingMatch?.[2] ?? trimmed).trim().length;
+        const barW = Math.max(
+          14,
+          Math.min(
+            maxWidth,
+            Math.round(maxWidth * Math.min(1, 0.35 + textLen / 28)),
+          ),
+        );
+        context.globalAlpha = isCurrentActive ? 1 : 0.95;
+        context.fillRect(xInset + indent, y, barW, barH);
+      } else {
+        const barH = Math.max(1.2, Math.min(2, rowHeight * 0.62));
+        const barW = Math.max(
+          6,
+          Math.min(maxWidth, Math.round((trimmed.length / 64) * maxWidth)),
+        );
+        context.globalAlpha = isCurrentActive ? 0.95 : isCode ? 0.68 : 0.46;
+        context.fillRect(
+          xInset + indent,
+          y + (rowHeight - barH) / 2,
+          barW,
+          barH,
+        );
+      }
     }
+    context.globalAlpha = 1;
 
     this.root.setAttribute('aria-valuemax', String(lineCount));
     this.root.setAttribute('aria-valuenow', String(activeLine + 1));

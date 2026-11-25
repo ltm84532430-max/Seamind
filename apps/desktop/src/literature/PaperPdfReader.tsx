@@ -10,6 +10,16 @@ import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import 'pdfjs-dist/web/pdf_viewer.css';
+import ReaderHeader from '../ebook/ReaderHeader';
+import { libraryApi } from '../library/library-api';
+import type { PdfBookDocument } from '../library/library';
+import {
+  deletePdfBookAnnotation,
+  getPdfBookProgress,
+  listPdfBookAnnotations,
+  savePdfBookAnnotation,
+  savePdfBookProgress,
+} from '../ebook/pdf-book-store';
 import { literatureApi } from './literature-api';
 import type {
   PaperAnnotation,
@@ -18,6 +28,15 @@ import type {
   PaperItem,
 } from './types';
 import { PaperPdfPage, type PaperTranslationDisplayMode } from './PaperPdfPage';
+import {
+  buildPdfPageOffsets,
+  pdfPageAtOffset,
+  pdfWindowAroundPage,
+  pdfWindowAtScroll,
+  pdfWindowSpacers,
+  PDF_SCROLL_GAP,
+  PDF_SCROLL_TOP_PADDING,
+} from './pdf-scroll-window';
 import {
   PaperSelectionPopover,
   type SelectionPopoverAnchor,
@@ -66,11 +85,28 @@ import './paper-pdf-reader.css';
 
 GlobalWorkerOptions.workerSrc = workerUrl;
 
-interface PaperPdfReaderProps {
-  paper: PaperItem;
-  onClose: () => void;
-  onReadStarted: (paperId: string) => void;
-}
+type PaperPdfReaderProps = (
+  | {
+      paper: PaperItem;
+      book?: never;
+      rootPath?: never;
+      onClose: () => void;
+      onReadStarted: (paperId: string) => void;
+    }
+  | {
+      paper?: never;
+      book: PdfBookDocument;
+      rootPath: string;
+      onClose: () => void;
+      onReadStarted?: never;
+    }
+) & { onSendSelectionToCodeLab?: CodeLabSelectionHandler };
+
+type CodeLabSelectionHandler = (
+  language: 'python' | 'c' | 'cpp',
+  source: string,
+  origin: { kind: 'pdf'; title: string; locator: string; reference: string },
+) => void;
 
 interface SelectionDraft {
   pageNumber: number;
@@ -82,15 +118,25 @@ interface SelectionDraft {
 
 export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
   paper,
+  book,
+  rootPath,
   onClose,
   onReadStarted,
+  onSendSelectionToCodeLab,
 }) => {
+  const isBook = Boolean(book);
+  const readerId = paper?.id ?? `book:${rootPath}:${book?.relativePath}`;
+  const readerTitle = paper?.title ?? book?.title ?? 'PDF';
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [pageNumber, setPageNumber] = useState(1);
   const [pageCount, setPageCount] = useState(0);
   const [scale, setScale] = useState(1);
   const [pdfSha256, setPdfSha256] = useState('');
   const [basePageSize, setBasePageSize] = useState({ width: 612, height: 792 });
+  const [measuredPageHeights, setMeasuredPageHeights] = useState<
+    Record<number, number>
+  >({});
+  const [scrollWindow, setScrollWindow] = useState({ start: 1, end: 5 });
   const [annotations, setAnnotations] = useState<PaperAnnotation[]>([]);
   const [selectionDraft, setSelectionDraft] = useState<SelectionDraft | null>(
     null,
@@ -161,17 +207,55 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
     stageSize.height || window.innerHeight,
   );
   const stageRef = useRef<HTMLElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const shellRef = useRef<HTMLDivElement>(null);
   const originalPdfPathRef = useRef('');
   const pdfTaskRef = useRef<ReturnType<typeof getDocument> | null>(null);
   const translationCancelRef = useRef(false);
   const preferencesReadyRef = useRef(false);
   const searchRequestRef = useRef(0);
+  const pageTextCacheRef = useRef(new Map<number, string>());
   const scrollFrameRef = useRef<number | null>(null);
   const progressTimerRef = useRef<number | null>(null);
+  const restoredBookOffsetRef = useRef<{ page: number; ratio: number } | null>(
+    null,
+  );
+  const initialScrollPendingRef = useRef(true);
   const pageNumberRef = useRef(pageNumber);
   pageNumberRef.current = pageNumber;
   const previousEffectiveModeRef = useRef(effectiveMode);
+  const previousScrollModeRef = useRef(effectiveMode);
+  const pageOffsets = useMemo(
+    () =>
+      buildPdfPageOffsets(
+        pageCount,
+        scale,
+        basePageSize.height,
+        measuredPageHeights,
+      ),
+    [basePageSize.height, measuredPageHeights, pageCount, scale],
+  );
+  const scrollSpacers = useMemo(
+    () => pdfWindowSpacers(pageOffsets, scrollWindow),
+    [pageOffsets, scrollWindow],
+  );
+  const onPageSizeMeasured = useCallback((number: number, height: number) => {
+    setMeasuredPageHeights((current) =>
+      current[number] === height ? current : { ...current, [number]: height },
+    );
+  }, []);
+
+  useEffect(() => {
+    if (
+      effectiveMode === 'scroll' &&
+      previousScrollModeRef.current !== 'scroll' &&
+      pageCount > 0
+    ) {
+      initialScrollPendingRef.current = true;
+      setScrollWindow(pdfWindowAroundPage(pageNumberRef.current, pageCount));
+    }
+    previousScrollModeRef.current = effectiveMode;
+  }, [effectiveMode, pageCount]);
 
   const annotationsByPage = useMemo(() => {
     const map = new Map<number, PaperAnnotation[]>();
@@ -212,10 +296,15 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
 
   const visiblePages = useMemo(() => {
     if (effectiveMode === 'scroll') {
-      return Array.from({ length: pageCount }, (_, index) => index + 1);
+      const start = Math.max(1, scrollWindow.start);
+      const end = Math.min(pageCount, scrollWindow.end);
+      return Array.from(
+        { length: Math.max(0, end - start + 1) },
+        (_, index) => start + index,
+      );
     }
     return pagesForMode(pageNumber, pageCount, effectiveMode);
-  }, [effectiveMode, pageCount, pageNumber]);
+  }, [effectiveMode, pageCount, pageNumber, scrollWindow]);
 
   const displayPageLabel =
     effectiveMode === 'spread' && pageNumber + 1 <= pageCount
@@ -226,18 +315,27 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
   const fitTargetPage = effectiveMode === 'scroll' ? 1 : pageNumber;
 
   const persistProgress = useCallback(
-    (nextPage: number, nextScale: number) => {
-      void literatureApi
-        .saveReadingProgress(
-          paper.id,
-          clamp(nextPage, 1, Math.max(1, pageCount)),
-          clamp(nextScale, MIN_SCALE, MAX_SCALE),
-        )
-        .catch((progressError) =>
-          console.error('保存论文阅读进度失败:', progressError),
-        );
+    (nextPage: number, nextScale: number, offsetRatio?: number) => {
+      const safePage = clamp(nextPage, 1, Math.max(1, pageCount));
+      const safeScale = clamp(nextScale, MIN_SCALE, MAX_SCALE);
+      const task =
+        book && rootPath
+          ? Promise.resolve().then(() =>
+              savePdfBookProgress(
+                rootPath,
+                book.relativePath,
+                pdfSha256,
+                safePage,
+                safeScale,
+                offsetRatio,
+              ),
+            )
+          : literatureApi.saveReadingProgress(readerId, safePage, safeScale);
+      void task.catch((progressError) =>
+        console.error('保存 PDF 阅读进度失败:', progressError),
+      );
     },
-    [pageCount, paper.id],
+    [book, pageCount, pdfSha256, readerId, rootPath],
   );
 
   useEffect(() => {
@@ -259,9 +357,17 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
     let cancelled = false;
     let loadingTask: ReturnType<typeof getDocument> | null = null;
     preferencesReadyRef.current = false;
+    searchRequestRef.current += 1;
+    setSearchBusy(false);
+    setSearchResults([]);
+    setSearchProgress(0);
+    setSearchError('');
     setLoading(true);
     setError(null);
     setPdf(null);
+    pageTextCacheRef.current.clear();
+    setMeasuredPageHeights({});
+    setScrollWindow({ start: 1, end: 5 });
     setOutline([]);
     setPopoverAnchor(null);
     setSelectionDraft(null);
@@ -275,20 +381,34 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
     setViewingDualPdf(false);
     setDualPdfError(null);
     originalPdfPathRef.current = '';
+    restoredBookOffsetRef.current = null;
+    initialScrollPendingRef.current = true;
 
     const load = async () => {
       try {
-        const [opened, savedAnnotations, progress] = await Promise.all([
-          literatureApi.openPdf(paper.id),
-          literatureApi.listAnnotations(paper.id),
-          literatureApi.getReadingProgress(paper.id),
-        ]);
+        const opened = book
+          ? await libraryApi.openPdfBook({ relativePath: book.relativePath })
+          : await literatureApi.openPdf(readerId);
+        const [savedAnnotations, progress] =
+          book && rootPath
+            ? [
+                listPdfBookAnnotations(
+                  rootPath,
+                  book.relativePath,
+                  opened.sha256,
+                ),
+                getPdfBookProgress(rootPath, book.relativePath, opened.sha256),
+              ]
+            : await Promise.all([
+                literatureApi.listAnnotations(readerId),
+                literatureApi.getReadingProgress(readerId),
+              ]);
         if (cancelled) return;
         originalPdfPathRef.current = opened.path;
-        const preferences = readPreferences(paper.id, opened.sha256);
+        const preferences = readPreferences(readerId, opened.sha256);
         setPdfSha256(opened.sha256);
         setAnnotations(savedAnnotations);
-        setBookmarks(readBookmarks(paper.id, opened.sha256));
+        setBookmarks(readBookmarks(readerId, opened.sha256));
         setMode(preferences.mode);
         setZoomMode(preferences.zoomMode);
         const openingWidth = stageRef.current?.clientWidth || window.innerWidth;
@@ -317,8 +437,21 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
         const width = stageRef.current?.clientWidth || window.innerWidth;
         const height = stageRef.current?.clientHeight || window.innerHeight;
         const layout = resolvedMode(preferences.mode, width, height);
+        initialScrollPendingRef.current = layout === 'scroll';
         const restoredPage =
           layout === 'spread' ? spreadStart(safePage) : safePage;
+        if (
+          book &&
+          layout === 'scroll' &&
+          progress &&
+          'offsetRatio' in progress &&
+          typeof progress.offsetRatio === 'number'
+        ) {
+          restoredBookOffsetRef.current = {
+            page: restoredPage,
+            ratio: progress.offsetRatio,
+          };
+        }
         const restoredScale =
           preferences.zoomMode === 'manual' && progress
             ? clamp(progress.scale, MIN_SCALE, MAX_SCALE)
@@ -334,6 +467,7 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
         if (cancelled) return;
         setPageCount(loadedPdf.numPages);
         setPageNumber(restoredPage);
+        setScrollWindow(pdfWindowAroundPage(restoredPage, loadedPdf.numPages));
         setPageInput(String(restoredPage));
         setScale(restoredScale);
         setPdf(loadedPdf);
@@ -346,11 +480,13 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
             if (!cancelled) setOutline([]);
           });
 
-        try {
-          await literatureApi.updateReadStatus(paper.id, 'reading');
-          if (!cancelled) onReadStarted(paper.id);
-        } catch (statusError) {
-          console.error('更新论文阅读状态失败:', statusError);
+        if (paper) {
+          try {
+            await literatureApi.updateReadStatus(paper.id, 'reading');
+            if (!cancelled) onReadStarted?.(paper.id);
+          } catch (statusError) {
+            console.error('更新论文阅读状态失败:', statusError);
+          }
         }
       } catch (loadError) {
         if (!cancelled) {
@@ -372,7 +508,30 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
       }
       pdfTaskRef.current = null;
     };
-  }, [onReadStarted, paper.id]);
+  }, [book?.relativePath, onReadStarted, paper?.id, readerId, rootPath]);
+
+  useEffect(() => {
+    if (!pdf || loading || effectiveMode !== 'scroll') return;
+    const restore = restoredBookOffsetRef.current;
+    const frame = window.requestAnimationFrame(() => {
+      const stage = stageRef.current;
+      if (!stage) return;
+      restoredBookOffsetRef.current = null;
+      const targetPage = restore?.page ?? pageNumberRef.current;
+      const pageHeight =
+        pageOffsets[targetPage] - pageOffsets[targetPage - 1] - PDF_SCROLL_GAP;
+      stage.scrollTop = Math.max(
+        0,
+        PDF_SCROLL_TOP_PADDING +
+          pageOffsets[targetPage - 1] +
+          pageHeight * (restore?.ratio ?? 0.5) -
+          stage.clientHeight / 2,
+      );
+      initialScrollPendingRef.current = false;
+    });
+    return () => window.cancelAnimationFrame(frame);
+    // Initial positioning belongs to the opened document, not later page-size updates.
+  }, [effectiveMode, loading, pdf]);
 
   const ensurePageLayoutAndCache = useCallback(
     async (targetPage: number): Promise<PaperParagraphBlock[]> => {
@@ -441,25 +600,25 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
     if (!pdfSha256 || !preferencesReadyRef.current) return;
     try {
       localStorage.setItem(
-        preferenceKey(paper.id, pdfSha256),
+        preferenceKey(readerId, pdfSha256),
         JSON.stringify({ mode, zoomMode, sidebarOpen, sidebarTab }),
       );
     } catch {
       // Reading remains available if local preferences cannot be saved.
     }
-  }, [mode, paper.id, pdfSha256, sidebarOpen, sidebarTab, zoomMode]);
+  }, [mode, readerId, pdfSha256, sidebarOpen, sidebarTab, zoomMode]);
 
   useEffect(() => {
     if (!pdfSha256 || !preferencesReadyRef.current) return;
     try {
       localStorage.setItem(
-        bookmarkKey(paper.id, pdfSha256),
+        bookmarkKey(readerId, pdfSha256),
         JSON.stringify(bookmarks),
       );
     } catch {
       // Bookmarks remain available for this session if storage is unavailable.
     }
-  }, [bookmarks, paper.id, pdfSha256]);
+  }, [bookmarks, readerId, pdfSha256]);
 
   useEffect(() => {
     if (!pdf || loading || zoomMode === 'manual') return;
@@ -526,25 +685,25 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
         effectiveMode === 'spread' ? spreadStart(safePage) : safePage;
       setPageNumber(targetPage);
       setSelectionDraft(null);
-      persistProgress(targetPage, scale);
+      persistProgress(targetPage, scale, 0.5);
 
       if (effectiveMode === 'scroll') {
+        setScrollWindow(pdfWindowAroundPage(safePage, pageCount));
         window.requestAnimationFrame(() => {
           const stage = stageRef.current;
-          const target = stage?.querySelector<HTMLElement>(
-            `[data-paper-page-number="${safePage}"]`,
-          );
-          if (!stage || !target) return;
+          if (!stage) return;
+          const pageHeight =
+            pageOffsets[safePage] - pageOffsets[safePage - 1] - PDF_SCROLL_GAP;
           const top =
-            stage.scrollTop +
-            target.getBoundingClientRect().top -
-            stage.getBoundingClientRect().top -
-            16;
-          stage.scrollTo({ top, behavior: 'smooth' });
+            PDF_SCROLL_TOP_PADDING +
+            pageOffsets[safePage - 1] +
+            pageHeight / 2 -
+            stage.clientHeight / 2;
+          stage.scrollTo({ top: Math.max(0, top), behavior: 'instant' });
         });
       }
     },
-    [effectiveMode, pageCount, persistProgress, scale],
+    [effectiveMode, pageCount, pageOffsets, persistProgress, scale],
   );
 
   const previousPage = useCallback(() => {
@@ -689,8 +848,8 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
   ) => {
     setSaving(true);
     try {
-      const saved = await literatureApi.saveAnnotation({
-        paperId: paper.id,
+      const input: PaperAnnotationInput = {
+        paperId: readerId,
         pageNumber: draft.pageNumber,
         selectedText: draft.selectedText,
         comment: commentText.trim() || null,
@@ -698,7 +857,11 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
         rects: draft.rects,
         contextBefore: draft.contextBefore,
         contextAfter: draft.contextAfter,
-      });
+      };
+      const saved =
+        book && rootPath
+          ? savePdfBookAnnotation(rootPath, book.relativePath, pdfSha256, input)
+          : await literatureApi.saveAnnotation(input);
       setAnnotations((current) => [...current, saved]);
       setActiveAnnotationId(saved.id);
       setSelectionDraft(null);
@@ -747,7 +910,7 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
     try {
       const result = await translatePaperSelection({
         pdfSha256,
-        paperTitle: paper.title,
+        paperTitle: readerTitle,
         text: selectionDraft.selectedText,
         mode: modeToUse,
         contextBefore: selectionDraft.contextBefore,
@@ -814,7 +977,7 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
     try {
       const blocks = await ensurePageLayoutAndCache(targetPage);
       const record = await translatePaperPage({
-        paperTitle: paper.title,
+        paperTitle: readerTitle,
         pdfSha256,
         pageNumber: targetPage,
         blocks,
@@ -876,8 +1039,8 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
   ) => {
     setSaving(true);
     try {
-      const saved = await literatureApi.saveAnnotation({
-        paperId: paper.id,
+      const input: PaperAnnotationInput = {
+        paperId: readerId,
         pageNumber: block.pageNumber,
         selectedText: block.text,
         comment: `【双语译文】${translation}`,
@@ -885,7 +1048,11 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
         rects: block.rects.slice(0, 24),
         contextBefore: null,
         contextAfter: null,
-      });
+      };
+      const saved =
+        book && rootPath
+          ? savePdfBookAnnotation(rootPath, book.relativePath, pdfSha256, input)
+          : await literatureApi.saveAnnotation(input);
       setAnnotations((current) => [...current, saved]);
       setActiveAnnotationId(saved.id);
     } catch (err) {
@@ -939,6 +1106,7 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
   };
 
   const handleGenerateDualPdf = async (force = false) => {
+    if (!paper) return;
     setGeneratingDualPdf(true);
     setDualPdfError(null);
     try {
@@ -979,7 +1147,7 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
     try {
       const input: PaperAnnotationInput = {
         id: annotation.id,
-        paperId: paper.id,
+        paperId: readerId,
         pageNumber: annotation.pageNumber,
         selectedText: annotation.selectedText,
         comment: editingComment.trim() || null,
@@ -988,7 +1156,10 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
         contextBefore: annotation.contextBefore,
         contextAfter: annotation.contextAfter,
       };
-      const saved = await literatureApi.saveAnnotation(input);
+      const saved =
+        book && rootPath
+          ? savePdfBookAnnotation(rootPath, book.relativePath, pdfSha256, input)
+          : await literatureApi.saveAnnotation(input);
       setAnnotations((current) =>
         current.map((entry) => (entry.id === saved.id ? saved : entry)),
       );
@@ -1005,7 +1176,16 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
   const deleteAnnotation = async (annotationId: string) => {
     if (!window.confirm('删除这条页内批注？')) return;
     try {
-      await literatureApi.deleteAnnotation(paper.id, annotationId);
+      if (book && rootPath) {
+        deletePdfBookAnnotation(
+          rootPath,
+          book.relativePath,
+          pdfSha256,
+          annotationId,
+        );
+      } else {
+        await literatureApi.deleteAnnotation(readerId, annotationId);
+      }
       setAnnotations((current) =>
         current.filter((entry) => entry.id !== annotationId),
       );
@@ -1053,9 +1233,15 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
       const results: PaperSearchResult[] = [];
       for (let page = 1; page <= pageCount; page += 1) {
         if (requestId !== searchRequestRef.current) return;
-        const text = (await (await pdf.getPage(page)).getTextContent()).items
-          .map((item) => ('str' in item ? item.str : ''))
-          .join(' ');
+        let text = pageTextCacheRef.current.get(page);
+        if (text === undefined) {
+          text = (await (await pdf.getPage(page)).getTextContent()).items
+            .map((item) => ('str' in item ? item.str : ''))
+            .join(' ');
+          if (requestId !== searchRequestRef.current) return;
+          pageTextCacheRef.current.set(page, text);
+        }
+        if (requestId !== searchRequestRef.current) return;
         const normalized = text.toLocaleLowerCase();
         const firstMatch = normalized.indexOf(query);
         if (firstMatch >= 0) {
@@ -1083,49 +1269,63 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
           await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
         }
       }
+      if (requestId !== searchRequestRef.current) return;
       if (!results.length)
         setSearchError('没有找到匹配内容。扫描版 PDF 可能不含可搜索文字。');
     } catch (searchCause) {
-      setSearchError(
-        searchCause instanceof Error
-          ? searchCause.message
-          : String(searchCause),
-      );
+      if (requestId === searchRequestRef.current) {
+        setSearchError(
+          searchCause instanceof Error
+            ? searchCause.message
+            : String(searchCause),
+        );
+      }
     } finally {
       if (requestId === searchRequestRef.current) setSearchBusy(false);
     }
   };
 
   const handleStageScroll = useCallback(() => {
-    if (effectiveMode !== 'scroll' || scrollFrameRef.current !== null) return;
+    if (
+      effectiveMode !== 'scroll' ||
+      initialScrollPendingRef.current ||
+      scrollFrameRef.current !== null
+    )
+      return;
     scrollFrameRef.current = window.requestAnimationFrame(() => {
       scrollFrameRef.current = null;
       const stage = stageRef.current;
       if (!stage) return;
-      const pages = Array.from(
-        stage.querySelectorAll<HTMLElement>('[data-paper-page-number]'),
+      const nextWindow = pdfWindowAtScroll(
+        pageOffsets,
+        stage.scrollTop,
+        stage.clientHeight,
       );
-      const center = stage.getBoundingClientRect().top + stage.clientHeight / 2;
-      let nearestPage = pageNumber;
-      let nearestDistance = Number.POSITIVE_INFINITY;
-      for (const page of pages) {
-        const rect = page.getBoundingClientRect();
-        const distance = Math.abs(rect.top + rect.height / 2 - center);
-        if (distance < nearestDistance) {
-          nearestDistance = distance;
-          nearestPage = Number(page.dataset.paperPageNumber) || nearestPage;
-        }
-      }
-      if (nearestPage === pageNumber) return;
-      setPageNumber(nearestPage);
+      setScrollWindow((current) =>
+        current.start === nextWindow.start && current.end === nextWindow.end
+          ? current
+          : nextWindow,
+      );
+      const center =
+        stage.scrollTop + stage.clientHeight / 2 - PDF_SCROLL_TOP_PADDING;
+      const nearestPage = pdfPageAtOffset(pageOffsets, center);
+      if (nearestPage === pageNumberRef.current && !book) return;
+      if (nearestPage !== pageNumberRef.current) setPageNumber(nearestPage);
+      const pageTop = pageOffsets[nearestPage - 1];
+      const pageHeight = pageOffsets[nearestPage] - pageTop - PDF_SCROLL_GAP;
+      const offsetRatio = clamp(
+        (center - pageTop) / Math.max(1, pageHeight),
+        0,
+        1,
+      );
       if (progressTimerRef.current !== null)
         window.clearTimeout(progressTimerRef.current);
       progressTimerRef.current = window.setTimeout(() => {
-        persistProgress(nearestPage, scale);
+        persistProgress(nearestPage, scale, offsetRatio);
         progressTimerRef.current = null;
       }, 260);
     });
-  }, [effectiveMode, pageNumber, persistProgress, scale]);
+  }, [book, effectiveMode, pageOffsets, persistProgress, scale]);
 
   useEffect(
     () => () => {
@@ -1139,9 +1339,11 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
   );
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Escape') {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
       event.preventDefault();
-      onClose();
+      setSidebarOpen(true);
+      setSidebarTab('search');
+      window.requestAnimationFrame(() => searchInputRef.current?.focus());
       return;
     }
     const target = event.target as HTMLElement;
@@ -1152,7 +1354,26 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
       target.isContentEditable
     )
       return;
-    if (event.key === 'ArrowRight' || event.key === 'PageDown') {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      if (selectionDraft) {
+        setSelectionDraft(null);
+        setPopoverAnchor(null);
+        return;
+      }
+      onClose();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'b') {
+      event.preventDefault();
+      toggleBookmark();
+    } else if (
+      effectiveMode === 'scroll' &&
+      (event.key === 'ArrowDown' || event.key === 'ArrowUp')
+    ) {
+      event.preventDefault();
+      stageRef.current?.scrollBy({ top: event.key === 'ArrowDown' ? 96 : -96 });
+    } else if (event.key === 'ArrowRight' || event.key === 'PageDown') {
       event.preventDefault();
       nextPage();
     } else if (event.key === 'ArrowLeft' || event.key === 'PageUp') {
@@ -1185,39 +1406,40 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
 
   return (
     <div
-      className="paper-reader-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-label="论文 PDF 阅读器"
+      className={`paper-reader-overlay${isBook ? ' is-book-reader' : ''}`}
+      role={isBook ? 'region' : 'dialog'}
+      aria-modal={isBook ? undefined : 'true'}
+      aria-label={isBook ? 'PDF 电子书阅读器' : '论文 PDF 阅读器'}
       onKeyDown={handleKeyDown}
     >
       <div className="paper-reader-shell" ref={shellRef} tabIndex={-1}>
-        <header className="paper-reader-header">
-          <div className="paper-reader-heading">
-            <span className="paper-reader-kicker">
-              论文原文 · {displayPageLabel} / {pageCount || '—'}
-            </span>
-            <strong title={paper.title}>{paper.title}</strong>
-          </div>
-          <div className="paper-reader-header-actions">
-            <button
-              type="button"
-              className="paper-reader-side-toggle"
-              aria-pressed={sidebarOpen}
-              onClick={() => setSidebarOpen((open) => !open)}
-              title={sidebarOpen ? '收起侧栏' : '打开侧栏'}
-            >
-              {sidebarOpen ? '收起侧栏' : '显示侧栏'}
-            </button>
-            <button
-              type="button"
-              className="paper-reader-close"
-              onClick={onClose}
-            >
-              返回文献
-            </button>
-          </div>
-        </header>
+        <ReaderHeader
+          className="paper-reader-header"
+          headingClassName="paper-reader-heading"
+          actionsClassName="paper-reader-header-actions"
+          eyebrow={`${isBook ? 'PDF 电子书' : '论文原文'} · ${displayPageLabel} / ${pageCount || '—'}`}
+          title={readerTitle}
+          actions={
+            <>
+              <button
+                type="button"
+                className="paper-reader-side-toggle"
+                aria-pressed={sidebarOpen}
+                onClick={() => setSidebarOpen((open) => !open)}
+                title={sidebarOpen ? '收起侧栏' : '打开侧栏'}
+              >
+                {sidebarOpen ? '收起侧栏' : '显示侧栏'}
+              </button>
+              <button
+                type="button"
+                className="paper-reader-close"
+                onClick={onClose}
+              >
+                {isBook ? '返回书架' : '返回文献'}
+              </button>
+            </>
+          }
+        />
 
         <div
           className="paper-reader-toolbar"
@@ -1237,7 +1459,7 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
               onBlur={onPageInputCommit}
               onKeyDown={(event) => {
                 if (event.key === 'Enter') {
-                  onPageInputCommit();
+                  event.preventDefault();
                   (event.target as HTMLInputElement).blur();
                 }
               }}
@@ -1321,7 +1543,11 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
               onClick={handleToggleBilingualMode}
               disabled={loading}
               aria-pressed={translationDisplayMode !== 'off'}
-              title="开启/关闭论文双语对照翻译"
+              title={
+                isBook
+                  ? '开启或关闭 PDF 双语对照翻译'
+                  : '开启或关闭论文双语对照翻译'
+              }
             >
               {translationDisplayMode !== 'off' ? '双语：开' : '双语对照'}
             </button>
@@ -1366,7 +1592,7 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
           </div>
 
           <span className="paper-reader-hint">
-            ← → 翻页 · 选中文字可翻译、高亮或批注
+            ← → 翻页 · ↑ ↓ 连续滚动 · Ctrl+F 搜索 · Ctrl+B 书签
           </span>
         </div>
 
@@ -1394,6 +1620,13 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
                   className={`paper-reader-page-scroller is-${effectiveMode}`}
                   onMouseUp={captureSelection}
                 >
+                  {effectiveMode === 'scroll' && (
+                    <div
+                      className="paper-reader-virtual-spacer"
+                      style={{ height: scrollSpacers.top }}
+                      aria-hidden="true"
+                    />
+                  )}
                   {visiblePages.map((number) => (
                     <PaperPdfPage
                       key={number}
@@ -1409,6 +1642,11 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
                         Math.abs(number - pageNumber) <= 3
                       }
                       baseSize={basePageSize}
+                      onSizeMeasured={
+                        effectiveMode === 'scroll'
+                          ? onPageSizeMeasured
+                          : undefined
+                      }
                       paragraphBlocks={blocksByPage[number]}
                       pageTranslations={translationMapsByPage[number]}
                       translationDisplayMode={
@@ -1431,6 +1669,13 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
                       }}
                     />
                   ))}
+                  {effectiveMode === 'scroll' && (
+                    <div
+                      className="paper-reader-virtual-spacer"
+                      style={{ height: scrollSpacers.bottom }}
+                      aria-hidden="true"
+                    />
+                  )}
                 </div>
               )}
             </main>
@@ -1454,13 +1699,33 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
                   handlePopoverOpenNote(withTranslation)
                 }
                 onCopyTranslation={() => void handleCopySelectionTranslation()}
+                onSendToCodeLab={
+                  onSendSelectionToCodeLab && isBook
+                    ? (language) => {
+                        onSendSelectionToCodeLab(
+                          language,
+                          selectionDraft.selectedText,
+                          {
+                            kind: 'pdf',
+                            title: readerTitle,
+                            locator: `第 ${selectionDraft.pageNumber} 页`,
+                            reference: `${readerId}#page=${selectionDraft.pageNumber}`,
+                          },
+                        );
+                        setPopoverAnchor(null);
+                      }
+                    : undefined
+                }
                 onClose={() => setPopoverAnchor(null)}
               />
             )}
           </div>
 
           {sidebarOpen && (
-            <aside className="paper-reader-notes" aria-label="论文导航与批注">
+            <aside
+              className="paper-reader-notes"
+              aria-label={isBook ? 'PDF 导航与批注' : '论文导航与批注'}
+            >
               <div
                 className="paper-reader-sidebar-tabs"
                 role="tablist"
@@ -1494,6 +1759,7 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
                     双语对照译文 <span>P.{pageNumber}</span>
                   </div>
                   <PaperTranslationSidebar
+                    allowDualPdf={!isBook}
                     visiblePages={
                       effectiveMode === 'scroll' ? [pageNumber] : visiblePages
                     }
@@ -1582,8 +1848,16 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
                     }}
                   >
                     <input
+                      ref={searchInputRef}
                       value={searchQuery}
-                      onChange={(event) => setSearchQuery(event.target.value)}
+                      onChange={(event) => {
+                        searchRequestRef.current += 1;
+                        setSearchBusy(false);
+                        setSearchResults([]);
+                        setSearchProgress(0);
+                        setSearchError('');
+                        setSearchQuery(event.target.value);
+                      }}
                       placeholder="输入关键词或术语"
                       aria-label="PDF 全文搜索"
                     />
@@ -1593,6 +1867,17 @@ export const PaperPdfReader: React.FC<PaperPdfReaderProps> = ({
                     >
                       {searchBusy ? `${searchProgress}%` : '搜索'}
                     </button>
+                    {searchBusy && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          searchRequestRef.current += 1;
+                          setSearchBusy(false);
+                        }}
+                      >
+                        取消
+                      </button>
+                    )}
                   </form>
                   {searchError && (
                     <p className="paper-reader-search-status">{searchError}</p>

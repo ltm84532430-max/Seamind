@@ -224,6 +224,7 @@ export default function MarkdownDocWorkbench({
   const [railTab, setRailTab] = useState<'outline' | 'footnotes' | 'links'>(
     'outline',
   );
+  const [outlineFilter, setOutlineFilter] = useState('');
   const [localFootnoteJump, setLocalFootnoteJump] =
     useState<PreviewFootnoteJumpRequest | null>(null);
   const [addingTag, setAddingTag] = useState(false);
@@ -437,6 +438,96 @@ export default function MarkdownDocWorkbench({
     () => extractMarkdownHeadings(document.source),
     [document.source],
   );
+
+  const outlineFrameworkItems = useMemo(() => {
+    if (headings.length > 0) {
+      return headings.map((h, headingIndex) => ({
+        ...h,
+        isHeading: true,
+        headingIndex,
+      }));
+    }
+    // Fallback when a document has no # ATX headings: extract top-level/nested list items
+    // or bold section lines so the document's structural framework is always displayed.
+    const lines = document.source.split(/\r?\n/);
+    const fallback: Array<
+      MarkdownHeading & { isHeading: boolean; headingIndex: number }
+    > = [];
+    let index = 0;
+    if (lines[0]?.trim() === '---') {
+      const end = lines.findIndex(
+        (l, pos) => pos > 0 && (l.trim() === '---' || l.trim() === '...'),
+      );
+      if (end > 0) index = end + 1;
+    }
+    let inFence = false;
+    for (; index < lines.length; index += 1) {
+      const raw = lines[index];
+      const trimmed = raw.trim();
+      if (/^(`{3,}|~{3,})/.test(trimmed)) {
+        inFence = !inFence;
+        continue;
+      }
+      if (inFence || !trimmed) continue;
+      const listMatch = raw.match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/);
+      if (listMatch) {
+        const indent = listMatch[1].length;
+        const depth = Math.min(6, Math.floor(indent / 2) + 1);
+        const text = listMatch[3]
+          .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+          .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+          .replace(/`+([^`]*)`+/g, '$1')
+          .replace(/[*_~]/g, '')
+          .trim();
+        if (text && !text.startsWith('<!--') && text.length <= 72) {
+          fallback.push({
+            depth,
+            text,
+            lineIndex: index,
+            isHeading: false,
+            headingIndex: -1,
+          });
+        }
+        continue;
+      }
+      const boldLineMatch = trimmed.match(/^\*\*(.+?)\*\*[:：]?$/);
+      if (boldLineMatch) {
+        const text = boldLineMatch[1].trim();
+        if (text && text.length <= 72) {
+          fallback.push({
+            depth: 2,
+            text,
+            lineIndex: index,
+            isHeading: false,
+            headingIndex: -1,
+          });
+        }
+      }
+    }
+    return fallback;
+  }, [document.source, headings]);
+
+  const filteredOutlineItems = useMemo(() => {
+    const q = outlineFilter.trim().toLowerCase();
+    if (!q) return outlineFrameworkItems;
+    return outlineFrameworkItems.filter((item) =>
+      item.text.toLowerCase().includes(q),
+    );
+  }, [outlineFilter, outlineFrameworkItems]);
+
+  const activeOutlineLineIndex = useMemo(() => {
+    const cursorLine = editorSelection?.lineIndex ?? -1;
+    if (cursorLine < 0 || outlineFrameworkItems.length === 0) return -1;
+    let bestLine = -1;
+    for (const item of outlineFrameworkItems) {
+      if (item.lineIndex <= cursorLine) {
+        bestLine = item.lineIndex;
+      } else {
+        break;
+      }
+    }
+    return bestLine;
+  }, [editorSelection?.lineIndex, outlineFrameworkItems]);
 
   const footnotes = useMemo(
     () => parseMarkdownFootnotes(document.source).footnotes,
@@ -802,22 +893,39 @@ export default function MarkdownDocWorkbench({
     [onSourceChange],
   );
 
-  const goToHeading = (heading: MarkdownHeading, index: number) => {
+  const goToOutlineItem = (
+    item: MarkdownHeading & { isHeading: boolean; headingIndex: number },
+  ) => {
     if (showEditor) {
-      editorRef.current?.selectLine(heading.lineIndex, viewMode === 'edit');
+      editorRef.current?.selectLine(item.lineIndex, viewMode === 'edit');
     }
     if (showPreview) {
       const previewEl = panesRef.current?.querySelector<HTMLElement>(
         '.markdown-rendered-preview',
       );
-      const target = previewEl?.querySelectorAll(headingSelector)[index];
-      if (!previewEl || !target) return;
+      if (!previewEl) return;
+      if (item.isHeading && item.headingIndex >= 0) {
+        const target =
+          previewEl.querySelectorAll(headingSelector)[item.headingIndex];
+        if (target) {
+          previewEl.scrollTo({
+            top:
+              target.getBoundingClientRect().top -
+              previewEl.getBoundingClientRect().top +
+              previewEl.scrollTop -
+              16,
+            behavior: 'smooth',
+          });
+          return;
+        }
+      }
+      const totalLines = Math.max(1, document.source.split(/\r?\n/).length - 1);
+      const scrollRange = Math.max(
+        0,
+        previewEl.scrollHeight - previewEl.clientHeight,
+      );
       previewEl.scrollTo({
-        top:
-          target.getBoundingClientRect().top -
-          previewEl.getBoundingClientRect().top +
-          previewEl.scrollTop -
-          16,
+        top: Math.round((item.lineIndex / totalLines) * scrollRange),
         behavior: 'smooth',
       });
     }
@@ -1032,7 +1140,10 @@ export default function MarkdownDocWorkbench({
             }}
             title="显示或隐藏章节大纲"
           >
-            大纲{headings.length > 0 ? ` ${headings.length}` : ''}
+            大纲
+            {outlineFrameworkItems.length > 0
+              ? ` ${outlineFrameworkItems.length}`
+              : ''}
           </button>
           <button
             type="button"
@@ -1203,7 +1314,7 @@ export default function MarkdownDocWorkbench({
               source={preview.source}
               theme={theme}
               mediaDocumentPath={document.relativePath}
-              hideMinimap={Boolean(compactSplit) || viewMode !== 'read'}
+              hideMinimap
               scrollToFootnoteRequest={activeFootnoteJump}
               onCodeChange={handleCodeChange}
               onOpenWikilink={onOpenWikilink}
@@ -1231,7 +1342,7 @@ export default function MarkdownDocWorkbench({
                 className={`workbench-rail-tab${railTab === 'outline' ? ' is-active' : ''}`}
                 onClick={() => setRailTab('outline')}
               >
-                目录 <span>{headings.length}</span>
+                目录 <span>{outlineFrameworkItems.length}</span>
               </button>
               <button
                 type="button"
@@ -1248,6 +1359,19 @@ export default function MarkdownDocWorkbench({
                 双链 <span>{totalKnowledgeLinksCount}</span>
               </button>
             </div>
+            {railTab === 'outline' &&
+              (outlineFrameworkItems.length >= 4 ||
+                Boolean(outlineFilter.trim())) && (
+                <div className="workbench-outline-filter">
+                  <input
+                    type="search"
+                    value={outlineFilter}
+                    onChange={(e) => setOutlineFilter(e.target.value)}
+                    placeholder="筛选章节大纲…"
+                    aria-label="筛选文档章节大纲"
+                  />
+                </div>
+              )}
             <div className="workbench-outline-list">
               {railTab === 'links' ? (
                 <div className="workbench-links-panel">
@@ -1464,21 +1588,33 @@ export default function MarkdownDocWorkbench({
                     </div>
                   ))
                 )
-              ) : headings.length === 0 ? (
+              ) : filteredOutlineItems.length === 0 ? (
                 <p className="workbench-outline-empty">
-                  使用 # 编写各级标题后，章节结构会自动生成在此处。
+                  {outlineFilter.trim()
+                    ? '未找到匹配的章节大纲项。'
+                    : '使用 # 编写各级标题或列表项后，文档框架会自动生成在此处。'}
                 </p>
               ) : (
-                headings.map((heading, index) => (
+                filteredOutlineItems.map((item, index) => (
                   <button
                     type="button"
-                    key={`${heading.lineIndex}-${index}`}
-                    className="workbench-outline-item"
-                    style={{ paddingLeft: 12 + (heading.depth - 1) * 12 }}
-                    title={`第 ${heading.lineIndex + 1} 行`}
-                    onClick={() => goToHeading(heading, index)}
+                    key={`${item.lineIndex}-${index}`}
+                    className={`workbench-outline-item${item.lineIndex === activeOutlineLineIndex ? ' is-active' : ''}`}
+                    style={{
+                      paddingLeft: `${8 + Math.max(0, item.depth - 1) * 11}px`,
+                    }}
+                    title={`${item.text}（第 ${item.lineIndex + 1} 行 · 点击定位）`}
+                    onClick={() => goToOutlineItem(item)}
                   >
-                    {heading.text}
+                    <span
+                      className={`workbench-outline-level-tag is-depth-${item.depth}`}
+                    >
+                      {item.isHeading ? `H${item.depth}` : '•'}
+                    </span>
+                    <span className="workbench-outline-text">{item.text}</span>
+                    <span className="workbench-outline-line">
+                      L{item.lineIndex + 1}
+                    </span>
                   </button>
                 ))
               )}

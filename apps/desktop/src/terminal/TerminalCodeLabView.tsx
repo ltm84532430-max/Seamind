@@ -14,7 +14,7 @@ import type {
   PythonWorkerResponse,
   PythonWorkerVarSummary,
 } from '../workbench/python.worker';
-import { CodeLabCellRow } from './CodeLabCellRow';
+import { CellOutputList, CodeLabCellRow } from './CodeLabCellRow';
 import {
   LabCellsIcon,
   LabCheckIcon,
@@ -38,21 +38,28 @@ import { terminalApi, type PythonEnvInfo } from './terminal-api';
 import {
   assembleCCellProgram,
   assembleFullScriptSource,
+  CODELAB_COLLECTION_EVENT,
+  CODELAB_SYNC_VIEW_EVENT,
   createStarterCodeLabCells,
   DEFAULT_C_PROLOGUE,
   DEFAULT_CODELAB_FOLDERS,
   DEFAULT_CPP_PROLOGUE,
+  duplicateCodeLabCell,
   exportCodeLabToMarkdown,
+  formatCellStudyExportMarkdown,
   formatDurationCompact,
   loadCodeLabCollection,
   makeCodeLabCellId,
   moveCodeLabCell,
   parseIpynbJson,
   serializeIpynbJson,
+  stripHeavyOutputsForStorage,
   upsertCodeLabFile,
   type CodeLabCell,
   type CodeLabOutputItem,
   type CodeLabSavedFile,
+  type CodeLabSourceOrigin,
+  type CodeLabSyncViewPayload,
 } from './terminal-codelab-model';
 import type {
   TerminalCodeLabLanguage,
@@ -68,9 +75,10 @@ export interface TerminalCodeLabViewHandle {
     language: TerminalCodeLabLanguage,
     source: string,
     autoRun?: boolean,
+    origin?: CodeLabSourceOrigin,
   ) => void;
   loadSavedFile: (file: CodeLabSavedFile) => void;
-  saveCurrentToCollection: (asNew?: boolean) => CodeLabSavedFile;
+  saveCurrentToCollection: (asNew?: boolean) => CodeLabSavedFile | null;
   createNewNotebook: (
     language: TerminalCodeLabLanguage,
     folder?: string,
@@ -78,6 +86,7 @@ export interface TerminalCodeLabViewHandle {
   setCanvasViewMode: (mode: CodeLabCanvasViewMode) => void;
   getCanvasViewMode: () => CodeLabCanvasViewMode;
   getActiveFileId: () => string | null;
+  hasUnsavedChanges: () => boolean;
   getScreenText: (maxLines?: number) => string;
   getLastErrorText: () => string;
 }
@@ -86,6 +95,8 @@ interface TerminalCodeLabViewProps {
   tab: TerminalTab;
   theme: Theme;
   active: boolean;
+  standalone?: boolean;
+  isSplitView?: boolean;
   isFocused?: boolean;
   style?: React.CSSProperties;
   bridge?: TerminalWorkspaceBridge;
@@ -93,13 +104,19 @@ interface TerminalCodeLabViewProps {
   onStatusChange?: (status: TerminalTab['status'], message?: string) => void;
   onSendToShellPane?: (command: string, execute?: boolean) => void;
   onSendToAgentPane?: (prompt: string) => void;
-  onActiveFileChange?: (info: {
-    fileId: string | null;
-    title: string;
-    folder: string;
-    language: TerminalCodeLabLanguage;
-    viewMode: CodeLabCanvasViewMode;
-  }) => void;
+  onOpenSyncView?: () => void;
+  onDuplicateNotebook?: (file: CodeLabSavedFile) => void;
+  onActiveFileChange?: (
+    tabId: string,
+    info: {
+      fileId: string | null;
+      title: string;
+      folder: string;
+      language: TerminalCodeLabLanguage;
+      viewMode: CodeLabCanvasViewMode;
+      dirty?: boolean;
+    },
+  ) => void;
 }
 
 interface ReplHistoryEntry {
@@ -113,6 +130,45 @@ interface ReplHistoryEntry {
 }
 
 const MAX_LIVE_CM_EDITORS = 5;
+const CODELAB_DRAFT_PREFIX = 'seamind:codelab-draft:v1:';
+
+interface CodeLabDraft {
+  fileId: string | null;
+  fileRevision: number | null;
+  title: string;
+  folder: string;
+  language: TerminalCodeLabLanguage;
+  starred: boolean;
+  cells: CodeLabCell[];
+  prologueSource: string;
+}
+
+function codeLabDraftKey(tabId: string, standalone: boolean): string {
+  if (!standalone) return `${CODELAB_DRAFT_PREFIX}main:${tabId}`;
+  try {
+    let windowId = sessionStorage.getItem('seamind:codelab-window-id:v1');
+    if (!windowId) {
+      windowId = `window-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      sessionStorage.setItem('seamind:codelab-window-id:v1', windowId);
+    }
+    return `${CODELAB_DRAFT_PREFIX}${windowId}:${tabId}`;
+  } catch {
+    return `${CODELAB_DRAFT_PREFIX}standalone:${tabId}`;
+  }
+}
+
+function readCodeLabDraft(key: string, fileId?: string): CodeLabDraft | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as CodeLabDraft;
+    if (!Array.isArray(value.cells) || value.fileId !== (fileId ?? null))
+      return null;
+    return value;
+  } catch {
+    return null;
+  }
+}
 
 function pushHydratedLru(prev: string[], cellId: string): string[] {
   if (!cellId) return prev;
@@ -129,6 +185,8 @@ export const TerminalCodeLabView = forwardRef<
     tab,
     theme,
     active,
+    standalone = false,
+    isSplitView = false,
     isFocused = false,
     style,
     bridge,
@@ -136,26 +194,49 @@ export const TerminalCodeLabView = forwardRef<
     onStatusChange,
     onSendToShellPane,
     onSendToAgentPane,
+    onOpenSyncView,
+    onDuplicateNotebook,
     onActiveFileChange,
   },
   ref,
 ) {
   const initialLang: TerminalCodeLabLanguage = tab.labLanguage ?? 'python';
-  const [language, setLanguage] =
-    useState<TerminalCodeLabLanguage>(initialLang);
-  const [cells, setCells] = useState<CodeLabCell[]>(() =>
-    createStarterCodeLabCells(initialLang),
+  const initialFile = useMemo(
+    () =>
+      tab.labFileId
+        ? loadCodeLabCollection().find((file) => file.id === tab.labFileId)
+        : null,
+    [tab.labFileId],
   );
-  const [activeFileId, setActiveFileId] = useState<string | null>(() => {
-    const initialFiles = loadCodeLabCollection();
-    const match = initialFiles.find((f) => f.language === initialLang);
-    return match?.id ?? null;
-  });
+  const draftKey = useMemo(
+    () => codeLabDraftKey(tab.id, standalone),
+    [standalone, tab.id],
+  );
+  const initialDraft = useMemo(
+    () => readCodeLabDraft(draftKey, tab.labFileId),
+    [draftKey, tab.labFileId],
+  );
+  const [language, setLanguage] = useState<TerminalCodeLabLanguage>(
+    initialDraft?.language ?? initialFile?.language ?? initialLang,
+  );
+  const [cells, setCells] = useState<CodeLabCell[]>(() =>
+    initialDraft?.cells.length || initialFile?.cells.length
+      ? (initialDraft?.cells ?? initialFile?.cells ?? []).map((cell) => ({
+          ...cell,
+          id: cell.id || makeCodeLabCellId(),
+        }))
+      : createStarterCodeLabCells(initialLang),
+  );
+  const [activeFileId, setActiveFileId] = useState<string | null>(
+    initialDraft?.fileId ?? initialFile?.id ?? null,
+  );
+  const [activeFileRevision, setActiveFileRevision] = useState<number | null>(
+    initialDraft?.fileRevision ?? initialFile?.updatedAt ?? null,
+  );
   const [activeFileTitle, setActiveFileTitle] = useState<string>(() => {
-    const initialFiles = loadCodeLabCollection();
-    const match = initialFiles.find((f) => f.language === initialLang);
     return (
-      match?.title ??
+      initialDraft?.title ??
+      initialFile?.title ??
       (initialLang === 'c'
         ? 'C 语言步进实验.c'
         : initialLang === 'cpp'
@@ -163,10 +244,13 @@ export const TerminalCodeLabView = forwardRef<
           : 'Python 交互实验本.ipynb')
     );
   });
-  const [activeFileFolder, setActiveFileFolder] =
-    useState<string>('书籍伴读验证');
-  const [activeFileStarred, setActiveFileStarred] = useState<boolean>(true);
-  const [dirty, setDirty] = useState<boolean>(false);
+  const [activeFileFolder, setActiveFileFolder] = useState<string>(
+    initialDraft?.folder || initialFile?.folder || '书籍伴读验证',
+  );
+  const [activeFileStarred, setActiveFileStarred] = useState<boolean>(
+    Boolean(initialDraft?.starred ?? initialFile?.starred),
+  );
+  const [dirty, setDirty] = useState<boolean>(Boolean(initialDraft));
   const [editingTitle, setEditingTitle] = useState<boolean>(false);
   const [canvasViewMode, setCanvasViewMode] =
     useState<CodeLabCanvasViewMode>('notebook');
@@ -183,19 +267,70 @@ export const TerminalCodeLabView = forwardRef<
     const firstCode = cells.find((c) => c.kind === 'code') ?? cells[0];
     return firstCode ? [firstCode.id] : [];
   });
-  const [showPrologue, setShowPrologue] = useState(initialLang !== 'python');
-  const [prologueSource, setPrologueSource] = useState(() =>
-    initialLang === 'cpp' ? DEFAULT_CPP_PROLOGUE : DEFAULT_C_PROLOGUE,
+  const [showPrologue, setShowPrologue] = useState(language !== 'python');
+  const [prologueSource, setPrologueSource] = useState(
+    () =>
+      initialDraft?.prologueSource ??
+      initialFile?.prologueSource ??
+      (language === 'cpp' ? DEFAULT_CPP_PROLOGUE : DEFAULT_C_PROLOGUE),
   );
 
   // Popovers & panels
   const [showFolderMenu, setShowFolderMenu] = useState(false);
   const [showKernelMenu, setShowKernelMenu] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
-  const [showVars, setShowVars] = useState(false);
-  const [replOpen, setReplOpen] = useState(false);
+  const [showVars, setShowVars] = useState(() => {
+    try {
+      return localStorage.getItem(`${draftKey}:vars`) === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [pinnedCellId, setPinnedCellId] = useState<string | null>(null);
+  const [fullWidth, setFullWidth] = useState(() => {
+    try {
+      return localStorage.getItem('seamind:codelab-full-width:v1') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [replOpen, setReplOpen] = useState(() => {
+    try {
+      return localStorage.getItem(`${draftKey}:console`) === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [bottomDrawerTab, setBottomDrawerTab] = useState<'console' | 'vars'>(
+    () => {
+      try {
+        return localStorage.getItem(`${draftKey}:vars`) === 'true'
+          ? 'vars'
+          : 'console';
+      } catch {
+        return 'console';
+      }
+    },
+  );
+  const [bottomDrawerHeight, setBottomDrawerHeight] = useState<number>(() => {
+    try {
+      const saved = Number(
+        localStorage.getItem('seamind:codelab-drawer-height:v1'),
+      );
+      if (Number.isFinite(saved) && saved >= 120 && saved <= 400) return saved;
+    } catch {
+      // ignore storage errors
+    }
+    return 192;
+  });
+  const isApplyingSyncRef = useRef(false);
   const [varFilter, setVarFilter] = useState('');
   const [expandedVarName, setExpandedVarName] = useState<string | null>(null);
+  const [variablePreview, setVariablePreview] = useState<{
+    name: string;
+    text: string;
+  } | null>(null);
+  const [variablePreviewLoading, setVariablePreviewLoading] = useState(false);
   const [zoomedImageSrc, setZoomedImageSrc] = useState<string | null>(null);
 
   // Python Kernels: 'pyodide' or local pythonPath
@@ -243,6 +378,7 @@ export const TerminalCodeLabView = forwardRef<
   const kernelMenuRef = useRef<HTMLDivElement>(null);
   const exportMenuRef = useRef<HTMLDivElement>(null);
   const rootContainerRef = useRef<HTMLDivElement>(null);
+  const cellsScrollRef = useRef<HTMLDivElement>(null);
   const replInputRef = useRef<HTMLInputElement>(null);
 
   const hydratedSet = useMemo(
@@ -254,6 +390,45 @@ export const TerminalCodeLabView = forwardRef<
     () => replBusy || cells.some((c) => c.status === 'running'),
     [cells, replBusy],
   );
+  const pinnedCell = cells.find((cell) => cell.id === pinnedCellId) ?? null;
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('seamind:codelab-full-width:v1', String(fullWidth));
+    } catch {
+      // View preference is optional when storage is unavailable.
+    }
+  }, [fullWidth]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(`${draftKey}:vars`, String(showVars));
+      localStorage.setItem(`${draftKey}:console`, String(replOpen));
+    } catch {
+      // Panel visibility is a best-effort view preference.
+    }
+  }, [draftKey, replOpen, showVars]);
+
+  useEffect(() => {
+    const element = cellsScrollRef.current;
+    if (!element) return;
+    const key = `${draftKey}:scroll`;
+    try {
+      const saved = Number(localStorage.getItem(key));
+      if (Number.isFinite(saved) && saved > 0) element.scrollTop = saved;
+    } catch {
+      /* optional scroll restoration */
+    }
+    const onScroll = () => {
+      try {
+        localStorage.setItem(key, String(element.scrollTop));
+      } catch {
+        /* optional scroll restoration */
+      }
+    };
+    element.addEventListener('scroll', onScroll, { passive: true });
+    return () => element.removeEventListener('scroll', onScroll);
+  }, [draftKey]);
 
   const getCellsWithLiveSources = useCallback((): CodeLabCell[] => {
     const liveMap = liveSourceMapRef.current;
@@ -264,6 +439,53 @@ export const TerminalCodeLabView = forwardRef<
         : c;
     });
   }, []);
+
+  const persistDraft = useCallback(() => {
+    if (!dirty) return;
+    const draft: CodeLabDraft = {
+      fileId: activeFileId,
+      fileRevision: activeFileRevision,
+      title: activeFileTitle,
+      folder: activeFileFolder,
+      language,
+      starred: activeFileStarred,
+      cells: stripHeavyOutputsForStorage(getCellsWithLiveSources()),
+      prologueSource,
+    };
+    try {
+      localStorage.setItem(draftKey, JSON.stringify(draft));
+    } catch {
+      // The explicit save path reports storage failures to the user.
+    }
+  }, [
+    activeFileFolder,
+    activeFileId,
+    activeFileRevision,
+    activeFileStarred,
+    activeFileTitle,
+    dirty,
+    draftKey,
+    getCellsWithLiveSources,
+    language,
+    prologueSource,
+  ]);
+
+  useEffect(() => {
+    if (!dirty) {
+      try {
+        localStorage.removeItem(draftKey);
+      } catch {
+        /* optional draft cleanup */
+      }
+      return;
+    }
+    const timer = window.setTimeout(persistDraft, 900);
+    window.addEventListener('pagehide', persistDraft);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('pagehide', persistDraft);
+    };
+  }, [dirty, draftKey, persistDraft]);
 
   // Dismiss popovers on outside mousedown
   useEffect(() => {
@@ -297,12 +519,13 @@ export const TerminalCodeLabView = forwardRef<
   }, [onStatusChange]);
 
   useEffect(() => {
-    onActiveFileChange?.({
+    onActiveFileChange?.(tab.id, {
       fileId: activeFileId,
       title: activeFileTitle,
       folder: activeFileFolder,
       language,
       viewMode: canvasViewMode,
+      dirty,
     });
   }, [
     activeFileId,
@@ -310,12 +533,110 @@ export const TerminalCodeLabView = forwardRef<
     activeFileFolder,
     language,
     canvasViewMode,
+    dirty,
+    tab.id,
     onActiveFileChange,
   ]);
+
+  // Synchronized Views: broadcast live edits, outputs, variables & save state to sibling tabs sharing activeFileId
+  useEffect(() => {
+    if (!activeFileId || isApplyingSyncRef.current) return;
+    const payload: CodeLabSyncViewPayload = {
+      sourceTabId: tab.id,
+      fileId: activeFileId,
+      title: activeFileTitle,
+      folder: activeFileFolder,
+      language,
+      starred: activeFileStarred,
+      cells: getCellsWithLiveSources(),
+      prologueSource,
+      variables,
+      dirty,
+      revision: activeFileRevision,
+    };
+    window.dispatchEvent(
+      new CustomEvent<CodeLabSyncViewPayload>(CODELAB_SYNC_VIEW_EVENT, {
+        detail: payload,
+      }),
+    );
+  }, [
+    activeFileFolder,
+    activeFileId,
+    activeFileRevision,
+    activeFileStarred,
+    activeFileTitle,
+    cells,
+    dirty,
+    getCellsWithLiveSources,
+    language,
+    prologueSource,
+    tab.id,
+    variables,
+  ]);
+
+  useEffect(() => {
+    if (!activeFileId) return;
+    const onSyncView = (event: Event) => {
+      const custom = event as CustomEvent<CodeLabSyncViewPayload>;
+      const detail = custom.detail;
+      if (
+        !detail ||
+        detail.fileId !== activeFileId ||
+        detail.sourceTabId === tab.id
+      ) {
+        return;
+      }
+      isApplyingSyncRef.current = true;
+      liveSourceMapRef.current = new Map(
+        detail.cells.map((c) => [c.id, c.source]),
+      );
+      setCells(detail.cells);
+      setActiveFileTitle(detail.title);
+      setActiveFileFolder(detail.folder);
+      setActiveFileStarred(detail.starred);
+      setLanguage(detail.language);
+      setPrologueSource(detail.prologueSource);
+      setDirty(detail.dirty);
+      setActiveFileRevision(detail.revision);
+      if (detail.variables) {
+        setVariables(detail.variables);
+      }
+      queueMicrotask(() => {
+        isApplyingSyncRef.current = false;
+      });
+    };
+    const onExternalSaved = () => {
+      if (dirty) return;
+      const latest = loadCodeLabCollection().find(
+        (item) => item.id === activeFileId,
+      );
+      if (!latest || latest.updatedAt === activeFileRevision) return;
+      isApplyingSyncRef.current = true;
+      liveSourceMapRef.current = new Map(
+        latest.cells.map((c) => [c.id, c.source]),
+      );
+      setCells(latest.cells);
+      setActiveFileTitle(latest.title);
+      setActiveFileFolder(latest.folder);
+      setActiveFileStarred(Boolean(latest.starred));
+      setLanguage(latest.language);
+      setActiveFileRevision(latest.updatedAt);
+      queueMicrotask(() => {
+        isApplyingSyncRef.current = false;
+      });
+    };
+    window.addEventListener(CODELAB_SYNC_VIEW_EVENT, onSyncView);
+    window.addEventListener(CODELAB_COLLECTION_EVENT, onExternalSaved);
+    return () => {
+      window.removeEventListener(CODELAB_SYNC_VIEW_EVENT, onSyncView);
+      window.removeEventListener(CODELAB_COLLECTION_EVENT, onExternalSaved);
+    };
+  }, [activeFileId, activeFileRevision, dirty, tab.id]);
 
   const handleLoadSavedFile = useCallback(
     (file: CodeLabSavedFile) => {
       setActiveFileId(file.id);
+      setActiveFileRevision(file.updatedAt);
       setActiveFileTitle(file.title);
       setActiveFileFolder(file.folder || '未归类代码');
       setActiveFileStarred(Boolean(file.starred));
@@ -328,6 +649,7 @@ export const TerminalCodeLabView = forwardRef<
         nextCells.map((c) => [c.id, c.source]),
       );
       setCells(nextCells);
+      setPinnedCellId(null);
       setDirty(false);
       const firstCode =
         nextCells.find((c) => c.kind === 'code') ?? nextCells[0];
@@ -351,7 +673,7 @@ export const TerminalCodeLabView = forwardRef<
   );
 
   const handleSaveToCollection = useCallback(
-    (asNew = false): CodeLabSavedFile => {
+    (asNew = false): CodeLabSavedFile | null => {
       const liveCells = getCellsWithLiveSources();
       const ext =
         language === 'cpp' ? '.cpp' : language === 'c' ? '.c' : '.ipynb';
@@ -360,9 +682,9 @@ export const TerminalCodeLabView = forwardRef<
         !asNew && activeFileId
           ? activeFileId
           : `codelab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-      const savedList = upsertCodeLabFile({
-        id,
-        title: rawTitle,
+      const makeInput = (fileId: string, title: string) => ({
+        id: fileId,
+        title,
         folder: activeFileFolder || '未归类代码',
         language,
         cells: liveCells,
@@ -373,27 +695,51 @@ export const TerminalCodeLabView = forwardRef<
         ],
         starred: activeFileStarred,
       });
-      setActiveFileId(id);
-      setDirty(false);
-      showTempNotice(
-        asNew ? `已另存至代码库：${rawTitle}` : `已归档：${rawTitle}`,
-      );
-      return (
-        savedList.find((item) => item.id === id) ?? {
-          id,
-          title: rawTitle,
-          folder: activeFileFolder,
-          language,
-          cells: liveCells,
-          tags: [],
-          starred: activeFileStarred,
-          updatedAt: Date.now(),
+      try {
+        let saved: CodeLabSavedFile;
+        let conflictCopy = false;
+        try {
+          const list = upsertCodeLabFile(
+            makeInput(id, rawTitle),
+            !asNew && activeFileId ? activeFileRevision : undefined,
+          );
+          saved = list.find((item) => item.id === id)!;
+        } catch (error) {
+          if (
+            !(error instanceof Error) ||
+            error.message !== 'CODELAB_REVISION_CONFLICT'
+          ) {
+            throw error;
+          }
+          const copyId = `codelab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+          const copyTitle = `${rawTitle.replace(/(\.ipynb|\.cpp|\.c)$/i, '')}（冲突副本）${ext}`;
+          const list = upsertCodeLabFile(makeInput(copyId, copyTitle));
+          saved = list.find((item) => item.id === copyId)!;
+          conflictCopy = true;
         }
-      );
+        setActiveFileId(saved.id);
+        setActiveFileRevision(saved.updatedAt);
+        setActiveFileTitle(saved.title);
+        setDirty(false);
+        showTempNotice(
+          conflictCopy
+            ? `另一窗口已修改原文件，已保存为冲突副本：${saved.title}`
+            : asNew
+              ? `已另存至代码库：${saved.title}`
+              : `已归档：${saved.title}`,
+        );
+        return saved;
+      } catch {
+        showTempNotice(
+          '保存失败：本地空间不足或存储不可用，请导出 .ipynb 备份',
+        );
+        return null;
+      }
     },
     [
       activeFileFolder,
       activeFileId,
+      activeFileRevision,
       activeFileStarred,
       activeFileTitle,
       getCellsWithLiveSources,
@@ -412,6 +758,8 @@ export const TerminalCodeLabView = forwardRef<
         nextCells.map((c) => [c.id, c.source]),
       );
       setActiveFileId(null);
+      setActiveFileRevision(null);
+      setPinnedCellId(null);
       setActiveFileTitle(
         `新建_${nextLang.toUpperCase()}_${new Date().toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }).replace(':', '')}${ext}`,
       );
@@ -733,6 +1081,7 @@ export const TerminalCodeLabView = forwardRef<
                     executionCount: runNumber,
                     status: res.ok ? 'success' : 'error',
                     outputs: res.outputs,
+                    lastExecutedSource: liveSource,
                     durationMs: res.durationMs,
                   }
                 : item,
@@ -785,6 +1134,7 @@ export const TerminalCodeLabView = forwardRef<
                     executionCount: runNumber,
                     status: res.success ? 'success' : 'error',
                     outputs,
+                    lastExecutedSource: liveSource,
                     durationMs: res.durationMs,
                     stage: res.stage,
                     exitCode: res.exitCode ?? null,
@@ -807,12 +1157,15 @@ export const TerminalCodeLabView = forwardRef<
                   executionCount: runNumber,
                   status: 'error',
                   outputs: [{ kind: 'error', message: msg }],
+                  lastExecutedSource: liveSource,
                 }
               : item,
           ),
         );
         onStatusChange?.('error', msg);
       }
+
+      setDirty(true);
 
       if (advance && !runAbortRef.current) {
         const snapshot = cellsRef.current;
@@ -914,6 +1267,101 @@ export const TerminalCodeLabView = forwardRef<
     [],
   );
 
+  const handleDuplicateCell = useCallback(
+    (cellId: string) => {
+      const liveCells = getCellsWithLiveSources();
+      const { cells: nextCells, duplicatedCellId } = duplicateCodeLabCell(
+        liveCells,
+        cellId,
+      );
+      if (!duplicatedCellId) return;
+      const cloned = nextCells.find((c) => c.id === duplicatedCellId);
+      if (cloned) {
+        liveSourceMapRef.current.set(cloned.id, cloned.source);
+      }
+      setCells(nextCells);
+      setDirty(true);
+      setFocusedCellId(duplicatedCellId);
+      setEditingCellId(duplicatedCellId);
+      setHydratedCellIds((prev) => pushHydratedLru(prev, duplicatedCellId));
+      setInteractionMode('edit');
+    },
+    [getCellsWithLiveSources],
+  );
+
+  const handleInsertCellBelowById = useCallback(
+    (cellId: string, kind: 'code' | 'markdown') => {
+      const idx = cellsRef.current.findIndex((c) => c.id === cellId);
+      const insertAt = idx < 0 ? cellsRef.current.length : idx + 1;
+      const newCell: CodeLabCell = {
+        id: makeCodeLabCellId(),
+        kind,
+        language,
+        source: '',
+        stdinInput: '',
+        executionCount: null,
+        status: 'idle',
+        outputs: [],
+      };
+      liveSourceMapRef.current.set(newCell.id, '');
+      setCells((prev) => [
+        ...prev.slice(0, insertAt),
+        newCell,
+        ...prev.slice(insertAt),
+      ]);
+      setDirty(true);
+      setFocusedCellId(newCell.id);
+      setEditingCellId(newCell.id);
+      setHydratedCellIds((prev) => pushHydratedLru(prev, newCell.id));
+      setInteractionMode('edit');
+    },
+    [language],
+  );
+
+  const handleExportCellToStudy = useCallback(
+    async (cellId: string, target: 'knowledge' | 'mindmap') => {
+      const liveCells = getCellsWithLiveSources();
+      const idx = liveCells.findIndex((c) => c.id === cellId);
+      if (idx < 0) return;
+      const cell = liveCells[idx];
+      const docTitle = activeFileTitle.trim() || tab.title;
+      const md = formatCellStudyExportMarkdown(docTitle, cell, idx);
+      if (target === 'mindmap') {
+        if (bridge?.onAppendToMindmap) {
+          const ok = await bridge.onAppendToMindmap({
+            title: `${docTitle} #${idx + 1}`,
+            markdown: md,
+          });
+          showTempNotice(
+            ok ? '已将此格结论与代码追加到思维导图' : '追加思维导图失败',
+          );
+        } else {
+          await navigator.clipboard?.writeText(md);
+          showTempNotice('已复制导图分支 Markdown 到剪贴板');
+        }
+        return;
+      }
+      if (bridge?.onSaveMarkdownNote) {
+        const ok = await bridge.onSaveMarkdownNote({
+          title: `${docTitle} · 格 #${idx + 1} 实验记录`,
+          category: '代码实验',
+          source: `# ${docTitle} · 格 #${idx + 1}\n\n${md}\n`,
+        });
+        showTempNotice(ok ? '已将此格代码与结果写入知识库' : '保存知识库失败');
+      } else {
+        await navigator.clipboard?.writeText(md);
+        showTempNotice('已复制实验记录 Markdown 到剪贴板');
+      }
+    },
+    [
+      activeFileTitle,
+      bridge,
+      getCellsWithLiveSources,
+      showTempNotice,
+      tab.title,
+    ],
+  );
+
   const handleClearCellOutputs = useCallback((cellId: string) => {
     setCells((prev) =>
       prev.map((c) =>
@@ -951,11 +1399,44 @@ export const TerminalCodeLabView = forwardRef<
         });
       }
       setVariables([]);
+      setVariablePreview(null);
       showTempNotice('Python 内核变量空间已清空重置');
     } catch (err) {
       showTempNotice(err instanceof Error ? err.message : '内核重置失败');
     }
   }, [runWorkerRequest, selectedPyRuntime, showTempNotice]);
+
+  const handleInspectVariable = useCallback(
+    async (name: string) => {
+      if (isAnyRunning || variablePreviewLoading) return;
+      setVariablePreviewLoading(true);
+      try {
+        const variableName = JSON.stringify(name);
+        const code = `__seamind_inspect_value = globals().get(${variableName})\nif hasattr(__seamind_inspect_value, 'head') and hasattr(__seamind_inspect_value, 'to_string'):\n    print(__seamind_inspect_value.head(20).to_string(max_rows=20, max_cols=12))\nelif hasattr(__seamind_inspect_value, 'shape'):\n    print('shape:', getattr(__seamind_inspect_value, 'shape', None))\n    print(repr(__seamind_inspect_value)[:8000])\nelif isinstance(__seamind_inspect_value, (list, tuple)):\n    print(repr(__seamind_inspect_value[:50])[:8000])\nelse:\n    print(repr(__seamind_inspect_value)[:8000])`;
+        const result = await executePythonSnippet(code);
+        const text = result.outputs
+          .map((item) =>
+            item.kind === 'stream' || item.kind === 'text'
+              ? item.text
+              : item.kind === 'error'
+                ? item.message
+                : '',
+          )
+          .filter(Boolean)
+          .join('\n');
+        setVariablePreview({ name, text: text || '没有可显示的文本预览' });
+        setVariables(result.vars);
+      } catch (error) {
+        setVariablePreview({
+          name,
+          text: error instanceof Error ? error.message : '预览失败',
+        });
+      } finally {
+        setVariablePreviewLoading(false);
+      }
+    },
+    [executePythonSnippet, isAnyRunning, variablePreviewLoading],
+  );
 
   const handleSwitchPythonRuntime = useCallback(
     async (nextRuntime: string) => {
@@ -1059,6 +1540,49 @@ export const TerminalCodeLabView = forwardRef<
       }
     }
   }, [runCellById]);
+
+  const handleRunRange = useCallback(
+    async (direction: 'through' | 'below') => {
+      const snapshot = cellsRef.current;
+      const selectedIndex = snapshot.findIndex(
+        (cell) => cell.id === focusedCellIdRef.current,
+      );
+      if (selectedIndex < 0) return;
+      runAbortRef.current = false;
+      for (let index = 0; index < snapshot.length; index += 1) {
+        if (runAbortRef.current) break;
+        if (
+          direction === 'through'
+            ? index > selectedIndex
+            : index < selectedIndex
+        )
+          continue;
+        if (snapshot[index].kind === 'code')
+          await runCellById(snapshot[index].id, false);
+      }
+    },
+    [runCellById],
+  );
+
+  const handleGoToNextError = useCallback(() => {
+    const snapshot = cellsRef.current;
+    const currentIndex = snapshot.findIndex(
+      (cell) => cell.id === focusedCellIdRef.current,
+    );
+    const next = [
+      ...snapshot.slice(currentIndex + 1),
+      ...snapshot.slice(0, currentIndex + 1),
+    ].find((cell) => cell.status === 'error');
+    if (!next) {
+      showTempNotice('当前实验本没有运行错误');
+      return;
+    }
+    setFocusedCellId(next.id);
+    setHydratedCellIds((previous) => pushHydratedLru(previous, next.id));
+    rootContainerRef.current
+      ?.querySelector(`[data-cell-id="${next.id}"]`)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [showTempNotice]);
 
   const handleRunQuickRepl = useCallback(
     async (overrideCode?: string) => {
@@ -1224,7 +1748,7 @@ export const TerminalCodeLabView = forwardRef<
       focus: () => {
         rootContainerRef.current?.focus();
       },
-      insertAndRunCell: (lang, source, autoRun = true) => {
+      insertAndRunCell: (lang, source, autoRun = true, origin) => {
         setLanguage(lang);
         if (lang !== 'python') setShowPrologue(true);
         const newCell: CodeLabCell = {
@@ -1236,6 +1760,7 @@ export const TerminalCodeLabView = forwardRef<
           executionCount: null,
           status: 'idle',
           outputs: [],
+          origin,
         };
         liveSourceMapRef.current.set(newCell.id, source);
         setCells((prev) => [...prev, newCell]);
@@ -1267,6 +1792,7 @@ export const TerminalCodeLabView = forwardRef<
       },
       getCanvasViewMode: () => canvasViewMode,
       getActiveFileId: () => activeFileId,
+      hasUnsavedChanges: () => dirty,
       getScreenText: (maxLines = 80) => {
         const lines: string[] = [];
         for (const c of getCellsWithLiveSources()) {
@@ -1300,6 +1826,7 @@ export const TerminalCodeLabView = forwardRef<
     }),
     [
       activeFileId,
+      dirty,
       canvasViewMode,
       getCellsWithLiveSources,
       handleCreateNewNotebook,
@@ -1433,6 +1960,24 @@ export const TerminalCodeLabView = forwardRef<
     }
   };
 
+  const handleExportNotebookToMindmap = async () => {
+    const liveCells = getCellsWithLiveSources();
+    const docTitle = activeFileTitle.trim() || tab.title;
+    const md = exportCodeLabToMarkdown(docTitle, language, liveCells);
+    if (bridge?.onAppendToMindmap) {
+      const ok = await bridge.onAppendToMindmap({
+        title: `${docTitle} 实验结论`,
+        markdown: md,
+      });
+      showTempNotice(
+        ok ? '已将实验结论与代码追加到思维导图' : '追加思维导图失败',
+      );
+    } else {
+      await navigator.clipboard?.writeText(md);
+      showTempNotice('已复制导图分支 Markdown 到剪贴板');
+    }
+  };
+
   // Lazy computation: zero cost while editing cells in notebook mode
   const assembledFullScript = useMemo(() => {
     if (canvasViewMode !== 'script') return '';
@@ -1491,16 +2036,28 @@ export const TerminalCodeLabView = forwardRef<
     selectedPyRuntime,
   ]);
 
+  const bottomDrawerOpen = replOpen || (showVars && language === 'python');
+  const activeBottomTab: 'console' | 'vars' =
+    language !== 'python'
+      ? 'console'
+      : showVars && (!replOpen || bottomDrawerTab === 'vars')
+        ? 'vars'
+        : 'console';
+  const runningCellsCount = useMemo(
+    () => cells.filter((c) => c.status === 'running').length,
+    [cells],
+  );
+
   return (
     <div
       ref={rootContainerRef}
       tabIndex={0}
-      className={`codelab-root${active ? '' : ' is-hidden-pane'}${isFocused ? ' is-focused' : ''}`}
+      className={`codelab-root${active ? '' : ' is-hidden-pane'}${isFocused ? ' is-focused' : ''}${isSplitView ? ' is-split-view' : ''}`}
       style={style}
       onMouseDown={() => onFocusPane?.()}
       onKeyDown={handleContainerKeyDown}
     >
-      {/* Notebook title and primary actions */}
+      {/* Single-Row Document-Centric Notebook Toolbar */}
       <header className="codelab-toolbar" aria-label="代码实验室控制栏">
         {/* File location, title and save state */}
         <div className="codelab-toolbar-left">
@@ -1594,7 +2151,7 @@ export const TerminalCodeLabView = forwardRef<
           </span>
         </div>
 
-        {/* Primary execution and notebook view */}
+        {/* Primary execution & cell insertion */}
         <div className="codelab-toolbar-center">
           <button
             type="button"
@@ -1606,17 +2163,7 @@ export const TerminalCodeLabView = forwardRef<
             <LabPlayIcon size={12} />
             <span>运行当前格</span>
           </button>
-          <button
-            type="button"
-            className="codelab-tool-btn"
-            onClick={() => void handleRunAll()}
-            disabled={isAnyRunning}
-            title="从上到下依次运行全部代码格"
-          >
-            <LabPlayAllIcon size={12} />
-            <span>运行全部</span>
-          </button>
-          {isAnyRunning && (
+          {isAnyRunning ? (
             <button
               type="button"
               className="codelab-tool-btn is-danger"
@@ -1626,7 +2173,61 @@ export const TerminalCodeLabView = forwardRef<
               <LabStopIcon size={11} />
               <span>停止</span>
             </button>
+          ) : (
+            <button
+              type="button"
+              className="codelab-tool-btn"
+              onClick={() => void handleRunAll()}
+              title="从上到下依次运行全部代码格"
+            >
+              <LabPlayAllIcon size={12} />
+              <span>运行全部</span>
+            </button>
           )}
+          <details className="codelab-insert-menu codelab-run-range-menu">
+            <summary
+              className="codelab-tool-btn"
+              title="选择运行范围"
+              aria-label="选择运行范围"
+            >
+              <LabChevronDownIcon size={10} />
+            </summary>
+            <div className="codelab-insert-options">
+              <button
+                type="button"
+                onClick={(event) => {
+                  void handleRunRange('through');
+                  event.currentTarget
+                    .closest('details')
+                    ?.removeAttribute('open');
+                }}
+              >
+                运行至当前格
+              </button>
+              <button
+                type="button"
+                onClick={(event) => {
+                  void handleRunRange('below');
+                  event.currentTarget
+                    .closest('details')
+                    ?.removeAttribute('open');
+                }}
+              >
+                从当前格运行到末尾
+              </button>
+              <button
+                type="button"
+                onClick={(event) => {
+                  handleGoToNextError();
+                  event.currentTarget
+                    .closest('details')
+                    ?.removeAttribute('open');
+                }}
+              >
+                跳转下一处错误
+              </button>
+            </div>
+          </details>
 
           <span className="codelab-tool-sep" aria-hidden="true" />
 
@@ -1664,39 +2265,9 @@ export const TerminalCodeLabView = forwardRef<
               </button>
             </div>
           </details>
-
-          <button
-            type="button"
-            className={`codelab-tool-btn${canvasViewMode === 'script' ? ' is-active' : ''}`}
-            onClick={() => {
-              const next =
-                canvasViewMode === 'notebook' ? 'script' : 'notebook';
-              if (next === 'script') {
-                setCells(getCellsWithLiveSources());
-              }
-              setCanvasViewMode(next);
-            }}
-            title={
-              canvasViewMode === 'notebook'
-                ? '切换至完整汇编源码视图'
-                : '返回交互单元格视图'
-            }
-          >
-            {canvasViewMode === 'notebook' ? (
-              <>
-                <LabCodeIcon size={12} />
-                <span>完整源码</span>
-              </>
-            ) : (
-              <>
-                <LabCellsIcon size={12} />
-                <span>单元格</span>
-              </>
-            )}
-          </button>
         </div>
 
-        {/* Runtime, optional inspector and file actions */}
+        {/* Runtime, width toggle, bottom drawer toggle and More menu */}
         <div className="codelab-toolbar-right">
           <div className="codelab-popover-wrap" ref={kernelMenuRef}>
             <button
@@ -1851,13 +2422,31 @@ export const TerminalCodeLabView = forwardRef<
             )}
           </div>
 
+          <button
+            type="button"
+            className={`codelab-tool-btn codelab-width-toggle${fullWidth ? ' is-active' : ''}`}
+            onClick={() => setFullWidth((value) => !value)}
+            aria-pressed={fullWidth}
+            title={fullWidth ? '切换标准正文宽度' : '使用全宽编辑区'}
+          >
+            <span>{fullWidth ? '标准宽度' : '全宽'}</span>
+          </button>
+
           {language === 'python' ? (
             <button
               type="button"
-              className={`codelab-tool-btn is-tabular${showVars ? ' is-active' : ''}`}
-              onClick={() => setShowVars((v) => !v)}
-              title="打开 / 收起 Python 变量面板"
-              aria-expanded={showVars}
+              className={`codelab-tool-btn is-tabular${showVars && activeBottomTab === 'vars' ? ' is-active' : ''}`}
+              onClick={() => {
+                if (bottomDrawerOpen && activeBottomTab === 'vars') {
+                  setShowVars(false);
+                  setReplOpen(false);
+                } else {
+                  setBottomDrawerTab('vars');
+                  setShowVars(true);
+                }
+              }}
+              title="在底部抽屉打开 / 收起 Python 变量检查器"
+              aria-expanded={showVars && activeBottomTab === 'vars'}
             >
               <LabVarsIcon size={12} />
               <span>变量</span>
@@ -1884,12 +2473,63 @@ export const TerminalCodeLabView = forwardRef<
               aria-expanded={showExportMenu}
               aria-haspopup="menu"
               aria-label="更多操作与导出"
-              title="归档、导入导出与维护"
+              title="视图、多开、导入导出与维护"
             >
               <LabMoreIcon size={14} />
             </button>
             {showExportMenu && (
               <div className="codelab-popover-menu" role="menu">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowExportMenu(false);
+                    const next =
+                      canvasViewMode === 'notebook' ? 'script' : 'notebook';
+                    if (next === 'script') {
+                      setCells(getCellsWithLiveSources());
+                    }
+                    setCanvasViewMode(next);
+                  }}
+                >
+                  {canvasViewMode === 'notebook'
+                    ? '切换至完整源码视图'
+                    : '返回交互单元格视图'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowExportMenu(false);
+                    setEditingTitle(true);
+                  }}
+                >
+                  重命名实验本
+                </button>
+                {onOpenSyncView && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowExportMenu(false);
+                      onOpenSyncView();
+                    }}
+                  >
+                    新建同步视图（右侧分屏）
+                  </button>
+                )}
+                {onDuplicateNotebook && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowExportMenu(false);
+                      const saved = handleSaveToCollection(false);
+                      if (saved) {
+                        onDuplicateNotebook(saved);
+                      }
+                    }}
+                  >
+                    复制实验本（新文档 · 独立内核）
+                  </button>
+                )}
+                <div className="codelab-popover-sep" />
                 <button
                   type="button"
                   onClick={() => {
@@ -1936,6 +2576,15 @@ export const TerminalCodeLabView = forwardRef<
                   }}
                 >
                   写入知识库 Markdown 笔记
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowExportMenu(false);
+                    void handleExportNotebookToMindmap();
+                  }}
+                >
+                  追加实验结论到当前思维导图
                 </button>
                 <div className="codelab-popover-sep" />
                 {language === 'python' && (
@@ -2028,10 +2677,12 @@ export const TerminalCodeLabView = forwardRef<
         </div>
       )}
 
-      {/* Main Notebook / Script Stage + Institutional Variable Table */}
+      {/* Main Notebook / Script Stage + Dedicated Right Pinned Output Panel */}
       <div className="codelab-main-area">
-        <div className="codelab-cells-scroll">
-          <div className="codelab-paper-column">
+        <div className="codelab-cells-scroll" ref={cellsScrollRef}>
+          <div
+            className={`codelab-paper-column${fullWidth || isSplitView ? ' is-full-width' : ''}`}
+          >
             {canvasViewMode === 'script' ? (
               <div className="codelab-script-view">
                 <div className="codelab-script-head">
@@ -2169,8 +2820,19 @@ export const TerminalCodeLabView = forwardRef<
                       onSendToAgent={handleSendCellToAgentById}
                       onMoveCell={handleMoveCell}
                       onDeleteCell={deleteCellById}
+                      onDuplicateCell={handleDuplicateCell}
+                      onInsertCellBelow={handleInsertCellBelowById}
+                      onExportCellToStudy={(cellId, target) => {
+                        void handleExportCellToStudy(cellId, target);
+                      }}
                       onClearOutputs={handleClearCellOutputs}
                       onZoomImage={setZoomedImageSrc}
+                      onPinOutput={(cellId) => {
+                        setPinnedCellId((current) =>
+                          current === cellId ? null : cellId,
+                        );
+                      }}
+                      pinnedOutputCellId={pinnedCellId}
                     />
                   ))}
                 </div>
@@ -2199,261 +2861,421 @@ export const TerminalCodeLabView = forwardRef<
           </div>
         </div>
 
-        {/* Institutional 3-Column Variable Inspector Drawer */}
-        {showVars && language === 'python' && (
-          <aside
-            className="codelab-vars-panel"
-            aria-label="Python 内存变量监视表"
-          >
-            <div className="codelab-vars-header">
-              <div className="codelab-vars-title">
-                <span>变量</span>
-                <span className="codelab-vars-count">{variables.length}</span>
+        {pinnedCell && pinnedCell.outputs.length > 0 && (
+          <aside className="codelab-pinned-panel" aria-label="固定的代码格输出">
+            <div className="codelab-pinned-head">
+              <div>
+                <strong>固定输出</strong>
+                <span>
+                  {activeFileTitle} · 格{' '}
+                  {cells.findIndex((cell) => cell.id === pinnedCell.id) + 1}
+                </span>
               </div>
-              <div className="codelab-vars-head-actions">
-                <button
-                  type="button"
-                  className="codelab-ghost-icon-btn"
-                  onClick={() => void handleResetPythonKernel()}
-                  title="清空并重置 Python 内核变量"
-                >
-                  <LabResetIcon size={11} />
-                </button>
-                <button
-                  type="button"
-                  className="codelab-ghost-icon-btn"
-                  onClick={() => setShowVars(false)}
-                  title="关闭变量面板"
-                >
-                  <LabCloseIcon size={11} />
-                </button>
-              </div>
+              <button
+                type="button"
+                className="codelab-ghost-icon-btn"
+                onClick={() => setPinnedCellId(null)}
+                title="关闭固定输出"
+                aria-label="关闭固定输出"
+              >
+                <LabCloseIcon size={12} />
+              </button>
             </div>
-
-            <div className="codelab-vars-search-wrap">
-              <input
-                type="search"
-                className="codelab-vars-search"
-                value={varFilter}
-                onChange={(e) => setVarFilter(e.target.value)}
-                placeholder="筛选变量名、类型或值…"
-                aria-label="筛选变量"
-              />
-            </div>
-
-            <div className="codelab-vars-table-head" aria-hidden="true">
-              <span>NAME</span>
-              <span>TYPE</span>
-              <span>VALUE</span>
-            </div>
-
-            <div className="codelab-vars-list">
-              {filteredVariables.length === 0 ? (
-                <div className="codelab-vars-empty">
-                  {variables.length === 0
-                    ? '运行 Python 代码格后显示活跃变量'
-                    : '无匹配变量'}
-                </div>
-              ) : (
-                filteredVariables.map((v) => {
-                  const isExpanded = expandedVarName === v.name;
-                  return (
-                    <div
-                      key={v.name}
-                      className={`codelab-var-row${isExpanded ? ' is-expanded' : ''}`}
-                      role="button"
-                      tabIndex={0}
-                      aria-expanded={isExpanded}
-                      aria-label={`查看变量 ${v.name} 的详情`}
-                      onClick={() =>
-                        setExpandedVarName((curr) =>
-                          curr === v.name ? null : v.name,
-                        )
-                      }
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault();
-                          setExpandedVarName((curr) =>
-                            curr === v.name ? null : v.name,
-                          );
-                        }
-                      }}
-                    >
-                      <div className="codelab-var-grid">
-                        <strong className="codelab-var-name" title={v.name}>
-                          {v.name}
-                        </strong>
-                        <span className="codelab-var-type" title={v.typeName}>
-                          {v.typeName}
-                        </span>
-                        <span className="codelab-var-val" title={v.preview}>
-                          {v.preview}
-                        </span>
-                      </div>
-                      {isExpanded && (
-                        <div
-                          className="codelab-var-detail"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <pre>{v.preview}</pre>
-                          <div className="codelab-var-detail-actions">
-                            <button
-                              type="button"
-                              className="codelab-float-btn"
-                              onClick={() => {
-                                setReplInput(`print(repr(${v.name}))`);
-                                setReplOpen(true);
-                                requestAnimationFrame(() =>
-                                  replInputRef.current?.focus(),
-                                );
-                              }}
-                            >
-                              在控制台查看
-                            </button>
-                            <button
-                              type="button"
-                              className="codelab-float-btn"
-                              onClick={() =>
-                                void navigator.clipboard
-                                  ?.writeText(v.preview)
-                                  .then(() =>
-                                    showTempNotice(`已复制 ${v.name} 预览值`),
-                                  )
-                              }
-                            >
-                              复制值
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })
+            <CellOutputList
+              cellId={pinnedCell.id}
+              outputs={pinnedCell.outputs}
+              durationMs={pinnedCell.durationMs}
+              stage={pinnedCell.stage}
+              theme={theme}
+              onClearOutputs={handleClearCellOutputs}
+              onZoomImage={setZoomedImageSrc}
+              stale={Boolean(
+                pinnedCell.lastExecutedSource !== undefined &&
+                pinnedCell.lastExecutedSource !== pinnedCell.source,
               )}
-            </div>
+            />
           </aside>
         )}
       </div>
 
-      {/* Optional quick console, sharing the active notebook kernel */}
-      <div className="codelab-repl-dock">
-        <button
-          type="button"
-          className="codelab-console-toggle"
-          aria-expanded={replOpen}
-          aria-controls={`codelab-console-${tab.id}`}
-          onClick={() => {
-            setReplOpen((open) => !open);
-            if (!replOpen) {
-              requestAnimationFrame(() => replInputRef.current?.focus());
-            }
-          }}
-        >
-          <span>
-            控制台{' '}
-            {replHistory.length > 0 ? `· ${replHistory.length} 条记录` : ''}
-          </span>
-          <span className={`codelab-mode-telemetry is-${interactionMode}`}>
-            {interactionMode === 'edit' ? '编辑模式' : '命令模式'}
-          </span>
-          <span aria-hidden="true">{replOpen ? '⌄' : '⌃'}</span>
-        </button>
-        {replOpen && (
+      {/* Unified Resizable Bottom Console & Variables Drawer (Collapsed by Default) */}
+      <section
+        className={`codelab-bottom-drawer${bottomDrawerOpen ? ' is-open' : ''}`}
+        aria-label="控制台与变量抽屉"
+      >
+        {bottomDrawerOpen && (
           <div
-            id={`codelab-console-${tab.id}`}
-            className={`codelab-console-content${replHistory.length === 0 ? ' is-empty' : ''}`}
-          >
-            {replHistory.length > 0 && !replLogCollapsed && (
-              <div className="codelab-repl-log">
-                {replHistory.slice(-6).map((entry) => (
-                  <div
-                    key={entry.id}
-                    className={`codelab-repl-entry${entry.ok ? '' : ' is-err'}`}
-                  >
-                    <div className="codelab-repl-in">
-                      <code>
-                        {entry.language === 'python'
-                          ? '>>> '
-                          : `${entry.language}> `}
-                        {entry.code}
-                      </code>
-                      {entry.durationMs !== undefined && (
-                        <span>{formatDurationCompact(entry.durationMs)}</span>
-                      )}
-                    </div>
-                    <pre className="codelab-repl-out">{entry.text}</pre>
-                    {entry.images?.map((src, idx) => (
-                      <img
-                        key={idx}
-                        src={src}
-                        alt="REPL 绘图"
-                        className="codelab-repl-img"
-                        onClick={() => setZoomedImageSrc(src)}
-                      />
-                    ))}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div className="codelab-repl-input-row">
-              <span className="codelab-repl-prompt">
-                {language === 'python' ? '>>>' : `${language}>`}
-              </span>
-              <input
-                ref={replInputRef}
-                type="text"
-                className="codelab-repl-input"
-                value={replInput}
-                onChange={(e) => setReplInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    void handleRunQuickRepl();
-                  }
-                }}
-                placeholder={
-                  language === 'python'
-                    ? '快速求值控制台（共享上方内核变量）· Enter 执行'
-                    : `快速执行单行 ${language.toUpperCase()} 语句（共享头文件前置）· Enter 执行`
+            className="codelab-bottom-drawer-resizer"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="拖动调整底部控制台与变量抽屉高度"
+            onPointerDown={(event) => {
+              event.preventDefault();
+              const startY = event.clientY;
+              const startHeight = bottomDrawerHeight;
+              const onPointerMove = (moveEvent: PointerEvent) => {
+                const nextHeight = Math.max(
+                  120,
+                  Math.min(380, startHeight + (startY - moveEvent.clientY)),
+                );
+                setBottomDrawerHeight(nextHeight);
+              };
+              const onPointerUp = (upEvent: PointerEvent) => {
+                const finalHeight = Math.max(
+                  120,
+                  Math.min(380, startHeight + (startY - upEvent.clientY)),
+                );
+                try {
+                  localStorage.setItem(
+                    'seamind:codelab-drawer-height:v1',
+                    String(finalHeight),
+                  );
+                } catch {
+                  // ignore storage errors
                 }
-              />
-              {replHistory.length > 0 && (
-                <>
-                  <button
-                    type="button"
-                    className="codelab-repl-action-btn"
-                    onClick={() => setReplLogCollapsed((c) => !c)}
-                    title={
-                      replLogCollapsed ? '展开控制台记录' : '收起控制台记录'
-                    }
-                  >
-                    {replLogCollapsed ? `记录 (${replHistory.length})` : '收起'}
-                  </button>
-                  <button
-                    type="button"
-                    className="codelab-ghost-icon-btn"
-                    onClick={() => setReplHistory([])}
-                    title="清空控制台记录"
-                  >
-                    <LabTrashIcon size={11} />
-                  </button>
-                </>
-              )}
+                window.removeEventListener('pointermove', onPointerMove);
+                window.removeEventListener('pointerup', onPointerUp);
+              };
+              window.addEventListener('pointermove', onPointerMove);
+              window.addEventListener('pointerup', onPointerUp, { once: true });
+            }}
+          />
+        )}
+
+        <div className="codelab-bottom-drawer-bar">
+          <div className="codelab-bottom-drawer-tabs" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={bottomDrawerOpen && activeBottomTab === 'console'}
+              className={`codelab-bottom-tab-btn${bottomDrawerOpen && activeBottomTab === 'console' ? ' is-active' : ''}`}
+              onClick={() => {
+                if (bottomDrawerOpen && activeBottomTab === 'console') {
+                  setReplOpen(false);
+                  setShowVars(false);
+                } else {
+                  setBottomDrawerTab('console');
+                  setReplOpen(true);
+                  requestAnimationFrame(() => replInputRef.current?.focus());
+                }
+              }}
+            >
+              <span>
+                控制台
+                {replHistory.length > 0 ? ` (${replHistory.length})` : ''}
+              </span>
+            </button>
+
+            {language === 'python' && (
               <button
                 type="button"
-                className="codelab-repl-exec-btn"
-                disabled={replBusy || !replInput.trim()}
-                onClick={() => void handleRunQuickRepl()}
-                title="执行控制台表达式 (Enter)"
+                role="tab"
+                aria-selected={bottomDrawerOpen && activeBottomTab === 'vars'}
+                className={`codelab-bottom-tab-btn${bottomDrawerOpen && activeBottomTab === 'vars' ? ' is-active' : ''}`}
+                onClick={() => {
+                  if (bottomDrawerOpen && activeBottomTab === 'vars') {
+                    setShowVars(false);
+                    setReplOpen(false);
+                  } else {
+                    setBottomDrawerTab('vars');
+                    setShowVars(true);
+                  }
+                }}
               >
-                <LabPlayIcon size={11} />
-                <span>{replBusy ? '运行中' : '求值'}</span>
+                <LabVarsIcon size={11} />
+                <span>变量 ({variables.length})</span>
               </button>
-            </div>
+            )}
+          </div>
+
+          <div className="codelab-bottom-drawer-status" role="status">
+            <span
+              className={`codelab-bottom-status-item${dirty ? ' is-dirty' : ''}`}
+            >
+              {activeFileTitle || '未命名实验'} ·{' '}
+              {activeFileId ? (dirty ? '未保存 ●' : '已保存') : '未归档'}
+            </span>
+            <span aria-hidden="true">·</span>
+            <span
+              className={`codelab-bottom-status-item${isAnyRunning ? ' is-running' : ''}`}
+            >
+              {kernelSummary.tag} ({kernelSummary.label}) ·{' '}
+              {isAnyRunning
+                ? `执行中 (${Math.max(1, runningCellsCount)} 格)`
+                : '就绪'}
+            </span>
+            <span aria-hidden="true">·</span>
+            <span className={`codelab-mode-telemetry is-${interactionMode}`}>
+              {interactionMode === 'edit' ? '编辑模式' : '命令模式'}
+            </span>
+            <button
+              type="button"
+              className="codelab-ghost-icon-btn"
+              onClick={() => {
+                if (bottomDrawerOpen) {
+                  setReplOpen(false);
+                  setShowVars(false);
+                } else {
+                  setReplOpen(true);
+                }
+              }}
+              aria-label={bottomDrawerOpen ? '收起底部抽屉' : '展开底部抽屉'}
+              title={bottomDrawerOpen ? '收起底部抽屉' : '展开底部抽屉'}
+            >
+              {bottomDrawerOpen ? '⌄' : '⌃'}
+            </button>
+          </div>
+        </div>
+
+        {bottomDrawerOpen && (
+          <div
+            id={`codelab-console-${tab.id}`}
+            className="codelab-bottom-drawer-body"
+            style={{ height: `${bottomDrawerHeight}px` }}
+          >
+            {activeBottomTab === 'console' ? (
+              <div
+                className={`codelab-console-content${replHistory.length === 0 ? ' is-empty' : ''}`}
+                style={{ height: '100%', maxHeight: 'none', resize: 'none' }}
+              >
+                {replHistory.length > 0 && !replLogCollapsed && (
+                  <div className="codelab-repl-log">
+                    {replHistory.slice(-6).map((entry) => (
+                      <div
+                        key={entry.id}
+                        className={`codelab-repl-entry${entry.ok ? '' : ' is-err'}`}
+                      >
+                        <div className="codelab-repl-in">
+                          <code>
+                            {entry.language === 'python'
+                              ? '>>> '
+                              : `${entry.language}> `}
+                            {entry.code}
+                          </code>
+                          {entry.durationMs !== undefined && (
+                            <span>
+                              {formatDurationCompact(entry.durationMs)}
+                            </span>
+                          )}
+                        </div>
+                        <pre className="codelab-repl-out">{entry.text}</pre>
+                        {entry.images?.map((src, idx) => (
+                          <img
+                            key={idx}
+                            src={src}
+                            alt="REPL 绘图"
+                            className="codelab-repl-img"
+                            onClick={() => setZoomedImageSrc(src)}
+                          />
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="codelab-repl-input-row">
+                  <span className="codelab-repl-prompt">
+                    {language === 'python' ? '>>>' : `${language}>`}
+                  </span>
+                  <input
+                    ref={replInputRef}
+                    type="text"
+                    className="codelab-repl-input"
+                    value={replInput}
+                    onChange={(e) => setReplInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        void handleRunQuickRepl();
+                      }
+                    }}
+                    placeholder={
+                      language === 'python'
+                        ? '快速求值控制台（共享当前实验本内核变量）· Enter 执行'
+                        : `快速执行单行 ${language.toUpperCase()} 语句（共享头文件前置）· Enter 执行`
+                    }
+                  />
+                  {replHistory.length > 0 && (
+                    <>
+                      <button
+                        type="button"
+                        className="codelab-repl-action-btn"
+                        onClick={() => setReplLogCollapsed((c) => !c)}
+                        title={
+                          replLogCollapsed ? '展开控制台记录' : '收起控制台记录'
+                        }
+                      >
+                        {replLogCollapsed
+                          ? `记录 (${replHistory.length})`
+                          : '收起'}
+                      </button>
+                      <button
+                        type="button"
+                        className="codelab-ghost-icon-btn"
+                        onClick={() => setReplHistory([])}
+                        title="清空控制台记录"
+                      >
+                        <LabTrashIcon size={11} />
+                      </button>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    className="codelab-repl-exec-btn"
+                    disabled={replBusy || !replInput.trim()}
+                    onClick={() => void handleRunQuickRepl()}
+                    title="执行控制台表达式 (Enter)"
+                  >
+                    <LabPlayIcon size={11} />
+                    <span>{replBusy ? '运行中' : '求值'}</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div
+                className="codelab-bottom-vars-body"
+                aria-label="Python 内存变量监视表"
+              >
+                <div className="codelab-bottom-vars-toolbar">
+                  <input
+                    type="search"
+                    className="codelab-vars-search"
+                    value={varFilter}
+                    onChange={(e) => setVarFilter(e.target.value)}
+                    placeholder="筛选变量名、类型或值…"
+                    aria-label="筛选变量"
+                  />
+                  <button
+                    type="button"
+                    className="codelab-float-btn"
+                    onClick={() => void handleResetPythonKernel()}
+                    title="清空并重置 Python 内核变量"
+                  >
+                    <LabResetIcon size={11} />
+                    <span>重置内核变量</span>
+                  </button>
+                </div>
+
+                <div className="codelab-vars-table-head" aria-hidden="true">
+                  <span>NAME</span>
+                  <span>TYPE</span>
+                  <span>VALUE</span>
+                </div>
+
+                <div className="codelab-vars-list">
+                  {filteredVariables.length === 0 ? (
+                    <div className="codelab-vars-empty">
+                      {variables.length === 0
+                        ? '运行 Python 代码格后显示活跃变量'
+                        : '无匹配变量'}
+                    </div>
+                  ) : (
+                    filteredVariables.map((v) => {
+                      const isExpanded = expandedVarName === v.name;
+                      return (
+                        <div
+                          key={v.name}
+                          className={`codelab-var-row${isExpanded ? ' is-expanded' : ''}`}
+                          role="button"
+                          tabIndex={0}
+                          aria-expanded={isExpanded}
+                          aria-label={`查看变量 ${v.name} 的详情`}
+                          onClick={() =>
+                            setExpandedVarName((curr) =>
+                              curr === v.name ? null : v.name,
+                            )
+                          }
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault();
+                              setExpandedVarName((curr) =>
+                                curr === v.name ? null : v.name,
+                              );
+                            }
+                          }}
+                        >
+                          <div className="codelab-var-grid">
+                            <strong className="codelab-var-name" title={v.name}>
+                              {v.name}
+                            </strong>
+                            <span
+                              className="codelab-var-type"
+                              title={v.typeName}
+                            >
+                              {v.typeName}
+                            </span>
+                            <span className="codelab-var-val" title={v.preview}>
+                              {v.preview}
+                            </span>
+                          </div>
+                          {isExpanded && (
+                            <div
+                              className="codelab-var-detail"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <pre>{v.preview}</pre>
+                              {variablePreview?.name === v.name && (
+                                <pre className="codelab-var-sample">
+                                  {variablePreview.text}
+                                </pre>
+                              )}
+                              <div className="codelab-var-detail-actions">
+                                <button
+                                  type="button"
+                                  className="codelab-float-btn"
+                                  disabled={
+                                    isAnyRunning || variablePreviewLoading
+                                  }
+                                  onClick={() =>
+                                    void handleInspectVariable(v.name)
+                                  }
+                                >
+                                  {variablePreviewLoading
+                                    ? '正在读取…'
+                                    : '预览前 20 行 / 元素'}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="codelab-float-btn"
+                                  onClick={() => {
+                                    setReplInput(`print(repr(${v.name}))`);
+                                    setBottomDrawerTab('console');
+                                    setReplOpen(true);
+                                    requestAnimationFrame(() =>
+                                      replInputRef.current?.focus(),
+                                    );
+                                  }}
+                                >
+                                  在控制台查看
+                                </button>
+                                <button
+                                  type="button"
+                                  className="codelab-float-btn"
+                                  onClick={() =>
+                                    void navigator.clipboard
+                                      ?.writeText(v.preview)
+                                      .then(() =>
+                                        showTempNotice(
+                                          `已复制 ${v.name} 预览值`,
+                                        ),
+                                      )
+                                  }
+                                >
+                                  复制值
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
-      </div>
+      </section>
 
       {/* Institutional Chart Lightbox */}
       {zoomedImageSrc && (

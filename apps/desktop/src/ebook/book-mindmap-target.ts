@@ -42,6 +42,23 @@ export const bookMindmapPath = (title: string) => {
   return `books/${stem}.md`;
 };
 
+// Older EPUB imports could mistake the landmarks list for the table of contents.
+// Only replace a saved map automatically when it still contains exactly that
+// generated two-item outline. Any added notes or nodes require an explicit refresh.
+export function isLegacyLandmarksOnlyMindmap(markdown: string): boolean {
+  const lines = markdown
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('<!-- markmap-desktop:'));
+  if (lines.length !== 3 || !/^#\s+\S/u.test(lines[0])) return false;
+  const items = lines
+    .slice(1)
+    .map((line) =>
+      line.replace(/\s*<!--\s*seamind:epub-href=[^>]*-->\s*$/u, '').trim(),
+    );
+  return items.includes('- Table of Contents') && items.includes('- Cover');
+}
+
 export function resolveBookMindmapTarget(
   snapshot: LibrarySnapshot,
   book: Pick<EpubBookDocument, 'relativePath' | 'title'>,

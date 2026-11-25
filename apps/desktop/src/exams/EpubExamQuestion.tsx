@@ -11,7 +11,6 @@ import {
   type ExamChoiceLayout,
 } from './exam-paper';
 import { ExamRichText } from './ExamRichText';
-import { ExamScrollMinimap } from './ExamScrollMinimap';
 
 export interface ExamCodeResult {
   evaluation: {
@@ -315,9 +314,17 @@ export default function EpubExamQuestion(props: Props) {
           ) : (
             <>
               <header className="epub-exam-leaf-header">
-                <span>第 {props.index + 1} 题</span>
-                <span>{typeLabel(question.type)}</span>
-                <span>{question.points || 2} 分</span>
+                <div className="epub-exam-leaf-header-left">
+                  <span className="epub-exam-q-badge">
+                    第 {props.index + 1} 题
+                  </span>
+                  <span className="epub-exam-q-type">
+                    {typeLabel(question.type)}
+                  </span>
+                </div>
+                <span className="epub-exam-q-points">
+                  {question.points || 2} 分
+                </span>
               </header>
               <h2 className="epub-exam-leaf-prompt">
                 <ExamRichText text={question.prompt} />
@@ -351,8 +358,17 @@ export default function EpubExamQuestion(props: Props) {
         <div className="epub-exam-leaf-answer">
           {!props.showPrompt && (
             <header className="epub-exam-leaf-header">
-              <span>第 {props.index + 1} 题 · 作答</span>
-              <span>{typeLabel(question.type)}</span>
+              <div className="epub-exam-leaf-header-left">
+                <span className="epub-exam-q-badge">
+                  第 {props.index + 1} 题 · 作答
+                </span>
+                <span className="epub-exam-q-type">
+                  {typeLabel(question.type)}
+                </span>
+              </div>
+              <span className="epub-exam-q-points">
+                {question.points || 2} 分
+              </span>
             </header>
           )}
           {isSubjective ? (
@@ -512,6 +528,9 @@ export default function EpubExamQuestion(props: Props) {
                         else props.onAnswer(option);
                       }}
                     />
+                    {!isPaper && choiceKey && (
+                      <span className="epub-exam-option-key">{`${choiceKey}.`}</span>
+                    )}
                     <span
                       className={
                         isPaper
@@ -519,7 +538,7 @@ export default function EpubExamQuestion(props: Props) {
                           : 'epub-exam-option-text'
                       }
                     >
-                      {choiceKey ? `${choiceKey}. ` : ''}
+                      {isPaper && choiceKey ? `${choiceKey}. ` : ''}
                       <ExamRichText text={option} />
                     </span>
                   </label>
@@ -550,10 +569,5 @@ export default function EpubExamQuestion(props: Props) {
     </article>
   );
   if (isPaper) return paper;
-  return (
-    <div className="epub-exam-leaf-shell">
-      {paper}
-      <ExamScrollMinimap scrollRef={leafRef} label="试卷作答缩略导航" />
-    </div>
-  );
+  return <div className="epub-exam-leaf-shell">{paper}</div>;
 }

@@ -25,6 +25,7 @@ export interface TerminalTab {
   id: string;
   title: string;
   kind?: TerminalTabKind;
+  labFileId?: string;
   shell: TerminalShellType;
   cwd: string;
   initialCli?: TerminalCliPreset;
@@ -98,6 +99,10 @@ export interface TerminalWorkspaceBridge {
     category?: string;
     source: string;
   }) => Promise<boolean>;
+  onAppendToMindmap?: (args: {
+    title: string;
+    markdown: string;
+  }) => Promise<boolean> | boolean;
   onOpenExamBookFilter?: (bookKey?: string | null) => void;
   onOpenYouTubeVideo?: (
     videoId: string,

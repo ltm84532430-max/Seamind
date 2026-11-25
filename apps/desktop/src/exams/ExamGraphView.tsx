@@ -10,6 +10,7 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from 'react';
 import '../ebook/book-galaxy-view.css';
+import { findStoredCoverByBookKey } from '../ebook/ebook-storage';
 import {
   buildGalaxyAdjacencyMap,
   createGalaxyPhysicsState,
@@ -40,15 +41,16 @@ interface Props {
   coverDataUrl: string | null;
   items: ExamGraphItem[];
   selectedId: string | null;
+  externalQuery?: string;
   onSelectExam: (id: string) => void;
   onOpenExam: (exam: EpubExamSummary) => void;
   onOpenBook?: () => void;
   onSelectBookFilter?: (bookKey: string) => void;
 }
 
-const MIN_ZOOM = 0.22;
+const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 2.8;
-const INITIAL_ZOOM = 0.68;
+const INITIAL_ZOOM = 0.86;
 
 function urgencyText(schedule: ExamReviewSchedule): string {
   if (schedule.urgency === 'overdue') {
@@ -61,12 +63,20 @@ function urgencyText(schedule: ExamReviewSchedule): string {
   return `${schedule.daysUntil ?? ''} 天后`;
 }
 
+function bookMonogram(title: string): string {
+  const clean = title.replace(/[《》【】[\]()（）\s]/g, '').trim();
+  if (!clean) return 'BOOK';
+  return Array.from(clean).slice(0, 2).join('').toUpperCase();
+}
+
 export function ExamGraphView({
   mode,
   bookKey,
   bookTitle,
+  coverDataUrl,
   items,
   selectedId,
+  externalQuery = '',
   onSelectExam,
   onOpenExam,
   onOpenBook,
@@ -80,16 +90,15 @@ export function ExamGraphView({
   const [pan, setPan] = useState({ x: 480, y: 320 });
   const hasCenteredRef = useRef(false);
 
-  const [query, setQuery] = useState('');
   const [controlsOpen, setControlsOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   // Toggles & Physics
   const [onlyDue, setOnlyDue] = useState(false);
   const [showOrbitGuides, setShowOrbitGuides] = useState(true);
-  const [showSequenceArcs, setShowSequenceArcs] = useState(true);
+  const [showSequenceArcs, setShowSequenceArcs] = useState(false);
   const [nodeSizeScale, setNodeSizeScale] = useState(1);
-  const [labelFadeThreshold, setLabelFadeThreshold] = useState(0.55);
+  const [labelFadeThreshold, setLabelFadeThreshold] = useState(0.5);
   const [physicsConfig, setPhysicsConfig] = useState<GalaxyPhysicsConfig>(
     DEFAULT_GALAXY_PHYSICS_CONFIG,
   );
@@ -151,7 +160,7 @@ export function ExamGraphView({
   }, [collapsedClusters, graph.nodes, onlyDue]);
 
   const filteredNodeIds = useMemo(() => {
-    const needle = query.trim().toLowerCase();
+    const needle = externalQuery.trim().toLowerCase();
     if (!needle) return null;
     const matched = new Set<string>([EXAM_ROOT_ID]);
     for (const node of graph.nodes) {
@@ -163,7 +172,34 @@ export function ExamGraphView({
       }
     }
     return matched;
-  }, [graph.nodes, query]);
+  }, [externalQuery, graph.nodes]);
+
+  const clusterCovers = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const node of graph.nodes) {
+      if (node.kind === 'cluster' && node.bookKey) {
+        const stored = findStoredCoverByBookKey(node.bookKey);
+        if (stored) {
+          map.set(node.id, stored);
+        }
+      }
+    }
+    return map;
+  }, [graph.nodes]);
+
+  const effectiveSunCover = useMemo(() => {
+    if (coverDataUrl) return coverDataUrl;
+    for (const cover of clusterCovers.values()) {
+      if (cover) return cover;
+    }
+    for (const { exam } of items) {
+      if (exam.bookKey) {
+        const stored = findStoredCoverByBookKey(exam.bookKey);
+        if (stored) return stored;
+      }
+    }
+    return null;
+  }, [clusterCovers, coverDataUrl, items]);
 
   // Physics simulation state
   const physicsRef = useRef<GalaxyPhysicsState | null>(null);
@@ -338,6 +374,8 @@ export function ExamGraphView({
     event: ReactPointerEvent<HTMLDivElement>,
   ) => {
     if (event.button !== 0) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest('.exam-galaxy-dock')) return;
     pointerActionRef.current = {
       kind: 'pan',
       startX: event.clientX,
@@ -356,6 +394,7 @@ export function ExamGraphView({
   ) => {
     if (event.button !== 0) return;
     event.stopPropagation();
+    event.preventDefault();
     pointerActionRef.current = {
       kind: 'node',
       nodeId: node.id,
@@ -496,7 +535,7 @@ export function ExamGraphView({
     return [...radii].sort((a, b) => a - b);
   }, [graph.nodes, physicsConfig.linkDistanceScale]);
 
-  const sunRadius = Math.round(32 * nodeSizeScale);
+  const sunRadius = Math.round(34 * nodeSizeScale);
   const clusterFontSize = Math.max(
     9.5,
     Math.min(13.5, 11.2 / Math.pow(scale, 0.28)),
@@ -515,8 +554,8 @@ export function ExamGraphView({
       className="book-galaxy-container"
       aria-label="试卷星系视图"
     >
-      <header className="book-galaxy-header">
-        <div className="book-galaxy-title-wrap">
+      <div className="exam-galaxy-hud">
+        <div className="exam-galaxy-hud-left">
           <span className="book-galaxy-badge">
             {mode === 'book' ? '单书星系' : '全库星系'}
           </span>
@@ -528,14 +567,7 @@ export function ExamGraphView({
           </span>
         </div>
 
-        <div className="book-galaxy-actions">
-          <input
-            type="search"
-            className="book-galaxy-search-input"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="定位试卷或书名…"
-          />
+        <div className="exam-galaxy-hud-actions">
           {mode === 'book' && onSelectBookFilter && (
             <button
               type="button"
@@ -562,14 +594,14 @@ export function ExamGraphView({
             图谱设置
           </button>
         </div>
-      </header>
+      </div>
 
       {controlsOpen && (
         <aside
           className="book-galaxy-controls-drawer"
           aria-label="图谱参数控制"
         >
-          <div className="book-galaxy-controls-header">
+          <div className="book-galaxy-controls-head">
             <span>星系控制台</span>
             <button
               type="button"
@@ -736,7 +768,6 @@ export function ExamGraphView({
           className="book-galaxy-svg"
           width={dimensions.width}
           height={dimensions.height}
-          role="group"
           aria-label="试卷星系知识拓扑"
         >
           <defs>
@@ -745,6 +776,61 @@ export function ExamGraphView({
               <stop offset="70%" stopColor="#e05638" />
               <stop offset="100%" stopColor="#992e18" />
             </radialGradient>
+            {effectiveSunCover && (
+              <>
+                <clipPath id="exam-sun-cover-clip">
+                  <circle cx="0" cy="0" r={sunRadius} />
+                </clipPath>
+                <pattern
+                  id="exam-sun-cover-pattern"
+                  x={-sunRadius}
+                  y={-sunRadius}
+                  width={sunRadius * 2}
+                  height={sunRadius * 2}
+                  patternUnits="userSpaceOnUse"
+                >
+                  <image
+                    href={effectiveSunCover}
+                    x="0"
+                    y="0"
+                    width={sunRadius * 2}
+                    height={sunRadius * 2}
+                    preserveAspectRatio="xMidYMid slice"
+                  />
+                </pattern>
+              </>
+            )}
+            {graph.nodes.map((node) => {
+              if (node.kind !== 'cluster') return null;
+              const cover = clusterCovers.get(node.id);
+              if (!cover) return null;
+              const r =
+                Math.min(20, 11.5 + node.examCount * 0.75) * nodeSizeScale;
+              return (
+                <g key={`cover-def-${node.id}`}>
+                  <clipPath id={`exam-cluster-clip-${node.id}`}>
+                    <circle cx="0" cy="0" r={r} />
+                  </clipPath>
+                  <pattern
+                    id={`exam-cluster-pattern-${node.id}`}
+                    x={-r}
+                    y={-r}
+                    width={r * 2}
+                    height={r * 2}
+                    patternUnits="userSpaceOnUse"
+                  >
+                    <image
+                      href={cover}
+                      x="0"
+                      y="0"
+                      width={r * 2}
+                      height={r * 2}
+                      preserveAspectRatio="xMidYMid slice"
+                    />
+                  </pattern>
+                </g>
+              );
+            })}
           </defs>
 
           <g transform={`translate(${pan.x}, ${pan.y}) scale(${scale})`}>
@@ -846,9 +932,12 @@ export function ExamGraphView({
               const displayRadius = isSun
                 ? sunRadius
                 : isCluster
-                  ? Math.min(18, 9.5 + node.examCount * 0.65) * nodeSizeScale
-                  : (node.isFocus ? 7.6 : node.isHighlighted ? 6.2 : 4.8) *
+                  ? Math.min(20, 11.5 + node.examCount * 0.75) * nodeSizeScale
+                  : (node.isFocus ? 9.2 : node.isHighlighted ? 7.8 : 6.4) *
                     nodeSizeScale;
+              const clusterCover = isCluster
+                ? clusterCovers.get(node.id)
+                : undefined;
 
               const t1 = labelFadeThreshold * 0.55;
               const t2 = labelFadeThreshold;
@@ -874,8 +963,6 @@ export function ExamGraphView({
                     isSpotlightNeighbor ? ' is-neighbor' : ''
                   }${isDimmed ? ' is-dimmed' : ''}`}
                   transform={`translate(${position.x}, ${position.y})`}
-                  role="button"
-                  tabIndex={0}
                   aria-label={`${node.label} ${node.subtitle}`}
                   onPointerDown={(event) => handleNodePointerDown(event, node)}
                   onDoubleClick={(event: ReactMouseEvent<SVGGElement>) => {
@@ -901,28 +988,66 @@ export function ExamGraphView({
                   }}
                   onMouseLeave={() => setHoveredNode(null)}
                 >
+                  <circle
+                    r={Math.max(15, displayRadius + 6)}
+                    fill="transparent"
+                    className="galaxy-node-hit"
+                  />
+
+                  {isEmphasized && !isSun && (
+                    <circle
+                      r={displayRadius + 3.5}
+                      className="galaxy-note-halo"
+                      style={{ '--node-color': node.color } as CSSProperties}
+                    />
+                  )}
+
                   {isFocus && (
                     <circle
                       r={displayRadius + 8}
                       className="galaxy-current-pulse"
-                      style={{ '--cluster-color': node.color } as CSSProperties}
+                      style={{ '--node-color': node.color } as CSSProperties}
                     />
                   )}
 
                   {isSun ? (
+                    effectiveSunCover ? (
+                      <circle
+                        r={displayRadius}
+                        fill="url(#exam-sun-cover-pattern)"
+                        clipPath="url(#exam-sun-cover-clip)"
+                        className="galaxy-sun-circle"
+                      />
+                    ) : (
+                      <>
+                        <circle
+                          r={displayRadius}
+                          fill="url(#examStarSunGrad)"
+                          className="galaxy-node-circle"
+                        />
+                        <text
+                          y={5}
+                          textAnchor="middle"
+                          className="galaxy-sun-monogram"
+                        >
+                          {bookMonogram(node.label)}
+                        </text>
+                      </>
+                    )
+                  ) : isCluster && clusterCover ? (
                     <circle
                       r={displayRadius}
-                      fill="url(#examStarSunGrad)"
-                      className="galaxy-sun-disc"
+                      fill={`url(#exam-cluster-pattern-${node.id})`}
+                      clipPath={`url(#exam-cluster-clip-${node.id})`}
+                      className="galaxy-sun-circle"
+                      style={{ '--node-color': node.color } as CSSProperties}
                     />
                   ) : (
                     <circle
                       r={displayRadius}
                       fill={node.color}
-                      className={
-                        isCluster ? 'galaxy-cluster-disc' : 'galaxy-planet-disc'
-                      }
-                      style={{ '--cluster-color': node.color } as CSSProperties}
+                      className="galaxy-node-circle"
+                      style={{ '--node-color': node.color } as CSSProperties}
                     />
                   )}
 
@@ -1013,37 +1138,19 @@ export function ExamGraphView({
         )}
 
         {/* Bottom-right Zoom & Focus Dock */}
-        <div className="lp-starmap-dock" aria-label="缩放与视图控制">
-          <button
-            type="button"
-            className="lp-starmap-dock-btn"
-            onClick={() => zoomAtCenter(1.22)}
-            title="放大"
-          >
+        <div className="exam-galaxy-dock" aria-label="缩放与视图控制">
+          <button type="button" onClick={() => zoomAtCenter(1.22)} title="放大">
             +
           </button>
-          <span className="lp-starmap-dock-scale">
-            {Math.round(scale * 100)}%
-          </span>
-          <button
-            type="button"
-            className="lp-starmap-dock-btn"
-            onClick={() => zoomAtCenter(0.82)}
-            title="缩小"
-          >
+          <span>{Math.round(scale * 100)}%</span>
+          <button type="button" onClick={() => zoomAtCenter(0.82)} title="缩小">
             −
           </button>
-          <button
-            type="button"
-            className="lp-starmap-dock-btn"
-            onClick={resetView}
-            title="重置居中"
-          >
+          <button type="button" onClick={resetView} title="重置居中">
             ⟲
           </button>
           <button
             type="button"
-            className="lp-starmap-dock-btn"
             onClick={focusUrgentExam}
             title="定位当前/待复习试卷"
           >
@@ -1051,7 +1158,6 @@ export function ExamGraphView({
           </button>
           <button
             type="button"
-            className="lp-starmap-dock-btn"
             onClick={() => void toggleFullscreen()}
             title={isFullscreen ? '退出全屏' : '全屏'}
           >

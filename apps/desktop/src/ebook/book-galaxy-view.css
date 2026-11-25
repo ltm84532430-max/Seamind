@@ -470,6 +470,16 @@
   position: relative;
   cursor: grab;
   touch-action: none;
+  outline: none;
+}
+
+.book-galaxy-canvas:focus,
+.book-galaxy-canvas:focus-visible,
+.book-galaxy-svg:focus,
+.book-galaxy-svg:focus-visible,
+.galaxy-node-group:focus,
+.galaxy-node-group:focus-visible {
+  outline: none;
 }
 
 .book-galaxy-canvas.is-panning,
@@ -481,6 +491,7 @@
   width: 100%;
   height: 100%;
   display: block;
+  outline: none;
 }
 
 /* SVG Elements & Obsidian Link Styling */
@@ -579,6 +590,7 @@
 /* Obsidian Node Styles */
 .galaxy-node-group {
   cursor: pointer;
+  outline: none;
   transition: opacity 0.16s ease;
 }
 
@@ -597,8 +609,9 @@
 }
 
 .app-shell[data-theme='light'] .galaxy-node-circle {
-  stroke: rgba(255, 255, 255, 0.92);
-  stroke-width: 1.3px;
+  stroke: rgba(255, 255, 255, 0.96);
+  stroke-width: 1.5px;
+  filter: drop-shadow(0 1px 3px rgba(15, 23, 42, 0.14));
 }
 
 /* Undocumented nodes are subtly muted so documented notes stand out like Obsidian active notes */
@@ -614,7 +627,9 @@
 }
 
 .app-shell[data-theme='light'] .galaxy-node-group.has-note .galaxy-node-circle {
-  stroke: #0f172a;
+  stroke: #ffffff;
+  stroke-width: 1.8px;
+  filter: drop-shadow(0 2px 6px rgba(15, 23, 42, 0.18));
 }
 
 .galaxy-node-group.is-hovered .galaxy-node-circle,
@@ -635,6 +650,12 @@
   stroke-width: 1.6px;
   transition: filter 0.18s ease;
   cursor: pointer;
+}
+
+.app-shell[data-theme='light'] .galaxy-sun-circle {
+  stroke: #ffffff;
+  stroke-width: 2.2px;
+  filter: drop-shadow(0 4px 12px rgba(15, 23, 42, 0.16));
 }
 
 .galaxy-node-group.is-sun:hover .galaxy-sun-circle,

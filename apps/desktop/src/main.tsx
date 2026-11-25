@@ -86,6 +86,7 @@ function Root() {
             initialCli={cli}
             initialKind={kind}
             initialLabLanguage={lab}
+            initialLabFileId={searchParams.get('file') ?? undefined}
           />
         </Suspense>
       </div>

@@ -61,6 +61,7 @@ import {
   type OfflineExportOptions,
 } from './mindmap/offline-export';
 import type { TerminalCodeLabLanguage } from './terminal/terminal-types';
+import type { CodeLabSourceOrigin } from './terminal/terminal-codelab-model';
 import MarkdownEditor from './workbench/MarkdownEditor';
 import type {
   MarkdownEditorHandle,
@@ -220,6 +221,9 @@ import {
 import { createPasteTransaction } from './workbench/markdown-editor-paste';
 const TerminalPanel = lazy(() => import('./system/TerminalPanel'));
 const EpubReader = lazy(() => import('./ebook/EpubReader'));
+const BookPdfReader = lazy(() => import('./literature/PaperPdfReader'));
+import { clearPdfBookData } from './ebook/pdf-book-store';
+import { clearPdfBookCover } from './ebook/pdf-book-cover';
 const EbookWorkspace = lazy(() => import('./ebook/EbookWorkspace'));
 const PlayerWorkspace = lazy(() => import('./player/PlayerWorkspace'));
 const TaskWorkspace = lazy(() => import('./tasks/TaskWorkspace'));
@@ -244,6 +248,7 @@ import type {
   DocumentVersion,
   DocumentVersionSnapshot,
   EpubBookDocument,
+  PdfBookDocument,
   LibrarySnapshot,
   MapDocument,
   PlantUmlDocument,
@@ -280,6 +285,8 @@ import {
   readMindmapMediaBounds,
   readAiCollapsed,
   isEpubPath,
+  isPdfPath,
+  classifyBookDrop,
   normalizeLibraryPath,
   saveEpubMindmapPath,
   resolveBookMindmapTarget,
@@ -308,7 +315,10 @@ import {
   createChapterKnowledgeStarter,
   resolveBookChapterKnowledgeTarget,
 } from './ebook/book-knowledge-target';
-import { bookMindmapTitle } from './ebook/book-mindmap-target';
+import {
+  bookMindmapTitle,
+  isLegacyLandmarksOnlyMindmap,
+} from './ebook/book-mindmap-target';
 import { BookGalaxyGraphView } from './ebook/BookGalaxyGraphView';
 import {
   buildBookGalaxyGraph,
@@ -483,6 +493,59 @@ function AppContent() {
   const [knowledgeWorkspaceOpened, setKnowledgeWorkspaceOpened] = useState(
     () => activeWorkspace === 'knowledge',
   );
+  const [tasksOpened, setTasksOpened] = useState(
+    () => activeWorkspace === 'tasks',
+  );
+  const [literatureOpened, setLiteratureOpened] = useState(
+    () => activeWorkspace === 'literature',
+  );
+  const [universalSplitOpen, setUniversalSplitOpen] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('seamind:universal-split-open:v1') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [secondaryWorkspace, setSecondaryWorkspace] = useState<ActiveWorkspace>(
+    () => {
+      try {
+        const stored = localStorage.getItem(
+          'seamind:universal-split-secondary:v1',
+        );
+        if (
+          stored === 'reader' ||
+          stored === 'exams' ||
+          stored === 'player' ||
+          stored === 'knowledge' ||
+          stored === 'mindmap' ||
+          stored === 'terminal' ||
+          stored === 'tasks' ||
+          stored === 'literature' ||
+          stored === 'feed'
+        ) {
+          return stored;
+        }
+      } catch {
+        // ignore storage errors
+      }
+      return 'player';
+    },
+  );
+  const [universalSplitRatio, setUniversalSplitRatio] = useState<number>(() => {
+    try {
+      const raw = Number(
+        localStorage.getItem('seamind:universal-split-ratio:v1'),
+      );
+      if (Number.isFinite(raw) && raw >= 0.2 && raw <= 0.8) return raw;
+    } catch {
+      // ignore storage errors
+    }
+    return 0.5;
+  });
+  const [focusedSplitSlot, setFocusedSplitSlot] = useState<
+    'primary' | 'secondary'
+  >('primary');
+  const universalSplitDragRef = useRef(false);
   const [theme, setTheme] = useState<Theme>(readTheme);
   const [mindmapStyle, setMindmapStyle] =
     useState<MindmapStyle>(readMindmapStyle);
@@ -597,6 +660,10 @@ function AppContent() {
   const [epubReader, setEpubReader] = useState<EpubReaderSelection | null>(
     null,
   );
+  const [pdfBookReader, setPdfBookReader] = useState<PdfBookDocument | null>(
+    null,
+  );
+  const readerOpenSequenceRef = useRef(0);
   const readerAgentBridgeRef = useRef<EpubReaderAgentBridge | null>(null);
   const [readerSplitOpen, setReaderSplitOpen] = useState(false);
   const [readerKnowledgeOpen, setReaderKnowledgeOpen] = useState(false);
@@ -627,17 +694,144 @@ function AppContent() {
     useState<MindmapMiniTreeNode | null>(null);
   const [bookMindmapBusy, setBookMindmapBusy] = useState(false);
   const [bookKnowledgeBusy, setBookKnowledgeBusy] = useState(false);
+  const pickDistinctSecondaryWorkspace = useCallback(
+    (primary: ActiveWorkspace, candidate: ActiveWorkspace): ActiveWorkspace => {
+      if (candidate !== primary) return candidate;
+      if (primary === 'reader') return 'player';
+      if (primary === 'player') return 'knowledge';
+      if (primary === 'knowledge') return 'reader';
+      if (primary === 'mindmap') return 'reader';
+      return 'knowledge';
+    },
+    [],
+  );
+  const effectiveSecondaryWorkspace: ActiveWorkspace | null = universalSplitOpen
+    ? pickDistinctSecondaryWorkspace(activeWorkspace, secondaryWorkspace)
+    : null;
+  const universalSplitActive = Boolean(effectiveSecondaryWorkspace);
+  const isWorkspaceVisible = useCallback(
+    (ws: ActiveWorkspace) =>
+      activeWorkspace === ws || effectiveSecondaryWorkspace === ws,
+    [activeWorkspace, effectiveSecondaryWorkspace],
+  );
+  const getWorkspaceSplitSlotClass = (ws: ActiveWorkspace) => {
+    if (!universalSplitActive) return '';
+    if (activeWorkspace === ws) {
+      return ` is-split-pane-primary${focusedSplitSlot === 'primary' ? ' is-split-pane-focused' : ''}`;
+    }
+    if (effectiveSecondaryWorkspace === ws) {
+      return ` is-split-pane-secondary${focusedSplitSlot === 'secondary' ? ' is-split-pane-focused' : ''}`;
+    }
+    return '';
+  };
+  const focusSplitSlotForWorkspace = (ws: ActiveWorkspace) => {
+    if (!universalSplitActive) return;
+    if (activeWorkspace === ws && focusedSplitSlot !== 'primary') {
+      setFocusedSplitSlot('primary');
+    } else if (
+      effectiveSecondaryWorkspace === ws &&
+      focusedSplitSlot !== 'secondary'
+    ) {
+      setFocusedSplitSlot('secondary');
+    }
+  };
+  const setUniversalSplitOpenAndStore = useCallback((open: boolean) => {
+    setUniversalSplitOpen(open);
+    try {
+      localStorage.setItem('seamind:universal-split-open:v1', open ? '1' : '0');
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+  const setSecondaryWorkspaceAndStore = useCallback((ws: ActiveWorkspace) => {
+    setSecondaryWorkspace(ws);
+    try {
+      localStorage.setItem('seamind:universal-split-secondary:v1', ws);
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+  const toggleUniversalSplit = () => {
+    if (universalSplitActive) {
+      setUniversalSplitOpenAndStore(false);
+      setFocusedSplitSlot('primary');
+      return;
+    }
+    const nextSecondary = pickDistinctSecondaryWorkspace(
+      activeWorkspace,
+      secondaryWorkspace,
+    );
+    setSecondaryWorkspaceAndStore(nextSecondary);
+    setUniversalSplitOpenAndStore(true);
+    setFocusedSplitSlot('secondary');
+  };
+  const swapUniversalSplitPanes = () => {
+    if (!effectiveSecondaryWorkspace) return;
+    const prevPrimary = activeWorkspace;
+    const prevSecondary = effectiveSecondaryWorkspace;
+    setActiveWorkspace(prevSecondary);
+    setSecondaryWorkspaceAndStore(prevPrimary);
+  };
+  const selectWorkspaceFromTopbar = (
+    targetWs: ActiveWorkspace,
+    forceSecondary = false,
+  ) => {
+    if (forceSecondary) {
+      if (targetWs === activeWorkspace) {
+        if (effectiveSecondaryWorkspace) {
+          swapUniversalSplitPanes();
+        } else {
+          const fallbackPrimary = pickDistinctSecondaryWorkspace(
+            targetWs,
+            'reader',
+          );
+          setActiveWorkspace(fallbackPrimary);
+          setSecondaryWorkspaceAndStore(targetWs);
+          setUniversalSplitOpenAndStore(true);
+        }
+      } else {
+        setSecondaryWorkspaceAndStore(targetWs);
+        setUniversalSplitOpenAndStore(true);
+      }
+      setFocusedSplitSlot('secondary');
+      return;
+    }
+    if (!universalSplitActive) {
+      setActiveWorkspace(targetWs);
+      return;
+    }
+    if (focusedSplitSlot === 'secondary') {
+      if (targetWs === activeWorkspace && effectiveSecondaryWorkspace) {
+        swapUniversalSplitPanes();
+      } else {
+        setSecondaryWorkspaceAndStore(targetWs);
+      }
+    } else {
+      if (targetWs === effectiveSecondaryWorkspace) {
+        swapUniversalSplitPanes();
+      } else {
+        setActiveWorkspace(targetWs);
+      }
+    }
+  };
   const readerSplitActive =
-    activeWorkspace === 'reader' && readerSplitOpen && Boolean(epubReader);
+    !universalSplitActive &&
+    activeWorkspace === 'reader' &&
+    readerSplitOpen &&
+    Boolean(epubReader);
   const readerKnowledgeActive =
-    activeWorkspace === 'reader' && readerKnowledgeOpen && Boolean(epubReader);
+    !universalSplitActive &&
+    activeWorkspace === 'reader' &&
+    readerKnowledgeOpen &&
+    Boolean(epubReader);
   const isKnowledgeSurface =
-    activeWorkspace === 'mindmap' || activeWorkspace === 'knowledge';
+    isWorkspaceVisible('mindmap') || isWorkspaceVisible('knowledge');
   const canDockTerminalRight =
-    (activeWorkspace === 'reader' && viewportWidth >= 1250) ||
-    ((activeWorkspace === 'feed' || activeWorkspace === 'player') &&
-      viewportWidth >= 1400) ||
-    (isKnowledgeSurface && viewportWidth >= 1080);
+    !universalSplitActive &&
+    ((activeWorkspace === 'reader' && viewportWidth >= 1250) ||
+      ((activeWorkspace === 'feed' || activeWorkspace === 'player') &&
+        viewportWidth >= 1400) ||
+      (isKnowledgeSurface && viewportWidth >= 1080));
   const isTerminalDrawerOpen = terminalOpen || runnerTerminalOpen;
   const terminalRightActive =
     isTerminalDrawerOpen && terminalDock === 'right' && canDockTerminalRight;
@@ -657,7 +851,10 @@ function AppContent() {
   const splitLayoutDragRef = useRef<'wide' | 'narrow' | null>(null);
   const appShellRef = useRef<HTMLDivElement>(null);
   const epubRestoreAttemptedRef = useRef(false);
-  const [epubDropActive, setEpubDropActive] = useState(false);
+  const [bookDropKind, setBookDropKind] = useState<'epub' | 'books' | null>(
+    null,
+  );
+  const [bookImportResetPending, setBookImportResetPending] = useState(false);
   const [libraryError, setLibraryError] = useState('');
   const [saveMessage, setSaveMessage] = useState('正在初始化文件库…');
   const [recoverableDraft, setRecoverableDraft] =
@@ -716,6 +913,7 @@ function AppContent() {
     language: TerminalCodeLabLanguage;
     source: string;
     autoRun?: boolean;
+    origin?: CodeLabSourceOrigin;
   } | null>(null);
   const isStandalonePlantUml = plantUmlSession?.request.saveTarget === 'file';
   // The library file open in the PlantUML canvas; its cache key is "file:<relative path>".
@@ -825,7 +1023,11 @@ function AppContent() {
     ) => boolean
   >(() => false);
   const epubImportInFlightRef = useRef(false);
+  const bookImportInFlightRef = useRef(false);
   const epubDropHandlerRef = useRef<(paths: string[]) => void>(() => {});
+  const bookShelfDropHandlerRef = useRef<(paths: string[]) => void>(() => {});
+  const activeWorkspaceRef = useRef(activeWorkspace);
+  activeWorkspaceRef.current = activeWorkspace;
   const searchRequestRef = useRef(0);
   const markdownNodeSourcesMarkdownRef = useRef(editorDraft.markdown);
   // The document open in the workbench, if any: a Markdown document or a diagram. While one is
@@ -963,7 +1165,12 @@ function AppContent() {
   ]);
 
   useEffect(() => {
-    media.setWorkspace(activeWorkspace);
+    const mediaWorkspace: ActiveWorkspace = isWorkspaceVisible('player')
+      ? 'player'
+      : isWorkspaceVisible('feed')
+        ? 'feed'
+        : activeWorkspace;
+    media.setWorkspace(mediaWorkspace);
     if (activeWorkspace === 'knowledge' || activeWorkspace === 'mindmap')
       lastKnowledgePageRef.current = activeWorkspace;
     try {
@@ -971,12 +1178,34 @@ function AppContent() {
     } catch {
       // The active workspace remains available for this session.
     }
-    if (activeWorkspace === 'player') setPlayerOpened(true);
-    if (activeWorkspace === 'feed') setFeedOpened(true);
-    if (activeWorkspace === 'reader') setReaderOpened(true);
-    if (activeWorkspace === 'knowledge') setKnowledgeWorkspaceOpened(true);
-    if (activeWorkspace === 'terminal') setTerminalWorkspaceOpened(true);
-  }, [media, activeWorkspace]);
+    if (isWorkspaceVisible('player')) setPlayerOpened(true);
+    if (isWorkspaceVisible('feed')) setFeedOpened(true);
+    if (isWorkspaceVisible('reader')) setReaderOpened(true);
+    if (isWorkspaceVisible('knowledge')) setKnowledgeWorkspaceOpened(true);
+    if (isWorkspaceVisible('terminal')) setTerminalWorkspaceOpened(true);
+    if (isWorkspaceVisible('tasks')) setTasksOpened(true);
+    if (isWorkspaceVisible('literature')) setLiteratureOpened(true);
+  }, [media, activeWorkspace, effectiveSecondaryWorkspace, isWorkspaceVisible]);
+
+  useEffect(() => {
+    if (
+      !isWorkspaceVisible('knowledge') ||
+      knowledgeSplit.splitState.tabs.length > 0
+    ) {
+      return;
+    }
+    const recentDoc = librarySnapshotRef.current?.documents
+      .filter((document) => document.kind === 'doc')
+      .sort((left, right) => right.updatedAt - left.updatedAt)[0];
+    if (recentDoc) {
+      void knowledgeSplit.openNote(recentDoc);
+    }
+  }, [
+    isWorkspaceVisible,
+    knowledgeSplit,
+    knowledgeSplit.splitState.tabs.length,
+    librarySnapshot,
+  ]);
 
   useEffect(() => {
     if (!epubReader?.progressKey) {
@@ -1057,7 +1286,7 @@ function AppContent() {
       if (
         !plantUmlSession &&
         !activeDocument &&
-        (activeWorkspace === 'mindmap' || readerSplitActive)
+        (isWorkspaceVisible('mindmap') || readerSplitActive)
       ) {
         void markmapRef.current?.fit();
       }
@@ -1065,6 +1294,10 @@ function AppContent() {
     return () => window.cancelAnimationFrame(frame);
   }, [
     activeWorkspace,
+    effectiveSecondaryWorkspace,
+    universalSplitActive,
+    universalSplitRatio,
+    isWorkspaceVisible,
     readerSplitActive,
     Boolean(plantUmlSession),
     Boolean(activeDocument),
@@ -1072,9 +1305,10 @@ function AppContent() {
 
   useEffect(() => {
     if (
-      activeWorkspace !== 'reader' ||
+      !isWorkspaceVisible('reader') ||
       !librarySnapshot ||
       !librarySnapshot.rootPath ||
+      pdfBookReader ||
       epubRestoreAttemptedRef.current
     ) {
       return;
@@ -1097,11 +1331,13 @@ function AppContent() {
       return;
     }
 
+    const openSequence = readerOpenSequenceRef.current;
     void libraryApi
       .openEpubBook({
         relativePath: book.relativePath,
       })
       .then((path) => {
+        if (openSequence !== readerOpenSequenceRef.current) return;
         setEpubReader({
           source: convertFileSrc(path),
           progressKey: epubProgressKey(book),
@@ -1113,7 +1349,7 @@ function AppContent() {
       .catch((error) => {
         setLibraryError(errorMessage(error, '无法恢复上次阅读的电子书'));
       });
-  }, [activeWorkspace, librarySnapshot]);
+  }, [activeWorkspace, librarySnapshot, pdfBookReader]);
 
   const transformer = useMemo(() => {
     const instance = new Transformer([pluginFrontmatter, pluginSourceLines]);
@@ -1862,17 +2098,42 @@ function AppContent() {
   };
 
   const handleOpenCodeInCodeLab = useCallback(
-    (language: TerminalCodeLabLanguage, source: string) => {
+    (
+      language: TerminalCodeLabLanguage,
+      source: string,
+      origin?: CodeLabSourceOrigin,
+    ) => {
+      const resolvedOrigin: CodeLabSourceOrigin = origin ?? {
+        kind: 'mindmap',
+        title:
+          markdownTitle(draftRef.current.markdown) ||
+          draftRef.current.title ||
+          '思维导图',
+        locator: focusedMapPath ? `分支 ${focusedMapPath}` : '画布代码块',
+        reference: draftRef.current.relativePath || 'mindmap:current',
+      };
       setTerminalWorkspaceOpened(true);
       setExternalCodeLabPush({
         id: Date.now(),
         language,
         source,
         autoRun: false,
+        origin: resolvedOrigin,
       });
-      setActiveWorkspace('terminal');
+      if (universalSplitActive) {
+        if (!isWorkspaceVisible('terminal')) {
+          setSecondaryWorkspaceAndStore('terminal');
+        }
+      } else {
+        setActiveWorkspace('terminal');
+      }
     },
-    [],
+    [
+      focusedMapPath,
+      isWorkspaceVisible,
+      setSecondaryWorkspaceAndStore,
+      universalSplitActive,
+    ],
   );
 
   const handleAskAgentAboutMindmapCode = useCallback(
@@ -2866,6 +3127,10 @@ function AppContent() {
   const installLibrarySnapshot = (snapshot: LibrarySnapshot) => {
     const rootChanged =
       librarySnapshotRef.current?.rootPath !== snapshot.rootPath;
+    if (rootChanged) {
+      readerOpenSequenceRef.current += 1;
+      setPdfBookReader(null);
+    }
     librarySnapshotRef.current = snapshot;
     setLibrarySnapshot(snapshot);
     if (
@@ -3263,19 +3528,29 @@ function AppContent() {
   };
 
   const showKnowledgeDocuments = async () => {
-    if (activeWorkspace === 'knowledge') return;
+    const switchTargetToKnowledge = () => {
+      if (
+        universalSplitActive &&
+        effectiveSecondaryWorkspace === 'mindmap' &&
+        activeWorkspace !== 'mindmap'
+      ) {
+        setSecondaryWorkspaceAndStore('knowledge');
+      } else {
+        setActiveWorkspace('knowledge');
+      }
+    };
     if (knowledgeSplit.splitState.tabs.length > 0) {
-      setActiveWorkspace('knowledge');
+      switchTargetToKnowledge();
       return;
     }
     const recent = librarySnapshotRef.current?.documents
       .filter((document) => document.kind === 'doc')
       .sort((left, right) => right.updatedAt - left.updatedAt)[0];
     if (recent) {
-      await openMap(recent);
-    } else {
-      setActiveWorkspace('knowledge');
+      await knowledgeSplit.openNote(recent);
+      setPreviewDocumentPath(null);
     }
+    switchTargetToKnowledge();
   };
 
   const loadLibrary = async (openRecent: boolean) => {
@@ -3487,6 +3762,10 @@ function AppContent() {
   };
 
   epubDropHandlerRef.current = (paths) => {
+    if (classifyBookDrop(paths, activeWorkspace === 'reader') === 'books') {
+      bookShelfDropHandlerRef.current(paths);
+      return;
+    }
     const excelPath = paths.find(isExcelFilePath);
     if (
       excelPath &&
@@ -3520,10 +3799,12 @@ function AppContent() {
 
   const openLibraryEpub = async (book: EpubBookDocument) => {
     if (!leavePlantUmlSession()) return false;
+    const openSequence = ++readerOpenSequenceRef.current;
     try {
       const path = await libraryApi.openEpubBook({
         relativePath: book.relativePath,
       });
+      if (openSequence !== readerOpenSequenceRef.current) return false;
       epubRestoreAttemptedRef.current = true;
       try {
         localStorage.setItem(LAST_READER_BOOK_KEY, book.relativePath);
@@ -3537,6 +3818,7 @@ function AppContent() {
         relativePath: book.relativePath,
         title: book.title,
       });
+      setPdfBookReader(null);
       setEpubChapterNavigation(null);
       setActiveWorkspace('reader');
       setLibraryError('');
@@ -3635,7 +3917,13 @@ function AppContent() {
       startSeconds: Math.max(0, Math.floor(startSeconds)),
     });
     setPlayerOpened(true);
-    setActiveWorkspace('player');
+    if (universalSplitActive) {
+      if (!isWorkspaceVisible('player')) {
+        setSecondaryWorkspaceAndStore('player');
+      }
+    } else {
+      setActiveWorkspace('player');
+    }
   };
 
   const openLibraryPlantUml = async (file: PlantUmlDocument) => {
@@ -4635,6 +4923,20 @@ function AppContent() {
     }
   };
 
+  const importBookMindmapOutline = async (book: EpubBookDocument) => {
+    const path = await libraryApi.openEpubBook({
+      relativePath: book.relativePath,
+    });
+    return epubApi.importToc({ path });
+  };
+
+  const preserveBookMindmapTitle = (previous: string, regenerated: string) => {
+    const heading = previous.match(/^#\s+[^\r\n]+/mu)?.[0];
+    return heading
+      ? regenerated.replace(/^#\s+[^\r\n]+/mu, heading)
+      : regenerated;
+  };
+
   const toggleBookMindmap = async () => {
     if (readerSplitOpen) {
       setReaderSplitOpen(false);
@@ -4678,7 +4980,28 @@ function AppContent() {
         return;
       }
       if (target.document) {
-        await openMap(target.document);
+        const savedMap = await libraryApi.openDocument({
+          relativePath: target.document.relativePath,
+        });
+        let repairedOutline: Awaited<
+          ReturnType<typeof epubApi.importToc>
+        > | null = null;
+        if (isLegacyLandmarksOnlyMindmap(savedMap.markdown)) {
+          try {
+            const outline = await importBookMindmapOutline(book);
+            if (
+              outline.chapterCount > 0 &&
+              !isLegacyLandmarksOnlyMindmap(outline.markdown)
+            ) {
+              repairedOutline = outline;
+            }
+          } catch (error) {
+            setSaveMessage(
+              `旧导图暂未更新：${errorMessage(error, '重新解析 EPUB 目录失败')}`,
+            );
+          }
+        }
+        if (!(await openMap(target.document))) return;
         if (
           normalizeLibraryPath(draftRef.current.relativePath ?? '') !==
           normalizeLibraryPath(target.document.relativePath)
@@ -4690,12 +5013,28 @@ function AppContent() {
           book.relativePath,
           target.document.relativePath,
         );
+        if (
+          repairedOutline &&
+          isLegacyLandmarksOnlyMindmap(draftRef.current.markdown)
+        ) {
+          installDraft({
+            ...draftRef.current,
+            markdown: preserveBookMindmapTitle(
+              draftRef.current.markdown,
+              repairedOutline.markdown,
+            ),
+            dirty: true,
+            revision: draftRef.current.revision + 1,
+          });
+          if (await saveDraft(true)) {
+            setSaveMessage(
+              `已修复旧书籍导图，导入 ${repairedOutline.chapterCount} 个目录节点、${repairedOutline.sectionCount} 个正文小标题`,
+            );
+          }
+        }
       } else {
         if (draftRef.current.dirty && !(await saveDraft())) return;
-        const path = await libraryApi.openEpubBook({
-          relativePath: book.relativePath,
-        });
-        const outline = await epubApi.importToc({ path });
+        const outline = await importBookMindmapOutline(book);
         const title = target.title;
         const markdown = outline.markdown.trim() || `# ${title}\n`;
         const next = createDraft({
@@ -4733,6 +5072,55 @@ function AppContent() {
     }
   };
 
+  const refreshBookMindmap = async () => {
+    const selection = epubReader;
+    const snapshot = librarySnapshotRef.current;
+    if (!selection || !snapshot?.rootPath || !readerSplitActive) return;
+    const book = snapshot.books.find(
+      (candidate) =>
+        normalizeLibraryPath(candidate.relativePath) ===
+        normalizeLibraryPath(selection.relativePath),
+    );
+    if (!book || draftRef.current.mapType !== '电子书导图') return;
+    setBookMindmapBusy(true);
+    setLibraryError('');
+    try {
+      if (draftRef.current.dirty && !(await saveDraft(true))) return;
+      const outline = await importBookMindmapOutline(book);
+      const current = draftRef.current;
+      const markdown = preserveBookMindmapTitle(
+        current.markdown,
+        outline.markdown,
+      );
+      if (current.markdown.trim() === markdown.trim()) {
+        setSaveMessage(`目录已是最新：${outline.chapterCount} 个目录节点`);
+        return;
+      }
+      if (
+        !isLegacyLandmarksOnlyMindmap(current.markdown) &&
+        !window.confirm(
+          `重新解析得到 ${outline.chapterCount} 个目录节点。更新会替换当前导图内容；旧版本可在历史记录中恢复。是否更新？`,
+        )
+      )
+        return;
+      installDraft({
+        ...current,
+        markdown,
+        dirty: true,
+        revision: current.revision + 1,
+      });
+      if (await saveDraft(true)) {
+        setSaveMessage(
+          `已更新书籍导图：${outline.chapterCount} 个目录节点、${outline.sectionCount} 个正文小标题`,
+        );
+      }
+    } catch (error) {
+      setLibraryError(errorMessage(error, '重新解析 EPUB 目录失败'));
+    } finally {
+      setBookMindmapBusy(false);
+    }
+  };
+
   const deleteLibraryEpubBook = async (book: EpubBookDocument) => {
     await libraryApi.deleteEpubBook({ relativePath: book.relativePath });
     const snapshot = librarySnapshotRef.current;
@@ -4753,39 +5141,140 @@ function AppContent() {
     }
   };
 
-  const importEpubBook = async () => {
+  const openLibraryPdfBook = (book: PdfBookDocument) => {
+    if (!leavePlantUmlSession()) return;
+    readerOpenSequenceRef.current += 1;
+    epubRestoreAttemptedRef.current = true;
+    setEpubReader(null);
+    setPdfBookReader(book);
+    setActiveWorkspace('reader');
+    setLibraryError('');
+  };
+
+  const deleteLibraryPdfBook = async (book: PdfBookDocument) => {
+    await libraryApi.deletePdfBook({ relativePath: book.relativePath });
+    const snapshot = librarySnapshotRef.current;
+    if (snapshot) {
+      installLibrarySnapshot({
+        ...snapshot,
+        pdfBooks: snapshot.pdfBooks.filter(
+          (candidate) => candidate.relativePath !== book.relativePath,
+        ),
+      });
+      if (snapshot.rootPath) {
+        clearPdfBookData(snapshot.rootPath, book.relativePath);
+        void clearPdfBookCover(snapshot.rootPath, book.relativePath);
+      }
+    }
+    if (pdfBookReader?.relativePath === book.relativePath) {
+      setPdfBookReader(null);
+    }
+  };
+
+  const importBookPaths = async (paths: string[]) => {
     if (!librarySnapshot?.rootPath) {
-      setLibraryError('请先选择文件库位置，再导入电子书。');
+      setLibraryError('请先选择文件库位置，再添加电子书。');
       return;
     }
+    const bookPaths = [
+      ...new Set(paths.filter((path) => isEpubPath(path) || isPdfPath(path))),
+    ];
+    if (!bookPaths.length) {
+      setLibraryError('请选择或拖入 EPUB、PDF 电子书文件。');
+      return;
+    }
+    if (libraryBusy || bookImportInFlightRef.current) {
+      setLibraryError('文件库正在处理其他操作，请稍后再添加电子书。');
+      return;
+    }
+    bookImportInFlightRef.current = true;
+    setLibraryBusy(true);
+    setLibraryError('');
+    setSaveMessage(`正在保存 ${bookPaths.length} 本电子书到书架…`);
+    try {
+      const imported: Array<
+        | { kind: 'epub'; book: EpubBookDocument }
+        | { kind: 'pdf'; book: PdfBookDocument }
+      > = [];
+      const failed: string[] = [];
+      for (const path of bookPaths) {
+        try {
+          if (isPdfPath(path)) {
+            imported.push({
+              kind: 'pdf',
+              book: await libraryApi.importPdfBook({ sourcePath: path }),
+            });
+          } else {
+            imported.push({
+              kind: 'epub',
+              book: await libraryApi.importEpubBook({ sourcePath: path }),
+            });
+          }
+        } catch (error) {
+          failed.push(
+            `${path.split(/[\\/]/).pop()}: ${errorMessage(error, '添加失败')}`,
+          );
+        }
+      }
+      if (imported.length) {
+        const snapshot = await libraryApi.status();
+        installLibrarySnapshot(snapshot);
+        setBookImportResetPending(true);
+        if (imported.length === 1 && !failed.length) {
+          const entry = imported[0];
+          if (entry.kind === 'pdf') {
+            openLibraryPdfBook(
+              snapshot.pdfBooks.find(
+                (candidate) =>
+                  candidate.relativePath === entry.book.relativePath,
+              ) ?? entry.book,
+            );
+          } else {
+            await openLibraryEpub(
+              snapshot.books.find(
+                (candidate) =>
+                  candidate.relativePath === entry.book.relativePath,
+              ) ?? entry.book,
+            );
+          }
+        }
+      }
+      setSaveMessage(
+        failed.length
+          ? `已添加 ${imported.length} 本电子书，${failed.length} 本失败`
+          : `已添加 ${imported.length} 本电子书到书架`,
+      );
+      if (failed.length) setLibraryError(failed.join('；'));
+    } catch (error) {
+      setLibraryError(errorMessage(error, '添加电子书失败'));
+      setSaveMessage('电子书添加失败');
+    } finally {
+      bookImportInFlightRef.current = false;
+      setLibraryBusy(false);
+    }
+  };
 
+  bookShelfDropHandlerRef.current = (paths) => {
+    void importBookPaths(paths);
+  };
+
+  const importBook = async () => {
+    if (!librarySnapshot?.rootPath) {
+      setLibraryError('请先选择文件库位置，再添加电子书。');
+      return;
+    }
     try {
       const selected = await openDialog({
-        multiple: false,
-        title: '导入电子书到书架',
-        filters: [{ name: 'EPUB 电子书', extensions: ['epub'] }],
+        multiple: true,
+        title: '添加电子书到书架',
+        filters: [{ name: 'EPUB / PDF 电子书', extensions: ['epub', 'pdf'] }],
       });
-      if (typeof selected !== 'string') return;
-
-      setLibraryBusy(true);
-      setLibraryError('');
-      setSaveMessage('正在保存 EPUB 到书架…');
-      const imported = await libraryApi.importEpubBook({
-        sourcePath: selected,
-      });
-      const snapshot = await libraryApi.status();
-      installLibrarySnapshot(snapshot);
-      const book =
-        snapshot.books.find(
-          (candidate) => candidate.relativePath === imported.relativePath,
-        ) ?? imported;
-      setSaveMessage('电子书已保存到书架');
-      await openLibraryEpub(book);
+      if (!selected) return;
+      await importBookPaths(
+        typeof selected === 'string' ? [selected] : selected,
+      );
     } catch (error) {
-      setLibraryError(errorMessage(error, '导入 EPUB 电子书失败'));
-      setSaveMessage('EPUB 导入失败');
-    } finally {
-      setLibraryBusy(false);
+      setLibraryError(errorMessage(error, '选择电子书文件失败'));
     }
   };
 
@@ -4892,22 +5381,42 @@ function AppContent() {
     }
   };
 
-  const renameLibraryFolder = async (relativePath: string, newName: string) => {
+  const renameLibraryFolder = async (
+    relativePath: string,
+    newName: string,
+    fromSurface: 'mindmap' | 'knowledge' = 'mindmap',
+  ) => {
     try {
       const folder = relativePath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
-      const containsDocuments = librarySnapshotRef.current?.documents.some(
-        (document) =>
-          document.kind === 'doc' &&
-          (document.category === folder ||
-            document.category.startsWith(`${folder}/`)),
-      );
-      if (
-        containsDocuments &&
-        !window.confirm(
-          '这个文件夹也包含知识库文档。重命名会同时移动其中的文档和导图，继续吗？',
+      if (fromSurface === 'mindmap') {
+        const containsDocuments = librarySnapshotRef.current?.documents.some(
+          (document) =>
+            document.kind === 'doc' &&
+            (document.category === folder ||
+              document.category.startsWith(`${folder}/`)),
+        );
+        if (
+          containsDocuments &&
+          !window.confirm(
+            '这个文件夹也包含知识库文档。重命名会同时移动其中的文档和导图，继续吗？',
+          )
         )
-      )
-        return false;
+          return false;
+      } else {
+        const containsMindmaps = librarySnapshotRef.current?.documents.some(
+          (document) =>
+            document.kind === 'mindmap' &&
+            (document.category === folder ||
+              document.category.startsWith(`${folder}/`)),
+        );
+        if (
+          containsMindmaps &&
+          !window.confirm(
+            '这个文件夹也包含思维导图。重命名会同时移动其中的文档和导图，继续吗？',
+          )
+        )
+          return false;
+      }
       const activeSave = activeSaveRef.current;
       if (activeSave && !(await activeSave)) {
         throw new Error('当前导图保存失败，请处理保存错误后再重命名文件夹。');
@@ -5331,11 +5840,16 @@ function AppContent() {
       .onDragDropEvent((event) => {
         const payload = event.payload;
         if (payload.type === 'enter') {
-          setEpubDropActive(payload.paths.some(isEpubPath));
+          setBookDropKind(
+            classifyBookDrop(
+              payload.paths,
+              activeWorkspaceRef.current === 'reader',
+            ),
+          );
         } else if (payload.type === 'leave') {
-          setEpubDropActive(false);
+          setBookDropKind(null);
         } else if (payload.type === 'drop') {
-          setEpubDropActive(false);
+          setBookDropKind(null);
           epubDropHandlerRef.current(payload.paths);
         }
       })
@@ -5980,7 +6494,35 @@ function AppContent() {
         if (branch) visibleRoot = branch;
         else setFocusedMapPath(null);
       }
-      await map.setData(clonePureNode(visibleRoot));
+      const bookMapSplit =
+        readerSplitActive && editorDraft.mapType === '电子书导图';
+      const renderedRoot = clonePureNode(visibleRoot);
+      if (bookMapSplit && !focusedMapPath) {
+        const activeChapter = normalizeMindmapText(
+          currentEpubChapter?.chapterHierarchy[0] ||
+            currentEpubChapter?.chapterLabel ||
+            '',
+        );
+        const activeIndex = prepared.navigation.children.findIndex(
+          (chapter) =>
+            activeChapter &&
+            normalizeMindmapText(chapter.label) === activeChapter,
+        );
+        renderedRoot.children.forEach((chapter, index) => {
+          chapter.payload = {
+            ...chapter.payload,
+            fold: index === activeIndex ? 0 : 1,
+          };
+          if (index === activeIndex) {
+            chapter.children.forEach((section) => {
+              section.payload = { ...section.payload, fold: 1 };
+            });
+          }
+        });
+      }
+      await map.setData(renderedRoot, {
+        initialExpandLevel: bookMapSplit && focusedMapPath ? 2 : -1,
+      });
       if (codeBlocksAbort.signal.aborted) return;
       markdownNodeSourcesMarkdownRef.current = editorDraft.markdown;
       markdownNodeSourcesRef.current = nextMarkdownNodeSources;
@@ -6030,7 +6572,8 @@ function AppContent() {
             setTerminalCommandConfirmation({ id, language, source });
           },
           onRunInTerminal: handleRunCodeInTerminal,
-          onOpenInCodeLab: handleOpenCodeInCodeLab,
+          onOpenInCodeLab: (language, source) =>
+            handleOpenCodeInCodeLab(language, source),
           onOpenCodeFullscreen: (req) => setCodeWorkbenchModal(req),
           onAskAgentAboutCode: handleAskAgentAboutMindmapCode,
           onZoomImage: (dataUrl) => setCodeZoomImageSrc(dataUrl),
@@ -6070,7 +6613,7 @@ function AppContent() {
           );
         });
         if (!nodes.length) {
-          void map.setData(clonePureNode(visibleRoot)).then(() => map.fit());
+          void map.setData(clonePureNode(renderedRoot)).then(() => map.fit());
         } else if (!hasVisibleNode) {
           void map.fit();
         }
@@ -6087,6 +6630,7 @@ function AppContent() {
   }, [
     activeWorkspace,
     editorDraft.markdown,
+    editorDraft.mapType,
     editorDraft.relativePath,
     focusedMapPath,
     htmlCanvasEmbed,
@@ -6224,11 +6768,139 @@ function AppContent() {
     setCanvasNodeContextMenu(null);
   };
 
+  const [isSplitDragging, setIsSplitDragging] = useState(false);
+  const [readerKnowledgeRatio, setReaderKnowledgeRatio] = useState<number>(
+    () => {
+      try {
+        const raw = Number(
+          localStorage.getItem('seamind:reader-knowledge-ratio:v1'),
+        );
+        if (Number.isFinite(raw) && raw >= 0.22 && raw <= 0.74) return raw;
+      } catch {
+        // ignore storage errors
+      }
+      return 0.5;
+    },
+  );
+  const [readerGalaxyRatio, setReaderGalaxyRatio] = useState<number>(() => {
+    try {
+      const raw = Number(
+        localStorage.getItem('seamind:reader-galaxy-ratio:v1'),
+      );
+      if (Number.isFinite(raw) && raw >= 0.2 && raw <= 0.74) return raw;
+    } catch {
+      // ignore storage errors
+    }
+    return 0.34;
+  });
+  const knowledgeSplitDragRef = useRef<boolean>(false);
+
+  const persistKnowledgeSplitRatio = (isGalaxy: boolean, ratio: number) => {
+    try {
+      localStorage.setItem(
+        isGalaxy
+          ? 'seamind:reader-galaxy-ratio:v1'
+          : 'seamind:reader-knowledge-ratio:v1',
+        String(ratio),
+      );
+    } catch {
+      // ignore storage errors
+    }
+  };
+
+  const onReaderKnowledgePointerDown = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    event.preventDefault();
+    knowledgeSplitDragRef.current = true;
+    setIsSplitDragging(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const onReaderKnowledgePointerMove = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    if (!knowledgeSplitDragRef.current) return;
+    const bounds = appShellRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+    const availableWidth = Math.max(
+      1,
+      bounds.width - (terminalRightActive ? terminalSideWidth + 6 : 3),
+    );
+    const minRatio = galaxyViewActive ? 0.2 : 0.22;
+    const maxRatio = readerSplitActive ? 0.56 : 0.74;
+    const nextRatio = Math.min(
+      maxRatio,
+      Math.max(minRatio, (event.clientX - bounds.left) / availableWidth),
+    );
+    if (galaxyViewActive) {
+      setReaderGalaxyRatio(nextRatio);
+    } else {
+      setReaderKnowledgeRatio(nextRatio);
+    }
+  };
+
+  const onReaderKnowledgePointerUp = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    if (!knowledgeSplitDragRef.current) return;
+    knowledgeSplitDragRef.current = false;
+    setIsSplitDragging(false);
+    persistKnowledgeSplitRatio(
+      galaxyViewActive,
+      galaxyViewActive ? readerGalaxyRatio : readerKnowledgeRatio,
+    );
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  const resetReaderKnowledgeSplitRatio = () => {
+    if (galaxyViewActive) {
+      setReaderGalaxyRatio(0.34);
+      persistKnowledgeSplitRatio(true, 0.34);
+    } else {
+      setReaderKnowledgeRatio(0.5);
+      persistKnowledgeSplitRatio(false, 0.5);
+    }
+  };
+
+  const onReaderKnowledgeKeyDown = (
+    event: ReactKeyboardEvent<HTMLDivElement>,
+  ) => {
+    const key = event.key;
+    if (key !== 'Home' && key !== 'ArrowLeft' && key !== 'ArrowRight') return;
+    event.preventDefault();
+    if (key === 'Home') {
+      resetReaderKnowledgeSplitRatio();
+      return;
+    }
+    const delta = key === 'ArrowRight' ? 0.02 : -0.02;
+    const minRatio = galaxyViewActive ? 0.2 : 0.22;
+    const maxRatio = readerSplitActive ? 0.56 : 0.74;
+    if (galaxyViewActive) {
+      const next = Math.min(
+        maxRatio,
+        Math.max(minRatio, readerGalaxyRatio + delta),
+      );
+      setReaderGalaxyRatio(next);
+      persistKnowledgeSplitRatio(true, next);
+    } else {
+      const next = Math.min(
+        maxRatio,
+        Math.max(minRatio, readerKnowledgeRatio + delta),
+      );
+      setReaderKnowledgeRatio(next);
+      persistKnowledgeSplitRatio(false, next);
+    }
+  };
+
   const onReaderSplitPointerDown = (
     event: ReactPointerEvent<HTMLDivElement>,
   ) => {
     event.preventDefault();
     splitLayoutDragRef.current = window.innerWidth > 1100 ? 'wide' : 'narrow';
+    setIsSplitDragging(true);
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
@@ -6250,16 +6922,17 @@ function AppContent() {
       setReaderSplitLayout((current) => ({ ...current, wideRatio: ratio }));
       return;
     }
-    const available = Math.max(1, bounds.height - 52 - 29 - 8);
+    const available = Math.max(1, bounds.height - 36 - 29 - 8);
     const ratio = Math.min(
       0.65,
-      Math.max(0.25, (event.clientY - bounds.top - 52) / available),
+      Math.max(0.25, (event.clientY - bounds.top - 36) / available),
     );
     setReaderSplitLayout((current) => ({ ...current, narrowRatio: ratio }));
   };
 
   const onReaderSplitPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
     splitLayoutDragRef.current = null;
+    setIsSplitDragging(false);
     if (event.currentTarget.hasPointerCapture(event.pointerId))
       event.currentTarget.releasePointerCapture(event.pointerId);
   };
@@ -6297,9 +6970,76 @@ function AppContent() {
     );
   };
 
+  const persistUniversalSplitRatio = (ratio: number) => {
+    try {
+      localStorage.setItem('seamind:universal-split-ratio:v1', String(ratio));
+    } catch {
+      // ignore storage errors
+    }
+  };
+
+  const onUniversalSplitPointerDown = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    event.preventDefault();
+    universalSplitDragRef.current = true;
+    setIsSplitDragging(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const onUniversalSplitPointerMove = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    if (!universalSplitDragRef.current) return;
+    const bounds = appShellRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+    const availableWidth = Math.max(1, bounds.width - 4);
+    const nextRatio = Math.min(
+      0.8,
+      Math.max(0.2, (event.clientX - bounds.left) / availableWidth),
+    );
+    setUniversalSplitRatio(nextRatio);
+  };
+
+  const onUniversalSplitPointerUp = (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => {
+    if (!universalSplitDragRef.current) return;
+    universalSplitDragRef.current = false;
+    setIsSplitDragging(false);
+    persistUniversalSplitRatio(universalSplitRatio);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  const resetUniversalSplitRatio = () => {
+    setUniversalSplitRatio(0.5);
+    persistUniversalSplitRatio(0.5);
+  };
+
+  const onUniversalSplitKeyDown = (
+    event: ReactKeyboardEvent<HTMLDivElement>,
+  ) => {
+    const key = event.key;
+    if (key !== 'Home' && key !== 'ArrowLeft' && key !== 'ArrowRight') return;
+    event.preventDefault();
+    if (key === 'Home') {
+      resetUniversalSplitRatio();
+      return;
+    }
+    const delta = key === 'ArrowRight' ? 0.02 : -0.02;
+    const next = Math.min(0.8, Math.max(0.2, universalSplitRatio + delta));
+    setUniversalSplitRatio(next);
+    persistUniversalSplitRatio(next);
+  };
+
   const readerSplitStyle = {
     '--reader-split-wide-ratio': String(readerSplitLayout.wideRatio),
     '--reader-split-narrow-size': `${readerSplitLayout.narrowRatio * 100}%`,
+    '--reader-knowledge-wide-ratio': String(readerKnowledgeRatio),
+    '--reader-galaxy-wide-ratio': String(readerGalaxyRatio),
+    '--universal-split-ratio': String(universalSplitRatio),
   } as CSSProperties;
 
   useEffect(() => {
@@ -6486,7 +7226,7 @@ function AppContent() {
   return (
     <main
       ref={appShellRef}
-      className={`app-shell${activeWorkspace === 'terminal' ? ' is-terminal-workspace' : ''}${readerSplitActive ? ' is-reader-split' : ''}${readerKnowledgeActive ? ' is-reader-knowledge' : ''}${readerKnowledgeActive && galaxyViewActive ? ' is-reader-knowledge-wide' : ''}${isTerminalDrawerOpen ? ' is-terminal-open' : ''}${terminalRightActive ? ' is-terminal-right' : ''}${activeWorkspace === 'knowledge' || activeWorkspace === 'mindmap' ? ' is-knowledge-surface' : ''}`}
+      className={`app-shell${isWorkspaceVisible('terminal') ? ' is-terminal-workspace' : ''}${universalSplitActive ? ' is-universal-split' : ''}${readerSplitActive ? ' is-reader-split' : ''}${readerKnowledgeActive ? ' is-reader-knowledge' : ''}${readerKnowledgeActive && galaxyViewActive ? ' is-reader-knowledge-wide' : ''}${isSplitDragging ? ' is-split-dragging' : ''}${isTerminalDrawerOpen ? ' is-terminal-open' : ''}${terminalRightActive ? ' is-terminal-right' : ''}${isKnowledgeSurface ? ' is-knowledge-surface' : ''}`}
       data-theme={theme}
       data-map-style={mindmapStyle}
       data-sync-preview-media={
@@ -6515,19 +7255,61 @@ function AppContent() {
         <nav className="workspace-switcher" aria-label="工作区">
           <button
             type="button"
-            className={activeWorkspace === 'reader' ? 'is-active' : ''}
-            aria-pressed={activeWorkspace === 'reader'}
-            onClick={() => setActiveWorkspace('reader')}
+            className={
+              activeWorkspace === 'reader'
+                ? 'is-active'
+                : effectiveSecondaryWorkspace === 'reader'
+                  ? 'is-split-secondary'
+                  : ''
+            }
+            aria-pressed={isWorkspaceVisible('reader')}
+            onClick={(event) =>
+              selectWorkspaceFromTopbar(
+                'reader',
+                event.ctrlKey ||
+                  event.metaKey ||
+                  event.altKey ||
+                  event.shiftKey,
+              )
+            }
+            onContextMenu={(event) => {
+              event.preventDefault();
+              selectWorkspaceFromTopbar('reader', true);
+            }}
           >
             电子书
+            {universalSplitActive && activeWorkspace === 'reader' && (
+              <span className="workspace-split-tag is-left">左</span>
+            )}
+            {universalSplitActive &&
+              effectiveSecondaryWorkspace === 'reader' && (
+                <span className="workspace-split-tag is-right">右</span>
+              )}
           </button>
           <button
             type="button"
-            className={activeWorkspace === 'exams' ? 'is-active' : ''}
-            aria-pressed={activeWorkspace === 'exams'}
-            onClick={() => {
+            className={
+              activeWorkspace === 'exams'
+                ? 'is-active'
+                : effectiveSecondaryWorkspace === 'exams'
+                  ? 'is-split-secondary'
+                  : ''
+            }
+            aria-pressed={isWorkspaceVisible('exams')}
+            onClick={(event) => {
               setExamBookFilter('');
-              setActiveWorkspace('exams');
+              selectWorkspaceFromTopbar(
+                'exams',
+                event.ctrlKey ||
+                  event.metaKey ||
+                  event.altKey ||
+                  event.shiftKey,
+              );
+            }}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              setExamBookFilter('');
+              selectWorkspaceFromTopbar('exams', true);
             }}
           >
             试卷
@@ -6539,42 +7321,142 @@ function AppContent() {
                 {dueExamCount}
               </span>
             )}
+            {universalSplitActive && activeWorkspace === 'exams' && (
+              <span className="workspace-split-tag is-left">左</span>
+            )}
+            {universalSplitActive &&
+              effectiveSecondaryWorkspace === 'exams' && (
+                <span className="workspace-split-tag is-right">右</span>
+              )}
           </button>
           <button
             type="button"
-            className={activeWorkspace === 'player' ? 'is-active' : ''}
-            aria-pressed={activeWorkspace === 'player'}
-            onClick={() => setActiveWorkspace('player')}
+            className={
+              activeWorkspace === 'player'
+                ? 'is-active'
+                : effectiveSecondaryWorkspace === 'player'
+                  ? 'is-split-secondary'
+                  : ''
+            }
+            aria-pressed={isWorkspaceVisible('player')}
+            onClick={(event) =>
+              selectWorkspaceFromTopbar(
+                'player',
+                event.ctrlKey ||
+                  event.metaKey ||
+                  event.altKey ||
+                  event.shiftKey,
+              )
+            }
+            onContextMenu={(event) => {
+              event.preventDefault();
+              selectWorkspaceFromTopbar('player', true);
+            }}
           >
             播放器
+            {universalSplitActive && activeWorkspace === 'player' && (
+              <span className="workspace-split-tag is-left">左</span>
+            )}
+            {universalSplitActive &&
+              effectiveSecondaryWorkspace === 'player' && (
+                <span className="workspace-split-tag is-right">右</span>
+              )}
           </button>
           <button
             type="button"
             className={
               activeWorkspace === 'knowledge' || activeWorkspace === 'mindmap'
                 ? 'is-active'
-                : ''
+                : effectiveSecondaryWorkspace === 'knowledge' ||
+                    effectiveSecondaryWorkspace === 'mindmap'
+                  ? 'is-split-secondary'
+                  : ''
             }
             aria-pressed={
-              activeWorkspace === 'knowledge' || activeWorkspace === 'mindmap'
+              isWorkspaceVisible('knowledge') || isWorkspaceVisible('mindmap')
             }
-            onClick={() => setActiveWorkspace(lastKnowledgePageRef.current)}
+            onClick={(event) =>
+              selectWorkspaceFromTopbar(
+                lastKnowledgePageRef.current,
+                event.ctrlKey ||
+                  event.metaKey ||
+                  event.altKey ||
+                  event.shiftKey,
+              )
+            }
+            onContextMenu={(event) => {
+              event.preventDefault();
+              selectWorkspaceFromTopbar(lastKnowledgePageRef.current, true);
+            }}
           >
             知识库
+            {universalSplitActive &&
+              (activeWorkspace === 'knowledge' ||
+                activeWorkspace === 'mindmap') && (
+                <span className="workspace-split-tag is-left">左</span>
+              )}
+            {universalSplitActive &&
+              (effectiveSecondaryWorkspace === 'knowledge' ||
+                effectiveSecondaryWorkspace === 'mindmap') && (
+                <span className="workspace-split-tag is-right">右</span>
+              )}
           </button>
           <button
             type="button"
-            className={activeWorkspace === 'terminal' ? 'is-active' : ''}
-            aria-pressed={activeWorkspace === 'terminal'}
-            onClick={() => setActiveWorkspace('terminal')}
+            className={
+              activeWorkspace === 'terminal'
+                ? 'is-active'
+                : effectiveSecondaryWorkspace === 'terminal'
+                  ? 'is-split-secondary'
+                  : ''
+            }
+            aria-pressed={isWorkspaceVisible('terminal')}
+            onClick={(event) =>
+              selectWorkspaceFromTopbar(
+                'terminal',
+                event.ctrlKey ||
+                  event.metaKey ||
+                  event.altKey ||
+                  event.shiftKey,
+              )
+            }
+            onContextMenu={(event) => {
+              event.preventDefault();
+              selectWorkspaceFromTopbar('terminal', true);
+            }}
           >
             终端
+            {universalSplitActive && activeWorkspace === 'terminal' && (
+              <span className="workspace-split-tag is-left">左</span>
+            )}
+            {universalSplitActive &&
+              effectiveSecondaryWorkspace === 'terminal' && (
+                <span className="workspace-split-tag is-right">右</span>
+              )}
           </button>
           <button
             type="button"
-            className={activeWorkspace === 'tasks' ? 'is-active' : ''}
-            aria-pressed={activeWorkspace === 'tasks'}
-            onClick={() => setActiveWorkspace('tasks')}
+            className={
+              activeWorkspace === 'tasks'
+                ? 'is-active'
+                : effectiveSecondaryWorkspace === 'tasks'
+                  ? 'is-split-secondary'
+                  : ''
+            }
+            aria-pressed={isWorkspaceVisible('tasks')}
+            onClick={(event) =>
+              selectWorkspaceFromTopbar(
+                'tasks',
+                event.ctrlKey ||
+                  event.metaKey ||
+                  event.altKey ||
+                  event.shiftKey,
+              )
+            }
+            onContextMenu={(event) => {
+              event.preventDefault();
+              selectWorkspaceFromTopbar('tasks', true);
+            }}
             title={
               pendingHabitCount > 0
                 ? `今日还有 ${pendingHabitCount} 个习惯未打卡`
@@ -6590,23 +7472,192 @@ function AppContent() {
                 {formatBadgeCount(pendingHabitCount)}
               </span>
             )}
+            {universalSplitActive && activeWorkspace === 'tasks' && (
+              <span className="workspace-split-tag is-left">左</span>
+            )}
+            {universalSplitActive &&
+              effectiveSecondaryWorkspace === 'tasks' && (
+                <span className="workspace-split-tag is-right">右</span>
+              )}
           </button>
           <button
             type="button"
-            className={activeWorkspace === 'literature' ? 'is-active' : ''}
-            aria-pressed={activeWorkspace === 'literature'}
-            onClick={() => setActiveWorkspace('literature')}
+            className={
+              activeWorkspace === 'literature'
+                ? 'is-active'
+                : effectiveSecondaryWorkspace === 'literature'
+                  ? 'is-split-secondary'
+                  : ''
+            }
+            aria-pressed={isWorkspaceVisible('literature')}
+            onClick={(event) =>
+              selectWorkspaceFromTopbar(
+                'literature',
+                event.ctrlKey ||
+                  event.metaKey ||
+                  event.altKey ||
+                  event.shiftKey,
+              )
+            }
+            onContextMenu={(event) => {
+              event.preventDefault();
+              selectWorkspaceFromTopbar('literature', true);
+            }}
           >
             论文
+            {universalSplitActive && activeWorkspace === 'literature' && (
+              <span className="workspace-split-tag is-left">左</span>
+            )}
+            {universalSplitActive &&
+              effectiveSecondaryWorkspace === 'literature' && (
+                <span className="workspace-split-tag is-right">右</span>
+              )}
           </button>
           <button
             type="button"
-            className={activeWorkspace === 'feed' ? 'is-active' : ''}
-            aria-pressed={activeWorkspace === 'feed'}
-            onClick={() => setActiveWorkspace('feed')}
+            className={
+              activeWorkspace === 'feed'
+                ? 'is-active'
+                : effectiveSecondaryWorkspace === 'feed'
+                  ? 'is-split-secondary'
+                  : ''
+            }
+            aria-pressed={isWorkspaceVisible('feed')}
+            onClick={(event) =>
+              selectWorkspaceFromTopbar(
+                'feed',
+                event.ctrlKey ||
+                  event.metaKey ||
+                  event.altKey ||
+                  event.shiftKey,
+              )
+            }
+            onContextMenu={(event) => {
+              event.preventDefault();
+              selectWorkspaceFromTopbar('feed', true);
+            }}
           >
             订阅
+            {universalSplitActive && activeWorkspace === 'feed' && (
+              <span className="workspace-split-tag is-left">左</span>
+            )}
+            {universalSplitActive && effectiveSecondaryWorkspace === 'feed' && (
+              <span className="workspace-split-tag is-right">右</span>
+            )}
           </button>
+
+          <div
+            className="topbar-split-controls"
+            role="group"
+            aria-label="双栏分页与分屏控制"
+          >
+            <button
+              type="button"
+              className={`topbar-split-toggle-btn${universalSplitActive ? ' is-active' : ''}`}
+              aria-pressed={universalSplitActive}
+              onClick={toggleUniversalSplit}
+              title="开启/关闭左右双栏分页（也可右键或按住 Ctrl/Shift 点击任意标签在右栏打开）"
+            >
+              分屏
+            </button>
+            {universalSplitActive && effectiveSecondaryWorkspace && (
+              <div className="topbar-split-bar">
+                <div
+                  className={`topbar-split-slot is-left${focusedSplitSlot === 'primary' ? ' is-focused' : ''}`}
+                >
+                  <button
+                    type="button"
+                    className="topbar-split-slot-label"
+                    onClick={() => setFocusedSplitSlot('primary')}
+                    title="点击将顶栏标签切换目标设为左栏"
+                  >
+                    左
+                  </button>
+                  <select
+                    className="topbar-split-select"
+                    aria-label="左分屏页面"
+                    value={activeWorkspace}
+                    onChange={(event) => {
+                      const nextWs = event.target.value as ActiveWorkspace;
+                      setFocusedSplitSlot('primary');
+                      if (nextWs === effectiveSecondaryWorkspace) {
+                        swapUniversalSplitPanes();
+                      } else {
+                        setActiveWorkspace(nextWs);
+                      }
+                    }}
+                  >
+                    <option value="reader">电子书</option>
+                    <option value="exams">试卷</option>
+                    <option value="player">播放器</option>
+                    <option value="knowledge">知识库·文档</option>
+                    <option value="mindmap">知识库·导图</option>
+                    <option value="terminal">终端</option>
+                    <option value="tasks">任务</option>
+                    <option value="literature">论文</option>
+                    <option value="feed">订阅</option>
+                  </select>
+                </div>
+
+                <button
+                  type="button"
+                  className="topbar-split-action-btn"
+                  onClick={swapUniversalSplitPanes}
+                  title="互换左右分屏页面"
+                  aria-label="互换左右分屏页面"
+                >
+                  ⇄
+                </button>
+
+                <div
+                  className={`topbar-split-slot is-right${focusedSplitSlot === 'secondary' ? ' is-focused' : ''}`}
+                >
+                  <button
+                    type="button"
+                    className="topbar-split-slot-label"
+                    onClick={() => setFocusedSplitSlot('secondary')}
+                    title="点击将顶栏标签切换目标设为右栏"
+                  >
+                    右
+                  </button>
+                  <select
+                    className="topbar-split-select"
+                    aria-label="右分屏页面"
+                    value={effectiveSecondaryWorkspace}
+                    onChange={(event) => {
+                      const nextWs = event.target.value as ActiveWorkspace;
+                      setFocusedSplitSlot('secondary');
+                      if (nextWs === activeWorkspace) {
+                        swapUniversalSplitPanes();
+                      } else {
+                        setSecondaryWorkspaceAndStore(nextWs);
+                      }
+                    }}
+                  >
+                    <option value="reader">电子书</option>
+                    <option value="exams">试卷</option>
+                    <option value="player">播放器</option>
+                    <option value="knowledge">知识库·文档</option>
+                    <option value="mindmap">知识库·导图</option>
+                    <option value="terminal">终端</option>
+                    <option value="tasks">任务</option>
+                    <option value="literature">论文</option>
+                    <option value="feed">订阅</option>
+                  </select>
+                </div>
+
+                <button
+                  type="button"
+                  className="topbar-split-action-btn"
+                  onClick={() => setUniversalSplitOpenAndStore(false)}
+                  title="退出分屏"
+                  aria-label="退出分屏"
+                >
+                  ×
+                </button>
+              </div>
+            )}
+          </div>
         </nav>
         <div className="topbar-media-slot">
           <TopbarMiniPlayer
@@ -6641,7 +7692,7 @@ function AppContent() {
           >
             <Icon name={THEME_OPTIONS[theme]?.icon ?? 'moon'} />
           </button>
-          {activeWorkspace === 'mindmap' && !plantUmlSession && (
+          {isWorkspaceVisible('mindmap') && !plantUmlSession && (
             <button
               type="button"
               className="save-document-button"
@@ -6726,9 +7777,10 @@ function AppContent() {
       </header>
 
       <section
-        className={`workspace${sourceCollapsed ? ' is-source-collapsed' : ''}${libraryCollapsed ? ' is-library-collapsed' : ''}${aiCollapsed ? ' is-ai-collapsed' : ''}${markdownFullscreen ? ' is-markdown-fullscreen' : ''}${activeDocument?.kind === 'mermaid' ? ' is-document-open' : ''}${activeWorkspace === 'mindmap' ? ' is-knowledge-map' : ''}${activeWorkspace !== 'mindmap' && !readerSplitActive ? ' is-workspace-hidden' : ''}`}
+        className={`workspace${sourceCollapsed ? ' is-source-collapsed' : ''}${libraryCollapsed ? ' is-library-collapsed' : ''}${aiCollapsed ? ' is-ai-collapsed' : ''}${markdownFullscreen ? ' is-markdown-fullscreen' : ''}${activeDocument?.kind === 'mermaid' ? ' is-document-open' : ''}${isWorkspaceVisible('mindmap') ? ' is-knowledge-map' : ''}${getWorkspaceSplitSlotClass('mindmap')}${!isWorkspaceVisible('mindmap') && !readerSplitActive ? ' is-workspace-hidden' : ''}`}
         aria-label="Markdown 思维导图编辑器"
-        aria-hidden={activeWorkspace !== 'mindmap' && !readerSplitActive}
+        aria-hidden={!isWorkspaceVisible('mindmap') && !readerSplitActive}
+        onPointerDownCapture={() => focusSplitSlotForWorkspace('mindmap')}
       >
         <LibraryPanel
           snapshot={librarySnapshot}
@@ -6750,6 +7802,18 @@ function AppContent() {
               : null
           }
           collapsed={libraryCollapsed}
+          sidebarWidth={knowledgeSidebarWidth}
+          onSidebarWidthChange={(width) => {
+            setKnowledgeSidebarWidth(width);
+            try {
+              localStorage.setItem(
+                'seamind.knowledge.sidebarWidth',
+                String(width),
+              );
+            } catch {
+              /* Ignore storage errors */
+            }
+          }}
           shortcutActive={
             activeWorkspace === 'mindmap' &&
             !readerSplitActive &&
@@ -6803,7 +7867,7 @@ function AppContent() {
           }}
         />
 
-        {activeWorkspace === 'mindmap' &&
+        {isWorkspaceVisible('mindmap') &&
           activeDocument?.kind !== 'mermaid' && (
             <div className="knowledge-file-header" aria-label="当前导图文件">
               <span className="knowledge-file-kind">
@@ -7478,6 +8542,23 @@ function AppContent() {
                     <Icon name="fit" />
                     <span>适应画布</span>
                   </button>
+                  {readerSplitActive &&
+                    activeBookMindmapTarget &&
+                    normalizeLibraryPath(editorDraft.relativePath ?? '') ===
+                      normalizeLibraryPath(
+                        activeBookMindmapTarget.relativePath,
+                      ) && (
+                      <button
+                        type="button"
+                        className="fit-button"
+                        title="重新读取 EPUB 目录并更新这份书籍导图"
+                        aria-label="重读 EPUB 目录"
+                        disabled={bookMindmapBusy}
+                        onClick={() => void refreshBookMindmap()}
+                      >
+                        <span>{bookMindmapBusy ? '解析中…' : '重读目录'}</span>
+                      </button>
+                    )}
                   <div className="map-style-picker" ref={mindmapStylePickerRef}>
                     <button
                       type="button"
@@ -8145,9 +9226,10 @@ function AppContent() {
       </section>
 
       <section
-        className={`ebook-workspace-stage${activeWorkspace !== 'reader' ? ' is-workspace-hidden' : ''}`}
+        className={`ebook-workspace-stage${getWorkspaceSplitSlotClass('reader')}${!isWorkspaceVisible('reader') ? ' is-workspace-hidden' : ''}`}
         aria-label="电子书工作区"
-        aria-hidden={activeWorkspace !== 'reader'}
+        aria-hidden={!isWorkspaceVisible('reader')}
+        onPointerDownCapture={() => focusSplitSlotForWorkspace('reader')}
       >
         {readerOpened && (
           <Suspense
@@ -8193,6 +9275,7 @@ function AppContent() {
                 onWriteFootnoteToNote={(payload) => {
                   void handleWriteEpubFootnoteToNote(payload);
                 }}
+                onSendSelectionToCodeLab={handleOpenCodeInCodeLab}
                 onClose={() => {
                   setReaderKnowledgeOpen(false);
                   setReaderSplitOpen(false);
@@ -8200,17 +9283,29 @@ function AppContent() {
                   setEpubReader(null);
                 }}
               />
+            ) : pdfBookReader && librarySnapshot?.rootPath ? (
+              <BookPdfReader
+                key={`${librarySnapshot.rootPath}:${pdfBookReader.relativePath}`}
+                book={pdfBookReader}
+                rootPath={librarySnapshot.rootPath}
+                onSendSelectionToCodeLab={handleOpenCodeInCodeLab}
+                onClose={() => setPdfBookReader(null)}
+              />
             ) : (
               <EbookWorkspace
-                active={activeWorkspace === 'reader'}
+                active={isWorkspaceVisible('reader')}
                 snapshot={librarySnapshot}
                 busy={libraryBusy}
-                onImport={() => void importEpubBook()}
+                onImport={() => void importBook()}
+                bookImportResetPending={bookImportResetPending}
+                onBookImportShown={() => setBookImportResetPending(false)}
                 onRefresh={() => void loadLibrary(false)}
                 onChooseRoot={() => void chooseLibraryRoot()}
                 onOpenBook={(book) => void openLibraryEpub(book)}
+                onOpenPdfBook={openLibraryPdfBook}
                 onCreateTask={(book) => createBookTask(book)}
                 onDeleteBook={deleteLibraryEpubBook}
+                onDeletePdfBook={deleteLibraryPdfBook}
                 onOpenExams={(bookKey) => {
                   setExamBookFilter(bookKey);
                   setActiveWorkspace('exams');
@@ -8222,12 +9317,13 @@ function AppContent() {
       </section>
 
       <section
-        className={`exam-workspace-stage${activeWorkspace !== 'exams' ? ' is-workspace-hidden' : ''}`}
+        className={`exam-workspace-stage${getWorkspaceSplitSlotClass('exams')}${!isWorkspaceVisible('exams') ? ' is-workspace-hidden' : ''}`}
         aria-label="试卷工作区"
-        aria-hidden={activeWorkspace !== 'exams'}
+        aria-hidden={!isWorkspaceVisible('exams')}
+        onPointerDownCapture={() => focusSplitSlotForWorkspace('exams')}
       >
         <ExamCenterWorkspace
-          active={activeWorkspace === 'exams'}
+          active={isWorkspaceVisible('exams')}
           provider={providerSettings}
           books={librarySnapshot?.books ?? []}
           libraryRoot={librarySnapshot?.rootPath ?? ''}
@@ -8240,22 +9336,23 @@ function AppContent() {
       </section>
 
       <section
-        className={`player-workspace-stage${
-          activeWorkspace !== 'player'
+        className={`player-workspace-stage${getWorkspaceSplitSlotClass('player')}${
+          !isWorkspaceVisible('player')
             ? isVideoStageOffscreen
               ? ' is-workspace-hidden-offscreen'
               : ' is-workspace-hidden'
             : ''
         }`}
         aria-label="播放器工作区"
-        aria-hidden={activeWorkspace !== 'player'}
+        aria-hidden={!isWorkspaceVisible('player')}
+        onPointerDownCapture={() => focusSplitSlotForWorkspace('player')}
       >
         {playerOpened && (
           <Suspense
             fallback={<div className="player-loading">正在载入播放器…</div>}
           >
             <PlayerWorkspace
-              active={activeWorkspace === 'player'}
+              active={isWorkspaceVisible('player')}
               provider={providerSettings}
               capabilities={agentCapabilities}
               openLearningPathRequest={playerOpenLearningPathRequest}
@@ -8326,19 +9423,39 @@ function AppContent() {
       </section>
 
       <section
-        className={`knowledge-workspace-stage${activeWorkspace !== 'knowledge' ? ' is-workspace-hidden' : ''}`}
+        className={`knowledge-workspace-stage${getWorkspaceSplitSlotClass('knowledge')}${!isWorkspaceVisible('knowledge') ? ' is-workspace-hidden' : ''}`}
         aria-label="知识库工作区"
-        aria-hidden={activeWorkspace !== 'knowledge'}
+        aria-hidden={!isWorkspaceVisible('knowledge')}
+        onPointerDownCapture={() => focusSplitSlotForWorkspace('knowledge')}
       >
         {knowledgeWorkspaceOpened && (
           <KnowledgeWorkspace
-            active={activeWorkspace === 'knowledge'}
+            active={isWorkspaceVisible('knowledge')}
             rootPath={librarySnapshot?.rootPath ?? null}
             documents={catalogDocuments}
             mindmapCount={
               catalogDocuments.filter((item) => item.kind === 'mindmap').length
             }
-            onSwitchToMindmap={() => setActiveWorkspace('mindmap')}
+            onSwitchToMindmap={() => {
+              if (
+                universalSplitActive &&
+                effectiveSecondaryWorkspace === 'knowledge' &&
+                activeWorkspace !== 'knowledge'
+              ) {
+                if (activeWorkspace === 'mindmap') {
+                  swapUniversalSplitPanes();
+                } else {
+                  setSecondaryWorkspaceAndStore('mindmap');
+                }
+              } else if (
+                universalSplitActive &&
+                effectiveSecondaryWorkspace === 'mindmap'
+              ) {
+                swapUniversalSplitPanes();
+              } else {
+                setActiveWorkspace('mindmap');
+              }
+            }}
             categories={librarySnapshot?.documentCategories ?? []}
             activeDocument={
               knowledgeSplit.focusedDocument?.kind === 'doc'
@@ -8351,6 +9468,9 @@ function AppContent() {
             onChooseRoot={() => void chooseLibraryRoot()}
             onRefresh={() => void loadLibrary(false)}
             onCreateCategory={(category) => createKnowledgeCategory(category)}
+            onRenameFolder={(path, newName) =>
+              renameLibraryFolder(path, newName, 'knowledge')
+            }
             onOpenNote={(note, options) =>
               void openKnowledgeWorkspaceNote(note, options)
             }
@@ -8376,9 +9496,10 @@ function AppContent() {
       </section>
 
       <section
-        className={`terminal-workspace-stage${activeWorkspace !== 'terminal' ? ' is-workspace-hidden' : ''}`}
+        className={`terminal-workspace-stage${getWorkspaceSplitSlotClass('terminal')}${!isWorkspaceVisible('terminal') ? ' is-workspace-hidden' : ''}`}
         aria-label="终端与系统实验工作区"
-        aria-hidden={activeWorkspace !== 'terminal'}
+        aria-hidden={!isWorkspaceVisible('terminal')}
+        onPointerDownCapture={() => focusSplitSlotForWorkspace('terminal')}
       >
         {terminalWorkspaceOpened && (
           <Suspense
@@ -8389,7 +9510,7 @@ function AppContent() {
             }
           >
             <TerminalWorkspace
-              active={activeWorkspace === 'terminal'}
+              active={isWorkspaceVisible('terminal')}
               cwd={librarySnapshot?.rootPath ?? ''}
               theme={theme}
               books={librarySnapshot?.books ?? []}
@@ -8432,31 +9553,50 @@ function AppContent() {
                     return false;
                   }
                 },
+                onAppendToMindmap: ({ title, markdown }) => {
+                  try {
+                    const currentMd = draftRef.current.markdown.trimEnd();
+                    const branchLines = markdown
+                      .trim()
+                      .split(/\r?\n/)
+                      .map((line) =>
+                        line.startsWith('## ')
+                          ? `## ${title || line.slice(3)}`
+                          : line,
+                      );
+                    const hasH2 = branchLines.some((line) =>
+                      line.startsWith('## '),
+                    );
+                    const appendedBlock = hasH2
+                      ? branchLines.join('\n')
+                      : `## ${title || '代码实验结论'}\n\n${branchLines.join('\n')}`;
+                    const nextMd = `${currentMd}\n\n${appendedBlock}\n`;
+                    applyMarkdownFromCanvas(nextMd, { focus: false });
+                    setSaveMessage(`已将「${title}」追加到当前思维导图`);
+                    return true;
+                  } catch {
+                    return false;
+                  }
+                },
               }}
             />
           </Suspense>
         )}
       </section>
 
-      {activeWorkspace === 'tasks' && (
-        <section
-          className="task-workspace-stage"
-          aria-label="任务工作区"
-          style={{
-            flex: 1,
-            minWidth: 0,
-            minHeight: 0,
-            height: '100%',
-            overflow: 'hidden',
-            display: 'flex',
-          }}
-        >
+      <section
+        className={`task-workspace-stage${getWorkspaceSplitSlotClass('tasks')}${!isWorkspaceVisible('tasks') ? ' is-workspace-hidden' : ''}`}
+        aria-label="任务工作区"
+        aria-hidden={!isWorkspaceVisible('tasks')}
+        onPointerDownCapture={() => focusSplitSlotForWorkspace('tasks')}
+      >
+        {tasksOpened && (
           <Suspense
             fallback={<div className="player-loading">正在载入任务工作台…</div>}
           >
             <TaskWorkspace
               library={librarySnapshot}
-              active={activeWorkspace === 'tasks'}
+              active={isWorkspaceVisible('tasks')}
               pendingHabitCount={pendingHabitCount}
               createRequest={taskCreateRequest}
               openTaskId={taskOpenId}
@@ -8469,20 +9609,16 @@ function AppContent() {
               onOpenResource={openTaskResource}
             />
           </Suspense>
-        </section>
-      )}
+        )}
+      </section>
 
-      {activeWorkspace === 'literature' && (
-        <section
-          className="literature-workspace-stage"
-          aria-label="论文工作区"
-          style={{
-            flex: 1,
-            height: '100%',
-            overflow: 'hidden',
-            display: 'flex',
-          }}
-        >
+      <section
+        className={`literature-workspace-stage${getWorkspaceSplitSlotClass('literature')}${!isWorkspaceVisible('literature') ? ' is-workspace-hidden' : ''}`}
+        aria-label="论文工作区"
+        aria-hidden={!isWorkspaceVisible('literature')}
+        onPointerDownCapture={() => focusSplitSlotForWorkspace('literature')}
+      >
+        {literatureOpened && (
           <Suspense
             fallback={
               <div
@@ -8524,13 +9660,14 @@ function AppContent() {
               }}
             />
           </Suspense>
-        </section>
-      )}
+        )}
+      </section>
 
       <section
-        className={`feed-workspace-stage${activeWorkspace !== 'feed' ? ' is-workspace-hidden' : ''}`}
+        className={`feed-workspace-stage${getWorkspaceSplitSlotClass('feed')}${!isWorkspaceVisible('feed') ? ' is-workspace-hidden' : ''}`}
         aria-label="博客与 RSS 订阅工作区"
-        aria-hidden={activeWorkspace !== 'feed'}
+        aria-hidden={!isWorkspaceVisible('feed')}
+        onPointerDownCapture={() => focusSplitSlotForWorkspace('feed')}
       >
         {feedOpened && (
           <Suspense
@@ -8550,7 +9687,7 @@ function AppContent() {
             }
           >
             <FeedWorkspace
-              active={activeWorkspace === 'feed'}
+              active={isWorkspaceVisible('feed')}
               provider={providerSettings}
               externalRevision={feedExternalRevision}
               focusArticleRequest={feedFocusArticleRequest}
@@ -8594,6 +9731,26 @@ function AppContent() {
           </Suspense>
         )}
       </section>
+
+      {universalSplitActive && (
+        <div
+          className={`reader-split-divider universal-split-divider${isSplitDragging ? ' is-dragging' : ''}`}
+          role="separator"
+          aria-label="拖动调整左右双栏分屏工作区宽度比例"
+          aria-orientation="vertical"
+          aria-valuemin={20}
+          aria-valuemax={80}
+          aria-valuenow={Math.round(universalSplitRatio * 100)}
+          tabIndex={0}
+          title="左右拖动调整分屏宽度比例；双击恢复 50:50；左右方向键微调"
+          onPointerDown={onUniversalSplitPointerDown}
+          onPointerMove={onUniversalSplitPointerMove}
+          onPointerUp={onUniversalSplitPointerUp}
+          onPointerCancel={onUniversalSplitPointerUp}
+          onKeyDown={onUniversalSplitKeyDown}
+          onDoubleClick={resetUniversalSplitRatio}
+        />
+      )}
 
       {isTerminalDrawerOpen && (
         <section
@@ -8846,9 +10003,23 @@ function AppContent() {
 
       {readerKnowledgeActive && (
         <div
-          className="reader-split-divider reader-knowledge-divider"
+          className={`reader-split-divider reader-knowledge-divider${isSplitDragging ? ' is-dragging' : ''}`}
           role="separator"
-          aria-label="电子书与知识库笔记分界"
+          aria-label="调整电子书与知识星系图或笔记的分栏比例"
+          aria-orientation="vertical"
+          aria-valuemin={galaxyViewActive ? 20 : 22}
+          aria-valuemax={readerSplitActive ? 56 : 74}
+          aria-valuenow={Math.round(
+            (galaxyViewActive ? readerGalaxyRatio : readerKnowledgeRatio) * 100,
+          )}
+          tabIndex={0}
+          title="拖动调整电子书与右侧星系图/笔记的分栏比例；双击恢复默认比例；左右方向键微调，Home 恢复默认"
+          onPointerDown={onReaderKnowledgePointerDown}
+          onPointerMove={onReaderKnowledgePointerMove}
+          onPointerUp={onReaderKnowledgePointerUp}
+          onPointerCancel={onReaderKnowledgePointerUp}
+          onKeyDown={onReaderKnowledgeKeyDown}
+          onDoubleClick={resetReaderKnowledgeSplitRatio}
         />
       )}
 
@@ -8994,11 +10165,17 @@ function AppContent() {
         </span>
       </footer>
 
-      {epubDropActive && (
+      {bookDropKind && (
         <div className="epub-drop-overlay" role="status" aria-live="polite">
           <div>
-            <strong>导入 EPUB 目录</strong>
-            <span>松开鼠标，解析目录并生成 Markdown 草稿</span>
+            <strong>
+              {bookDropKind === 'books' ? '添加电子书到书架' : '导入 EPUB 目录'}
+            </strong>
+            <span>
+              {bookDropKind === 'books'
+                ? '松开鼠标，将 EPUB 或 PDF 保存到当前书架'
+                : '松开鼠标，解析目录并生成 Markdown 草稿'}
+            </span>
           </div>
         </div>
       )}

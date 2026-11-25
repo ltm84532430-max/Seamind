@@ -1,6 +1,6 @@
 /* Knowledge pages share one frame; the editor and canvas keep their own tools. */
 .app-shell.is-knowledge-surface {
-  grid-template-rows: 52px minmax(0, 1fr) 29px;
+  grid-template-rows: var(--topbar-height, 36px) minmax(0, 1fr) 29px;
 }
 .app-shell.is-knowledge-surface > .workspace,
 .app-shell.is-knowledge-surface > .knowledge-workspace-stage {
@@ -11,7 +11,7 @@
 }
 .app-shell.is-knowledge-surface.is-terminal-open:not(.is-terminal-right) {
   grid-template-rows:
-    52px minmax(0, 1fr)
+    var(--topbar-height, 36px) minmax(0, 1fr)
     minmax(160px, var(--terminal-height, 280px)) 29px;
 }
 .app-shell.is-knowledge-surface.is-terminal-open:not(.is-terminal-right)
@@ -27,7 +27,7 @@
       320px,
       var(--terminal-side-width, 440px)
     );
-  grid-template-rows: 52px minmax(0, 1fr) 29px;
+  grid-template-rows: var(--topbar-height, 36px) minmax(0, 1fr) 29px;
 }
 .app-shell.is-knowledge-surface.is-terminal-right > .workspace,
 .app-shell.is-knowledge-surface.is-terminal-right > .knowledge-workspace-stage,
@@ -424,22 +424,87 @@
   padding: 0 8px 0 10px;
 }
 .app-shell.is-knowledge-surface .library-tabs {
+  display: inline-flex;
+  flex: 0 0 auto;
   height: 100%;
+  gap: 2px;
   padding: 0;
   border-radius: 0;
   background: transparent;
 }
 .app-shell.is-knowledge-surface .library-tab,
 .app-shell.is-knowledge-surface .library-tab.is-active {
+  flex: 0 0 auto;
   height: 100%;
   padding: 0 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
   border-radius: 0;
   box-shadow: none;
   background: transparent;
+  font: 500 12.5px/1 var(--ui-font);
 }
 .app-shell.is-knowledge-surface .library-tab.is-active {
-  border-bottom: 2px solid var(--accent);
+  border-bottom-color: var(--accent);
   color: var(--accent);
+  font-weight: 600;
+}
+.app-shell.is-knowledge-surface .library-tab-badge,
+.app-shell.is-knowledge-surface .library-tab.is-active .library-tab-badge {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  font: 400 11px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.app-shell.is-knowledge-surface .library-tab.is-active .library-tab-badge {
+  color: var(--accent);
+  font-weight: 600;
+}
+.library-head-tools {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+}
+.library-sidebar {
+  position: relative;
+}
+.library-outline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--ink) 2%, var(--panel));
+}
+.library-outline-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.library-outline-back-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.library-outline-head-title {
+  color: var(--muted);
+  font: 600 11px var(--mono);
+}
+.library-icon-btn.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
 }
 .app-shell.is-knowledge-surface .library-new-btn-group,
 .app-shell.is-knowledge-surface .library-btn-primary,
