@@ -9,12 +9,15 @@ import {
 } from 'react';
 import type { Theme } from '../app/app-storage';
 import { systemApi } from '../system/system-api';
+import { AnalysisChartGallery } from './AnalysisChartGallery';
+import { clampFocusRatio, collectAnalysisCharts } from './analysis-focus-model';
 import type {
   PythonWorkerRequest,
   PythonWorkerResponse,
   PythonWorkerVarSummary,
 } from '../workbench/python.worker';
 import { CellOutputList, CodeLabCellRow } from './CodeLabCellRow';
+import { CodeLabDataPanel } from './CodeLabDataPanel';
 import {
   LabCellsIcon,
   LabCheckIcon,
@@ -66,6 +69,8 @@ import {
   makeCodeLabCellId,
   moveCodeLabCell,
   parseIpynbJson,
+  saveDataLabConnections,
+  saveDataLabFiles,
   serializeIpynbJson,
   stripHeavyOutputsForStorage,
   summarizeCellOutputsForAgent,
@@ -91,6 +96,10 @@ import {
   buildCodeLabAppearanceCssVars,
   useCodeLabAppearance,
 } from './codelab-appearance';
+import {
+  TerminalAgentView,
+  type PaneReaderAccessor,
+} from './TerminalAgentView';
 import type {
   TerminalCodeLabLanguage,
   TerminalTab,
@@ -151,8 +160,11 @@ interface TerminalCodeLabViewProps {
   isFocused?: boolean;
   style?: React.CSSProperties;
   bridge?: TerminalWorkspaceBridge;
+  paneAccessor?: PaneReaderAccessor;
   mountedFiles?: DataLabMountedFile[];
   dbConnections?: DataLabDbConnection[];
+  onUpdateMountedFiles?: (next: DataLabMountedFile[]) => void;
+  onUpdateDbConnections?: (next: DataLabDbConnection[]) => void;
   pythonEnvs?: PythonEnvInfo[];
   rEnvs?: REnvInfo[];
   preferredPythonRuntime?: string;
@@ -249,8 +261,11 @@ export const TerminalCodeLabView = forwardRef<
     isFocused = false,
     style,
     bridge,
+    paneAccessor,
     mountedFiles: mountedFilesProp,
     dbConnections: dbConnectionsProp,
+    onUpdateMountedFiles,
+    onUpdateDbConnections,
     pythonEnvs: pythonEnvsProp,
     rEnvs: rEnvsProp,
     preferredPythonRuntime,
@@ -409,6 +424,14 @@ export const TerminalCodeLabView = forwardRef<
     Record<string, boolean>
   >({});
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [focusedGroupId, setFocusedGroupId] = useState<string | null>(null);
+  const [focusTopTab, setFocusTopTab] = useState<'agent' | 'data'>('agent');
+  const [focusAgentMounted, setFocusAgentMounted] = useState(false);
+  const [focusLeftRatio, setFocusLeftRatio] = useState(60);
+  const [focusTopRatio, setFocusTopRatio] = useState(48);
+  const focusReturnScrollRef = useRef(0);
+  const focusReturnCellRef = useRef<string | null>(null);
+  const focusRightRef = useRef<HTMLDivElement>(null);
 
   // Python & R Kernels + Data Lab state
   const [localPythonEnvs, setLocalPythonEnvs] = useState<PythonEnvInfo[]>([]);
@@ -2405,6 +2428,55 @@ export const TerminalCodeLabView = forwardRef<
     [],
   );
 
+  const handleInsertFocusedDataCell = useCallback(
+    (
+      lang: TerminalCodeLabLanguage,
+      source: string,
+      autoRun: boolean,
+      sqlConnectionId?: string,
+    ) => {
+      if (!focusedGroupId) return;
+      const groupTitle =
+        cellsRef.current.find((cell) => cell.groupId === focusedGroupId)
+          ?.groupTitle || '分析区块';
+      const newCell: CodeLabCell = {
+        id: makeCodeLabCellId(),
+        kind: 'code',
+        language: lang,
+        source,
+        stdinInput: '',
+        executionCount: null,
+        status: 'idle',
+        outputs: [],
+        sqlConnectionId,
+        groupId: focusedGroupId,
+        groupTitle,
+        groupCollapsed: false,
+      };
+      liveSourceMapRef.current.set(newCell.id, source);
+      setCells((previous) => {
+        let lastIndex = -1;
+        for (let index = 0; index < previous.length; index += 1) {
+          if (previous[index].groupId === focusedGroupId) lastIndex = index;
+        }
+        return [
+          ...previous.slice(0, lastIndex + 1),
+          newCell,
+          ...previous.slice(lastIndex + 1),
+        ];
+      });
+      setDirty(true);
+      setFocusedCellId(newCell.id);
+      setEditingCellId(newCell.id);
+      setHydratedCellIds((previous) => pushHydratedLru(previous, newCell.id));
+      setInteractionMode('edit');
+      if (autoRun) {
+        requestAnimationFrame(() => void runCellById(newCell.id, false));
+      }
+    },
+    [focusedGroupId, runCellById],
+  );
+
   const handleRenameAnalysisBlock = useCallback(
     (groupId: string, nextTitle: string) => {
       setCells((prev) =>
@@ -3244,6 +3316,109 @@ export const TerminalCodeLabView = forwardRef<
   }, []);
 
   const renderItems = useMemo(() => buildNotebookRenderItems(cells), [cells]);
+  const focusedBlock = renderItems.find(
+    (item) => item.kind === 'group' && item.groupId === focusedGroupId,
+  );
+  const focusedBlockTitle =
+    focusedBlock?.kind === 'group' ? focusedBlock.title : '分析区块';
+  const focusedCharts = useMemo(
+    () => (focusedGroupId ? collectAnalysisCharts(cells, focusedGroupId) : []),
+    [cells, focusedGroupId],
+  );
+  const focusAgentTab = useMemo<TerminalTab>(
+    () => ({
+      id: `${tab.id}:analysis-agent`,
+      title: '分析区块 Agent',
+      kind: 'agent',
+      shell: tab.shell,
+      cwd: tab.cwd,
+      agentEngine: 'hybrid',
+      status: 'ready',
+      createdAt: tab.createdAt,
+    }),
+    [tab.id, tab.shell, tab.cwd, tab.createdAt],
+  );
+  const focusPaneAccessor = useMemo<PaneReaderAccessor | undefined>(
+    () =>
+      paneAccessor
+        ? {
+            ...paneAccessor,
+            pushToCodeLab: (lang, source, autoRun) =>
+              handleInsertFocusedDataCell(lang, source, autoRun ?? true),
+          }
+        : undefined,
+    [paneAccessor, handleInsertFocusedDataCell],
+  );
+  const exitAnalysisFocus = useCallback(() => {
+    setFocusedGroupId(null);
+    requestAnimationFrame(() => {
+      if (cellsScrollRef.current) {
+        cellsScrollRef.current.scrollTop = focusReturnScrollRef.current;
+      }
+      if (focusReturnCellRef.current) {
+        setFocusedCellId(focusReturnCellRef.current);
+      }
+      rootContainerRef.current?.focus();
+    });
+  }, []);
+  const enterAnalysisFocus = useCallback(
+    (groupId: string) => {
+      focusReturnScrollRef.current = cellsScrollRef.current?.scrollTop ?? 0;
+      focusReturnCellRef.current = focusedCellId;
+      setFocusAgentMounted(true);
+      setFocusTopTab('agent');
+      setFocusedGroupId(groupId);
+      requestAnimationFrame(() => {
+        if (cellsScrollRef.current) cellsScrollRef.current.scrollTop = 0;
+      });
+    },
+    [focusedCellId],
+  );
+  const getAnalysisContext = useCallback((): string | null => {
+    if (!focusedGroupId) return null;
+    const groupCells = getCellsWithLiveSources().filter(
+      (cell) => cell.groupId === focusedGroupId,
+    );
+    if (!groupCells.length) return null;
+    const parts = [
+      `分析区块：${groupCells[0].groupTitle || focusedBlockTitle}`,
+      `笔记本：${activeFileTitle}`,
+      `数据源：${effectiveMountedFiles.map((file) => `${file.alias} (${file.format})`).join('、') || '无'}`,
+      ...groupCells.map((cell, index) => {
+        const outputs = summarizeCellOutputsForAgent(cell.outputs)
+          .join('\n')
+          .slice(0, 1200);
+        return [
+          `[${index + 1}] ${cell.kind === 'markdown' ? 'MD' : cell.language.toUpperCase()} · ${cell.status}`,
+          cell.source.slice(0, 2400),
+          outputs ? `输出摘要：\n${outputs}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n');
+      }),
+    ];
+    return parts.join('\n\n').slice(0, 14000);
+  }, [
+    focusedGroupId,
+    getCellsWithLiveSources,
+    focusedBlockTitle,
+    activeFileTitle,
+    effectiveMountedFiles,
+  ]);
+  useEffect(() => {
+    if (focusedGroupId && !focusedBlock) exitAnalysisFocus();
+  }, [focusedGroupId, focusedBlock, exitAnalysisFocus]);
+  useEffect(() => {
+    if (!focusedGroupId) return;
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.defaultPrevented) {
+        event.preventDefault();
+        exitAnalysisFocus();
+      }
+    };
+    window.addEventListener('keydown', onEscape);
+    return () => window.removeEventListener('keydown', onEscape);
+  }, [focusedGroupId, exitAnalysisFocus]);
 
   const kernelSummary = useMemo(() => {
     if (language === 'c') {
@@ -3357,8 +3532,14 @@ export const TerminalCodeLabView = forwardRef<
       tabIndex={0}
       data-editor-theme={appearance.themePreset}
       data-cell-radius={appearance.cellRadius}
-      className={`codelab-root${active ? '' : ' is-hidden-pane'}${isFocused ? ' is-focused' : ''}${isSplitView ? ' is-split-view' : ''}`}
-      style={mergedRootStyle}
+      className={`codelab-root${active ? '' : ' is-hidden-pane'}${isFocused ? ' is-focused' : ''}${isSplitView ? ' is-split-view' : ''}${focusedGroupId ? ' is-analysis-focus' : ''}`}
+      style={
+        {
+          ...mergedRootStyle,
+          '--analysis-left': `${focusLeftRatio}%`,
+          '--analysis-top': `${focusTopRatio}%`,
+        } as React.CSSProperties
+      }
       onMouseDown={() => onFocusPane?.()}
       onKeyDown={handleContainerKeyDown}
     >
@@ -4354,7 +4535,7 @@ export const TerminalCodeLabView = forwardRef<
                     return (
                       <section
                         key={item.groupId}
-                        className={`codelab-analysis-block${item.collapsed ? ' is-collapsed' : ''}${blockHasRunning ? ' is-running' : ''}${blockHasError ? ' is-error' : ''}`}
+                        className={`codelab-analysis-block${item.collapsed ? ' is-collapsed' : ''}${blockHasRunning ? ' is-running' : ''}${blockHasError ? ' is-error' : ''}${focusedGroupId === item.groupId ? ' is-analysis-focus-target' : ''}`}
                       >
                         <header className="codelab-ablock-head">
                           <div className="codelab-ablock-head-left">
@@ -4426,6 +4607,29 @@ export const TerminalCodeLabView = forwardRef<
                           </div>
 
                           <div className="codelab-ablock-actions">
+                            <button
+                              type="button"
+                              className="codelab-ablock-btn is-focus-toggle"
+                              onClick={() =>
+                                focusedGroupId === item.groupId
+                                  ? exitAnalysisFocus()
+                                  : enterAnalysisFocus(item.groupId)
+                              }
+                              aria-label={
+                                focusedGroupId === item.groupId
+                                  ? '退出分析全屏'
+                                  : '全屏分析区块'
+                              }
+                              title={
+                                focusedGroupId === item.groupId
+                                  ? '退出分析全屏 (Esc)'
+                                  : '全屏分析区块'
+                              }
+                            >
+                              {focusedGroupId === item.groupId
+                                ? '退出全屏'
+                                : '全屏分析'}
+                            </button>
                             <button
                               type="button"
                               className="codelab-ablock-btn is-run"
@@ -4543,7 +4747,8 @@ export const TerminalCodeLabView = forwardRef<
                           </div>
                         </header>
 
-                        {!item.collapsed && (
+                        {(!item.collapsed ||
+                          focusedGroupId === item.groupId) && (
                           <div className="codelab-ablock-body">
                             {item.cells.map(({ cell, index }) => (
                               <CodeLabCellRow
@@ -4560,7 +4765,13 @@ export const TerminalCodeLabView = forwardRef<
                                 }
                                 theme={theme}
                                 nested
-                                hideSource={isResultsOnly}
+                                hideSource={
+                                  isResultsOnly &&
+                                  focusedGroupId !== item.groupId
+                                }
+                                hideChartOutputs={
+                                  focusedGroupId === item.groupId
+                                }
                                 canSendToShell={Boolean(onSendToShellPane)}
                                 canSendToAgent={Boolean(onSendToAgentPane)}
                                 liveSourceMapRef={liveSourceMapRef}
@@ -4670,6 +4881,182 @@ export const TerminalCodeLabView = forwardRef<
               )}
             />
           </aside>
+        )}
+        {focusAgentMounted && (
+          <>
+            <div
+              className="codelab-focus-column-resizer"
+              role="separator"
+              aria-label="调整代码区和右侧面板宽度"
+              aria-orientation="vertical"
+              tabIndex={focusedGroupId ? 0 : -1}
+              aria-valuenow={focusLeftRatio}
+              aria-valuemin={35}
+              aria-valuemax={75}
+              onPointerDown={(event) => {
+                event.currentTarget.setPointerCapture(event.pointerId);
+                event.preventDefault();
+              }}
+              onPointerMove={(event) => {
+                if (!event.currentTarget.hasPointerCapture(event.pointerId))
+                  return;
+                const rect = rootContainerRef.current?.getBoundingClientRect();
+                if (rect) {
+                  setFocusLeftRatio(
+                    clampFocusRatio(
+                      ((event.clientX - rect.left) / rect.width) * 100,
+                      35,
+                      75,
+                    ),
+                  );
+                }
+              }}
+              onDoubleClick={() => setFocusLeftRatio(60)}
+              onKeyDown={(event) => {
+                if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+                  event.preventDefault();
+                  setFocusLeftRatio((current) =>
+                    clampFocusRatio(
+                      current + (event.key === 'ArrowRight' ? 2 : -2),
+                      35,
+                      75,
+                    ),
+                  );
+                }
+              }}
+            />
+            <aside
+              ref={focusRightRef}
+              className="codelab-focus-right"
+              aria-label="分析辅助面板"
+            >
+              <div className="codelab-focus-top">
+                <div
+                  className="codelab-focus-tabs"
+                  role="tablist"
+                  aria-label="分析辅助窗口"
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={focusTopTab === 'agent'}
+                    className={focusTopTab === 'agent' ? 'is-active' : ''}
+                    onClick={() => setFocusTopTab('agent')}
+                  >
+                    Agent 对话
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={focusTopTab === 'data'}
+                    className={focusTopTab === 'data' ? 'is-active' : ''}
+                    onClick={() => setFocusTopTab('data')}
+                  >
+                    数据映射{' '}
+                    <span>
+                      {effectiveMountedFiles.length +
+                        effectiveDbConnections.length}
+                    </span>
+                  </button>
+                </div>
+                <div className="codelab-focus-top-content">
+                  <div
+                    className={`codelab-focus-agent${focusTopTab === 'agent' ? ' is-active' : ''}`}
+                    role="tabpanel"
+                    aria-label="Agent 对话"
+                  >
+                    <TerminalAgentView
+                      tab={focusAgentTab}
+                      theme={theme}
+                      active={Boolean(
+                        focusedGroupId && focusTopTab === 'agent',
+                      )}
+                      compact
+                      bridge={bridge}
+                      paneAccessor={focusPaneAccessor}
+                      analysisContext={getAnalysisContext}
+                    />
+                  </div>
+                  {focusTopTab === 'data' && (
+                    <div
+                      className="codelab-focus-data"
+                      role="tabpanel"
+                      aria-label="数据映射"
+                    >
+                      <CodeLabDataPanel
+                        mountedFiles={effectiveMountedFiles}
+                        dbConnections={effectiveDbConnections}
+                        preferredPythonPath={selectedPyRuntime}
+                        onUpdateFiles={(next) => {
+                          if (onUpdateMountedFiles) onUpdateMountedFiles(next);
+                          else {
+                            setLocalMountedFiles(next);
+                            saveDataLabFiles(next);
+                          }
+                        }}
+                        onUpdateConnections={(next) => {
+                          if (onUpdateDbConnections)
+                            onUpdateDbConnections(next);
+                          else {
+                            setLocalDbConnections(next);
+                            saveDataLabConnections(next);
+                          }
+                        }}
+                        onInsertCell={handleInsertFocusedDataCell}
+                        onNotify={showTempNotice}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div
+                className="codelab-focus-row-resizer"
+                role="separator"
+                aria-label="调整辅助窗口和图表区域高度"
+                aria-orientation="horizontal"
+                tabIndex={focusedGroupId ? 0 : -1}
+                aria-valuenow={focusTopRatio}
+                aria-valuemin={25}
+                aria-valuemax={75}
+                onPointerDown={(event) => {
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  event.preventDefault();
+                }}
+                onPointerMove={(event) => {
+                  if (!event.currentTarget.hasPointerCapture(event.pointerId))
+                    return;
+                  const rect = focusRightRef.current?.getBoundingClientRect();
+                  if (rect) {
+                    setFocusTopRatio(
+                      clampFocusRatio(
+                        ((event.clientY - rect.top) / rect.height) * 100,
+                        25,
+                        75,
+                      ),
+                    );
+                  }
+                }}
+                onDoubleClick={() => setFocusTopRatio(48)}
+                onKeyDown={(event) => {
+                  if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    setFocusTopRatio((current) =>
+                      clampFocusRatio(
+                        current + (event.key === 'ArrowDown' ? 2 : -2),
+                        25,
+                        75,
+                      ),
+                    );
+                  }
+                }}
+              />
+              <AnalysisChartGallery
+                charts={focusedCharts}
+                blockTitle={focusedBlockTitle}
+                onNotify={showTempNotice}
+              />
+            </aside>
+          </>
         )}
       </div>
 

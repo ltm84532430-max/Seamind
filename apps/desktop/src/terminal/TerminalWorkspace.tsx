@@ -4097,8 +4097,17 @@ export function TerminalWorkspace({
                   style={paneStyle}
                   active={active && isVisibleInStage}
                   bridge={mergedBridge}
+                  paneAccessor={paneAccessor}
                   mountedFiles={mountedDataFiles}
                   dbConnections={dbConnections}
+                  onUpdateMountedFiles={(next) => {
+                    setMountedDataFiles(next);
+                    saveDataLabFiles(next);
+                  }}
+                  onUpdateDbConnections={(next) => {
+                    setDbConnections(next);
+                    saveDataLabConnections(next);
+                  }}
                   pythonEnvs={pythonEnvs}
                   rEnvs={rEnvs}
                   preferredPythonRuntime={selectedPythonRuntime}

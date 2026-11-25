@@ -462,6 +462,7 @@ export interface CodeLabCellRowProps {
   pinnedOutputCellId: string | null;
   nested?: boolean;
   hideSource?: boolean;
+  hideChartOutputs?: boolean;
 }
 
 export const CodeLabCellRow = memo(function CodeLabCellRow({
@@ -501,6 +502,7 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
   pinnedOutputCellId,
   nested = false,
   hideSource = false,
+  hideChartOutputs = false,
 }: CodeLabCellRowProps) {
   const [langMenuOpen, setLangMenuOpen] = useState(false);
   const [copiedSource, setCopiedSource] = useState(false);
@@ -526,6 +528,12 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
   const isMarkdownPreview = isMarkdown && !isEditing;
   const isLegacyStarterNote = LEGACY_STARTER_NOTES.has(cell.source);
   const durationText = formatDurationCompact(cell.durationMs);
+  const visibleOutputs = hideChartOutputs
+    ? cell.outputs.filter(
+        (output) =>
+          output.kind !== 'image/png' && output.kind !== 'image/svg+xml',
+      )
+    : cell.outputs;
   const execLabel = isMarkdown
     ? 'MD'
     : cell.status === 'running'
@@ -924,8 +932,8 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
           )}
 
         {/* Structured Output Well */}
-        {cell.outputs.length > 0 &&
-          (pinnedOutputCellId === cell.id ? (
+        {visibleOutputs.length > 0 &&
+          (!hideChartOutputs && pinnedOutputCellId === cell.id ? (
             <div className="codelab-output-docked-note">
               <span>
                 输出已固定到侧栏 · {cell.outputs.length} 项 ·{' '}
@@ -938,13 +946,13 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
           ) : (
             <CellOutputList
               cellId={cell.id}
-              outputs={cell.outputs}
+              outputs={visibleOutputs}
               durationMs={cell.durationMs}
               stage={cell.stage}
               theme={theme}
               onClearOutputs={onClearOutputs}
               onZoomImage={onZoomImage}
-              onPinOutput={onPinOutput}
+              onPinOutput={hideChartOutputs ? undefined : onPinOutput}
               stale={Boolean(
                 cell.lastExecutedSource !== undefined &&
                 cell.lastExecutedSource !== cell.source,

@@ -100,6 +100,8 @@ interface TerminalAgentViewProps {
   tab: TerminalTab;
   theme: Theme;
   active: boolean;
+  compact?: boolean;
+  analysisContext?: () => string | null;
   isFocused?: boolean;
   style?: React.CSSProperties;
   bridge?: TerminalWorkspaceBridge;
@@ -405,6 +407,8 @@ export const TerminalAgentView = forwardRef<
   {
     tab,
     active,
+    compact = false,
+    analysisContext,
     isFocused = false,
     style,
     bridge,
@@ -1149,6 +1153,11 @@ export const TerminalAgentView = forwardRef<
         const { contextLines, summaryLabels } = await resolveMentionEnvelopes(
           parsed.mentions,
         );
+        const blockContext = analysisContext?.();
+        if (blockContext) {
+          contextLines.unshift(`[当前分析区块]\n${blockContext}`);
+          summaryLabels.unshift('当前分析区块');
+        }
         if (summaryLabels.length > 0) {
           setTurns((prev) =>
             prev.map((t) =>
@@ -1407,6 +1416,7 @@ export const TerminalAgentView = forwardRef<
     },
     [
       activeCliEngine,
+      analysisContext,
       appendLocalSystemTurn,
       bridge,
       cliEngines,
@@ -1549,7 +1559,7 @@ export const TerminalAgentView = forwardRef<
   return (
     <div
       ref={rootRef}
-      className={`t-agent-root${active ? '' : ' is-hidden-pane'}${isFocused ? ' is-focused' : ''}`}
+      className={`t-agent-root${active ? '' : ' is-hidden-pane'}${isFocused ? ' is-focused' : ''}${compact ? ' is-compact' : ''}`}
       style={style}
       onMouseDown={() => onFocusPane?.()}
       onKeyDown={handleRootKeyDown}

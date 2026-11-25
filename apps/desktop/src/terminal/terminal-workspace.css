@@ -8689,6 +8689,332 @@
   border-left-color: var(--term-muted);
 }
 
+/* Analysis block focus workspace: the existing editors stay mounted. */
+.codelab-root.is-analysis-focus {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 10000;
+  width: 100vw !important;
+  height: 100vh !important;
+  border: 0;
+  border-radius: 0;
+  background: var(--term-bg);
+}
+
+.codelab-root.is-analysis-focus > .codelab-toolbar,
+.codelab-root.is-analysis-focus > .codelab-notice-strip,
+.codelab-root.is-analysis-focus > .codelab-bottom-drawer {
+  display: none;
+}
+
+.codelab-root.is-analysis-focus .codelab-main-area {
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+}
+
+.codelab-root.is-analysis-focus .codelab-cells-scroll {
+  flex: 0 0 calc(var(--analysis-left) - 3px);
+  width: calc(var(--analysis-left) - 3px);
+  min-width: 0;
+  padding: 0;
+  overflow: auto;
+}
+
+.codelab-root.is-analysis-focus .codelab-paper-column,
+.codelab-root.is-analysis-focus .codelab-cell-stream {
+  width: 100%;
+  max-width: none;
+  min-height: 100%;
+  margin: 0;
+  gap: 0;
+}
+
+.codelab-root.is-analysis-focus
+  .codelab-paper-column
+  > :not(.codelab-cell-stream),
+.codelab-root.is-analysis-focus
+  .codelab-cell-stream
+  > :not(.is-analysis-focus-target),
+.codelab-root.is-analysis-focus .codelab-pinned-panel,
+.codelab-root:not(.is-analysis-focus) .codelab-focus-column-resizer,
+.codelab-root:not(.is-analysis-focus) .codelab-focus-right {
+  display: none;
+}
+
+.codelab-root.is-analysis-focus
+  .codelab-analysis-block.is-analysis-focus-target {
+  min-height: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  overflow: visible;
+}
+
+.codelab-root.is-analysis-focus .codelab-ablock-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  min-height: 42px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--term-border-strong);
+}
+
+.codelab-root.is-analysis-focus .codelab-ablock-body {
+  padding: 12px;
+  gap: 10px;
+}
+
+.codelab-root.is-analysis-focus
+  .codelab-ablock-actions
+  > .codelab-ablock-btn:nth-child(n + 7) {
+  display: none;
+}
+
+.codelab-ablock-btn.is-focus-toggle {
+  font-family: var(--mono, Consolas, monospace);
+  color: var(--term-accent);
+  border-color: var(--term-accent);
+}
+
+.codelab-focus-column-resizer,
+.codelab-focus-row-resizer {
+  position: relative;
+  flex: 0 0 6px;
+  background: var(--term-subtle);
+  touch-action: none;
+  outline: none;
+}
+
+.codelab-focus-column-resizer {
+  cursor: col-resize;
+  border-left: 1px solid var(--term-border-strong);
+  border-right: 1px solid var(--term-border-strong);
+}
+
+.codelab-focus-row-resizer {
+  cursor: row-resize;
+  border-top: 1px solid var(--term-border-strong);
+  border-bottom: 1px solid var(--term-border-strong);
+}
+
+.codelab-focus-column-resizer:hover,
+.codelab-focus-row-resizer:hover,
+.codelab-focus-column-resizer:focus-visible,
+.codelab-focus-row-resizer:focus-visible {
+  background: var(--term-accent);
+}
+
+.codelab-focus-right {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--term-bg);
+}
+
+.codelab-focus-top {
+  display: flex;
+  flex: 0 0 calc(var(--analysis-top) - 3px);
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.codelab-focus-tabs,
+.codelab-focus-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 37px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--term-border);
+  background: var(--term-surface);
+  font: 600 11px var(--mono, Consolas, monospace);
+}
+
+.codelab-focus-tabs {
+  justify-content: flex-start;
+  padding: 0 8px;
+}
+
+.codelab-focus-tabs::before {
+  content: '>_';
+  padding: 0 8px;
+  color: var(--term-accent);
+}
+
+.codelab-focus-tabs button,
+.codelab-focus-chart-actions button {
+  min-height: 26px;
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--term-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.codelab-focus-tabs button.is-active {
+  color: var(--term-ink);
+  border-bottom-color: var(--term-accent);
+}
+
+.codelab-focus-tabs button span {
+  color: var(--term-accent);
+}
+
+.codelab-focus-top-content,
+.codelab-focus-agent,
+.codelab-focus-data {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.codelab-focus-top-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.codelab-focus-agent:not(.is-active) {
+  display: none;
+}
+
+.codelab-focus-data {
+  overflow: auto;
+  padding: 12px;
+}
+
+.codelab-focus-charts {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+  outline: none;
+}
+
+.codelab-focus-chart-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.codelab-focus-chart-actions button {
+  border-color: var(--term-border);
+  color: var(--term-ink);
+}
+
+.codelab-focus-chart-actions button:hover:not(:disabled) {
+  border-color: var(--term-accent);
+  color: var(--term-accent);
+}
+
+.codelab-focus-chart-actions button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.codelab-focus-chart-count,
+.codelab-focus-chart-source {
+  color: var(--term-muted);
+  font: 11px var(--mono, Consolas, monospace);
+}
+
+.codelab-focus-chart-stage {
+  display: flex;
+  flex: 1 1 0;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  padding: 12px;
+  overflow: auto;
+  background: var(--term-bg);
+  position: relative;
+}
+
+.codelab-focus-chart-stage img,
+.codelab-focus-chart-stage .codelab-svg-output,
+.codelab-focus-chart-stage .codelab-svg-output svg {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.codelab-focus-chart-stage.is-actual-size {
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+
+.codelab-focus-chart-stage.is-actual-size img,
+.codelab-focus-chart-stage.is-actual-size .codelab-svg-output,
+.codelab-focus-chart-stage.is-actual-size .codelab-svg-output svg {
+  max-width: none;
+  max-height: none;
+}
+
+.codelab-focus-chart-stale {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  padding: 3px 6px;
+  border: 1px solid var(--term-border-strong);
+  background: var(--term-surface);
+  color: var(--term-muted);
+  font: 10px var(--mono, Consolas, monospace);
+}
+
+.codelab-focus-chart-source {
+  flex: 0 0 auto;
+  padding: 5px 12px;
+  border-top: 1px solid var(--term-border);
+}
+
+.codelab-focus-agent .t-agent-root.is-compact .t-agent-topbar,
+.codelab-focus-agent .t-agent-root.is-compact .t-agent-cli-footer-row,
+.codelab-focus-agent .t-agent-root.is-compact .t-agent-cli-quick-pills,
+.codelab-focus-agent .t-agent-root.is-compact .t-agent-hud {
+  display: none;
+}
+
+.codelab-focus-agent .t-agent-root.is-compact .t-agent-startup {
+  padding: 12px;
+}
+
+.codelab-focus-agent .t-agent-root.is-compact .t-agent-cli-emblem-box {
+  width: 42px;
+  height: 42px;
+}
+
+.codelab-focus-agent .t-agent-root.is-compact .t-agent-cli-banner {
+  gap: 10px;
+}
+
+.codelab-focus-agent .t-agent-root.is-compact .t-agent-composer-wrap {
+  padding: 8px;
+}
+
+@media (max-width: 900px) {
+  .codelab-root.is-analysis-focus .codelab-cells-scroll {
+    flex-basis: calc(53% - 3px);
+    width: calc(53% - 3px);
+  }
+  .codelab-root.is-analysis-focus
+    .codelab-ablock-actions
+    > .codelab-ablock-btn:not(.is-run):not(.is-focus-toggle) {
+    display: none;
+  }
+  .codelab-focus-panel-head {
+    flex-wrap: wrap;
+    padding: 6px 8px;
+  }
+}
+
 .codelab-append-btn.is-primary {
   border-color: var(--term-accent);
   color: var(--term-accent);
