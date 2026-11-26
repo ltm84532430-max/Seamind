@@ -30,6 +30,7 @@ import {
 import '../ebook/book-galaxy-view.css';
 
 export interface LearningPathStarMapViewProps {
+  embedded?: boolean;
   detail: LearningPathDetail;
   layout: LearningPathLayoutResult;
   selectedNodeId: string | null;
@@ -63,6 +64,7 @@ function readPathVideoNotes(videoIds: string[]): Record<string, string> {
 }
 
 export default function LearningPathStarMapView({
+  embedded = false,
   detail,
   layout,
   selectedNodeId,
@@ -74,6 +76,7 @@ export default function LearningPathStarMapView({
   onDeleteNode,
 }: LearningPathStarMapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 920, height: 640 });
   const [pan, setPan] = useState({ x: 460, y: 320 });
   const [scale, setScale] = useState(0.68);
@@ -411,7 +414,7 @@ export default function LearningPathStarMapView({
   );
 
   useEffect(() => {
-    const el = containerRef.current;
+    const el = canvasRef.current;
     if (!el) return;
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
@@ -453,14 +456,12 @@ export default function LearningPathStarMapView({
 
   const clientToWorld = useCallback(
     (clientX: number, clientY: number) => {
-      const rect = containerRef.current?.getBoundingClientRect();
+      const rect = canvasRef.current?.getBoundingClientRect();
       const localX = clientX - (rect?.left ?? 0);
       const localY = clientY - (rect?.top ?? 0);
       return {
         x: (localX - pan.x) / scale,
         y: (localY - pan.y) / scale,
-        localX,
-        localY,
       };
     },
     [pan.x, pan.y, scale],
@@ -471,6 +472,7 @@ export default function LearningPathStarMapView({
     node: PathStarNode,
   ) => {
     e.stopPropagation();
+    setHoveredNode(null);
     const world = clientToWorld(e.clientX, e.clientY);
     dragInfoRef.current = {
       node,
@@ -489,9 +491,7 @@ export default function LearningPathStarMapView({
     }
 
     try {
-      containerRef.current
-        ?.querySelector('.book-galaxy-canvas')
-        ?.setPointerCapture(e.pointerId);
+      canvasRef.current?.setPointerCapture(e.pointerId);
     } catch {
       // ignore
     }
@@ -534,11 +534,6 @@ export default function LearningPathStarMapView({
         body.fy = world.y;
         reheatSimulation(0.32);
       }
-      setHoveredNode({
-        node: info.node,
-        clientX: world.localX,
-        clientY: world.localY,
-      });
       return;
     }
 
@@ -568,6 +563,7 @@ export default function LearningPathStarMapView({
       const clicked = info.node;
       dragInfoRef.current = null;
       setDraggingNodeId(null);
+      setHoveredNode(null);
       try {
         (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
       } catch {
@@ -604,13 +600,29 @@ export default function LearningPathStarMapView({
     }
   };
 
+  const handlePointerCancel = () => {
+    const info = dragInfoRef.current;
+    if (info) {
+      const body = physicsRef.current?.bodies.get(info.node.id);
+      if (body) {
+        body.fx = null;
+        body.fy = null;
+        reheatSimulation(0.22);
+      }
+      dragInfoRef.current = null;
+      setDraggingNodeId(null);
+      setHoveredNode(null);
+    }
+    setIsPanning(false);
+  };
+
   const handleWheel = (e: ReactWheelEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement).closest('.lp-star-video-card')) return;
     e.preventDefault();
     const zoomFactor = e.deltaY < 0 ? 1.12 : 0.89;
     const nextScale = Math.min(3.5, Math.max(0.18, scale * zoomFactor));
 
-    const rect = containerRef.current?.getBoundingClientRect();
+    const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) {
       setScale(nextScale);
       return;
@@ -786,7 +798,7 @@ export default function LearningPathStarMapView({
 
   return (
     <div
-      className={`book-galaxy-container lp-starmap-root${fullscreenFallback ? ' is-fullscreen-fallback' : ''}`}
+      className={`book-galaxy-container lp-starmap-root${embedded ? ' is-embedded' : ''}${fullscreenFallback ? ' is-fullscreen-fallback' : ''}`}
       ref={containerRef}
     >
       {/* Top Header Controls — Identical structure to Image 1 (BookGalaxyGraphView) */}
@@ -1046,12 +1058,14 @@ export default function LearningPathStarMapView({
 
       {/* SVG Canvas Viewport */}
       <div
+        ref={canvasRef}
         className={`book-galaxy-canvas ${isPanning ? 'is-panning' : ''} ${
           draggingNodeId ? 'is-dragging-node' : ''
         }`}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
         onWheel={handleWheel}
       >
         <svg
@@ -1306,7 +1320,7 @@ export default function LearningPathStarMapView({
                   }}
                   onMouseEnter={(e) => {
                     if (dragInfoRef.current) return;
-                    const rect = containerRef.current?.getBoundingClientRect();
+                    const rect = canvasRef.current?.getBoundingClientRect();
                     setHoveredNode({
                       node,
                       clientX: e.clientX - (rect?.left ?? 0),

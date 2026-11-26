@@ -9634,6 +9634,7 @@ function AppContent() {
           capabilities: agentCapabilities,
           books: librarySnapshot?.books ?? [],
           documents: librarySnapshot?.documents ?? [],
+          renderMarkdownPreview: renderDocumentPreview,
           activeDocument: effectiveActiveDoc
             ? {
                 title: effectiveActiveDoc.title,

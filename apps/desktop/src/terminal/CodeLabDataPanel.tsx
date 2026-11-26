@@ -1,6 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
-import { terminalApi, type DataDbConnectionInput } from './terminal-api';
+import {
+  terminalApi,
+  type DataDbConnectionInput,
+  type LocalPostgresInstance,
+} from './terminal-api';
 import {
   formatFileSizeCompact,
   sanitizeDataAlias,
@@ -99,6 +103,110 @@ export function CodeLabDataPanel({
   const [connUsername, setConnUsername] = useState('');
   const [connPassword, setConnPassword] = useState('');
   const [savingConn, setSavingConn] = useState(false);
+  const [connFormError, setConnFormError] = useState('');
+  const [localPgInstances, setLocalPgInstances] = useState<
+    LocalPostgresInstance[]
+  >([]);
+  const [discoveringPg, setDiscoveringPg] = useState(true);
+  const [pgDiscoveryError, setPgDiscoveryError] = useState('');
+  const [startingPgService, setStartingPgService] = useState<string | null>(
+    null,
+  );
+  const [showCreateDatabase, setShowCreateDatabase] = useState(false);
+  const [newDatabaseName, setNewDatabaseName] = useState('');
+  const [creatingDatabase, setCreatingDatabase] = useState(false);
+  const [createDatabaseMessage, setCreateDatabaseMessage] = useState('');
+  const [createForConnId, setCreateForConnId] = useState<string | null>(null);
+  const [savedNewDatabaseName, setSavedNewDatabaseName] = useState('');
+  const [creatingForConnId, setCreatingForConnId] = useState<string | null>(
+    null,
+  );
+  const [savedCreateStatus, setSavedCreateStatus] = useState<
+    Record<string, string>
+  >({});
+
+  useEffect(() => {
+    let active = true;
+    terminalApi
+      .discoverLocalPostgres()
+      .then((instances) => {
+        if (active) {
+          setLocalPgInstances(instances);
+          setDiscoveringPg(false);
+        }
+      })
+      .catch((err) => {
+        if (active) {
+          setPgDiscoveryError(err instanceof Error ? err.message : String(err));
+          setDiscoveringPg(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const refreshLocalPg = async () => {
+    setDiscoveringPg(true);
+    setPgDiscoveryError('');
+    try {
+      setLocalPgInstances(await terminalApi.discoverLocalPostgres());
+    } catch (err) {
+      setPgDiscoveryError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDiscoveringPg(false);
+    }
+  };
+
+  const selectLocalPg = async (instance: LocalPostgresInstance) => {
+    setPgDiscoveryError('');
+    let selected = instance;
+    if (instance.state.toLowerCase() !== 'running') {
+      setStartingPgService(instance.serviceName);
+      try {
+        selected = await terminalApi.startLocalPostgres({
+          serviceName: instance.serviceName,
+        });
+        setLocalPgInstances((items) =>
+          items.map((item) =>
+            item.serviceName === selected.serviceName ? selected : item,
+          ),
+        );
+      } catch (err) {
+        setPgDiscoveryError(err instanceof Error ? err.message : String(err));
+        return;
+      } finally {
+        setStartingPgService(null);
+      }
+    }
+    setDbType('postgres');
+    setConnName(selected.displayName || selected.serviceName);
+    setConnHost('127.0.0.1');
+    setConnPort(String(selected.port));
+    setConnDatabase('postgres');
+    setConnUsername('postgres');
+    setConnPassword('');
+    setConnFormError('');
+    setCreateDatabaseMessage('');
+    setShowConnForm(true);
+  };
+
+  const formConnectionInput = (
+    id: string,
+    databaseOverride?: string,
+  ): DataDbConnectionInput => ({
+    id,
+    name: connName.trim() || 'PostgreSQL',
+    dbType,
+    filePath:
+      dbType === 'sqlite' || dbType === 'duckdb' ? connFilePath.trim() : null,
+    host: dbType === 'sqlite' || dbType === 'duckdb' ? null : connHost.trim(),
+    port: dbType === 'sqlite' || dbType === 'duckdb' ? null : Number(connPort),
+    database: (databaseOverride ?? connDatabase.trim()) || null,
+    username: connUsername.trim() || null,
+    password: connPassword || null,
+    pythonPath: preferredPythonPath ?? null,
+  });
 
   const inspectAndMountPath = async (rawPath: string) => {
     const cleanPath = rawPath.trim().replace(/^["']|["']$/g, '');
@@ -274,13 +382,22 @@ export function CodeLabDataPanel({
   const handleSaveNewConnection = async () => {
     const isFileDb = dbType === 'sqlite' || dbType === 'duckdb';
     if (isFileDb && !connFilePath.trim()) {
-      onNotify?.('请指定数据库文件路径');
+      setConnFormError('请指定数据库文件路径');
       return;
     }
     if (!isFileDb && !connHost.trim()) {
-      onNotify?.('请输入数据库主机地址');
+      setConnFormError('请输入数据库主机地址');
       return;
     }
+    const parsedPort = Number(connPort);
+    if (
+      !isFileDb &&
+      (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535)
+    ) {
+      setConnFormError('端口必须是 1–65535 之间的整数。');
+      return;
+    }
+    setConnFormError('');
     setSavingConn(true);
     try {
       const id = `db-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
@@ -289,45 +406,21 @@ export function CodeLabDataPanel({
         (isFileDb
           ? connFilePath.split(/[\\/]/).pop() || dbType.toUpperCase()
           : `${dbType}://${connHost}/${connDatabase || 'default'}`);
-      const parsedPort = Number.parseInt(connPort, 10);
       const newConn: DataLabDbConnection = {
         id,
         name: displayName,
         dbType,
         filePath: isFileDb ? connFilePath.trim() : undefined,
         host: isFileDb ? undefined : connHost.trim(),
-        port: isFileDb
-          ? undefined
-          : Number.isFinite(parsedPort)
-            ? parsedPort
-            : dbType === 'mysql'
-              ? 3306
-              : 5432,
+        port: isFileDb ? undefined : parsedPort,
         database: isFileDb ? undefined : connDatabase.trim() || undefined,
         username: isFileDb ? undefined : connUsername.trim() || undefined,
         hasPassword: !isFileDb && Boolean(connPassword),
         pythonPath: preferredPythonPath ?? undefined,
       };
-      if (!isFileDb && connPassword) {
-        await terminalApi.saveDbPassword({
-          connectionId: id,
-          password: connPassword,
-        });
-      }
       const testRes = await terminalApi
         .testDbConnection({
-          connection: {
-            id: newConn.id,
-            name: newConn.name,
-            dbType: newConn.dbType,
-            filePath: newConn.filePath ?? null,
-            host: newConn.host ?? null,
-            port: newConn.port ?? null,
-            database: newConn.database ?? null,
-            username: newConn.username ?? null,
-            password: connPassword || null,
-            pythonPath: preferredPythonPath ?? null,
-          },
+          connection: { ...formConnectionInput(id), name: newConn.name },
         })
         .catch((err) => ({
           ok: false,
@@ -335,22 +428,140 @@ export function CodeLabDataPanel({
           tables: [],
           engine: dbType.toUpperCase(),
         }));
+      if (!testRes.ok) {
+        setConnFormError(testRes.message);
+        onNotify?.(testRes.message);
+        return;
+      }
+      if (!isFileDb && connPassword) {
+        await terminalApi.saveDbPassword({
+          connectionId: id,
+          password: connPassword,
+        });
+      }
 
       const savedConn: DataLabDbConnection = {
         ...newConn,
         tables: testRes.tables,
         lastTestedAt: Date.now(),
-        lastStatus: testRes.ok ? `已连接 · ${testRes.engine}` : testRes.message,
+        lastStatus: `已连接 · ${testRes.engine}`,
       };
       onUpdateConnections([savedConn, ...dbConnections]);
       setExpandedConnIds((prev) => ({ ...prev, [savedConn.id]: true }));
       setShowConnForm(false);
+      setShowCreateDatabase(false);
+      setCreateDatabaseMessage('');
       setConnName('');
       setConnFilePath('');
       setConnPassword('');
       onNotify?.(testRes.message);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setConnFormError(message);
+      onNotify?.(message);
     } finally {
       setSavingConn(false);
+    }
+  };
+
+  const handleCreatePostgresDatabase = async () => {
+    const name = newDatabaseName.trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(name)) {
+      setConnFormError(
+        '数据库名须以字母或下划线开头，只能包含字母、数字、下划线，最长 63 字符。',
+      );
+      return;
+    }
+    const port = Number(connPort);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      setConnFormError('端口必须是 1–65535 之间的整数。');
+      return;
+    }
+    setCreatingDatabase(true);
+    setConnFormError('');
+    setCreateDatabaseMessage('');
+    try {
+      const message = await terminalApi.createPostgresDatabase({
+        connection: formConnectionInput(`db-create-${Date.now()}`),
+        databaseName: name,
+      });
+      setConnDatabase(name);
+      setNewDatabaseName('');
+      setShowCreateDatabase(false);
+      setCreateDatabaseMessage(`${message} 请测试并保存连接。`);
+      onNotify?.(message);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setConnFormError(message);
+      onNotify?.(message);
+    } finally {
+      setCreatingDatabase(false);
+    }
+  };
+
+  const handleCreateForSavedConnection = async (conn: DataLabDbConnection) => {
+    const name = savedNewDatabaseName.trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(name)) {
+      setSavedCreateStatus((previous) => ({
+        ...previous,
+        [conn.id]:
+          '数据库名须以字母或下划线开头，只能包含字母、数字、下划线，最长 63 字符。',
+      }));
+      return;
+    }
+    setCreatingForConnId(conn.id);
+    setSavedCreateStatus((previous) => ({ ...previous, [conn.id]: '' }));
+    let created = false;
+    try {
+      const baseInput: DataDbConnectionInput = {
+        id: conn.id,
+        name: conn.name,
+        dbType: 'postgres',
+        host: conn.host ?? '127.0.0.1',
+        port: conn.port ?? 5432,
+        database: conn.database ?? 'postgres',
+        username: conn.username ?? 'postgres',
+        password: null,
+        pythonPath: conn.pythonPath ?? preferredPythonPath ?? null,
+      };
+      await terminalApi.createPostgresDatabase({
+        connection: baseInput,
+        databaseName: name,
+      });
+      created = true;
+      const tested = await terminalApi.testDbConnection({
+        connection: { ...baseInput, database: name },
+      });
+      if (!tested.ok) throw new Error(tested.message);
+      const newId = `db-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
+      const hasPassword = await terminalApi.copyDbPassword({
+        sourceConnectionId: conn.id,
+        targetConnectionId: newId,
+      });
+      const newConn: DataLabDbConnection = {
+        ...conn,
+        id: newId,
+        name: `${conn.name} / ${name}`,
+        database: name,
+        hasPassword,
+        tables: tested.tables,
+        lastTestedAt: Date.now(),
+        lastStatus: `已连接 · ${tested.engine}`,
+      };
+      onUpdateConnections([newConn, ...dbConnections]);
+      setExpandedConnIds((previous) => ({ ...previous, [newId]: true }));
+      setCreateForConnId(null);
+      setSavedNewDatabaseName('');
+      onNotify?.(`数据库 ${name} 已创建并连接。`);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      const message = created
+        ? `数据库 ${name} 已创建，但新连接未保存：${reason}`
+        : reason;
+      setSavedCreateStatus((previous) => ({ ...previous, [conn.id]: message }));
+      onNotify?.(message);
+    } finally {
+      setCreatingForConnId(null);
     }
   };
 
@@ -562,14 +773,84 @@ export function CodeLabDataPanel({
       <div className="datalab-section">
         <div className="datalab-section-head">
           <span>数据库连接 ({dbConnections.length})</span>
-          <button
-            type="button"
-            className="terminal-rail-mini-btn is-accent"
-            onClick={() => setShowConnForm((v) => !v)}
-          >
-            {showConnForm ? '取消' : '+ 新建连接'}
-          </button>
+          <div className="datalab-head-btns">
+            <button
+              type="button"
+              className="terminal-rail-mini-btn"
+              onClick={() => void refreshLocalPg()}
+              disabled={discoveringPg || Boolean(startingPgService)}
+            >
+              {discoveringPg ? '查找中…' : '查找本机 PG'}
+            </button>
+            <button
+              type="button"
+              className="terminal-rail-mini-btn is-accent"
+              onClick={() => {
+                if (showConnForm) {
+                  setConnPassword('');
+                  setConnFormError('');
+                  setShowCreateDatabase(false);
+                  setCreateDatabaseMessage('');
+                }
+                setShowConnForm((value) => !value);
+              }}
+            >
+              {showConnForm ? '取消' : '+ 新建连接'}
+            </button>
+          </div>
         </div>
+
+        {localPgInstances.length > 0 && (
+          <div className="datalab-local-pg-list">
+            {localPgInstances.map((instance) => {
+              const running = instance.state.toLowerCase() === 'running';
+              const stopped = instance.state.toLowerCase() === 'stopped';
+              return (
+                <div key={instance.serviceName} className="datalab-local-pg">
+                  <div className="datalab-local-pg-info">
+                    <strong>
+                      {instance.displayName || instance.serviceName}
+                    </strong>
+                    <span>
+                      127.0.0.1:{instance.port}
+                      {instance.portSource === 'default'
+                        ? ' · 默认端口，连接前可修改'
+                        : ''}
+                      {' · '}
+                      {running ? '运行中' : stopped ? '已停止' : instance.state}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="terminal-rail-mini-btn is-accent"
+                    disabled={
+                      Boolean(startingPgService) || (!running && !stopped)
+                    }
+                    onClick={() => void selectLocalPg(instance)}
+                  >
+                    {startingPgService === instance.serviceName
+                      ? '启动中…'
+                      : running
+                        ? '连接'
+                        : '启动并连接'}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {pgDiscoveryError && (
+          <div className="datalab-inline-error" role="alert">
+            {pgDiscoveryError}
+          </div>
+        )}
+        {!discoveringPg &&
+          localPgInstances.length === 0 &&
+          !pgDiscoveryError && (
+            <div className="terminal-rail-empty-hint">
+              未发现 Windows PostgreSQL 服务；可手动填写本机或远程连接。
+            </div>
+          )}
 
         {showConnForm && (
           <div className="datalab-conn-form">
@@ -583,6 +864,10 @@ export function CodeLabDataPanel({
                     onClick={() => {
                       setDbType(kind);
                       setConnPort(kind === 'mysql' ? '3306' : '5432');
+                      setConnFormError('');
+                      setShowCreateDatabase(false);
+                      setConnPassword('');
+                      setCreateDatabaseMessage('');
                     }}
                   >
                     {kind === 'postgres' ? 'PG' : kind.toUpperCase()}
@@ -658,10 +943,57 @@ export function CodeLabDataPanel({
                     className="terminal-rail-search"
                     value={connPassword}
                     onChange={(e) => setConnPassword(e.target.value)}
-                    placeholder="密码（加密存储）"
+                    placeholder="密码（Windows 凭据管理器）"
                   />
                 </div>
+                {dbType === 'postgres' && (
+                  <div className="datalab-create-db">
+                    <button
+                      type="button"
+                      className="terminal-rail-mini-btn"
+                      onClick={() => setShowCreateDatabase((value) => !value)}
+                    >
+                      {showCreateDatabase ? '收起创建数据库' : '+ 创建新数据库'}
+                    </button>
+                    {showCreateDatabase && (
+                      <div className="datalab-create-db-fields">
+                        <span>
+                          用上面的账户连接现有数据库，创建后切换到新数据库。
+                        </span>
+                        <input
+                          type="text"
+                          className="terminal-rail-search"
+                          value={newDatabaseName}
+                          onChange={(event) =>
+                            setNewDatabaseName(event.target.value)
+                          }
+                          placeholder="新数据库名，例如 research"
+                          aria-label="新 PostgreSQL 数据库名"
+                        />
+                        <button
+                          type="button"
+                          className="terminal-rail-mini-btn is-accent"
+                          disabled={creatingDatabase || savingConn}
+                          onClick={() => void handleCreatePostgresDatabase()}
+                        >
+                          {creatingDatabase ? '正在创建…' : '确认创建数据库'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </>
+            )}
+
+            {createDatabaseMessage && (
+              <div className="datalab-inline-success" role="status">
+                {createDatabaseMessage}
+              </div>
+            )}
+            {connFormError && (
+              <div className="datalab-inline-error" role="alert">
+                {connFormError}
+              </div>
             )}
 
             <button
@@ -744,6 +1076,24 @@ export function CodeLabDataPanel({
                     >
                       {testingConnId === conn.id ? '检测中…' : '刷新表'}
                     </button>
+                    {conn.dbType === 'postgres' && (
+                      <button
+                        type="button"
+                        className="terminal-rail-mini-btn"
+                        onClick={() => {
+                          setCreateForConnId((current) =>
+                            current === conn.id ? null : conn.id,
+                          );
+                          setSavedNewDatabaseName('');
+                          setSavedCreateStatus((previous) => ({
+                            ...previous,
+                            [conn.id]: '',
+                          }));
+                        }}
+                      >
+                        创建数据库
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="terminal-rail-mini-btn"
@@ -753,6 +1103,41 @@ export function CodeLabDataPanel({
                       ×
                     </button>
                   </div>
+
+                  {createForConnId === conn.id && (
+                    <div className="datalab-create-db-fields">
+                      <span>
+                        使用此连接的账户创建数据库，并自动添加新连接。
+                      </span>
+                      <input
+                        type="text"
+                        className="terminal-rail-search"
+                        value={savedNewDatabaseName}
+                        onChange={(event) =>
+                          setSavedNewDatabaseName(event.target.value)
+                        }
+                        placeholder="新数据库名，例如 research"
+                        aria-label="新 PostgreSQL 数据库名"
+                      />
+                      <button
+                        type="button"
+                        className="terminal-rail-mini-btn is-accent"
+                        disabled={creatingForConnId === conn.id}
+                        onClick={() =>
+                          void handleCreateForSavedConnection(conn)
+                        }
+                      >
+                        {creatingForConnId === conn.id
+                          ? '正在创建…'
+                          : '确认创建数据库'}
+                      </button>
+                    </div>
+                  )}
+                  {savedCreateStatus[conn.id] && (
+                    <div className="datalab-inline-error" role="alert">
+                      {savedCreateStatus[conn.id]}
+                    </div>
+                  )}
 
                   {expanded && (
                     <div className="datalab-schema-box">

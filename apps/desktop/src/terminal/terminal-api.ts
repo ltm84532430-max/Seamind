@@ -153,6 +153,14 @@ export interface DataDbTestResult {
   engine: string;
 }
 
+export interface LocalPostgresInstance {
+  serviceName: string;
+  displayName: string;
+  state: string;
+  port: number;
+  portSource: 'config' | 'default';
+}
+
 export interface DataMountedFileRef {
   alias: string;
   path: string;
@@ -287,6 +295,10 @@ export const terminalApi = {
     invoke<void>('r_kernel_close', args),
   saveDbPassword: (args: { connectionId: string; password: string }) =>
     invoke<void>('data_lab_save_db_password', args),
+  copyDbPassword: (args: {
+    sourceConnectionId: string;
+    targetConnectionId: string;
+  }) => invoke<boolean>('data_lab_copy_db_password', args),
   deleteDbPassword: (args: { connectionId: string }) =>
     invoke<void>('data_lab_delete_db_password', args),
   inspectDataFile: (args: {
@@ -301,6 +313,14 @@ export const terminalApi = {
     }),
   testDbConnection: (args: { connection: DataDbConnectionInput }) =>
     invoke<DataDbTestResult>('data_lab_test_connection', args),
+  discoverLocalPostgres: () =>
+    invoke<LocalPostgresInstance[]>('data_lab_discover_local_postgres'),
+  startLocalPostgres: (args: { serviceName: string }) =>
+    invoke<LocalPostgresInstance>('data_lab_start_local_postgres', args),
+  createPostgresDatabase: (args: {
+    connection: DataDbConnectionInput;
+    databaseName: string;
+  }) => invoke<string>('data_lab_create_postgres_database', args),
   querySql: (args: {
     sql: string;
     connection?: DataDbConnectionInput | null;

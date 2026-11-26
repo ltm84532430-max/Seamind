@@ -94,6 +94,10 @@ export interface TerminalWorkspaceBridge {
   onNavigateWorkspace?: (workspace: ActiveWorkspace) => void;
   onOpenBook?: (book: EpubBookDocument) => void;
   onOpenDocument?: (doc: MapDocument) => void;
+  renderMarkdownPreview?: (markdown: string) => {
+    html: string;
+    source: string;
+  };
   onSaveMarkdownNote?: (args: {
     title: string;
     category?: string;

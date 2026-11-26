@@ -18,6 +18,8 @@ import type {
 } from '../workbench/python.worker';
 import { CellOutputList, CodeLabCellRow } from './CodeLabCellRow';
 import { CodeLabDataPanel } from './CodeLabDataPanel';
+import { CodeLabKnowledgePanel } from './CodeLabKnowledgePanel';
+import { CodeLabLearningPlayer } from './CodeLabLearningPlayer';
 import {
   LabCellsIcon,
   LabCheckIcon,
@@ -425,8 +427,12 @@ export const TerminalCodeLabView = forwardRef<
   >({});
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [focusedGroupId, setFocusedGroupId] = useState<string | null>(null);
-  const [focusTopTab, setFocusTopTab] = useState<'agent' | 'data'>('agent');
+  const [focusTopTab, setFocusTopTab] = useState<
+    'agent' | 'data' | 'player' | 'knowledge'
+  >('agent');
   const [focusAgentMounted, setFocusAgentMounted] = useState(false);
+  const [focusPlayerMounted, setFocusPlayerMounted] = useState(false);
+  const [focusKnowledgeMounted, setFocusKnowledgeMounted] = useState(false);
   const [focusLeftRatio, setFocusLeftRatio] = useState(60);
   const [focusTopRatio, setFocusTopRatio] = useState(48);
   const focusReturnScrollRef = useRef(0);
@@ -457,16 +463,34 @@ export const TerminalCodeLabView = forwardRef<
     () => preferredRRuntime || loadDataLabBaseProfile().rscriptPath || '',
   );
   const [localKernelId, setLocalKernelId] = useState<string | null>(null);
+  const [localKernelStarting, setLocalKernelStarting] = useState(false);
+  const [localKernelStartError, setLocalKernelStartError] = useState('');
   const [rKernelId, setRKernelId] = useState<string | null>(null);
   const [variables, setVariables] = useState<PythonWorkerVarSummary[]>([]);
+  const lastPreferredPyRuntimeRef = useRef(preferredPythonRuntime);
   const rKernelIdRef = useRef<string | null>(null);
   rKernelIdRef.current = rKernelId;
 
   useEffect(() => {
     if (
-      preferredPythonRuntime &&
-      preferredPythonRuntime !== selectedPyRuntime
-    ) {
+      !preferredPythonRuntime ||
+      preferredPythonRuntime === lastPreferredPyRuntimeRef.current
+    )
+      return;
+    lastPreferredPyRuntimeRef.current = preferredPythonRuntime;
+    if (preferredPythonRuntime !== selectedPyRuntime) {
+      localKernelGenerationRef.current += 1;
+      localKernelStartRef.current = null;
+      setLocalKernelStarting(false);
+      setLocalKernelStartError('');
+      const oldId = localKernelIdRef.current;
+      localKernelIdRef.current = null;
+      setLocalKernelId(null);
+      if (oldId) {
+        void terminalApi
+          .closePythonKernel({ kernelId: oldId })
+          .catch(() => undefined);
+      }
       setSelectedPyRuntime(preferredPythonRuntime);
     }
   }, [preferredPythonRuntime, selectedPyRuntime]);
@@ -523,6 +547,8 @@ export const TerminalCodeLabView = forwardRef<
   >(new Map());
   const localKernelIdRef = useRef<string | null>(null);
   localKernelIdRef.current = localKernelId;
+  const localKernelStartRef = useRef<Promise<string> | null>(null);
+  const localKernelGenerationRef = useRef(0);
   const cellsRef = useRef(cells);
   cellsRef.current = cells;
   const liveSourceMapRef = useRef<Map<string, string>>(
@@ -1029,6 +1055,7 @@ export const TerminalCodeLabView = forwardRef<
   useEffect(() => {
     const pending = workerPendingRef.current;
     return () => {
+      localKernelGenerationRef.current += 1;
       if (pyodideWorkerRef.current) {
         pyodideWorkerRef.current.terminate();
         pyodideWorkerRef.current = null;
@@ -1129,49 +1156,92 @@ export const TerminalCodeLabView = forwardRef<
     showTempNotice('已中断当前执行并重置沙盒 Worker');
   }, [onStatusChange, showTempNotice]);
 
-  const ensureLocalPythonKernel = useCallback(async (): Promise<string> => {
-    if (localKernelIdRef.current) return localKernelIdRef.current;
-    const baseProf = loadDataLabBaseProfile();
-    await terminalApi
-      .syncDataBusContext({
+  const ensureLocalPythonKernel = useCallback((): Promise<string> => {
+    if (localKernelIdRef.current)
+      return Promise.resolve(localKernelIdRef.current);
+    if (localKernelStartRef.current) return localKernelStartRef.current;
+    const generation = localKernelGenerationRef.current;
+    setLocalKernelStarting(true);
+    setLocalKernelStartError('');
+    const task = (async () => {
+      const baseProf = loadDataLabBaseProfile();
+      await terminalApi
+        .syncDataBusContext({
+          sessionId: 'default',
+          mountedFiles: effectiveMountedFiles.map((f) => ({
+            alias: f.alias,
+            path: f.path,
+            format: f.format,
+          })),
+          dbConnections: effectiveDbConnections.map((c) => ({
+            id: c.id,
+            name: c.name,
+            dbType: c.dbType,
+            filePath: c.filePath ?? null,
+            host: c.host ?? null,
+            port: c.port ?? null,
+            database: c.database ?? null,
+            username: c.username ?? null,
+          })),
+          defaultPythonPath:
+            baseProf.pythonPath && baseProf.pythonPath !== 'pyodide'
+              ? baseProf.pythonPath
+              : null,
+          defaultRscriptPath: baseProf.rscriptPath || null,
+          defaultConnectionId: baseProf.defaultConnectionId || null,
+        })
+        .catch(() => undefined);
+      const kernelId = await terminalApi.startPythonKernel({
+        pythonPath: selectedPyRuntime,
+        cwd: tab.cwd || null,
         sessionId: 'default',
-        mountedFiles: effectiveMountedFiles.map((f) => ({
-          alias: f.alias,
-          path: f.path,
-          format: f.format,
-        })),
-        dbConnections: effectiveDbConnections.map((c) => ({
-          id: c.id,
-          name: c.name,
-          dbType: c.dbType,
-          filePath: c.filePath ?? null,
-          host: c.host ?? null,
-          port: c.port ?? null,
-          database: c.database ?? null,
-          username: c.username ?? null,
-        })),
-        defaultPythonPath:
-          baseProf.pythonPath && baseProf.pythonPath !== 'pyodide'
-            ? baseProf.pythonPath
-            : null,
-        defaultRscriptPath: baseProf.rscriptPath || null,
-        defaultConnectionId: baseProf.defaultConnectionId || null,
-      })
-      .catch(() => undefined);
-    const kernelId = await terminalApi.startPythonKernel({
-      pythonPath: selectedPyRuntime === 'pyodide' ? null : selectedPyRuntime,
-      cwd: tab.cwd || null,
-      sessionId: 'default',
-    });
-    localKernelIdRef.current = kernelId;
-    setLocalKernelId(kernelId);
-    return kernelId;
+      });
+      if (generation !== localKernelGenerationRef.current) {
+        await terminalApi
+          .closePythonKernel({ kernelId })
+          .catch(() => undefined);
+        throw new Error('Python 环境已切换，旧内核已关闭。');
+      }
+      localKernelIdRef.current = kernelId;
+      setLocalKernelId(kernelId);
+      return kernelId;
+    })();
+    localKernelStartRef.current = task;
+    void task
+      .then(
+        () => {
+          if (generation === localKernelGenerationRef.current)
+            setLocalKernelStarting(false);
+        },
+        (error: unknown) => {
+          if (generation === localKernelGenerationRef.current) {
+            setLocalKernelStarting(false);
+            setLocalKernelStartError(
+              error instanceof Error ? error.message : String(error),
+            );
+          }
+        },
+      )
+      .finally(() => {
+        if (localKernelStartRef.current === task)
+          localKernelStartRef.current = null;
+      });
+    return task;
   }, [
     effectiveDbConnections,
     effectiveMountedFiles,
     selectedPyRuntime,
     tab.cwd,
   ]);
+
+  useEffect(() => {
+    if (!active || language !== 'python' || selectedPyRuntime === 'pyodide')
+      return;
+    const timer = window.setTimeout(() => {
+      void ensureLocalPythonKernel().catch(() => undefined);
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [active, ensureLocalPythonKernel, language, selectedPyRuntime]);
 
   const ensureRKernel = useCallback(async (): Promise<string> => {
     if (rKernelIdRef.current) return rKernelIdRef.current;
@@ -1321,7 +1391,29 @@ export const TerminalCodeLabView = forwardRef<
         vars = res.variables ?? [];
       } else {
         const kernelId = await ensureLocalPythonKernel();
-        const res = await terminalApi.evalPythonKernel({ kernelId, code });
+        const res = await terminalApi
+          .evalPythonKernel({ kernelId, code })
+          .catch((error: unknown) => {
+            const message =
+              error instanceof Error ? error.message : String(error);
+            if (
+              /写入 Python 内核失败|刷新 Python 内核输入失败|Python 内核已意外终止|读取 Python 内核响应失败|Python 执行超过 .*已终止/.test(
+                message,
+              )
+            ) {
+              if (localKernelIdRef.current === kernelId) {
+                localKernelIdRef.current = null;
+                setLocalKernelId(null);
+              }
+              void terminalApi
+                .closePythonKernel({ kernelId })
+                .catch(() => undefined);
+              throw new Error(
+                `Python 内核进程已退出，失效会话已清理；重新运行将启动所选环境。${message}`,
+              );
+            }
+            throw error;
+          });
         if (res.stdout.trim()) {
           outputs.push({ kind: 'stream', name: 'stdout', text: res.stdout });
         }
@@ -1877,6 +1969,8 @@ export const TerminalCodeLabView = forwardRef<
         await terminalApi.resetPythonKernel({
           kernelId: localKernelIdRef.current,
         });
+      } else {
+        await ensureLocalPythonKernel();
       }
       setVariables([]);
       setVariablePreview(null);
@@ -1884,7 +1978,12 @@ export const TerminalCodeLabView = forwardRef<
     } catch (err) {
       showTempNotice(err instanceof Error ? err.message : '内核重置失败');
     }
-  }, [runWorkerRequest, selectedPyRuntime, showTempNotice]);
+  }, [
+    ensureLocalPythonKernel,
+    runWorkerRequest,
+    selectedPyRuntime,
+    showTempNotice,
+  ]);
 
   const handleInspectVariable = useCallback(
     async (name: string) => {
@@ -1953,6 +2052,10 @@ export const TerminalCodeLabView = forwardRef<
   const handleSwitchPythonRuntime = useCallback(
     async (nextRuntime: string) => {
       if (nextRuntime === selectedPyRuntime) return;
+      localKernelGenerationRef.current += 1;
+      localKernelStartRef.current = null;
+      setLocalKernelStarting(false);
+      setLocalKernelStartError('');
       if (localKernelIdRef.current) {
         const oldId = localKernelIdRef.current;
         localKernelIdRef.current = null;
@@ -1967,7 +2070,7 @@ export const TerminalCodeLabView = forwardRef<
       showTempNotice(
         nextRuntime === 'pyodide'
           ? '已切换至 Pyodide WebAssembly 沙盒内核'
-          : '已切换本地 Python 环境（下次运行自动拉起）',
+          : '已切换本地 Python 环境，正在自动启动内核',
       );
     },
     [onSelectPythonRuntime, selectedPyRuntime, showTempNotice],
@@ -3475,7 +3578,14 @@ export const TerminalCodeLabView = forwardRef<
       label:
         activeEnvObj?.label ||
         (pyEnvShort ? `${pyEnvShort} (自动激活)` : 'Local Python'),
-      tone: isAnyRunning ? 'busy' : localKernelId ? 'ready' : 'idle',
+      tone:
+        isAnyRunning || localKernelStarting
+          ? 'busy'
+          : localKernelStartError
+            ? 'warn'
+            : localKernelId
+              ? 'ready'
+              : 'idle',
     };
   }, [
     activeEnvObj?.label,
@@ -3485,11 +3595,32 @@ export const TerminalCodeLabView = forwardRef<
     isAnyRunning,
     language,
     localKernelId,
+    localKernelStarting,
+    localKernelStartError,
     pythonEnvs,
     rKernelId,
     selectedPyRuntime,
     selectedRRuntime,
   ]);
+
+  const isLocalPythonRuntime =
+    language === 'python' && selectedPyRuntime !== 'pyodide';
+  const kernelStateLabel =
+    isLocalPythonRuntime && localKernelStarting
+      ? '启动中'
+      : isLocalPythonRuntime && localKernelStartError
+        ? '启动失败'
+        : kernelSummary.tone === 'busy'
+          ? '运行中'
+          : kernelSummary.tone === 'warn'
+            ? '不可用'
+            : kernelSummary.tone === 'idle'
+              ? '未启动'
+              : '就绪';
+  const kernelStatusTitle =
+    isLocalPythonRuntime && localKernelStartError
+      ? `Python 内核启动失败：${localKernelStartError}`
+      : `切换语言与计算内核环境 · ${kernelStateLabel}`;
 
   const supportsVarsDrawer = language === 'python' || language === 'r';
   const bottomDrawerOpen = replOpen || (showVars && supportsVarsDrawer);
@@ -3851,7 +3982,7 @@ export const TerminalCodeLabView = forwardRef<
               onClick={() => setShowKernelMenu((v) => !v)}
               aria-expanded={showKernelMenu}
               aria-haspopup="menu"
-              title={`切换语言与计算内核环境 · ${kernelSummary.tone === 'busy' ? '运行中' : kernelSummary.tone === 'warn' ? '不可用' : kernelSummary.tone === 'idle' ? '未启动' : '就绪'}`}
+              title={kernelStatusTitle}
               aria-label={`${kernelSummary.tag} ${kernelSummary.label}，切换内核`}
             >
               <span
@@ -3860,14 +3991,8 @@ export const TerminalCodeLabView = forwardRef<
               />
               <span className="codelab-kernel-lang">{kernelSummary.tag}</span>
               <span className="codelab-kernel-name">{kernelSummary.label}</span>
-              <span className="codelab-kernel-state">
-                {kernelSummary.tone === 'busy'
-                  ? '运行中'
-                  : kernelSummary.tone === 'warn'
-                    ? '不可用'
-                    : kernelSummary.tone === 'idle'
-                      ? '未启动'
-                      : '就绪'}
+              <span className="codelab-kernel-state" aria-live="polite">
+                {kernelStateLabel}
               </span>
               <LabChevronDownIcon size={10} />
             </button>
@@ -3906,6 +4031,12 @@ export const TerminalCodeLabView = forwardRef<
                     <div className="codelab-popover-head">
                       Anaconda / Python 运行时内核
                     </div>
+                    {isLocalPythonRuntime && localKernelStartError && (
+                      <div className="codelab-kernel-info-row" role="alert">
+                        <span className="codelab-kernel-dot is-warn" />
+                        <span>{localKernelStartError}</span>
+                      </div>
+                    )}
                     <button
                       type="button"
                       role="menuitemradio"
@@ -3969,7 +4100,11 @@ export const TerminalCodeLabView = forwardRef<
                       }}
                     >
                       <LabResetIcon size={12} />
-                      <span>重置 Python 内核变量空间</span>
+                      <span>
+                        {isLocalPythonRuntime && localKernelStartError
+                          ? '重试启动 Python 内核'
+                          : '重置 Python 内核变量空间'}
+                      </span>
                     </button>
                   </>
                 ) : language === 'r' ? (
@@ -4958,6 +5093,30 @@ export const TerminalCodeLabView = forwardRef<
                         effectiveDbConnections.length}
                     </span>
                   </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={focusTopTab === 'player'}
+                    className={focusTopTab === 'player' ? 'is-active' : ''}
+                    onClick={() => {
+                      setFocusPlayerMounted(true);
+                      setFocusTopTab('player');
+                    }}
+                  >
+                    播放器
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={focusTopTab === 'knowledge'}
+                    className={focusTopTab === 'knowledge' ? 'is-active' : ''}
+                    onClick={() => {
+                      setFocusKnowledgeMounted(true);
+                      setFocusTopTab('knowledge');
+                    }}
+                  >
+                    知识库
+                  </button>
                 </div>
                 <div className="codelab-focus-top-content">
                   <div
@@ -5004,6 +5163,42 @@ export const TerminalCodeLabView = forwardRef<
                         }}
                         onInsertCell={handleInsertFocusedDataCell}
                         onNotify={showTempNotice}
+                      />
+                    </div>
+                  )}
+                  {focusPlayerMounted && (
+                    <div
+                      className={`codelab-focus-player${focusTopTab === 'player' ? ' is-active' : ''}`}
+                      role="tabpanel"
+                      aria-label="学习路径播放器"
+                    >
+                      <CodeLabLearningPlayer
+                        active={Boolean(
+                          active && focusedGroupId && focusTopTab === 'player',
+                        )}
+                      />
+                    </div>
+                  )}
+                  {focusKnowledgeMounted && (
+                    <div
+                      className={`codelab-focus-knowledge${focusTopTab === 'knowledge' ? ' is-active' : ''}`}
+                      role="tabpanel"
+                      aria-label="知识库笔记"
+                    >
+                      <CodeLabKnowledgePanel
+                        active={Boolean(
+                          active &&
+                          focusedGroupId &&
+                          focusTopTab === 'knowledge',
+                        )}
+                        theme={theme}
+                        activeDocumentPath={
+                          bridge?.activeDocument?.kind === 'doc'
+                            ? bridge.activeDocument.relativePath
+                            : null
+                        }
+                        renderMarkdownPreview={bridge?.renderMarkdownPreview}
+                        onOpenDocument={bridge?.onOpenDocument}
                       />
                     </div>
                   )}
