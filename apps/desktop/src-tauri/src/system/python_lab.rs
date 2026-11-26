@@ -1255,7 +1255,9 @@ async fn spawn_kernel_process(
     })?;
     let exe_display = exe_path.to_string_lossy().to_string();
     let mut cmd = Command::new(&exe_path);
-    cmd.args(["-u", "-c", EMBEDDED_KERNEL_DRIVER]);
+    // Windows' locale codec can fail while reading UTF-8 .pth files before our
+    // driver starts. PYTHONIOENCODING only covers stdio, so enable UTF-8 mode.
+    cmd.args(["-X", "utf8", "-u", "-c", EMBEDDED_KERNEL_DRIVER]);
     apply_python_env_activation(&mut cmd, &exe_path);
     if let Some(dir) = cwd.map(str::trim).filter(|s| !s.is_empty()) {
         let p = PathBuf::from(dir.trim_start_matches("\\\\?\\"));
@@ -1393,6 +1395,38 @@ async fn send_kernel_request(
     })
 }
 
+async fn spawn_verified_kernel_process(
+    python_path: &str,
+    cwd: Option<&str>,
+    session_id: Option<&str>,
+) -> Result<KernelProcess, String> {
+    let proc = spawn_kernel_process(python_path, cwd, session_id).await?;
+    let shared = Arc::new(tokio::sync::Mutex::new(proc));
+    // A successful spawn does not mean Python survived site initialization.
+    let ready = send_kernel_request(
+        &shared,
+        serde_json::json!({ "id": Uuid::new_v4().to_string(), "op": "vars" }),
+    )
+    .await;
+    match ready {
+        Ok(response) if response.ok => {}
+        other => {
+            let mut guard = shared.lock().await;
+            kill_process_tree(guard.pid, &mut guard.child);
+            let cause = match other {
+                Ok(response) => response
+                    .error
+                    .unwrap_or_else(|| "内核未返回就绪确认。".to_string()),
+                Err(error) => error,
+            };
+            return Err(format!("Python 内核启动校验失败：{cause}"));
+        }
+    }
+    Arc::try_unwrap(shared)
+        .map_err(|_| "无法取得已校验的 Python 内核。".to_string())
+        .map(tokio::sync::Mutex::into_inner)
+}
+
 #[tauri::command]
 pub async fn python_kernel_start(
     state: State<'_, PythonKernelState>,
@@ -1409,10 +1443,12 @@ pub async fn python_kernel_start(
             .ok_or_else(|| "未检测到本地 Python / Conda 环境，可直接使用 Pyodide 沙盒。".to_string())?,
     };
 
-    let kernel_id = format!("pyk-{}", Uuid::new_v4());
-    let proc = spawn_kernel_process(&resolved_path, cwd.as_deref(), session_id.as_deref()).await?;
+    let proc =
+        spawn_verified_kernel_process(&resolved_path, cwd.as_deref(), session_id.as_deref()).await?;
     let pid = proc.pid;
     let shared = Arc::new(tokio::sync::Mutex::new(proc));
+
+    let kernel_id = format!("pyk-{}", Uuid::new_v4());
 
     state
         .0
@@ -1458,7 +1494,7 @@ pub async fn python_kernel_reset(
     let kernel = get_kernel(&state, &kernel_id)?;
     let req_id = Uuid::new_v4().to_string();
     let res = send_kernel_request(&kernel, serde_json::json!({ "id": req_id, "op": "reset" })).await;
-    if res.is_ok() {
+    if res.as_ref().is_ok_and(|response| response.ok) {
         return res;
     }
     // If the kernel died after timeout, transparently respawn a fresh process.
@@ -1471,7 +1507,8 @@ pub async fn python_kernel_reset(
             guard.session_id.clone(),
         )
     };
-    let fresh = spawn_kernel_process(&python_path, cwd.as_deref(), session_id.as_deref()).await?;
+    let fresh =
+        spawn_verified_kernel_process(&python_path, cwd.as_deref(), session_id.as_deref()).await?;
     {
         let mut guard = kernel.lock().await;
         *guard = fresh;
@@ -1559,5 +1596,34 @@ mod tests {
         assert_eq!(resolved, py_exe);
         assert_eq!(infer_python_env_root(&resolved), dir);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn selected_python_kernel_completes_protocol_handshake() {
+        let Ok(python_path) = std::env::var("SEAMIND_TEST_PYTHON") else {
+            return;
+        };
+        let proc = spawn_verified_kernel_process(&python_path, None, None)
+            .await
+            .expect("selected Python should start");
+        let shared = Arc::new(tokio::sync::Mutex::new(proc));
+        let ready = send_kernel_request(
+            &shared,
+            serde_json::json!({ "id": "ready", "op": "vars" }),
+        )
+        .await;
+        let execution = send_kernel_request(
+            &shared,
+            serde_json::json!({ "id": "exec", "op": "exec", "code": "print('seamind-kernel-ready')" }),
+        )
+        .await;
+        {
+            let mut guard = shared.lock().await;
+            kill_process_tree(guard.pid, &mut guard.child);
+        }
+        assert!(ready.expect("handshake should respond").ok);
+        let output = execution.expect("execution should respond");
+        assert!(output.ok);
+        assert!(output.stdout.contains("seamind-kernel-ready"));
     }
 }

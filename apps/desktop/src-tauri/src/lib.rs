@@ -83,6 +83,8 @@ mod learning_tasks;
 mod c_runner;
 #[path = "system/data_lab.rs"]
 mod data_lab;
+#[path = "system/postgres_service.rs"]
+mod postgres_service;
 #[path = "system/installer_components.rs"]
 mod installer_components;
 #[path = "system/python_lab.rs"]
@@ -219,10 +221,14 @@ pub fn run() {
             r_lab::r_kernel_vars,
             r_lab::r_kernel_close,
             data_lab::data_lab_save_db_password,
+            data_lab::data_lab_copy_db_password,
             data_lab::data_lab_delete_db_password,
             data_lab::data_lab_inspect_file,
             data_lab::data_lab_test_connection,
+            data_lab::data_lab_create_postgres_database,
             data_lab::data_lab_query_sql,
+            postgres_service::data_lab_discover_local_postgres,
+            postgres_service::data_lab_start_local_postgres,
             data_lab::data_lab_bus_info,
             data_lab::data_lab_sync_context,
             cli_agent::cli_agent_detect,

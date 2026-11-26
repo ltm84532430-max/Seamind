@@ -278,13 +278,6 @@ pub fn data_lab_save_db_password(connection_id: String, password: String) -> Res
     if id.is_empty() {
         return Err("连接 ID 不能为空。".to_string());
     }
-    if let Ok(mut map) = memory_secrets().lock() {
-        if password.is_empty() {
-            map.remove(id);
-        } else {
-            map.insert(id.to_string(), password.clone());
-        }
-    }
     #[cfg(windows)]
     {
         let entry = db_secret_entry(id)?;
@@ -294,6 +287,13 @@ pub fn data_lab_save_db_password(connection_id: String, password: String) -> Res
             entry
                 .set_password(&password)
                 .map_err(|e| format!("保存数据库密码到系统凭据库失败：{e}"))?;
+        }
+    }
+    if let Ok(mut map) = memory_secrets().lock() {
+        if password.is_empty() {
+            map.remove(id);
+        } else {
+            map.insert(id.to_string(), password);
         }
     }
     Ok(())
@@ -323,7 +323,11 @@ fn resolve_db_password(conn: &DataDbConnectionInput) -> Option<String> {
             return Some(pwd.to_string());
         }
     }
-    let id = conn.id.trim();
+    resolve_saved_db_password(&conn.id)
+}
+
+fn resolve_saved_db_password(connection_id: &str) -> Option<String> {
+    let id = connection_id.trim();
     if id.is_empty() {
         return None;
     }
@@ -343,6 +347,22 @@ fn resolve_db_password(conn: &DataDbConnectionInput) -> Option<String> {
         }
     }
     None
+}
+
+#[tauri::command]
+pub fn data_lab_copy_db_password(
+    source_connection_id: String,
+    target_connection_id: String,
+) -> Result<bool, String> {
+    let target = target_connection_id.trim();
+    if target.is_empty() || target == source_connection_id.trim() {
+        return Err("目标连接 ID 无效。".to_string());
+    }
+    let Some(password) = resolve_saved_db_password(&source_connection_id) else {
+        return Ok(false);
+    };
+    data_lab_save_db_password(target.to_string(), password)?;
+    Ok(true)
 }
 
 fn detect_file_format(path: &Path) -> String {
@@ -1406,6 +1426,22 @@ def _open_mysql(conn_cfg):
         pass
     raise RuntimeError('未检测到 MySQL 驱动。请在所选 Anaconda 环境中执行：pip install pymysql (或 pip install mysql-connector-python)')
 
+def _create_pg_database(req):
+    conn_cfg = req['connection']
+    database_name = req['databaseName']
+    c, engine = _open_pg(conn_cfg)
+    try:
+        # CREATE DATABASE cannot run inside a PostgreSQL transaction.
+        c.autocommit = True
+        cur = c.cursor()
+        try:
+            cur.execute('CREATE DATABASE "' + database_name + '"')
+        finally:
+            cur.close()
+    finally:
+        c.close()
+    return {'ok': True, 'message': f'数据库 {database_name} 已创建。', 'engine': engine}
+
 def _test_db(req):
     conn_cfg = req['connection']
     db_type = (conn_cfg.get('dbType') or '').lower()
@@ -1655,6 +1691,8 @@ def main():
             out = _inspect_file(req)
         elif op == 'test_db':
             out = _test_db(req)
+        elif op == 'create_pg_database':
+            out = _create_pg_database(req)
         elif op == 'query_sql':
             out = _query_sql(req)
         else:
@@ -1863,6 +1901,69 @@ pub async fn data_lab_test_connection(
         tables,
         engine,
     })
+}
+
+#[tauri::command]
+pub async fn data_lab_create_postgres_database(
+    connection: DataDbConnectionInput,
+    database_name: String,
+) -> Result<String, String> {
+    if !connection.db_type.eq_ignore_ascii_case("postgres") {
+        return Err("仅支持创建 PostgreSQL 数据库。".to_string());
+    }
+    let name = database_name.trim();
+    if !valid_postgres_database_name(name) {
+        return Err("数据库名必须以字母或下划线开头，且只包含字母、数字、下划线，最长 63 字符。".to_string());
+    }
+    let Some((py_exe, _)) = pick_best_python(connection.python_path.as_deref(), false) else {
+        return Err("未检测到可用的本地 Python / Anaconda 环境。".to_string());
+    };
+    let mut conn_payload = connection.clone();
+    conn_payload.password = resolve_db_password(&connection);
+    let resp = run_python_data_helper(
+        &py_exe,
+        serde_json::json!({
+            "op": "create_pg_database",
+            "connection": conn_payload,
+            "databaseName": name,
+        }),
+    )
+    .await?;
+    let message = resp
+        .get("message")
+        .or_else(|| resp.get("error"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("创建 PostgreSQL 数据库失败。")
+        .to_string();
+    if resp.get("ok").and_then(|value| value.as_bool()) == Some(true) {
+        Ok(message)
+    } else {
+        Err(message)
+    }
+}
+
+fn valid_postgres_database_name(name: &str) -> bool {
+    name.len() <= 63
+        && !name.is_empty()
+        && name
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+#[cfg(test)]
+mod postgres_database_name_tests {
+    use super::valid_postgres_database_name;
+
+    #[test]
+    fn accepts_identifiers_and_rejects_sql_fragments() {
+        assert!(valid_postgres_database_name("research_2026"));
+        assert!(!valid_postgres_database_name(""));
+        assert!(!valid_postgres_database_name("2026_research"));
+        assert!(!valid_postgres_database_name("research\"; DROP DATABASE postgres; --"));
+        assert!(!valid_postgres_database_name(&"a".repeat(64)));
+    }
 }
 
 #[tauri::command]
