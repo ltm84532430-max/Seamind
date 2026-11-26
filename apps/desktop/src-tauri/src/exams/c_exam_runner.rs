@@ -321,7 +321,19 @@ mod tests {
         }
         let source = "#include <stdio.h>\nint main(void){int x; if(scanf(\"%d\",&x)!=1)return 1; printf(\"%d\\n\",x*x);return 0;}";
         let public = evaluate_c(source, &cases(), false).await.unwrap();
-        assert_eq!((public.passed, public.total), (1, 1));
+        let outcomes = public
+            .cases
+            .iter()
+            .map(|case| (case.passed, &case.stdout, &case.stderr))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            (public.passed, public.total),
+            (1, 1),
+            "compiler={:?}, stage={}, error={:?}, outcomes={outcomes:?}",
+            crate::c_runner::find_c_compiler(),
+            public.stage,
+            public.error
+        );
         let all = evaluate_c(source, &cases(), true).await.unwrap();
         assert_eq!((all.passed, all.total), (2, 2));
         assert!(all.cases[1].expected_stdout.is_none());

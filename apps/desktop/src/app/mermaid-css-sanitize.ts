@@ -115,7 +115,7 @@ export function sanitizeScopedMermaidCss(
           return (
             (next !== undefined && !/[\s.:>[#]/.test(next)) ||
             /[+~@{};\\]/.test(selector) ||
-            !/^[\w\s#.,:>\]="'()*/-]+$/.test(selector)
+            !/^[\w\s#.,:>[\]="'()*/-]+$/.test(selector)
           );
         })
       ) {

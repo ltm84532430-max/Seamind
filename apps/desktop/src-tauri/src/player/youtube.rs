@@ -2441,9 +2441,10 @@ mod tests {
 
     #[cfg(windows)]
     fn sleeping_grandchild_script(pid_file: &std::path::Path) -> String {
+        let pid_file = pid_file.to_string_lossy().replace('\'', "''");
         format!(
-            "$p = Start-Process -FilePath ping -ArgumentList '-n','120','127.0.0.1' -WindowStyle Hidden -PassThru; Set-Content -Path '{}' -Value $p.Id; Start-Sleep 120",
-            pid_file.display()
+            "$ping = Join-Path $env:SystemRoot 'System32\\PING.EXE'; $p = Start-Process -FilePath $ping -ArgumentList @('-n','120','127.0.0.1') -WindowStyle Hidden -PassThru -ErrorAction Stop; [System.IO.File]::WriteAllText('{}', [string]$p.Id); Start-Sleep -Seconds 120",
+            pid_file
         )
     }
 
