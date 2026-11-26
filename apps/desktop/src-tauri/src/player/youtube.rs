@@ -2440,12 +2440,36 @@ mod tests {
     }
 
     #[cfg(windows)]
-    fn sleeping_grandchild_script(pid_file: &std::path::Path) -> String {
-        let pid_file = pid_file.to_string_lossy().replace('\'', "''");
-        format!(
-            "$ping = Join-Path $env:SystemRoot 'System32\\PING.EXE'; $p = Start-Process -FilePath $ping -ArgumentList @('-n','120','127.0.0.1') -WindowStyle Hidden -PassThru -ErrorAction Stop; [System.IO.File]::WriteAllText('{}', [string]$p.Id); Start-Sleep -Seconds 120",
-            pid_file
-        )
+    fn spawn_sleeping_grandchild(pid_file: &std::path::Path) -> Command {
+        let current_exe = std::env::current_exe().expect("current test executable");
+        let mut command = Command::new(current_exe);
+        command.args([
+            "--exact",
+            "youtube::tests::sleeping_grandchild_test_helper",
+        ]);
+        command.env("SEAMIND_TEST_PROCESS_TREE_PID_FILE", pid_file);
+        super::hide_command_window(&mut command);
+        command
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn sleeping_grandchild_test_helper() {
+        let Some(pid_file) = std::env::var_os("SEAMIND_TEST_PROCESS_TREE_PID_FILE") else {
+            return;
+        };
+        let system_root = std::env::var_os("SystemRoot").expect("SystemRoot");
+        let ping = std::path::PathBuf::from(system_root)
+            .join("System32")
+            .join("PING.EXE");
+        let mut grandchild = Command::new(ping);
+        grandchild.args(["-n", "120", "127.0.0.1"]);
+        grandchild.stdout(std::process::Stdio::null());
+        grandchild.stderr(std::process::Stdio::null());
+        super::hide_command_window(&mut grandchild);
+        let child = grandchild.spawn().expect("start ping grandchild");
+        std::fs::write(pid_file, child.id().to_string()).expect("write grandchild pid");
+        std::thread::sleep(Duration::from_secs(120));
     }
 
     #[cfg(windows)]
@@ -2471,7 +2495,7 @@ mod tests {
         let pid_file =
             std::env::temp_dir().join(format!("seamind-tree-timeout-{}.pid", std::process::id()));
         let _ = std::fs::remove_file(&pid_file);
-        let command = powershell(&sleeping_grandchild_script(&pid_file));
+        let command = spawn_sleeping_grandchild(&pid_file);
         let error =
             run_command_bounded(command, Duration::from_secs(8), None).expect_err("must time out");
         assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
@@ -2502,7 +2526,7 @@ mod tests {
             })
         };
         let started = Instant::now();
-        let command = powershell(&sleeping_grandchild_script(&pid_file));
+        let command = spawn_sleeping_grandchild(&pid_file);
         let error = run_command_bounded(command, Duration::from_secs(60), Some(&control))
             .expect_err("must be cancelled");
         assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
