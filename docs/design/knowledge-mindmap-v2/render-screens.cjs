@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports -- This standalone .cjs script uses Node CommonJS to load global Playwright. */
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { chromium } = require(path.join(process.env.APPDATA, 'npm/node_modules/playwright'));
