@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Transaction } from '@codemirror/state';
 import {
   preparePastedSvg,
   updateMarkdownCodeFence,
@@ -12,6 +13,7 @@ import type { PreviewFootnoteJumpRequest } from './MarkdownPreview';
 import type { ActiveDocument } from './active-document';
 import {
   extractFootnoteAnchorContext,
+  formatFootnoteDefinitionBlock,
   formatTextForFootnotePaste,
   nextAvailableFootnoteId,
   parseMarkdownFootnotes,
@@ -31,6 +33,15 @@ import type {
 import { libraryApi } from '../library/library-api';
 import { buildMarkdownDiffHunks } from '../agent/session';
 import { createKnowledgeEditorExtensions } from '../knowledge/knowledge-completions';
+import { createPasteTransaction } from './markdown-editor-paste';
+import {
+  codeFenceAtSelection,
+  codeFenceForPreview,
+  fencedCodeMarkdown,
+  findMarkdownCodeFences,
+  separateMarkdownBlock,
+  wouldCloseCodeFence,
+} from './markdown-code-block';
 import {
   computeDocumentKnowledgeLinks,
   enhanceKnowledgePreviewHtml,
@@ -49,6 +60,12 @@ import type {
 import { importDocumentMedia } from '../knowledge/document-media';
 import { UNFILED_FOLDER } from '../knowledge/knowledge-notes';
 import type { Theme } from '../app/app-storage';
+import { renderCodeLinesInto } from './code-syntax-utils';
+import {
+  newCodeBlockId,
+  readCodeBlockMeta,
+  writeCodeBlockInfo,
+} from '../knowledge/code-block-meta';
 
 export type DocViewMode = 'edit' | 'split' | 'read';
 
@@ -166,13 +183,59 @@ async function importCandidatesWithPartialTolerance(
 
 interface FootnoteComposerState {
   session: number;
-  mode: 'create' | 'edit';
+  mode: 'create' | 'edit' | 'code';
   footnoteId: string;
   indexLabel: string;
   selectionFrom: number;
   selectionTo: number;
   anchorContext: string;
   draft: string;
+  codeRange?: { from: number; to: number };
+  codeLine?: number;
+  baseSource?: string;
+}
+
+interface CodeBlockComposerState {
+  session: number;
+  mode: 'insert' | 'edit';
+  baseSource: string;
+  from: number;
+  to: number;
+  language: string;
+  draft: string;
+  previousInfo?: string;
+  blockId: string;
+  sourceFile: string;
+  linkedDocs: string;
+}
+
+function CodeBlockDraftPreview({
+  code,
+  language,
+}: {
+  code: string;
+  language: string;
+}) {
+  const codeRef = useRef<HTMLElement>(null);
+  const gutterRef = useRef<HTMLDivElement>(null);
+  const delayedCode = useDebouncedValue(code, 120);
+  useEffect(() => {
+    if (codeRef.current && gutterRef.current)
+      renderCodeLinesInto(
+        codeRef.current,
+        gutterRef.current,
+        delayedCode,
+        language,
+      );
+  }, [delayedCode, language]);
+  return (
+    <div className="workbench-code-draft-preview seamind-text-code-body seamind-fn-hover-scroll">
+      <div ref={gutterRef} className="seamind-text-code-gutter" />
+      <pre className="seamind-text-code-pre">
+        <code ref={codeRef} />
+      </pre>
+    </div>
+  );
 }
 
 /**
@@ -248,10 +311,15 @@ export default function MarkdownDocWorkbench({
   const [footnoteComposer, setFootnoteComposer] =
     useState<FootnoteComposerState | null>(null);
   const [footnoteComposerError, setFootnoteComposerError] = useState('');
+  const [codeComposer, setCodeComposer] =
+    useState<CodeBlockComposerState | null>(null);
+  const [codeComposerError, setCodeComposerError] = useState('');
 
   useEffect(() => {
     setFootnoteComposer(null);
     setFootnoteComposerError('');
+    setCodeComposer(null);
+    setCodeComposerError('');
     setEditorSelection(null);
     setHistoryOpen(false);
   }, [document.session]);
@@ -260,6 +328,75 @@ export default function MarkdownDocWorkbench({
     (event: ClipboardEvent, editor: import('codemirror').EditorView) => {
       const clipboard = event.clipboardData;
       if (!clipboard) return false;
+      const selection = editor.state.selection.main;
+      const existingFence = codeFenceAtSelection(
+        editor.state.doc.toString(),
+        selection.from,
+        selection.to,
+      );
+      if (existingFence) {
+        event.preventDefault();
+        const plain = clipboard.getData('text/plain');
+        const html = clipboard.getData('text/html');
+        const code =
+          plain ||
+          (html
+            ? (new DOMParser()
+                .parseFromString(html, 'text/html')
+                .querySelector('pre code, pre')?.textContent ?? '')
+            : '');
+        if (code) {
+          const normalized = code.replace(/\r\n?/g, '\n');
+          const localFrom = Math.min(
+            existingFence.code.length,
+            selection.from - existingFence.bodyFrom,
+          );
+          const localTo = Math.min(
+            existingFence.code.length,
+            selection.to - existingFence.bodyFrom,
+          );
+          const nextCode =
+            existingFence.code.slice(0, localFrom) +
+            normalized +
+            existingFence.code.slice(localTo);
+          if (
+            selection.from === existingFence.bodyTo ||
+            selection.to === existingFence.bodyTo ||
+            wouldCloseCodeFence(existingFence, nextCode)
+          ) {
+            const replacement = fencedCodeMarkdown(
+              existingFence.language || 'text',
+              nextCode,
+              existingFence.info,
+            );
+            const cursor =
+              existingFence.from +
+              replacement.indexOf('\n') +
+              1 +
+              localFrom +
+              normalized.length;
+            editor.dispatch({
+              changes: {
+                from: existingFence.from,
+                to: existingFence.to,
+                insert: replacement,
+              },
+              selection: { anchor: cursor },
+              annotations: Transaction.userEvent.of('input.paste'),
+            });
+          } else {
+            editor.dispatch(
+              createPasteTransaction(
+                editor.state,
+                selection.from,
+                selection.to,
+                normalized,
+              ),
+            );
+          }
+        }
+        return true;
+      }
       const analyzed = analyzeKnowledgePaste(clipboard);
       const shouldPreview = needsKnowledgePasteReview(
         analyzed,
@@ -653,6 +790,131 @@ export default function MarkdownDocWorkbench({
     [editorSelection],
   );
 
+  const openCodeComposer = useCallback(() => {
+    const current = showEditor
+      ? (editorRef.current?.getValue() ?? sourceRef.current)
+      : sourceRef.current;
+    const selection = showEditor
+      ? (editorRef.current?.getSelection() ?? editorSelection)
+      : null;
+    const from = selection?.from ?? current.length;
+    const to = selection?.to ?? from;
+    const existing = selection ? codeFenceAtSelection(current, from, to) : null;
+    setCodeComposerError('');
+    setCodeComposer(
+      existing
+        ? {
+            session: document.session,
+            mode: 'edit',
+            baseSource: current,
+            from: existing.from,
+            to: existing.to,
+            language: existing.language || 'text',
+            draft: existing.code,
+            previousInfo: existing.info,
+            blockId: readCodeBlockMeta(existing.info).id || newCodeBlockId(),
+            sourceFile: readCodeBlockMeta(existing.info).sourceFile,
+            linkedDocs: readCodeBlockMeta(existing.info).links.join(', '),
+          }
+        : {
+            session: document.session,
+            mode: 'insert',
+            baseSource: current,
+            from,
+            to,
+            language: 'text',
+            draft: current.slice(from, to),
+            blockId: newCodeBlockId(),
+            sourceFile: '',
+            linkedDocs: '',
+          },
+    );
+  }, [document.session, editorSelection, showEditor]);
+
+  const openCodeComposerFromPreview = useCallback<
+    NonNullable<CodeBlockHandlers['onOpenCodeBlockEditor']>
+  >(
+    (_language, renderedCode, sourceRange) => {
+      const current = showEditor
+        ? (editorRef.current?.getValue() ?? sourceRef.current)
+        : sourceRef.current;
+      const existing = codeFenceForPreview(current, sourceRange, renderedCode);
+      if (!existing) return;
+      setCodeComposerError('');
+      setCodeComposer({
+        session: document.session,
+        mode: 'edit',
+        baseSource: current,
+        from: existing.from,
+        to: existing.to,
+        language: existing.language || 'text',
+        draft: existing.code,
+        previousInfo: existing.info,
+        blockId: readCodeBlockMeta(existing.info).id || newCodeBlockId(),
+        sourceFile: readCodeBlockMeta(existing.info).sourceFile,
+        linkedDocs: readCodeBlockMeta(existing.info).links.join(', '),
+      });
+    },
+    [document.session, showEditor],
+  );
+
+  const submitCodeComposer = useCallback(() => {
+    const composer = codeComposer;
+    if (!composer) return;
+    const current = showEditor
+      ? (editorRef.current?.getValue() ?? sourceRef.current)
+      : sourceRef.current;
+    if (
+      composer.session !== document.session ||
+      composer.baseSource !== current
+    ) {
+      setCodeComposerError('文档已变化，请关闭后重新打开代码块。');
+      return;
+    }
+    const language = composer.language.trim();
+    if (!/^[a-z][a-z0-9_+.-]{0,31}$/i.test(language)) {
+      setCodeComposerError('请输入有效语言名称，例如 python、sql 或 text。');
+      return;
+    }
+    const normalizedBlock = fencedCodeMarkdown(
+      language,
+      composer.draft,
+      writeCodeBlockInfo(language, composer.previousInfo ?? '', {
+        id: composer.blockId,
+        sourceFile: composer.sourceFile.trim(),
+        links: Array.from(
+          new Set(
+            composer.linkedDocs
+              .split(/[,，\n]/)
+              .map((link) => link.trim())
+              .filter(Boolean),
+          ),
+        ),
+      }),
+    );
+    const block = composer.baseSource.includes('\r\n')
+      ? normalizedBlock.replace(/\n/g, '\r\n')
+      : normalizedBlock;
+    const replacement =
+      composer.mode === 'insert'
+        ? separateMarkdownBlock(
+            composer.baseSource,
+            composer.from,
+            composer.to,
+            block,
+          )
+        : block;
+    if (showEditor && editorRef.current) {
+      editorRef.current.replaceRange(composer.from, composer.to, replacement);
+    } else {
+      onSourceChange(
+        `${composer.baseSource.slice(0, composer.from)}${replacement}${composer.baseSource.slice(composer.to)}`,
+      );
+    }
+    setCodeComposer(null);
+    setCodeComposerError('');
+  }, [codeComposer, document.session, onSourceChange, showEditor]);
+
   const handleExtractSelectionToSubnote = useCallback(async () => {
     const sel = editorRef.current?.getSelection() ?? editorSelection;
     if (!sel || sel.to <= sel.from || !editorRef.current || extractingSubnote) {
@@ -780,8 +1042,10 @@ export default function MarkdownDocWorkbench({
       if (!target) return;
       const sourceLines = sourceRef.current.split(/\r?\n/);
       const refLine = target.refLineIndices[0];
-      const anchorContext =
-        refLine !== undefined && sourceLines[refLine] !== undefined
+      const codeLine = /^code-[a-z0-9-]+-l(\d+)-\d+$/i.exec(target.id)?.[1];
+      const anchorContext = codeLine
+        ? `代码第 ${codeLine} 行`
+        : refLine !== undefined && sourceLines[refLine] !== undefined
           ? sourceLines[refLine].trim().slice(0, 48)
           : `第 ${target.lineIndex + 1} 行`;
       setFootnoteComposerError('');
@@ -799,6 +1063,42 @@ export default function MarkdownDocWorkbench({
     [document.session],
   );
 
+  const openCodeFootnoteComposer = useCallback<
+    NonNullable<CodeBlockHandlers['onAddCodeFootnote']>
+  >(
+    (sourceRange, lineNumber) => {
+      const current = showEditor
+        ? (editorRef.current?.getValue() ?? sourceRef.current)
+        : sourceRef.current;
+      const fence = codeFenceForPreview(current, sourceRange, '');
+      if (!fence) return;
+      const blockId = readCodeBlockMeta(fence.info).id || newCodeBlockId();
+      const line = Math.max(
+        1,
+        Math.min(lineNumber, fence.code.split(/\r?\n/).length),
+      );
+      const footnoteId = nextAvailableFootnoteId(
+        current,
+        `code-${blockId}-l${line}-`,
+      );
+      setFootnoteComposerError('');
+      setFootnoteComposer({
+        session: document.session,
+        mode: 'code',
+        footnoteId,
+        indexLabel: footnoteId,
+        selectionFrom: 0,
+        selectionTo: 0,
+        anchorContext: `${fence.language || 'text'} · 第 ${line} 行`,
+        draft: '',
+        codeRange: { from: fence.from, to: fence.to },
+        codeLine: line,
+        baseSource: current,
+      });
+    },
+    [document.session, showEditor],
+  );
+
   const submitFootnoteComposer = useCallback(() => {
     const composer = footnoteComposer;
     if (!composer) return;
@@ -808,6 +1108,52 @@ export default function MarkdownDocWorkbench({
     }
     if (!composer.draft.trim()) {
       setFootnoteComposerError('请输入或粘贴脚注内容');
+      return;
+    }
+    if (composer.mode === 'code') {
+      const current = showEditor
+        ? (editorRef.current?.getValue() ?? sourceRef.current)
+        : sourceRef.current;
+      if (current !== composer.baseSource || !composer.codeRange) {
+        setFootnoteComposerError('文档已变化，请重新定位代码行后添加脚注');
+        return;
+      }
+      const fence = findMarkdownCodeFences(current).find(
+        (candidate) =>
+          candidate.from === composer.codeRange?.from &&
+          candidate.to === composer.codeRange?.to,
+      );
+      if (!fence) {
+        setFootnoteComposerError('代码块已变化，请重新打开');
+        return;
+      }
+      const blockId = composer.footnoteId.match(
+        /^code-([a-z0-9-]+)-l\d+-\d+$/i,
+      )?.[1];
+      if (!blockId) return;
+      const meta = readCodeBlockMeta(fence.info);
+      const info = writeCodeBlockInfo(fence.language || 'text', fence.info, {
+        ...meta,
+        id: blockId,
+      });
+      const updatedFence = fencedCodeMarkdown(
+        fence.language || 'text',
+        fence.code,
+        info,
+      );
+      const lineEnding = current.includes('\r\n') ? '\r\n' : '\n';
+      const withId = `${current.slice(0, fence.from)}${updatedFence.replace(/\n/g, lineEnding)}${current.slice(fence.to)}`;
+      const def = formatFootnoteDefinitionBlock(
+        composer.footnoteId,
+        composer.draft,
+      ).replace(/\n/g, lineEnding);
+      const nextSource = `${withId.replace(/[\r\n]*$/, '')}${lineEnding}${lineEnding}${def}${lineEnding}`;
+      if (showEditor && editorRef.current)
+        editorRef.current.applyDocument(nextSource);
+      else onSourceChange(nextSource);
+      setRailTab('footnotes');
+      setFootnoteComposerError('');
+      setFootnoteComposer(null);
       return;
     }
     const result = upsertFootnoteInMarkdown(sourceRef.current, {
@@ -1121,6 +1467,13 @@ export default function MarkdownDocWorkbench({
           </div>
           <button
             type="button"
+            onClick={openCodeComposer}
+            title="在光标处新建代码块，或编辑光标所在代码块"
+          >
+            + 代码块
+          </button>
+          <button
+            type="button"
             onClick={handleInsertFootnote}
             title="在光标处插入 Markdown 脚注 [^n] (Ctrl+Alt+F)"
           >
@@ -1267,6 +1620,13 @@ export default function MarkdownDocWorkbench({
                   </button>
                   <button
                     type="button"
+                    onClick={openCodeComposer}
+                    title="将选中的文本转换为独立代码块"
+                  >
+                    转代码块
+                  </button>
+                  <button
+                    type="button"
                     onClick={handleInsertFootnote}
                     title="在选中位置附加独立脚注 [^n]"
                   >
@@ -1317,6 +1677,9 @@ export default function MarkdownDocWorkbench({
               hideMinimap
               scrollToFootnoteRequest={activeFootnoteJump}
               onCodeChange={handleCodeChange}
+              onOpenCodeBlockEditor={openCodeComposerFromPreview}
+              onAddCodeFootnote={openCodeFootnoteComposer}
+              documents={documents}
               onOpenWikilink={onOpenWikilink}
               onOpenYouTubeLink={handleOpenYouTubeFromPreview}
               onRunInTerminal={onRunInTerminal}
@@ -1812,6 +2175,249 @@ export default function MarkdownDocWorkbench({
           </section>
         </div>
       )}
+      {codeComposer && (
+        <div
+          className="workbench-paste-overlay"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setCodeComposer(null);
+              setCodeComposerError('');
+            }
+          }}
+        >
+          <section
+            className="workbench-paste-dialog workbench-code-composer-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="workbench-code-composer-title"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.stopPropagation();
+                setCodeComposer(null);
+                setCodeComposerError('');
+              }
+            }}
+          >
+            <div className="workbench-paste-heading">
+              <div>
+                <small>
+                  CODE / {codeComposer.mode === 'insert' ? '新建' : '编辑'}
+                </small>
+                <h2 id="workbench-code-composer-title">
+                  {codeComposer.mode === 'insert' ? '新建代码块' : '编辑代码块'}
+                </h2>
+              </div>
+              <button
+                type="button"
+                aria-label="关闭代码块编辑"
+                onClick={() => {
+                  setCodeComposer(null);
+                  setCodeComposerError('');
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <form
+              className="workbench-code-composer-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                submitCodeComposer();
+              }}
+            >
+              <label className="workbench-code-composer-language">
+                <span>语言</span>
+                <input
+                  value={codeComposer.language}
+                  list={`workbench-code-languages-${paneKey ?? 'main'}-${document.session}`}
+                  onChange={(event) => {
+                    setCodeComposer((current) =>
+                      current
+                        ? { ...current, language: event.target.value }
+                        : null,
+                    );
+                    setCodeComposerError('');
+                  }}
+                  aria-label="代码语言"
+                  spellCheck={false}
+                />
+                <datalist
+                  id={`workbench-code-languages-${paneKey ?? 'main'}-${document.session}`}
+                >
+                  {[
+                    'text',
+                    'python',
+                    'javascript',
+                    'typescript',
+                    'sql',
+                    'json',
+                    'bash',
+                    'powershell',
+                    'r',
+                    'c',
+                    'cpp',
+                    'rust',
+                    'html',
+                    'css',
+                    'markdown',
+                  ].map((language) => (
+                    <option value={language} key={language} />
+                  ))}
+                </datalist>
+              </label>
+              <div className="workbench-code-composer-meta">
+                <label>
+                  <span>源文件位置</span>
+                  <input
+                    value={codeComposer.sourceFile}
+                    placeholder="例如 src/analysis/tick.py"
+                    onChange={(event) =>
+                      setCodeComposer((current) =>
+                        current
+                          ? { ...current, sourceFile: event.target.value }
+                          : null,
+                      )
+                    }
+                    spellCheck={false}
+                  />
+                </label>
+                <label>
+                  <span>关联技术笔记</span>
+                  <input
+                    value={codeComposer.linkedDocs}
+                    placeholder="笔记标题或相对路径，多个用逗号分隔"
+                    onChange={(event) =>
+                      setCodeComposer((current) =>
+                        current
+                          ? { ...current, linkedDocs: event.target.value }
+                          : null,
+                      )
+                    }
+                    spellCheck={false}
+                  />
+                  <select
+                    aria-label="从知识库选择关联笔记"
+                    value=""
+                    onChange={(event) => {
+                      const target = event.target.value;
+                      if (!target) return;
+                      setCodeComposer((current) =>
+                        current
+                          ? {
+                              ...current,
+                              linkedDocs: [current.linkedDocs.trim(), target]
+                                .filter(Boolean)
+                                .join(', '),
+                            }
+                          : null,
+                      );
+                    }}
+                  >
+                    <option value="">+ 从知识库选择…</option>
+                    {(documents ?? [])
+                      .filter((item) => item.kind === 'doc')
+                      .map((item) => (
+                        <option
+                          key={item.relativePath}
+                          value={item.relativePath}
+                        >
+                          {item.title} · {item.relativePath}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              </div>
+              <textarea
+                autoFocus
+                className="workbench-code-composer-textarea seamind-fn-hover-scroll"
+                value={codeComposer.draft}
+                aria-label="代码块内容"
+                placeholder="在这里粘贴或输入代码…"
+                spellCheck={false}
+                wrap="off"
+                onChange={(event) =>
+                  setCodeComposer((current) =>
+                    current ? { ...current, draft: event.target.value } : null,
+                  )
+                }
+                onPaste={(event) => {
+                  const plain = event.clipboardData.getData('text/plain');
+                  const html = event.clipboardData.getData('text/html');
+                  const raw =
+                    plain ||
+                    (html
+                      ? (new DOMParser()
+                          .parseFromString(html, 'text/html')
+                          .querySelector('pre code, pre')?.textContent ?? '')
+                      : '');
+                  if (!raw) return;
+                  event.preventDefault();
+                  const area = event.currentTarget;
+                  area.setRangeText(
+                    raw.replace(/\r\n?/g, '\n'),
+                    area.selectionStart,
+                    area.selectionEnd,
+                    'end',
+                  );
+                  setCodeComposer((current) =>
+                    current ? { ...current, draft: area.value } : null,
+                  );
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Tab' && !event.shiftKey) {
+                    event.preventDefault();
+                    const area = event.currentTarget;
+                    area.setRangeText(
+                      '\t',
+                      area.selectionStart,
+                      area.selectionEnd,
+                      'end',
+                    );
+                    setCodeComposer((current) =>
+                      current ? { ...current, draft: area.value } : null,
+                    );
+                  } else if (
+                    (event.ctrlKey || event.metaKey) &&
+                    event.key === 'Enter'
+                  ) {
+                    event.preventDefault();
+                    submitCodeComposer();
+                  }
+                }}
+              />
+              <details className="workbench-code-preview-details" open>
+                <summary>语法预览 · {codeComposer.language || 'text'}</summary>
+                <CodeBlockDraftPreview
+                  code={codeComposer.draft}
+                  language={codeComposer.language}
+                />
+              </details>
+              {codeComposerError && (
+                <p className="workbench-paste-error" role="alert">
+                  {codeComposerError}
+                </p>
+              )}
+              <p className="workbench-code-composer-hint">
+                纯文本粘贴保留缩进、Tab 与空行 · Ctrl+Enter 保存
+              </p>
+              <div className="workbench-paste-actions">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCodeComposer(null);
+                    setCodeComposerError('');
+                  }}
+                >
+                  取消
+                </button>
+                <button type="submit" className="is-primary">
+                  {codeComposer.mode === 'insert' ? '插入代码块' : '保存代码块'}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
       {footnoteComposer && (
         <div
           className="workbench-paste-overlay"
@@ -1837,14 +2443,18 @@ export default function MarkdownDocWorkbench({
             <div className="workbench-paste-heading">
               <div>
                 <small>
-                  {footnoteComposer.mode === 'create'
-                    ? `FOOTNOTE / 插入 [^${footnoteComposer.footnoteId}]`
-                    : `FOOTNOTE / 编辑 [${footnoteComposer.indexLabel}] [^${footnoteComposer.footnoteId}]`}
+                  {footnoteComposer.mode === 'code'
+                    ? `CODE FOOTNOTE / 第 ${footnoteComposer.codeLine} 行`
+                    : footnoteComposer.mode === 'create'
+                      ? `FOOTNOTE / 插入 [^${footnoteComposer.footnoteId}]`
+                      : `FOOTNOTE / 编辑 [${footnoteComposer.indexLabel}] [^${footnoteComposer.footnoteId}]`}
                 </small>
                 <h2 id="workbench-fn-composer-title">
-                  {footnoteComposer.mode === 'create'
-                    ? '新建独立脚注'
-                    : '编辑脚注内容'}
+                  {footnoteComposer.mode === 'code'
+                    ? '为代码行添加脚注'
+                    : footnoteComposer.mode === 'create'
+                      ? '新建独立脚注'
+                      : '编辑脚注内容'}
                 </h2>
               </div>
               <button

@@ -14,6 +14,7 @@ import { parseYouTubeEmbedInput } from '../player/youtube';
 import { resolveDocumentMedia } from '../knowledge/document-media';
 import { mediaIdFromSource } from '../knowledge/knowledge-paste';
 import type { Theme } from '../app/app-storage';
+import type { MapDocument } from '../library/library';
 
 type ActiveImagePreview = {
   src: string;
@@ -51,7 +52,10 @@ interface MarkdownPreviewProps {
   onOpenWikilink?: (target: string, options?: { split?: boolean }) => void;
   onOpenYouTubeLink?: (videoId: string, startSeconds: number) => void;
   onRunInTerminal?: CodeBlockHandlers['onRunInTerminal'];
+  onOpenCodeBlockEditor?: CodeBlockHandlers['onOpenCodeBlockEditor'];
+  onAddCodeFootnote?: CodeBlockHandlers['onAddCodeFootnote'];
   onEditFootnote?: (footnoteId: string) => void;
+  documents?: readonly MapDocument[];
 }
 
 export default function MarkdownPreview({
@@ -66,7 +70,10 @@ export default function MarkdownPreview({
   onOpenWikilink,
   onOpenYouTubeLink,
   onRunInTerminal,
+  onOpenCodeBlockEditor,
+  onAddCodeFootnote,
   onEditFootnote,
+  documents,
 }: MarkdownPreviewProps) {
   const frameRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLElement>(null);
@@ -138,11 +145,19 @@ export default function MarkdownPreview({
     onCodeChange,
     onOpenPlantUmlEditor,
     onRunInTerminal,
+    onOpenCodeBlockEditor,
+    onAddCodeFootnote,
+    onEditFootnote,
+    onOpenWikilink,
   });
   handlersRef.current = {
     onCodeChange,
     onOpenPlantUmlEditor,
     onRunInTerminal,
+    onOpenCodeBlockEditor,
+    onAddCodeFootnote,
+    onEditFootnote,
+    onOpenWikilink,
   };
 
   useEffect(() => {
@@ -166,10 +181,20 @@ export default function MarkdownPreview({
           handlersRef.current.onOpenPlantUmlEditor?.(...args),
         onRunInTerminal: (...args) =>
           handlersRef.current.onRunInTerminal?.(...args),
+        onOpenCodeBlockEditor: (...args) =>
+          handlersRef.current.onOpenCodeBlockEditor?.(...args),
+        onAddCodeFootnote: (...args) =>
+          handlersRef.current.onAddCodeFootnote?.(...args),
+        onEditFootnote: (...args) =>
+          handlersRef.current.onEditFootnote?.(...args),
+        onOpenWikilink: (...args) =>
+          handlersRef.current.onOpenWikilink?.(...args),
       },
       {
         mode: 'markdown-preview',
         documentRelativePath: mediaDocumentPath,
+        markdownSource: source,
+        documents,
       },
     ).then((release) => {
       if (disposed) release();
@@ -181,7 +206,7 @@ export default function MarkdownPreview({
       cleanup();
       minimap?.destroy();
     };
-  }, [markup, source, theme, hideMinimap, mediaDocumentPath]);
+  }, [markup, source, theme, hideMinimap, mediaDocumentPath, documents]);
 
   const scrollAndFlashElement = useCallback((el: Element | null) => {
     const scroller = rootRef.current;

@@ -18,6 +18,7 @@ import {
 import type { Theme } from '../app/app-storage';
 import { parseSafeSvgElement, preparePastedSvg } from '../app/svg-sanitize';
 import {
+  codeLanguageDisplayName,
   detectCodeLanguageFromSource,
   isDiagramCodeLanguage,
 } from './code-execution-service';
@@ -32,6 +33,14 @@ import {
 } from './mindmap-table-card';
 import { hydrateMindmapMedia } from './mindmap-media-card';
 import { hydrateMindmapNoteCards } from './mindmap-note-card';
+import { attachMermaidFullscreen } from './mermaid-fullscreen';
+import {
+  codeFenceForPreview,
+  findMarkdownCodeFences,
+  type MarkdownCodeFence,
+} from './markdown-code-block';
+import { attachReadableCodeWorkspace } from './readable-code-workspace';
+import type { MapDocument } from '../library/library';
 
 export { preparePastedSvg };
 export type { MindmapCodeBlockAgentRequest, MindmapCodeBlockFullscreenRequest };
@@ -123,6 +132,17 @@ export interface CodeBlockHandlers {
   onAskAgentAboutCode?: (request: MindmapCodeBlockAgentRequest) => void;
   onZoomImage?: (dataUrl: string) => void;
   onEditNodeNote?: (nodePath: string) => void;
+  onOpenCodeBlockEditor?: (
+    language: string,
+    source: string,
+    sourceRange?: CodeBlockSourceRange,
+  ) => void;
+  onAddCodeFootnote?: (
+    sourceRange: CodeBlockSourceRange,
+    lineNumber: number,
+  ) => void;
+  onEditFootnote?: (footnoteId: string) => void;
+  onOpenWikilink?: (target: string, options?: { split?: boolean }) => void;
 }
 
 export interface CodeBlockSourceRange {
@@ -134,6 +154,8 @@ export interface CodeBlockHydrationOptions {
   mode?: 'mindmap' | 'markdown-preview';
   cwd?: string | null;
   documentRelativePath?: string;
+  markdownSource?: string;
+  documents?: readonly MapDocument[];
 }
 
 function normalizeFenceSource(source: string): string {
@@ -306,6 +328,121 @@ function replacePre(
   });
 }
 
+function decorateReadableCodeBlock(
+  pre: HTMLElement,
+  source: string,
+  language: string,
+  dispose: (callback: () => void) => void,
+  onOpenEditor?: CodeBlockHandlers['onOpenCodeBlockEditor'],
+  markdownSource?: string,
+  options?: CodeBlockHydrationOptions,
+  handlers?: CodeBlockHandlers,
+  sourceFence?: MarkdownCodeFence,
+): void {
+  const panel = createPanel('CODE', 'text-code');
+  const heading = panel.querySelector<HTMLElement>(
+    '.seamind-code-panel-heading',
+  );
+  const label = heading?.querySelector('strong');
+  if (!heading || !label) return;
+  label.textContent = `CODE / ${codeLanguageDisplayName(language || 'text')}`;
+  const copyButton = document.createElement('button');
+  copyButton.type = 'button';
+  copyButton.textContent = '复制';
+  copyButton.setAttribute('aria-label', '复制代码块');
+  let canonicalSource = source;
+  const copy = async () => {
+    let copied = false;
+    try {
+      await navigator.clipboard.writeText(canonicalSource);
+      copied = true;
+    } catch {
+      const temporary = document.createElement('textarea');
+      temporary.value = canonicalSource;
+      temporary.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+      document.body.append(temporary);
+      temporary.select();
+      try {
+        copied = document.execCommand('copy');
+      } catch {
+        copied = false;
+      } finally {
+        temporary.remove();
+      }
+    }
+    copyButton.textContent = copied ? '已复制' : '复制失败';
+    window.setTimeout(() => {
+      if (copyButton.isConnected) copyButton.textContent = '复制';
+    }, 1500);
+  };
+  copyButton.addEventListener('click', copy);
+  heading.append(copyButton);
+
+  const lineRange = pre.dataset.lines?.split(',').map(Number);
+  const sourceRange =
+    lineRange?.length === 2 && lineRange.every(Number.isFinite)
+      ? { lineIndex: lineRange[0]!, endLineIndex: lineRange[1]! }
+      : undefined;
+  const matchingFence =
+    sourceFence ??
+    (markdownSource
+      ? codeFenceForPreview(markdownSource, sourceRange, source)
+      : null);
+  canonicalSource = matchingFence?.code ?? source;
+  let editButton: HTMLButtonElement | null = null;
+  let edit: (() => void) | null = null;
+  if (onOpenEditor && matchingFence) {
+    editButton = document.createElement('button');
+    editButton.type = 'button';
+    editButton.textContent = '编辑';
+    editButton.setAttribute('aria-label', '编辑代码块');
+    edit = () =>
+      onOpenEditor(language, source, {
+        lineIndex: matchingFence.lineIndex,
+        endLineIndex: matchingFence.endLineIndex,
+      });
+    editButton.addEventListener('click', edit);
+    heading.append(editButton);
+  }
+
+  pre.dataset.seamindHydrated = 'true';
+  panel.dataset.language = language || 'text';
+  panel.dataset.sourceLength = String(source.length);
+  pre.replaceWith(panel);
+  panel.append(pre);
+  attachReadableCodeWorkspace({
+    panel,
+    pre,
+    source: canonicalSource,
+    language,
+    info: matchingFence?.info ?? language,
+    markdownSource,
+    documentRelativePath: options?.documentRelativePath,
+    documents: options?.documents,
+    sourceRange: matchingFence
+      ? {
+          lineIndex: matchingFence.lineIndex,
+          endLineIndex: matchingFence.endLineIndex,
+        }
+      : undefined,
+    onOpenWikilink: handlers?.onOpenWikilink,
+    onEditFootnote: handlers?.onEditFootnote,
+    onAddCodeFootnote: handlers?.onAddCodeFootnote,
+    dispose,
+  });
+  dispose(() => {
+    delete pre.dataset.seamindHydrated;
+    if (panel.isConnected) {
+      panel.before(pre);
+      panel.remove();
+    }
+  });
+  dispose(() => {
+    copyButton.removeEventListener('click', copy);
+    if (editButton && edit) editButton.removeEventListener('click', edit);
+  });
+}
+
 const sanitizeMermaidSvg = parseSafeSvgElement;
 
 export const sanitizeDiagramSvg = sanitizeMermaidSvg;
@@ -403,25 +540,88 @@ async function renderMermaid(
     throw new Error('Mermaid 代码块超过 50 KB。');
   const { default: mermaid } = await import('mermaid');
   if (signal.aborted || !output.isConnected) return;
+  const palette =
+    theme === 'navy'
+      ? {
+          background: '#0b172a',
+          surface: '#10233e',
+          surfaceAlt: '#142a47',
+          text: '#e0f0fe',
+          border: '#4e789e',
+          line: '#9ab7d1',
+        }
+      : theme === 'purple'
+        ? {
+            background: '#140d24',
+            surface: '#241733',
+            surfaceAlt: '#2b1d3e',
+            text: '#f6effe',
+            border: '#80659b',
+            line: '#b7a1cb',
+          }
+        : theme === 'dark'
+          ? {
+              background: '#1c2227',
+              surface: '#263038',
+              surfaceAlt: '#303a41',
+              text: '#e6ebef',
+              border: '#74858e',
+              line: '#acb8be',
+            }
+          : {
+              background: '#ffffff',
+              surface: '#f3f6f4',
+              surfaceAlt: '#f8faf9',
+              text: '#20252b',
+              border: '#9bada4',
+              line: '#687b72',
+            };
   mermaid.initialize({
     startOnLoad: false,
     securityLevel: 'strict',
     suppressErrorRendering: true,
     maxTextSize: maxVisualizationSource,
     maxEdges: 500,
-    theme: theme === 'light' ? 'neutral' : 'dark',
-    flowchart: { htmlLabels: false, useMaxWidth: true },
+    theme: 'base',
+    themeVariables: {
+      background: palette.background,
+      primaryColor: palette.surface,
+      primaryTextColor: palette.text,
+      primaryBorderColor: palette.border,
+      secondaryColor: palette.surfaceAlt,
+      secondaryTextColor: palette.text,
+      secondaryBorderColor: palette.border,
+      tertiaryColor: palette.background,
+      tertiaryTextColor: palette.text,
+      tertiaryBorderColor: palette.border,
+      textColor: palette.text,
+      lineColor: palette.line,
+      mainBkg: palette.surface,
+      nodeBorder: palette.border,
+      nodeTextColor: palette.text,
+      clusterBkg: palette.surfaceAlt,
+      clusterBorder: palette.border,
+      edgeLabelBackground: palette.background,
+      arrowheadColor: palette.line,
+      fontFamily: 'Inter, Segoe UI, Microsoft YaHei UI, sans-serif',
+    },
+    htmlLabels: false,
+    flowchart: { useMaxWidth: true, wrappingWidth: 220, minNodeWidth: 164 },
+    state: { wrappingWidth: 220, minNodeWidth: 164 },
   });
-  const { svg } = await mermaid.render(
-    `seamind-diagram-${++diagramId}`,
-    source,
-  );
+  const svgId = `seamind-diagram-${++diagramId}`;
+  const { svg } = await mermaid.render(svgId, source);
   if (signal.aborted || !output.isConnected) return;
-  const diagram = sanitizeMermaidSvg(svg);
+  const diagram = parseSafeSvgElement(svg, { mermaidScopeId: svgId });
   if (!diagram) throw new Error('Mermaid 输出未通过 SVG 安全检查。');
   diagram.setAttribute('role', 'img');
   diagram.setAttribute('aria-label', 'Mermaid 思维图');
   diagram.classList.add('seamind-diagram-svg');
+  const intrinsicWidth = diagram.viewBox.baseVal.width;
+  if (Number.isFinite(intrinsicWidth) && intrinsicWidth > 0) {
+    diagram.style.minWidth = `${Math.min(intrinsicWidth, 3000)}px`;
+    diagram.style.maxWidth = 'none';
+  }
   output.replaceChildren(diagram);
 }
 
@@ -1496,10 +1696,13 @@ export async function hydrateCodeBlocks(
     });
   }
   const codeNodes = Array.from(
-    container.querySelectorAll<HTMLElement>(
-      isMindmapMode ? 'pre > code' : 'pre > code[class*="language-"]',
-    ),
+    container.querySelectorAll<HTMLElement>('pre > code'),
   );
+  const previewFences =
+    !isMindmapMode && options.markdownSource
+      ? findMarkdownCodeFences(options.markdownSource)
+      : [];
+  const usedPreviewFences = new Set<number>();
   for (const code of codeNodes) {
     if (signal.aborted || cleaned) break;
     const pre = code.parentElement;
@@ -1541,6 +1744,28 @@ export async function hydrateCodeBlocks(
         replacePre(pre, excelCard, source, 'seamind-excel', dispose);
         continue;
       }
+    }
+
+    if (!isMindmapMode && !isDiagramCodeLanguage(rawLanguage)) {
+      const fenceIndex = previewFences.findIndex(
+        (fence, index) =>
+          !usedPreviewFences.has(index) &&
+          fence.language.toLowerCase() === rawLanguage &&
+          normalizeFenceSource(fence.code) === normalizeFenceSource(source),
+      );
+      if (fenceIndex >= 0) usedPreviewFences.add(fenceIndex);
+      decorateReadableCodeBlock(
+        pre,
+        source,
+        rawLanguage,
+        dispose,
+        handlers.onOpenCodeBlockEditor,
+        options.markdownSource,
+        options,
+        handlers,
+        fenceIndex >= 0 ? previewFences[fenceIndex] : undefined,
+      );
+      continue;
     }
 
     if (
@@ -1730,6 +1955,8 @@ export async function hydrateCodeBlocks(
     } else if (isMermaid) {
       try {
         await renderMermaid(source, output, theme, signal);
+        if (!signal.aborted && output.isConnected)
+          attachMermaidFullscreen(panel, output, dispose);
       } catch (error) {
         if (!signal.aborted)
           showError(

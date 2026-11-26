@@ -1569,6 +1569,123 @@
 }
 
 /* Ebook-style independent footnote composer modal */
+.workbench-code-composer-dialog {
+  width: min(760px, calc(100vw - 32px));
+  max-height: min(86vh, 760px);
+}
+.workbench-code-composer-form {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 16px;
+}
+.workbench-code-composer-language {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.workbench-code-composer-language input {
+  min-width: 0;
+  width: 180px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--panel);
+  color: var(--ink);
+  font: 12px var(--mono);
+}
+.workbench-code-composer-textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 280px;
+  max-height: 58vh;
+  padding: 12px 14px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: #06234b;
+  color: #e4edff;
+  font: 12px/1.65 var(--mono);
+  tab-size: 4;
+  resize: vertical;
+}
+.workbench-code-preview-details {
+  min-height: 0;
+  border: 1px solid var(--line);
+  font: 11px var(--mono);
+}
+.workbench-code-preview-details summary {
+  padding: 6px 9px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.workbench-code-draft-preview {
+  display: flex;
+  max-height: 190px;
+  overflow: auto;
+  background: #06234b;
+  color: #e4edff;
+  font: 12px/1.6 var(--mono);
+  tab-size: 4;
+}
+.workbench-code-draft-preview pre {
+  flex: 1 0 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 10px 18px 14px 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+.workbench-code-draft-preview .seamind-text-code-gutter span {
+  cursor: default;
+}
+.workbench-code-composer-language input:focus,
+.workbench-code-composer-meta input:focus,
+.workbench-code-composer-meta select:focus,
+.workbench-code-composer-textarea:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: 0;
+}
+.workbench-code-composer-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.workbench-code-composer-meta label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.workbench-code-composer-meta input,
+.workbench-code-composer-meta select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--panel);
+  color: var(--ink);
+  font: 12px var(--mono);
+}
+@media (max-width: 600px) {
+  .workbench-code-composer-meta {
+    grid-template-columns: 1fr;
+  }
+}
+.workbench-code-composer-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .workbench-fn-composer-dialog {
   width: min(560px, calc(100vw - 32px));
   max-height: min(82vh, 660px);

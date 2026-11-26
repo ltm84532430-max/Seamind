@@ -1,3 +1,8 @@
+import {
+  sanitizeMermaidInlineCss,
+  sanitizeScopedMermaidCss,
+} from './mermaid-css-sanitize';
+
 export const MAX_SAFE_SVG_CHARS = 300_000;
 
 export const katexSvgElements = new Set(['svg', 'path', 'line']);
@@ -441,10 +446,17 @@ function sanitizeForeignObjectSubtree(foreignObject: Element): void {
 function stripDisallowedSvgAttributes(
   element: Element,
   isKatex: boolean,
+  mermaidScopeId?: string,
 ): void {
   const elementName = element.localName.toLowerCase();
   for (const attribute of Array.from(element.attributes)) {
     const name = attribute.name.toLowerCase();
+    if (!isKatex && mermaidScopeId && name === 'style') {
+      const safeStyle = sanitizeMermaidInlineCss(attribute.value);
+      if (safeStyle) element.setAttribute(attribute.name, safeStyle);
+      else element.removeAttribute(attribute.name);
+      continue;
+    }
     const isAllowed = isKatex
       ? katexSvgAttributes.has(name) &&
         isSafeKatexSvgAttribute(name, attribute.value)
@@ -473,7 +485,11 @@ function isInsideForeignObject(element: Element, root: Element): boolean {
   return false;
 }
 
-export function sanitizeSvgTree(root: Element, isKatex = false): void {
+export function sanitizeSvgTree(
+  root: Element,
+  isKatex = false,
+  mermaidScopeId?: string,
+): void {
   const allowedElements = isKatex ? katexSvgElements : safeSvgElements;
   const elements = [root, ...Array.from(root.querySelectorAll('*'))];
   for (const element of elements) {
@@ -487,12 +503,19 @@ export function sanitizeSvgTree(root: Element, isKatex = false): void {
       continue;
     }
     if (name === 'style') {
-      if (!isSafeSvgStyle(element.textContent ?? '')) {
+      if (mermaidScopeId) {
+        const safeStyle = sanitizeScopedMermaidCss(
+          element.textContent ?? '',
+          mermaidScopeId,
+        );
+        if (safeStyle) element.textContent = safeStyle;
+        else element.remove();
+      } else if (!isSafeSvgStyle(element.textContent ?? '')) {
         element.remove();
       }
       continue;
     }
-    stripDisallowedSvgAttributes(element, isKatex);
+    stripDisallowedSvgAttributes(element, isKatex, mermaidScopeId);
     if (!isKatex && name === 'foreignobject' && root.contains(element)) {
       sanitizeForeignObjectSubtree(element);
     }
@@ -512,7 +535,10 @@ function prepareSvgXmlSource(raw: string): string {
   );
 }
 
-export function parseSafeSvgElement(source: string): SVGSVGElement | null {
+export function parseSafeSvgElement(
+  source: string,
+  options?: { mermaidScopeId?: string },
+): SVGSVGElement | null {
   if (
     source.length > MAX_SAFE_SVG_CHARS ||
     /<!doctype|<!entity/i.test(source)
@@ -529,7 +555,13 @@ export function parseSafeSvgElement(source: string): SVGSVGElement | null {
   ) {
     return null;
   }
-  sanitizeSvgTree(root, false);
+  if (
+    options?.mermaidScopeId &&
+    root.getAttribute('id') !== options.mermaidScopeId
+  ) {
+    return null;
+  }
+  sanitizeSvgTree(root, false, options?.mermaidScopeId);
   return root as unknown as SVGSVGElement;
 }
 

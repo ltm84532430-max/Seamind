@@ -43,6 +43,7 @@
     "mermaid": "12.2.0",
     "pdfjs-dist": "6.4.299",
     "pele": "1.7.0",
+    "postcss": "8.5.33",
     "pyodide": "314.0.7",
     "react": "19.1.0",
     "react-dom": "19.1.0",

@@ -1,4 +1,5 @@
 import type { MapDocument } from '../library/library';
+import { readCodeBlockMeta } from './code-block-meta';
 
 export interface KnowledgeNoteTemplate {
   id: string;
@@ -200,7 +201,27 @@ export function computeDocumentKnowledgeLinks(args: {
 
   for (let lineIdx = 0; lineIdx < lines.length; lineIdx += 1) {
     const line = lines[lineIdx];
-    if (/^\s*(`{3,}|~{3,})/.test(line)) {
+    const codeFence = /^\s*(`{3,}|~{3,})(.*)$/.exec(line);
+    if (codeFence) {
+      if (!inFence) {
+        for (const rawTarget of readCodeBlockMeta(codeFence[2]).links) {
+          const { noteTarget, headingTarget } = parseWikilinkTarget(rawTarget);
+          if (!noteTarget) continue;
+          const resolved = findWikilinkTarget(rawTarget, documents) ?? null;
+          if (resolved) linkedDocPaths.add(resolved.relativePath);
+          outgoingLinks.push({
+            rawTarget,
+            noteTarget,
+            headingTarget,
+            displayLabel: headingTarget
+              ? `${noteTarget} § ${headingTarget}`
+              : noteTarget,
+            isEmbed: false,
+            lineIndex: lineIdx,
+            resolved,
+          });
+        }
+      }
       inFence = !inFence;
       continue;
     }

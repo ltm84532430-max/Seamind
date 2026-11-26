@@ -33,6 +33,7 @@ export interface MarkdownEditorHandle {
   selectLine(lineIndex: number, focus?: boolean): void;
   selectLines(lineIndex: number, endLineIndex: number, focus?: boolean): void;
   getSelection(): MarkdownSelection | null;
+  getValue(): string;
   undo(): boolean;
   redo(): boolean;
   focus(): void;
@@ -316,6 +317,9 @@ const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
             to: selection.to,
             lineIndex: view.state.doc.lineAt(selection.from).number - 1,
           };
+        },
+        getValue() {
+          return viewRef.current?.state.doc.toString() ?? '';
         },
         undo() {
           const view = viewRef.current;

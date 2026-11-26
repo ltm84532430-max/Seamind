@@ -167,6 +167,9 @@ importers:
       pele:
         specifier: 1.7.0
         version: 1.7.0
+      postcss:
+        specifier: 8.5.33
+        version: 8.5.33
       pyodide:
         specifier: 314.0.7
         version: 314.0.7
