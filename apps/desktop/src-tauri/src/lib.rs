@@ -83,6 +83,8 @@ mod learning_tasks;
 mod c_runner;
 #[path = "system/data_lab.rs"]
 mod data_lab;
+#[path = "system/data_lab_bridge.rs"]
+mod data_lab_bridge;
 #[path = "system/postgres_service.rs"]
 mod postgres_service;
 #[path = "system/installer_components.rs"]
@@ -109,6 +111,7 @@ pub fn run() {
         .manage(r_lab::RKernelState::default())
         .manage(agent_bridge::AgentBridgeState::default())
         .manage(cli_agent::CliAgentState::default())
+        .manage(AgentCompletionState::default())
         .manage(youtube::YouTubeJobs::default())
         .manage(youtube_botguard::YouTubeBotGuardState::default())
         .manage(youtube_embed_transcript::YouTubeEmbedTranscriptState::default())
@@ -157,6 +160,7 @@ pub fn run() {
             epub_translation::list_epub_book_translations,
             transcript_refiner::refine_transcript_stage,
             agent_completion,
+            agent_completion_cancel,
             agent_bridge::agent_bridge_status,
             agent_bridge::agent_bridge_set_tools,
             agent_bridge::agent_bridge_resolve,
@@ -223,6 +227,11 @@ pub fn run() {
             data_lab::data_lab_save_db_password,
             data_lab::data_lab_copy_db_password,
             data_lab::data_lab_delete_db_password,
+            data_lab::data_lab_check_pgpass,
+            data_lab::data_lab_list_databases,
+            data_lab::data_lab_inspect_table_detail,
+            data_lab::data_lab_profile_table,
+            data_lab::data_lab_cancel_sql,
             data_lab::data_lab_inspect_file,
             data_lab::data_lab_test_connection,
             data_lab::data_lab_create_postgres_database,
@@ -231,6 +240,8 @@ pub fn run() {
             postgres_service::data_lab_start_local_postgres,
             data_lab::data_lab_bus_info,
             data_lab::data_lab_sync_context,
+            data_lab::data_lab_write_er_export,
+            data_lab::data_lab_open_er_export,
             cli_agent::cli_agent_detect,
             cli_agent::cli_agent_list_models,
             cli_agent::cli_agent_run,
@@ -1070,13 +1081,37 @@ pub(crate) fn strip_json_code_fence(content: &str) -> &str {
     trimmed[line_end + 1..trimmed.len() - 3].trim()
 }
 
+#[derive(Default)]
+struct AgentCompletionState(
+    std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>,
+);
+
+#[tauri::command]
+fn agent_completion_cancel(
+    state: tauri::State<'_, AgentCompletionState>,
+    request_id: String,
+) -> Result<(), String> {
+    let trimmed = request_id.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    if let Ok(mut guard) = state.0.lock() {
+        if let Some(tx) = guard.remove(trimmed) {
+            let _ = tx.send(());
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn agent_completion(
+    state: tauri::State<'_, AgentCompletionState>,
     base_url: String,
     model: String,
     messages: Vec<serde_json::Value>,
     tools: Vec<serde_json::Value>,
     provider_id: Option<String>,
+    request_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let model = model.trim();
     if model.is_empty() || model.len() > 200 {
@@ -1120,6 +1155,8 @@ async fn agent_completion(
         "knowledge_sync_reader_chapter",
         "knowledge_append_excerpt",
         "mindmap_get_current",
+        "knowledge_get_current_document",
+        "knowledge_propose_document_edit",
         "library_search",
         "library_read_document",
         "mindmap_propose_node_edit",
@@ -1136,6 +1173,10 @@ async fn agent_completion(
         "code_run_c",
         "datalab_list_sources",
         "datalab_inspect_file",
+        "datalab_inspect_db",
+        "datalab_profile_table",
+        "datalab_er_get_diagram",
+        "datalab_er_annotate",
         "datalab_query_sql",
         "datalab_run_r",
         "datalab_read_notebook",
@@ -1162,7 +1203,13 @@ async fn agent_completion(
         tool_names.push(name);
     }
 
-    let body = post_chat_completion_for_provider(
+    let clean_request_id = request_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    let completion_future = post_chat_completion_for_provider(
         &base_url,
         model,
         serde_json::Value::Array(messages),
@@ -1174,8 +1221,24 @@ async fn agent_completion(
         None,
         AGENT_FAULTS,
         provider_id.as_deref(),
-    )
-    .await?;
+    );
+
+    let body = if let Some(req_id) = clean_request_id {
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        if let Ok(mut guard) = state.0.lock() {
+            guard.insert(req_id.clone(), cancel_tx);
+        }
+        let outcome = tokio::select! {
+            _ = cancel_rx => Err("[AGENT_CANCELLED] 请求已由用户取消。".to_string()),
+            res = completion_future => res,
+        };
+        if let Ok(mut guard) = state.0.lock() {
+            guard.remove(&req_id);
+        }
+        outcome?
+    } else {
+        completion_future.await?
+    };
     let message = body
         .pointer("/choices/0/message")
         .ok_or_else(|| "模型没有返回有效的助手消息。".to_string())?;

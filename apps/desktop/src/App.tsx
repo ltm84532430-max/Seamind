@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react';
 import type {
   CSSProperties,
@@ -60,7 +61,15 @@ import {
   generateOfflineMindmapHtml,
   type OfflineExportOptions,
 } from './mindmap/offline-export';
-import type { TerminalCodeLabLanguage } from './terminal/terminal-types';
+import type {
+  AgentWorkspaceContextSnapshot,
+  AgentWorkspaceSubView,
+  TerminalCodeLabLanguage,
+} from './terminal/terminal-types';
+import {
+  getActiveLabTabSnapshot,
+  subscribeActiveLabTabSnapshot,
+} from './terminal/codelab-live-bridge';
 import type { CodeLabSourceOrigin } from './terminal/terminal-codelab-model';
 import MarkdownEditor from './workbench/MarkdownEditor';
 import type {
@@ -150,6 +159,7 @@ import type {
   RunMindmapCodeBlockInput,
 } from './agent/capabilities';
 import type {
+  ActiveKnowledgeDocumentSnapshot,
   ActiveMindmapSnapshot,
   AgentAnalysisMode,
   NodeEditProposal,
@@ -1113,13 +1123,16 @@ function AppContent() {
     setError: (message) => setLibraryError(message),
     confirmDiscard: (message) => window.confirm(message),
   });
+  const activeLabTabSnapshot = useSyncExternalStore(
+    subscribeActiveLabTabSnapshot,
+    getActiveLabTabSnapshot,
+  );
   const knowledgeSplitRef = useRef(knowledgeSplit);
   knowledgeSplitRef.current = knowledgeSplit;
   const activeDocument = workbench.active;
-  const effectiveActiveDoc =
-    activeWorkspace === 'knowledge'
-      ? (knowledgeSplit.focusedDocument ?? activeDocument)
-      : activeDocument;
+  const effectiveActiveDoc = isWorkspaceVisible('knowledge')
+    ? (knowledgeSplit.focusedDocument ?? activeDocument)
+    : activeDocument;
   const catalogDocuments = librarySnapshot?.documents ?? [];
 
   useEffect(() => {
@@ -2517,13 +2530,13 @@ function AppContent() {
       getLibrarySnapshot: () => librarySnapshotRef.current,
       getCurrentChapter: () => currentEpubChapter,
       getOpenDocument: () =>
-        activeWorkspace === 'knowledge'
+        isWorkspaceVisible('knowledge')
           ? (knowledgeSplitRef.current.focusedDocument ??
             workbench.controller.getState())
           : workbench.controller.getState(),
       editOpenDocument: (markdown) => {
         if (
-          activeWorkspace === 'knowledge' &&
+          isWorkspaceVisible('knowledge') &&
           knowledgeSplitRef.current.focusedPath
         ) {
           knowledgeSplitRef.current.editDoc(
@@ -2536,7 +2549,7 @@ function AppContent() {
       },
       saveOpenDocument: () => {
         if (
-          activeWorkspace === 'knowledge' &&
+          isWorkspaceVisible('knowledge') &&
           knowledgeSplitRef.current.focusedPath
         ) {
           return knowledgeSplitRef.current.saveDoc(
@@ -2547,7 +2560,7 @@ function AppContent() {
         return workbench.controller.save({ manual: true });
       },
       createKnowledgeDocument: async (options) => {
-        if (activeWorkspace === 'knowledge') {
+        if (isWorkspaceVisible('knowledge')) {
           const created = await knowledgeSplitRef.current.createNote(options);
           return Boolean(created);
         }
@@ -2569,6 +2582,30 @@ function AppContent() {
     },
     mindmap: {
       getCurrentMindmap: getAgentMindmap,
+      readCurrentKnowledgeDocument:
+        (): ActiveKnowledgeDocumentSnapshot | null => {
+          const ks = knowledgeSplitRef.current;
+          const doc =
+            ks.focusedDocument ??
+            (() => {
+              const wb = workbench.controller.getState();
+              return wb && wb.kind === 'doc' ? wb : null;
+            })();
+          if (!doc) return null;
+          return {
+            title: doc.title,
+            relativePath: doc.relativePath ?? null,
+            category: doc.category || '我的笔记',
+            kind: 'doc',
+            markdown: doc.source,
+            dirty: doc.revision !== doc.savedRevision,
+            openTabs: ks.splitState.tabs.map((tab) => ({
+              title: tab.title,
+              relativePath: tab.path,
+              active: tab.path === doc.relativePath,
+            })),
+          };
+        },
       searchLibrary: (query, category) =>
         libraryApi.search({
           query,
@@ -9629,6 +9666,114 @@ function AppContent() {
       </section>
 
       {(() => {
+        const visibleNonAgentWorkspaces: ActiveWorkspace[] = [];
+        if (activeWorkspace !== 'agent') {
+          visibleNonAgentWorkspaces.push(activeWorkspace);
+        }
+        if (
+          effectiveSecondaryWorkspace &&
+          effectiveSecondaryWorkspace !== 'agent' &&
+          effectiveSecondaryWorkspace !== activeWorkspace
+        ) {
+          visibleNonAgentWorkspaces.push(effectiveSecondaryWorkspace);
+        }
+        const targetWorkspace: ActiveWorkspace | null = universalSplitActive
+          ? activeWorkspace !== 'agent'
+            ? activeWorkspace
+            : effectiveSecondaryWorkspace &&
+                effectiveSecondaryWorkspace !== 'agent'
+              ? effectiveSecondaryWorkspace
+              : null
+          : activeWorkspace !== 'agent'
+            ? activeWorkspace
+            : null;
+        const targetPosition: AgentWorkspaceContextSnapshot['targetPosition'] =
+          !targetWorkspace
+            ? 'none'
+            : !universalSplitActive
+              ? 'main'
+              : targetWorkspace === activeWorkspace
+                ? 'left'
+                : 'right';
+
+        const focusedKnowledgeDoc = knowledgeSplit.focusedDocument;
+        const activeKnowledgeDocInfo = focusedKnowledgeDoc
+          ? {
+              title: focusedKnowledgeDoc.title,
+              relativePath: focusedKnowledgeDoc.relativePath ?? null,
+              category: focusedKnowledgeDoc.category || '我的笔记',
+              charCount: focusedKnowledgeDoc.source.length,
+              lineCount: focusedKnowledgeDoc.source
+                ? focusedKnowledgeDoc.source.split(/\r?\n/).length
+                : 0,
+              openTabs: knowledgeSplit.splitState.tabs.map((tab) => ({
+                title: tab.title,
+                relativePath: tab.path,
+                active: tab.path === focusedKnowledgeDoc.relativePath,
+              })),
+            }
+          : null;
+
+        const targetSubView: AgentWorkspaceSubView = (() => {
+          if (targetWorkspace === 'knowledge') {
+            return focusedKnowledgeDoc &&
+              !knowledgeSplit.splitState.showHomeOverview
+              ? 'doc'
+              : 'overview';
+          }
+          if (targetWorkspace === 'mindmap') return 'mindmap';
+          if (targetWorkspace === 'lab') {
+            return activeLabTabSnapshot?.mode === 'er' ? 'er' : 'notebook';
+          }
+          if (targetWorkspace === 'reader') {
+            if (pdfBookReader) return 'pdf';
+            if (epubReader) return 'epub';
+            return 'shelf';
+          }
+          if (targetWorkspace === 'terminal') return 'shell';
+          return 'default';
+        })();
+
+        const agentWorkspaceContext: AgentWorkspaceContextSnapshot = {
+          primaryWorkspace: activeWorkspace,
+          secondaryWorkspace: effectiveSecondaryWorkspace,
+          splitActive: universalSplitActive,
+          visibleWorkspaces: visibleNonAgentWorkspaces,
+          targetWorkspace,
+          targetPosition,
+          targetSubView,
+          activeKnowledgeDoc:
+            targetWorkspace === 'knowledge' && targetSubView === 'overview'
+              ? null
+              : activeKnowledgeDocInfo,
+          activeMindmap: editorDraft.title
+            ? {
+                title: editorDraft.title,
+                relativePath: editorDraft.relativePath ?? null,
+              }
+            : null,
+          activeLab: activeLabTabSnapshot
+            ? {
+                mode: activeLabTabSnapshot.mode,
+                title: activeLabTabSnapshot.title,
+                erConnectionId: activeLabTabSnapshot.erConnectionId ?? null,
+              }
+            : null,
+          activeBook: epubReader
+            ? {
+                title: epubReader.title,
+                kind: 'epub',
+                chapterLabel: currentEpubChapter?.chapterLabel ?? null,
+              }
+            : pdfBookReader
+              ? {
+                  title: pdfBookReader.title,
+                  kind: 'pdf',
+                  chapterLabel: null,
+                }
+              : null,
+        };
+
         const sharedTerminalBridge: TerminalWorkspaceBridge = {
           provider: providerSettings,
           capabilities: agentCapabilities,
@@ -9643,10 +9788,87 @@ function AppContent() {
               }
             : null,
           activeMindmapTitle: editorDraft.title,
+          workspaceContext: agentWorkspaceContext,
           onNavigateWorkspace: (ws) => setActiveWorkspace(ws),
           onOpenBook: (book) => void openLibraryEpub(book),
           onOpenYouTubeVideo: (videoId, startSeconds, title) =>
             openYouTubeVideoInPlayer(videoId, startSeconds ?? 0, title),
+          onApplyKnowledgeDocumentProposal: async (proposal) => {
+            try {
+              const ks = knowledgeSplitRef.current;
+              if (proposal.mode === 'create_copy') {
+                const title =
+                  proposal.newTitle?.trim() ||
+                  `${proposal.targetTitle}（副本）`;
+                const created = await ks.createNote({
+                  category: proposal.targetCategory || '我的笔记',
+                  title,
+                  source: proposal.content,
+                  split: false,
+                });
+                if (!created) {
+                  return { ok: false, message: '创建知识库副本失败。' };
+                }
+                await loadLibrary(false);
+                setSaveMessage(`已在知识库新建文档「${created.title}」`);
+                return {
+                  ok: true,
+                  message: `已创建并打开新文档「${created.title}」（${created.relativePath}）`,
+                  savedPath: created.relativePath,
+                };
+              }
+
+              const targetPath = proposal.targetRelativePath ?? ks.focusedPath;
+              if (targetPath && ks.documentsByPath[targetPath]) {
+                const existing = ks.documentsByPath[targetPath];
+                const nextSource =
+                  proposal.mode === 'append'
+                    ? `${existing.source.trimEnd()}\n\n${proposal.content.trimStart()}`
+                    : proposal.content;
+                ks.editDoc(targetPath, nextSource);
+                const saved = await ks.saveDoc(targetPath, true);
+                await loadLibrary(false);
+                setSaveMessage(
+                  saved
+                    ? `已更新知识库文档「${proposal.targetTitle}」`
+                    : `已写入缓冲区「${proposal.targetTitle}」`,
+                );
+                return {
+                  ok: true,
+                  message:
+                    proposal.mode === 'append'
+                      ? `已将内容追加并保存到「${proposal.targetTitle}」`
+                      : `已替换并保存「${proposal.targetTitle}」正文`,
+                  savedPath: targetPath,
+                };
+              }
+
+              const wb = workbench.controller.getState();
+              if (wb && wb.kind === 'doc') {
+                const nextSource =
+                  proposal.mode === 'append'
+                    ? `${wb.source.trimEnd()}\n\n${proposal.content.trimStart()}`
+                    : proposal.content;
+                workbench.controller.edit(nextSource);
+                await workbench.controller.save({ manual: true });
+                await loadLibrary(false);
+                return {
+                  ok: true,
+                  message: `已保存对「${wb.title}」的修改`,
+                  savedPath: wb.relativePath ?? undefined,
+                };
+              }
+              return {
+                ok: false,
+                message: '未找到目标知识库文档，请先在左侧打开对应文档。',
+              };
+            } catch (error) {
+              return {
+                ok: false,
+                message: errorMessage(error, '写入知识库文档失败'),
+              };
+            }
+          },
           onSaveMarkdownNote: async ({ title, category, source }) => {
             try {
               await libraryApi.createTextDocument({

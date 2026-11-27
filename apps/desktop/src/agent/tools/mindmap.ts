@@ -4,10 +4,17 @@ import {
   MAX_MINDMAP_CODE_BLOCK_CHARS,
 } from '../../mindmap/commands';
 import type { AgentCapabilities, AgentToolResult } from '../tool-api';
-import type { AgentToolDescriptor, NodeEditOperation } from '../types';
+import type {
+  AgentToolDescriptor,
+  KnowledgeDocumentEditMode,
+  KnowledgeDocumentEditProposal,
+  NodeEditOperation,
+} from '../types';
 import {
   assertOnlyKeys,
   MAX_SEARCH_RESULTS,
+  MAX_TOOL_READ_CHARS,
+  optionalString,
   previewDocument,
   requireInteger,
   requireString,
@@ -15,20 +22,112 @@ import {
   schema,
 } from './parse';
 
+const MAX_KNOWLEDGE_DOC_PROPOSAL_CHARS = 180_000;
+
+function extractMarkdownHeadings(
+  markdown: string,
+): Array<{ level: number; text: string; offset: number; line: number }> {
+  const headings: Array<{
+    level: number;
+    text: string;
+    offset: number;
+    line: number;
+  }> = [];
+  const lines = markdown.split(/\r?\n/);
+  let offset = 0;
+  let inFence = false;
+  for (let i = 0; i < lines.length; i += 1) {
+    const raw = lines[i];
+    const trimmed = raw.trim();
+    if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
+      inFence = !inFence;
+    } else if (!inFence) {
+      const m = /^(#{1,4})\s+(.+)$/.exec(trimmed);
+      if (m) {
+        headings.push({
+          level: m[1].length,
+          text: m[2].trim().slice(0, 120),
+          offset,
+          line: i + 1,
+        });
+        if (headings.length >= 60) break;
+      }
+    }
+    offset += raw.length + 1;
+  }
+  return headings;
+}
+
 export const mindmapToolCatalog: AgentToolDescriptor[] = [
   {
     version: 1,
     name: 'mindmap_get_current',
     description:
-      '读取当前打开的思维导图结构和完整 Markdown 原文。每个节点包含持久 nodeId（旧节点可能为空）、allowedOperations 和 noteTruncated；只对 allowedOperations 中列出的操作提出修改。节点路径只在返回的 revision 版本内有效；树结构若 truncated 为 true 表示节点树只列出部分节点，markdown 字段仍是完整原文。修改前必须先调用此工具。',
+      '读取当前打开的思维导图结构和完整 Markdown 原文（仅用于思维导图工作区；若用户在知识库阅读 Markdown 文档请改用 knowledge_get_current_document）。每个节点包含持久 nodeId、allowedOperations 和 noteTruncated；修改导图前必须先调用此工具。',
     permission: 'read',
     inputSchema: schema({}),
   },
   {
     version: 1,
+    name: 'knowledge_get_current_document',
+    description:
+      '读取知识库工作区当前正在打开/阅读的 Markdown 文档（如视频笔记、研究文档、读书笔记等），返回标题、相对路径、总字数、总行数、章节大纲（含字符 offset）以及正文内容。文档较长时可通过 offset（字符偏移）和 maxChars 分段读取直到 nextOffset 为 null。当左侧/主页面为知识库文档时，优先调用此工具。',
+    permission: 'read',
+    inputSchema: schema({
+      offset: {
+        type: 'integer',
+        minimum: 0,
+        description: '可选：正文读取起始字符偏移，默认 0。',
+      },
+      maxChars: {
+        type: 'integer',
+        minimum: 500,
+        maximum: 24_000,
+        description: '可选：单次读取最大字符数，默认 12000，上限 24000。',
+      },
+    }),
+  },
+  {
+    version: 1,
+    name: 'knowledge_propose_document_edit',
+    description:
+      '对当前打开的知识库 Markdown 文档提出修改、追加或新建副本（如全文翻译、双语对照、摘要整理）的待确认提案。mode="create_copy" 保留原文并新建独立文档（推荐用于长文翻译）；mode="append" 在文末追加；mode="replace" 替换当前文档全文。工具仅生成确认卡片，用户点击确认后才会写入知识库。',
+    permission: 'user_approval',
+    inputSchema: schema(
+      {
+        mode: {
+          type: 'string',
+          enum: ['create_copy', 'append', 'replace'],
+          description:
+            '写入方式：create_copy 新建译文/整理副本（保留原文）；append 文末追加；replace 替换原文。',
+        },
+        content: {
+          type: 'string',
+          minLength: 1,
+          maxLength: MAX_KNOWLEDGE_DOC_PROPOSAL_CHARS,
+          description: '待写入或追加的完整 Markdown 正文。',
+        },
+        newTitle: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 180,
+          description:
+            '可选：mode="create_copy" 时的新文档标题（如「1. Introduction（中文译文）」）。',
+        },
+        rationale: {
+          type: 'string',
+          maxLength: 500,
+          description: '本次翻译、整理或修改的简明说明。',
+        },
+      },
+      ['mode', 'content', 'rationale'],
+    ),
+  },
+  {
+    version: 1,
     name: 'library_search',
     description:
-      '只读搜索本地文件库中的思维导图，返回标题、分类和相对路径。需要正文时再调用 library_read_document。',
+      '只读搜索本地文件库中的知识库文档与思维导图，返回标题、分类、类型（doc/mindmap）和相对路径。需要正文时再调用 library_read_document。',
     permission: 'read',
     inputSchema: schema(
       {
@@ -42,7 +141,7 @@ export const mindmapToolCatalog: AgentToolDescriptor[] = [
     version: 1,
     name: 'library_read_document',
     description:
-      '只读打开文件库中的一个 Markdown 思维导图。relativePath 应来自 library_search；可用 offset 分段读取较长内容。',
+      '只读打开文件库中的任意一篇 Markdown 知识文档或思维导图。relativePath 应来自 library_search 或当前界面状态；可用 offset 分段读取较长内容。',
     permission: 'read',
     inputSchema: schema(
       {
@@ -217,6 +316,124 @@ async function mindmap_get_current(
   };
 }
 
+async function knowledge_get_current_document(
+  input: Record<string, unknown>,
+  capabilities: AgentCapabilities,
+): Promise<AgentToolResult> {
+  const name = 'knowledge_get_current_document';
+  assertOnlyKeys(input, ['offset', 'maxChars']);
+  const offset =
+    input.offset === undefined ? 0 : requireInteger(input, 'offset');
+  const maxChars =
+    input.maxChars === undefined
+      ? MAX_TOOL_READ_CHARS
+      : Math.max(500, Math.min(24_000, requireInteger(input, 'maxChars')));
+
+  const current = capabilities.readCurrentKnowledgeDocument?.() ?? null;
+  if (!current) {
+    throw new Error(
+      '当前知识库工作区尚未打开任何 Markdown 文档（可能停留在概览页）。请先在知识库打开一篇文档，或使用 library_search 检索目标文档。',
+    );
+  }
+  const markdown = current.markdown ?? '';
+  const totalChars = markdown.length;
+  const totalLines = markdown ? markdown.split(/\r?\n/).length : 0;
+  const start = Math.min(offset, totalChars);
+  const content = markdown.slice(start, start + maxChars);
+  const nextOffset = start + content.length;
+  const headings = extractMarkdownHeadings(markdown);
+
+  return {
+    version: 1,
+    permission: 'read',
+    name,
+    label: `读取当前知识库文档「${current.title}」`,
+    summary: `已读取「${current.title}」(${start}–${nextOffset} / ${totalChars} 字，共 ${totalLines} 行)`,
+    result: {
+      document: {
+        title: current.title,
+        relativePath: current.relativePath,
+        category: current.category,
+        kind: current.kind,
+        dirty: Boolean(current.dirty),
+      },
+      totalChars,
+      totalLines,
+      offset: start,
+      content,
+      nextOffset: nextOffset < totalChars ? nextOffset : null,
+      headings,
+      ...(current.openTabs && current.openTabs.length > 0
+        ? { openTabs: current.openTabs }
+        : {}),
+    },
+  };
+}
+
+async function knowledge_propose_document_edit(
+  input: Record<string, unknown>,
+  capabilities: AgentCapabilities,
+): Promise<AgentToolResult> {
+  const name = 'knowledge_propose_document_edit';
+  assertOnlyKeys(input, ['mode', 'content', 'newTitle', 'rationale']);
+  const mode = input.mode;
+  if (mode !== 'create_copy' && mode !== 'append' && mode !== 'replace') {
+    throw new Error('mode 仅支持 create_copy、append 或 replace。');
+  }
+  const content = requireText(
+    input,
+    'content',
+    MAX_KNOWLEDGE_DOC_PROPOSAL_CHARS,
+    1,
+  );
+  const newTitle = optionalString(input, 'newTitle', 180);
+  const rationale = requireString(input, 'rationale', 500, 1);
+
+  const current = capabilities.readCurrentKnowledgeDocument?.() ?? null;
+  if (!current && mode !== 'create_copy') {
+    throw new Error(
+      '当前知识库没有打开中的目标文档，无法执行替换或追加；请改用 mode="create_copy" 新建文档。',
+    );
+  }
+
+  const targetTitle = current?.title || newTitle || '知识库文档';
+  const targetCategory = current?.category || '知识笔记';
+  const resolvedNewTitle =
+    mode === 'create_copy' ? newTitle || `${targetTitle}（整理版）` : undefined;
+
+  const proposal: KnowledgeDocumentEditProposal = {
+    mode: mode as KnowledgeDocumentEditMode,
+    targetRelativePath: current?.relativePath ?? null,
+    targetTitle,
+    targetCategory,
+    ...(resolvedNewTitle ? { newTitle: resolvedNewTitle } : {}),
+    content,
+    rationale,
+  };
+
+  return {
+    version: 1,
+    permission: 'user_approval',
+    name,
+    label:
+      mode === 'create_copy'
+        ? `新建知识库文档「${resolvedNewTitle}」`
+        : mode === 'append'
+          ? `向「${targetTitle}」追加内容`
+          : `更新知识库文档「${targetTitle}」`,
+    summary: `已生成 ${content.length.toLocaleString()} 字文档变更预览，等待确认写入。`,
+    result: {
+      status: 'awaiting_user_approval',
+      mode,
+      targetTitle,
+      targetRelativePath: proposal.targetRelativePath,
+      ...(resolvedNewTitle ? { newTitle: resolvedNewTitle } : {}),
+      chars: content.length,
+    },
+    knowledgeDocumentProposal: proposal,
+  };
+}
+
 async function library_search(
   input: Record<string, unknown>,
   capabilities: AgentCapabilities,
@@ -233,6 +450,7 @@ async function library_search(
   const results = documents.slice(0, MAX_SEARCH_RESULTS).map((document) => ({
     title: document.title,
     category: document.category,
+    kind: document.kind,
     mapType: document.mapType,
     relativePath: document.relativePath,
     updatedAt: document.updatedAt,
@@ -242,7 +460,7 @@ async function library_search(
     permission: 'read',
     name,
     label: '搜索文件库',
-    summary: `找到 ${results.length} 个相关导图。`,
+    summary: `找到 ${results.length} 篇相关知识文档/导图。`,
     result: { results, truncated: documents.length > results.length },
   };
 }
@@ -263,7 +481,7 @@ async function library_read_document(
     version: 1,
     permission: 'read',
     name,
-    label: `读取导图「${opened.document.title}」`,
+    label: `读取文档「${opened.document.title}」`,
     summary: `读取 ${result.offset}–${result.offset + result.content.length} / ${result.totalChars} 字符。`,
     result,
   };
@@ -586,6 +804,8 @@ async function mindmap_run_code_block(
 
 export const mindmapHandlers = {
   mindmap_get_current,
+  knowledge_get_current_document,
+  knowledge_propose_document_edit,
   library_search,
   library_read_document,
   mindmap_propose_node_edit,

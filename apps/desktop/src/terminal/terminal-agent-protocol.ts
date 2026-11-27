@@ -331,6 +331,14 @@ export const TERMINAL_RESOURCE_MENTIONS: TerminalMentionSpec[] = [
     category: 'book',
   },
   {
+    id: 'doc',
+    token: '#doc',
+    label: '当前知识库文档正文',
+    description:
+      '直接挂载左侧/主页面当前打开的知识库 Markdown 文档正文与标题目录',
+    category: 'kb',
+  },
+  {
     id: 'kb',
     token: '#kb',
     label: '知识库 Markdown 文档',

@@ -1,4 +1,18 @@
 import { getCodeLabLiveBridge } from '../../terminal/codelab-live-bridge';
+import { exportErToMermaid } from '../../terminal/db-er-codec';
+import { mergeLiveSchemaIntoEr } from '../../terminal/db-er-infer';
+import {
+  ER_CARD_WIDTH,
+  ER_NOTE_COLORS,
+  ER_SCHEMA_PALETTE,
+  estimateTableCardHeight,
+  loadErOverlay,
+  makeErEntityId,
+  OFFLINE_ER_CONNECTION_ID,
+  saveErOverlay,
+  type ErCardinality,
+  type ErRelation,
+} from '../../terminal/db-er-model';
 import {
   terminalApi,
   type DataDbConnectionInput,
@@ -133,9 +147,190 @@ export const datalabToolCatalog: AgentToolDescriptor[] = [
   },
   {
     version: 1,
+    name: 'datalab_inspect_db',
+    description:
+      '实时探测已连接数据库（PostgreSQL/DuckDB/SQLite/MySQL）的全量多 Schema 表/视图/物化视图清单、估算行数、磁盘体积、主键、外键拓扑、表注释与字段定义（零全表扫描）。',
+    permission: 'read',
+    inputSchema: schema({
+      connectionId: {
+        type: 'string',
+        maxLength: 160,
+        description:
+          '可选：数据库连接 ID、名称或库名（如 FED）；留空则使用默认研究库或首个已连接库',
+      },
+      schema: {
+        type: 'string',
+        maxLength: 120,
+        description: '可选：仅筛选指定 Schema（如 fred）',
+      },
+    }),
+  },
+  {
+    version: 1,
+    name: 'datalab_profile_table',
+    description:
+      '对单张数据库表进行轻量只读科研剖析：返回精确列类型、主键、外键、索引、估算行数与体积、pg_stats 空值率/基数估计/高频值/值域分布及前若干行样本（零全表扫描，适合百万行大表）。',
+    permission: 'read',
+    inputSchema: schema(
+      {
+        tableName: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 200,
+          description: '目标表名（支持 schema.table 或仅 table）',
+        },
+        schema: {
+          type: 'string',
+          maxLength: 120,
+          description: '可选：Schema 名（如 fred）',
+        },
+        connectionId: {
+          type: 'string',
+          maxLength: 160,
+          description: '可选：数据库连接 ID、名称或库名；留空使用默认连接',
+        },
+        sampleRows: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 20,
+          description: '可选：抽样返回行数（默认 5）',
+        },
+      },
+      ['tableName'],
+    ),
+  },
+  {
+    version: 1,
+    name: 'datalab_er_get_diagram',
+    description:
+      '读取指定数据库连接（或离线建模草图）的完整 ER 图谱拓扑：包含多 Schema 表结构、估算行数、主键、物理外键、已采纳的逻辑关联、自动推断的隐式关联、自定义 Enum/复合类型、用户/Agent 本地中文批注、领域分区、画布便签、双维体检 Issues，以及可选 Mermaid erDiagram 源码。',
+    permission: 'read',
+    inputSchema: schema({
+      connectionId: {
+        type: 'string',
+        maxLength: 160,
+        description:
+          '可选：数据库连接 ID、名称、库名（如 FED）或 "__offline__"；留空使用默认库或首个已连接库',
+      },
+      includeMermaid: {
+        type: 'boolean',
+        description: '可选：是否附带 Mermaid erDiagram 代码（默认 true）',
+      },
+    }),
+  },
+  {
+    version: 1,
+    name: 'datalab_er_annotate',
+    description:
+      '为数据库的本地 ER 图谱叠加层写入中文业务别名、表/字段研究释义、逻辑关联连线（虚线）、领域分区（Subject Areas）、研究便签或挂载本地 Parquet 文件到画布；所有修改仅保存在本地研究叠加层，绝不改动只读数据库，并实时同步到左侧 ER 图谱画布。',
+    permission: 'read',
+    inputSchema: schema({
+      connectionId: {
+        type: 'string',
+        maxLength: 160,
+        description:
+          '可选：数据库连接 ID、名称、库名或 "__offline__"；留空使用默认库',
+      },
+      tableAnnotations: {
+        type: 'array',
+        maxItems: 40,
+        items: {
+          type: 'object',
+          properties: {
+            tableId: {
+              type: 'string',
+              minLength: 1,
+              maxLength: 200,
+              description: '表标识（如 fred.observations 或 table_name）',
+            },
+            alias: { type: 'string', maxLength: 120 },
+            note: { type: 'string', maxLength: 1000 },
+            color: { type: 'string', maxLength: 32 },
+          },
+          required: ['tableId'],
+        },
+      },
+      columnAnnotations: {
+        type: 'array',
+        maxItems: 80,
+        items: {
+          type: 'object',
+          properties: {
+            tableId: { type: 'string', minLength: 1, maxLength: 200 },
+            columnName: { type: 'string', minLength: 1, maxLength: 120 },
+            note: { type: 'string', minLength: 1, maxLength: 400 },
+          },
+          required: ['tableId', 'columnName', 'note'],
+        },
+      },
+      addLogicalRelations: {
+        type: 'array',
+        maxItems: 30,
+        items: {
+          type: 'object',
+          properties: {
+            sourceTableId: { type: 'string', minLength: 1, maxLength: 200 },
+            sourceColumn: { type: 'string', minLength: 1, maxLength: 120 },
+            targetTableId: { type: 'string', minLength: 1, maxLength: 200 },
+            targetColumn: { type: 'string', minLength: 1, maxLength: 120 },
+            cardinality: {
+              type: 'string',
+              enum: ['1:1', '1:N', 'N:1', 'N:M', '0:1', '0:N'],
+            },
+            note: { type: 'string', maxLength: 300 },
+          },
+          required: [
+            'sourceTableId',
+            'sourceColumn',
+            'targetTableId',
+            'targetColumn',
+          ],
+        },
+      },
+      addSubjectAreas: {
+        type: 'array',
+        maxItems: 12,
+        items: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', minLength: 1, maxLength: 120 },
+            tableIds: {
+              type: 'array',
+              items: { type: 'string', maxLength: 200 },
+              maxItems: 50,
+            },
+            note: { type: 'string', maxLength: 300 },
+            color: { type: 'string', maxLength: 32 },
+          },
+          required: ['name'],
+        },
+      },
+      addNotes: {
+        type: 'array',
+        maxItems: 12,
+        items: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', minLength: 1, maxLength: 120 },
+            content: { type: 'string', minLength: 1, maxLength: 2000 },
+            color: { type: 'string', maxLength: 32 },
+          },
+          required: ['title', 'content'],
+        },
+      },
+      pinLocalFiles: {
+        type: 'array',
+        maxItems: 12,
+        items: { type: 'string', minLength: 1, maxLength: 120 },
+        description: '可选：将已挂载的本地 Parquet/CSV 文件别名钉到 ER 画布上',
+      },
+    }),
+  },
+  {
+    version: 1,
     name: 'datalab_query_sql',
     description:
-      '使用 SQL 检索已挂载文件、会话共享总线表或已连接的 SQLite/DuckDB/PostgreSQL/MySQL 数据库；可选通过 saveAsTable 将完整结果写入跨语言 Parquet 总线供 Python/R 调用 sm_load() 读取。',
+      '以强制只读模式执行 SQL 检索已挂载文件、会话共享总线表或已连接的 SQLite/DuckDB/PostgreSQL/MySQL 数据库；支持 DuckDB 联邦 ATTACH 跨库 JOIN 本地 Parquet；可选通过 saveAsTable 将完整结果以 Parquet 写入跨语言总线供 Python/R 调用 sm_load() 读取。',
     permission: 'read',
     inputSchema: schema(
       {
@@ -143,24 +338,36 @@ export const datalabToolCatalog: AgentToolDescriptor[] = [
           type: 'string',
           minLength: 1,
           maxLength: 16_000,
-          description: '待执行的 SQL 语句',
+          description: '待执行的只读 SQL 语句',
         },
         connectionId: {
           type: 'string',
           maxLength: 160,
           description:
-            '可选：数据库连接 ID 或名称；留空则使用本地文件/总线或默认基座数据库',
+            '可选：数据库连接 ID、名称或库名；留空则使用本地文件/DuckDB 联邦总线或默认基座数据库',
+        },
+        attachDbIds: {
+          type: 'array',
+          items: { type: 'string', maxLength: 160 },
+          maxItems: 6,
+          description:
+            '可选（仅本地 DuckDB 模式）：指定要以只读模式 ATTACH 的数据库 ID/名称/库名列表，支持单条 SQL 直接 JOIN 本地 Parquet 与 PostgreSQL',
         },
         saveAsTable: {
           type: 'string',
           maxLength: 80,
           description:
-            '可选：将全量查询结果保存为共享总线表名（Python/R 可立即 sm_load）',
+            '可选：将查询结果以 Parquet 保存为共享总线表名（Python/R 可立即 sm_load）',
         },
         maxRows: {
           type: 'integer',
           minimum: 1,
           maximum: 500,
+        },
+        page: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 10000,
         },
         pythonPath: {
           type: 'string',
@@ -384,6 +591,9 @@ async function syncAgentDataBusContext() {
         port: c.port ?? null,
         database: c.database ?? null,
         username: c.username ?? null,
+        readOnly: c.readOnly ?? true,
+        sslMode: c.sslMode ?? null,
+        statementTimeoutSec: c.statementTimeoutSec ?? null,
       })),
       defaultPythonPath:
         baseProfile.pythonPath && baseProfile.pythonPath !== 'pyodide'
@@ -597,7 +807,7 @@ export const datalabHandlers: Record<string, ToolHandler> = {
         baseProfile,
         sessionBus,
         helpersHint:
-          'Python 与 R 持久会话已预注入 sm_load(name), sm_save(name, df), sm_tables(), sm_files() 与 SEAMIND_FILES（Python 另含 sm_sql(query)）；SQL 工具可传 saveAsTable 写入同一 Parquet 总线。',
+          'Python 与 R 持久会话已预注入 sm_load(name), sm_save(name, df), sm_tables(), sm_files(), sm_dbs(), sm_db_tables(conn), sm_db_query(conn, sql), sm_db_to_bus(conn, sql, bus_name)（无需明文密码）；Python 另含 sm_sql(query, attach_dbs=[...]) 支持 DuckDB 只读联邦查询；SQL 工具始终强制只读并可传 saveAsTable 写入 Parquet 总线。',
         mountedFiles: files,
         dbConnections: connections,
         pythonEnvs,
@@ -650,12 +860,589 @@ export const datalabHandlers: Record<string, ToolHandler> = {
     };
   },
 
+  async datalab_inspect_db(input): Promise<AgentToolResult> {
+    assertOnlyKeys(input, ['connectionId', 'schema']);
+    const rawConnRef = parseOptionalString(input, 'connectionId', 160) ?? '';
+    const filterSchema = parseOptionalString(input, 'schema', 120) ?? '';
+    const baseProfile = loadDataLabBaseProfile();
+    const savedConns = loadDataLabConnections();
+    const targetRef =
+      rawConnRef || baseProfile.defaultConnectionId || savedConns[0]?.id || '';
+    const matchedConn = savedConns.find(
+      (c) =>
+        c.id === targetRef ||
+        c.name.toLowerCase() === targetRef.toLowerCase() ||
+        (c.database && c.database.toLowerCase() === targetRef.toLowerCase()),
+    );
+    if (!matchedConn) {
+      throw new Error(
+        `未找到数据库连接 "${rawConnRef || '默认连接'}"。可用连接：${savedConns.map((c) => `${c.name} (${c.database ?? c.id})`).join(', ') || '无'}`,
+      );
+    }
+    const pythonPath =
+      matchedConn.pythonPath ??
+      (baseProfile.pythonPath && baseProfile.pythonPath !== 'pyodide'
+        ? baseProfile.pythonPath
+        : null);
+    const res = await terminalApi.testDbConnection({
+      connection: {
+        id: matchedConn.id,
+        name: matchedConn.name,
+        dbType: matchedConn.dbType,
+        filePath: matchedConn.filePath ?? null,
+        host: matchedConn.host ?? null,
+        port: matchedConn.port ?? null,
+        database: matchedConn.database ?? null,
+        username: matchedConn.username ?? null,
+        password: null,
+        pythonPath,
+        readOnly: true,
+        sslMode: matchedConn.sslMode ?? 'prefer',
+        statementTimeoutSec: matchedConn.statementTimeoutSec ?? 30,
+      },
+    });
+    if (!res.ok) {
+      throw new Error(res.message || '数据库连接探测失败');
+    }
+    const tables = filterSchema
+      ? res.tables.filter(
+          (t) => (t.schema ?? '').toLowerCase() === filterSchema.toLowerCase(),
+        )
+      : res.tables;
+    const schemas = Array.from(
+      new Set(tables.map((t) => t.schema || 'default')),
+    );
+    return {
+      version: 1,
+      permission: 'read',
+      name: 'datalab_inspect_db',
+      label: `探查数据库结构 · ${matchedConn.name}`,
+      summary: `${schemas.length} 个 Schema · ${tables.length} 张表/视图 (${res.engine})`,
+      result: {
+        connection: {
+          id: matchedConn.id,
+          name: matchedConn.name,
+          dbType: matchedConn.dbType,
+          database: matchedConn.database ?? null,
+          readOnly: matchedConn.readOnly ?? true,
+        },
+        engine: res.engine,
+        schemas,
+        tableCount: tables.length,
+        tables: tables.slice(0, 120).map((t) => ({
+          schema: t.schema ?? null,
+          name: t.name,
+          tableType: t.tableType,
+          estimatedRows: t.estimatedRows ?? t.rowCount ?? null,
+          totalBytes: t.totalBytes ?? null,
+          comment: t.comment ?? null,
+          primaryKeys: t.primaryKeys ?? [],
+          foreignKeys: t.foreignKeys ?? [],
+          columns: t.columns.slice(0, 80),
+        })),
+      },
+    };
+  },
+
+  async datalab_er_get_diagram(input): Promise<AgentToolResult> {
+    assertOnlyKeys(input, ['connectionId', 'includeMermaid']);
+    const rawConnRef = parseOptionalString(input, 'connectionId', 160) ?? '';
+    const includeMermaid = input.includeMermaid !== false;
+    const baseProfile = loadDataLabBaseProfile();
+    const savedConns = loadDataLabConnections();
+    const mountedFiles = loadDataLabFiles();
+
+    const isOffline = rawConnRef === OFFLINE_ER_CONNECTION_ID;
+    const targetRef =
+      rawConnRef || baseProfile.defaultConnectionId || savedConns[0]?.id || '';
+    const matchedConn = isOffline
+      ? null
+      : (savedConns.find(
+          (c) =>
+            c.id === targetRef ||
+            c.name.toLowerCase() === targetRef.toLowerCase() ||
+            (c.database &&
+              c.database.toLowerCase() === targetRef.toLowerCase()),
+        ) ?? null);
+
+    if (!isOffline && !matchedConn) {
+      throw new Error(
+        `未找到数据库连接 "${rawConnRef || '默认连接'}"。可用连接：${savedConns.map((c) => `${c.name} (${c.database ?? c.id})`).join(', ') || '无'}（或传 "__offline__" 读取离线草图）。`,
+      );
+    }
+
+    let liveTables = matchedConn?.tables ?? [];
+    let liveTypes = matchedConn?.customTypes ?? [];
+    if (matchedConn && liveTables.length === 0) {
+      const pythonPath =
+        matchedConn.pythonPath ??
+        (baseProfile.pythonPath && baseProfile.pythonPath !== 'pyodide'
+          ? baseProfile.pythonPath
+          : null);
+      const res = await terminalApi
+        .testDbConnection({
+          connection: {
+            id: matchedConn.id,
+            name: matchedConn.name,
+            dbType: matchedConn.dbType,
+            filePath: matchedConn.filePath ?? null,
+            host: matchedConn.host ?? null,
+            port: matchedConn.port ?? null,
+            database: matchedConn.database ?? null,
+            username: matchedConn.username ?? null,
+            password: null,
+            pythonPath,
+            readOnly: true,
+            sslMode: matchedConn.sslMode ?? 'prefer',
+            statementTimeoutSec: matchedConn.statementTimeoutSec ?? 30,
+          },
+        })
+        .catch(() => null);
+      if (res?.ok) {
+        liveTables = res.tables;
+        liveTypes = res.customTypes ?? [];
+      }
+    }
+
+    const overlayId = matchedConn ? matchedConn.id : OFFLINE_ER_CONNECTION_ID;
+    const overlay = loadErOverlay(overlayId);
+    const diagram = mergeLiveSchemaIntoEr({
+      connection: matchedConn,
+      liveTables,
+      liveTypes,
+      mountedFiles,
+      overlay,
+    });
+
+    return {
+      version: 1,
+      permission: 'read',
+      name: 'datalab_er_get_diagram',
+      label: `读取 ER 图谱 · ${diagram.title}`,
+      summary: `${diagram.tables.length} 张表 · ${diagram.relations.length} 条关系 · ${diagram.issues.length} 条双维体检`,
+      result: {
+        connectionId: overlayId,
+        title: diagram.title,
+        dbType: diagram.dbType,
+        isOffline: diagram.isOffline,
+        tableCount: diagram.tables.length,
+        tables: diagram.tables.slice(0, 120).map((t) => ({
+          id: t.id,
+          schema: t.schema,
+          name: t.name,
+          tableType: t.tableType,
+          sourceKind: t.sourceKind,
+          alias: t.alias ?? null,
+          note: t.note ?? null,
+          estimatedRows: t.estimatedRows ?? null,
+          totalBytes: t.totalBytes ?? null,
+          primaryKeys: t.primaryKeys,
+          indexCount: t.indexes.length,
+          columns: t.columns.slice(0, 60).map((c) => ({
+            name: c.name,
+            dataType: c.dataType,
+            nullable: c.nullable,
+            isPrimaryKey: c.isPrimaryKey,
+            note: c.note ?? null,
+            comment: c.comment ?? null,
+          })),
+        })),
+        relations: diagram.relations.slice(0, 160),
+        subjectAreas: diagram.subjectAreas,
+        notes: diagram.notes,
+        customTypes: diagram.customTypes,
+        issues: diagram.issues.slice(0, 80),
+        mermaid: includeMermaid ? exportErToMermaid(diagram) : undefined,
+      },
+    };
+  },
+
+  async datalab_er_annotate(input): Promise<AgentToolResult> {
+    assertOnlyKeys(input, [
+      'connectionId',
+      'tableAnnotations',
+      'columnAnnotations',
+      'addLogicalRelations',
+      'addSubjectAreas',
+      'addNotes',
+      'pinLocalFiles',
+    ]);
+    const rawConnRef = parseOptionalString(input, 'connectionId', 160) ?? '';
+    const baseProfile = loadDataLabBaseProfile();
+    const savedConns = loadDataLabConnections();
+    const mountedFiles = loadDataLabFiles();
+
+    const isOffline = rawConnRef === OFFLINE_ER_CONNECTION_ID;
+    const targetRef =
+      rawConnRef || baseProfile.defaultConnectionId || savedConns[0]?.id || '';
+    const matchedConn = isOffline
+      ? null
+      : (savedConns.find(
+          (c) =>
+            c.id === targetRef ||
+            c.name.toLowerCase() === targetRef.toLowerCase() ||
+            (c.database &&
+              c.database.toLowerCase() === targetRef.toLowerCase()),
+        ) ?? null);
+
+    if (!isOffline && !matchedConn) {
+      throw new Error(
+        `未找到数据库连接 "${rawConnRef || '默认连接'}"，无法写入 ER 图谱研究批注。`,
+      );
+    }
+
+    const overlayId = matchedConn ? matchedConn.id : OFFLINE_ER_CONNECTION_ID;
+    const prevOverlay = loadErOverlay(overlayId);
+    const currentDiagram = mergeLiveSchemaIntoEr({
+      connection: matchedConn,
+      liveTables: matchedConn?.tables ?? [],
+      liveTypes: matchedConn?.customTypes ?? [],
+      mountedFiles,
+      overlay: prevOverlay,
+    });
+    const tableById = new Map(currentDiagram.tables.map((t) => [t.id, t]));
+    const resolveTableId = (rawId: string): string => {
+      const clean = rawId.trim();
+      if (tableById.has(clean)) return clean;
+      const found = currentDiagram.tables.find(
+        (t) =>
+          t.id.toLowerCase() === clean.toLowerCase() ||
+          t.name.toLowerCase() === clean.toLowerCase(),
+      );
+      return found ? found.id : clean;
+    };
+
+    const nextTableLayouts = { ...prevOverlay.tableLayouts };
+    const nextColNotes = { ...prevOverlay.columnNotes };
+    const nextLogical = [...prevOverlay.logicalRelations];
+    const nextAreas =
+      prevOverlay.subjectAreas.length > 0
+        ? [...prevOverlay.subjectAreas]
+        : [...currentDiagram.subjectAreas];
+    const nextNotes = [...prevOverlay.notes];
+    const nextPinned = [...prevOverlay.pinnedLocalFiles];
+
+    let updatedTables = 0;
+    let updatedCols = 0;
+    let addedRels = 0;
+    let addedAreas = 0;
+    let addedNotes = 0;
+
+    if (Array.isArray(input.tableAnnotations)) {
+      for (const item of input.tableAnnotations.slice(0, 40)) {
+        if (!item || typeof item !== 'object') continue;
+        const rec = item as Record<string, unknown>;
+        if (typeof rec.tableId !== 'string' || !rec.tableId.trim()) continue;
+        const tid = resolveTableId(rec.tableId);
+        const existingTbl = tableById.get(tid);
+        const prevLayout = nextTableLayouts[tid] ?? {
+          x: existingTbl?.x ?? 80,
+          y: existingTbl?.y ?? 80,
+        };
+        nextTableLayouts[tid] = {
+          ...prevLayout,
+          ...(typeof rec.alias === 'string'
+            ? { alias: rec.alias.trim().slice(0, 120) }
+            : {}),
+          ...(typeof rec.note === 'string'
+            ? { note: rec.note.trim().slice(0, 1000) }
+            : {}),
+          ...(typeof rec.color === 'string' && rec.color.trim()
+            ? { color: rec.color.trim().slice(0, 32) }
+            : {}),
+        };
+        updatedTables += 1;
+      }
+    }
+
+    if (Array.isArray(input.columnAnnotations)) {
+      for (const item of input.columnAnnotations.slice(0, 80)) {
+        if (!item || typeof item !== 'object') continue;
+        const rec = item as Record<string, unknown>;
+        if (
+          typeof rec.tableId !== 'string' ||
+          typeof rec.columnName !== 'string' ||
+          typeof rec.note !== 'string'
+        ) {
+          continue;
+        }
+        const tid = resolveTableId(rec.tableId);
+        const col = rec.columnName.trim();
+        const note = rec.note.trim().slice(0, 400);
+        if (!tid || !col || !note) continue;
+        nextColNotes[`${tid}.${col}`] = note;
+        updatedCols += 1;
+      }
+    }
+
+    if (Array.isArray(input.addLogicalRelations)) {
+      const validCards = new Set<ErCardinality>([
+        '1:1',
+        '1:N',
+        'N:1',
+        'N:M',
+        '0:1',
+        '0:N',
+      ]);
+      for (const item of input.addLogicalRelations.slice(0, 30)) {
+        if (!item || typeof item !== 'object') continue;
+        const rec = item as Record<string, unknown>;
+        if (
+          typeof rec.sourceTableId !== 'string' ||
+          typeof rec.sourceColumn !== 'string' ||
+          typeof rec.targetTableId !== 'string' ||
+          typeof rec.targetColumn !== 'string'
+        ) {
+          continue;
+        }
+        const srcTid = resolveTableId(rec.sourceTableId);
+        const tgtTid = resolveTableId(rec.targetTableId);
+        const srcCol = rec.sourceColumn.trim();
+        const tgtCol = rec.targetColumn.trim();
+        if (!srcTid || !tgtTid || !srcCol || !tgtCol) continue;
+        const dup = nextLogical.some(
+          (r) =>
+            r.sourceTableId.toLowerCase() === srcTid.toLowerCase() &&
+            r.sourceColumn.toLowerCase() === srcCol.toLowerCase() &&
+            r.targetTableId.toLowerCase() === tgtTid.toLowerCase() &&
+            r.targetColumn.toLowerCase() === tgtCol.toLowerCase(),
+        );
+        if (dup) continue;
+        const rawCard =
+          typeof rec.cardinality === 'string' &&
+          validCards.has(rec.cardinality as ErCardinality)
+            ? (rec.cardinality as ErCardinality)
+            : 'N:1';
+        const rel: ErRelation = {
+          id: makeErEntityId('logrel'),
+          sourceTableId: srcTid,
+          sourceColumn: srcCol,
+          targetTableId: tgtTid,
+          targetColumn: tgtCol,
+          cardinality: rawCard,
+          kind: 'logical',
+          note:
+            typeof rec.note === 'string'
+              ? rec.note.trim().slice(0, 300)
+              : undefined,
+        };
+        nextLogical.push(rel);
+        addedRels += 1;
+      }
+    }
+
+    if (Array.isArray(input.addSubjectAreas)) {
+      for (const item of input.addSubjectAreas.slice(0, 12)) {
+        if (!item || typeof item !== 'object') continue;
+        const rec = item as Record<string, unknown>;
+        if (typeof rec.name !== 'string' || !rec.name.trim()) continue;
+        const memberTables = Array.isArray(rec.tableIds)
+          ? rec.tableIds
+              .filter((s): s is string => typeof s === 'string')
+              .map((s) => tableById.get(resolveTableId(s)))
+              .filter((t): t is NonNullable<typeof t> => Boolean(t))
+          : [];
+        let x = 60 + nextAreas.length * 40;
+        let y = 60 + nextAreas.length * 40;
+        let width = 460;
+        let height = 300;
+        if (memberTables.length > 0) {
+          let minX = Infinity;
+          let minY = Infinity;
+          let maxX = -Infinity;
+          let maxY = -Infinity;
+          for (const t of memberTables) {
+            minX = Math.min(minX, t.x);
+            minY = Math.min(minY, t.y);
+            maxX = Math.max(maxX, t.x + (t.width || ER_CARD_WIDTH));
+            maxY = Math.max(maxY, t.y + estimateTableCardHeight(t, false));
+          }
+          x = Math.round(minX - 28);
+          y = Math.round(minY - 44);
+          width = Math.max(320, Math.round(maxX - minX + 56));
+          height = Math.max(180, Math.round(maxY - minY + 72));
+        }
+        nextAreas.push({
+          id: makeErEntityId('area'),
+          name: rec.name.trim().slice(0, 120),
+          x,
+          y,
+          width,
+          height,
+          color:
+            typeof rec.color === 'string' && rec.color.trim()
+              ? rec.color.trim().slice(0, 32)
+              : ER_SCHEMA_PALETTE[nextAreas.length % ER_SCHEMA_PALETTE.length],
+          note:
+            typeof rec.note === 'string'
+              ? rec.note.trim().slice(0, 300)
+              : undefined,
+        });
+        addedAreas += 1;
+      }
+    }
+
+    if (Array.isArray(input.addNotes)) {
+      const baseRightX = currentDiagram.tables.reduce(
+        (m, t) => Math.max(m, t.x + t.width),
+        120,
+      );
+      for (const item of input.addNotes.slice(0, 12)) {
+        if (!item || typeof item !== 'object') continue;
+        const rec = item as Record<string, unknown>;
+        if (
+          typeof rec.title !== 'string' ||
+          typeof rec.content !== 'string' ||
+          !rec.title.trim()
+        ) {
+          continue;
+        }
+        nextNotes.push({
+          id: makeErEntityId('note'),
+          title: rec.title.trim().slice(0, 120),
+          content: rec.content.trim().slice(0, 2000),
+          x: Math.round(baseRightX + 64),
+          y: 64 + nextNotes.length * 168,
+          width: 260,
+          height: 144,
+          color:
+            typeof rec.color === 'string' && rec.color.trim()
+              ? rec.color.trim().slice(0, 32)
+              : ER_NOTE_COLORS[nextNotes.length % ER_NOTE_COLORS.length],
+        });
+        addedNotes += 1;
+      }
+    }
+
+    if (Array.isArray(input.pinLocalFiles)) {
+      for (const rawAlias of input.pinLocalFiles.slice(0, 12)) {
+        if (typeof rawAlias !== 'string') continue;
+        const clean = rawAlias.trim();
+        if (clean && !nextPinned.includes(clean)) {
+          nextPinned.push(clean);
+        }
+      }
+    }
+
+    saveErOverlay({
+      ...prevOverlay,
+      tableLayouts: nextTableLayouts,
+      columnNotes: nextColNotes,
+      logicalRelations: nextLogical,
+      subjectAreas: nextAreas,
+      notes: nextNotes,
+      pinnedLocalFiles: nextPinned,
+    });
+
+    return {
+      version: 1,
+      permission: 'read',
+      name: 'datalab_er_annotate',
+      label: `更新 ER 研究批注 · ${currentDiagram.title}`,
+      summary: `已同步至本地 ER 画布：${updatedTables} 表批注 · ${updatedCols} 列注释 · +${addedRels} 逻辑关联 · +${addedAreas} 分区 · +${addedNotes} 便签`,
+      result: {
+        ok: true,
+        connectionId: overlayId,
+        updatedTables,
+        updatedCols,
+        addedRelations: addedRels,
+        addedSubjectAreas: addedAreas,
+        addedNotes,
+        pinnedLocalFiles: nextPinned,
+      },
+    };
+  },
+
+  async datalab_profile_table(input): Promise<AgentToolResult> {
+    assertOnlyKeys(input, [
+      'tableName',
+      'schema',
+      'connectionId',
+      'sampleRows',
+    ]);
+    const rawTable = requireString(input, 'tableName', 200).trim();
+    let schemaName = parseOptionalString(input, 'schema', 120) ?? null;
+    let tableName = rawTable;
+    if (!schemaName && rawTable.includes('.')) {
+      const parts = rawTable.split('.');
+      if (parts.length === 2 && parts[0] && parts[1]) {
+        schemaName = parts[0].replace(/^["'`]|["'`]$/g, '');
+        tableName = parts[1].replace(/^["'`]|["'`]$/g, '');
+      }
+    }
+    const sampleRows =
+      typeof input.sampleRows === 'number' && Number.isFinite(input.sampleRows)
+        ? Math.max(0, Math.min(20, Math.floor(input.sampleRows)))
+        : 5;
+    const rawConnRef = parseOptionalString(input, 'connectionId', 160) ?? '';
+    const baseProfile = loadDataLabBaseProfile();
+    const savedConns = loadDataLabConnections();
+    const targetRef =
+      rawConnRef || baseProfile.defaultConnectionId || savedConns[0]?.id || '';
+    const matchedConn = savedConns.find(
+      (c) =>
+        c.id === targetRef ||
+        c.name.toLowerCase() === targetRef.toLowerCase() ||
+        (c.database && c.database.toLowerCase() === targetRef.toLowerCase()),
+    );
+    if (!matchedConn) {
+      throw new Error(
+        `未找到数据库连接 "${rawConnRef || '默认连接'}"。可用连接：${savedConns.map((c) => `${c.name} (${c.database ?? c.id})`).join(', ') || '无'}`,
+      );
+    }
+    const pythonPath =
+      matchedConn.pythonPath ??
+      (baseProfile.pythonPath && baseProfile.pythonPath !== 'pyodide'
+        ? baseProfile.pythonPath
+        : null);
+    const profile = await terminalApi.profileTable({
+      connection: {
+        id: matchedConn.id,
+        name: matchedConn.name,
+        dbType: matchedConn.dbType,
+        filePath: matchedConn.filePath ?? null,
+        host: matchedConn.host ?? null,
+        port: matchedConn.port ?? null,
+        database: matchedConn.database ?? null,
+        username: matchedConn.username ?? null,
+        password: null,
+        pythonPath,
+        readOnly: true,
+        sslMode: matchedConn.sslMode ?? 'prefer',
+        statementTimeoutSec: matchedConn.statementTimeoutSec ?? 30,
+      },
+      schema: schemaName,
+      tableName,
+      sampleRows,
+    });
+    if (!profile.ok) {
+      throw new Error(profile.error || `剖析表 ${rawTable} 失败`);
+    }
+    const sampleMarkdown =
+      profile.sampleColumns.length > 0 && profile.sampleRows.length > 0
+        ? formatTableToMarkdown(profile.sampleColumns, profile.sampleRows)
+        : '';
+    return {
+      version: 1,
+      permission: 'read',
+      name: 'datalab_profile_table',
+      label: `剖析数据表 · ${profile.schema ? `${profile.schema}.` : ''}${profile.tableName}`,
+      summary: `${profile.columns.length} 列${profile.estimatedRows != null ? ` · ~${profile.estimatedRows.toLocaleString()} 行` : ''} · ${profile.indexes.length} 索引 (${profile.durationMs}ms)`,
+      result: {
+        ...profile,
+        markdownTable: sampleMarkdown,
+      },
+    };
+  },
+
   async datalab_query_sql(input): Promise<AgentToolResult> {
     assertOnlyKeys(input, [
       'sql',
       'connectionId',
+      'attachDbIds',
       'saveAsTable',
       'maxRows',
+      'page',
       'pythonPath',
     ]);
     const sql = requireString(input, 'sql', 16_000);
@@ -666,6 +1453,10 @@ export const datalabHandlers: Record<string, ToolHandler> = {
       typeof input.maxRows === 'number' && Number.isFinite(input.maxRows)
         ? Math.max(1, Math.min(500, Math.floor(input.maxRows)))
         : 100;
+    const page =
+      typeof input.page === 'number' && Number.isFinite(input.page)
+        ? Math.max(1, Math.min(10000, Math.floor(input.page)))
+        : 1;
     const pythonPath =
       parseOptionalString(input, 'pythonPath', 500) ??
       (baseProfile.pythonPath && baseProfile.pythonPath !== 'pyodide'
@@ -674,19 +1465,31 @@ export const datalabHandlers: Record<string, ToolHandler> = {
 
     const savedFiles = loadDataLabFiles();
     const savedConns = loadDataLabConnections();
+    const rawAttachRefs = Array.isArray(input.attachDbIds)
+      ? input.attachDbIds
+          .filter(
+            (x): x is string => typeof x === 'string' && x.trim().length > 0,
+          )
+          .slice(0, 6)
+      : [];
     const effectiveConnRef =
       rawConnRef ||
-      (savedFiles.length === 0 ? baseProfile.defaultConnectionId : '');
+      (rawAttachRefs.length === 0 && savedFiles.length === 0
+        ? baseProfile.defaultConnectionId
+        : '');
+    const findConn = (ref: string) =>
+      savedConns.find(
+        (c) =>
+          c.id === ref ||
+          c.name.toLowerCase() === ref.toLowerCase() ||
+          (c.database && c.database.toLowerCase() === ref.toLowerCase()),
+      );
     const matchedConn = effectiveConnRef
-      ? savedConns.find(
-          (c) =>
-            c.id === effectiveConnRef ||
-            c.name.toLowerCase() === effectiveConnRef.toLowerCase(),
-        )
+      ? findConn(effectiveConnRef)
       : undefined;
     if (rawConnRef && !matchedConn) {
       throw new Error(
-        `未找到数据库连接 "${rawConnRef}"。可用连接：${savedConns.map((c) => `${c.name} (${c.id})`).join(', ') || '无'}`,
+        `未找到数据库连接 "${rawConnRef}"。可用连接：${savedConns.map((c) => `${c.name} (${c.database ?? c.id})`).join(', ') || '无'}`,
       );
     }
 
@@ -702,8 +1505,32 @@ export const datalabHandlers: Record<string, ToolHandler> = {
           username: matchedConn.username ?? null,
           password: null,
           pythonPath: matchedConn.pythonPath ?? pythonPath,
+          readOnly: true,
+          sslMode: matchedConn.sslMode ?? 'prefer',
+          statementTimeoutSec: matchedConn.statementTimeoutSec ?? 30,
         }
       : null;
+
+    const attachConnections: DataDbConnectionInput[] = !connPayload
+      ? rawAttachRefs
+          .map((ref) => findConn(ref))
+          .filter((c): c is NonNullable<typeof c> => Boolean(c))
+          .map((c) => ({
+            id: c.id,
+            name: c.name,
+            dbType: c.dbType,
+            filePath: c.filePath ?? null,
+            host: c.host ?? null,
+            port: c.port ?? null,
+            database: c.database ?? null,
+            username: c.username ?? null,
+            password: null,
+            pythonPath: c.pythonPath ?? pythonPath,
+            readOnly: true,
+            sslMode: c.sslMode ?? 'prefer',
+            statementTimeoutSec: c.statementTimeoutSec ?? 30,
+          }))
+      : [];
 
     const mountedFiles = connPayload
       ? []
@@ -719,7 +1546,12 @@ export const datalabHandlers: Record<string, ToolHandler> = {
       mountedFiles,
       pythonPath,
       maxRows,
+      page,
+      readOnly: true,
       exportBusTable: saveAsTable,
+      attachConnections:
+        attachConnections.length > 0 ? attachConnections : null,
+      statementTimeoutSec: matchedConn?.statementTimeoutSec ?? 30,
       sessionId: 'default',
     });
     const markdownTable =
@@ -731,9 +1563,9 @@ export const datalabHandlers: Record<string, ToolHandler> = {
       version: 1,
       permission: 'read',
       name: 'datalab_query_sql',
-      label: `SQL 查询 · ${res.engine}`,
+      label: `SQL 只读查询 · ${res.engine}`,
       summary: res.ok
-        ? `返回 ${res.rows.length} 行 × ${res.columns.length} 列（${res.durationMs}ms${res.busTablePath ? ` · 已写入总线 ${saveAsTable}` : ''}）`
+        ? `返回 ${res.rows.length} 行 × ${res.columns.length} 列（${res.durationMs}ms${res.busTablePath ? ` · 已写入 Parquet 总线 ${saveAsTable}` : ''}）`
         : `SQL 执行失败：${(res.error ?? '').slice(0, 80)}`,
       result: {
         ...res,

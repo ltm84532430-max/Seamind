@@ -6,17 +6,173 @@ import type {
   AgentChatMessage,
   AgentCallEvent,
   AgentToolAction,
+  AgentToolArtifact,
   AgentToolCall,
   AgentToolDefinition,
   AgentTurnUsage,
   CompletionUsage,
   FavoritesCategorizationProposal,
+  KnowledgeDocumentEditProposal,
   KnowledgeNoteProposal,
   LearningPathProposal,
   NodeEditProposal,
   ReaderChapterProposal,
 } from './types';
 import type { AgentToolResult, TerminalCommandProposal } from './tool-api';
+
+const SENSITIVE_KEY_RE =
+  /(?:api[_-]?key|secret|password|passwd|authorization|cookie|credential|private[_-]?key|(?:access|refresh|auth|bearer|session|mcp|client)[_-]?token|^token$)/i;
+
+export class AgentSessionCancelledError extends Error {
+  readonly isAgentCancelled = true;
+  constructor(message = '请求已由用户取消。') {
+    super(message);
+    this.name = 'AgentSessionCancelledError';
+  }
+}
+
+export function isAgentSessionCancelledError(error: unknown): boolean {
+  if (error instanceof AgentSessionCancelledError) return true;
+  if (error instanceof Error) {
+    return (
+      error.message.includes('[AGENT_CANCELLED]') || error.name === 'AbortError'
+    );
+  }
+  return typeof error === 'string' && error.includes('[AGENT_CANCELLED]');
+}
+
+export function redactSensitiveValue(value: unknown, depth = 0): unknown {
+  if (depth > 6 || value === null || value === undefined) return value;
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, 40)
+      .map((item) => redactSensitiveValue(item, depth + 1));
+  }
+  if (typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (SENSITIVE_KEY_RE.test(k)) {
+        out[k] = '[REDACTED]';
+      } else if (typeof v === 'string' && v.length > 600) {
+        out[k] = `${v.slice(0, 600)}… (${v.length} chars)`;
+      } else {
+        out[k] = redactSensitiveValue(v, depth + 1);
+      }
+    }
+    return out;
+  }
+  return value;
+}
+
+function parseRedactedToolArgs(
+  rawArgs: string,
+): Record<string, unknown> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(rawArgs);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return redactSensitiveValue(parsed) as Record<string, unknown>;
+    }
+    return undefined;
+  } catch {
+    return rawArgs.trim() ? { raw: rawArgs.slice(0, 400) } : undefined;
+  }
+}
+
+function formatSafeOutputPreview(result: Record<string, unknown>): string {
+  try {
+    const redacted = redactSensitiveValue(result);
+    const json = JSON.stringify(redacted, null, 2);
+    if (json.length <= 6000) return json;
+    return `${json.slice(0, 6000)}\n… (已截断展示，总长度 ${json.length} 字符)`;
+  } catch {
+    return String(result);
+  }
+}
+
+function extractToolArtifacts(
+  toolName: string,
+  label: string,
+  result: Record<string, unknown>,
+): AgentToolArtifact[] {
+  const artifacts: AgentToolArtifact[] = [];
+
+  // Structured tabular result (e.g., datalab_query_sql, datalab_inspect_file)
+  const rawCols = result.columns;
+  const rawRows = result.rows ?? result.previewRows;
+  if (Array.isArray(rawCols) && rawCols.length > 0 && Array.isArray(rawRows)) {
+    const columns = rawCols.map((c) =>
+      typeof c === 'string'
+        ? c
+        : c && typeof c === 'object' && 'name' in c
+          ? String((c as { name: unknown }).name)
+          : String(c),
+    );
+    const rows = rawRows
+      .slice(0, 100)
+      .filter((r): r is unknown[] => Array.isArray(r))
+      .map((r) =>
+        r.map((cell) =>
+          cell === null ||
+          typeof cell === 'string' ||
+          typeof cell === 'number' ||
+          typeof cell === 'boolean'
+            ? cell
+            : JSON.stringify(cell),
+        ),
+      );
+    artifacts.push({
+      kind: 'table',
+      title: label || toolName,
+      columns,
+      rows,
+      totalRows:
+        typeof result.totalRows === 'number'
+          ? result.totalRows
+          : typeof result.rowCount === 'number'
+            ? result.rowCount
+            : rows.length,
+      truncated: result.truncated === true || rawRows.length > 100,
+      engine: typeof result.engine === 'string' ? result.engine : undefined,
+    });
+  }
+
+  // Saved image or data bus file references
+  if (Array.isArray(result.savedImages)) {
+    for (const imgPath of result.savedImages) {
+      if (typeof imgPath === 'string' && imgPath.trim()) {
+        artifacts.push({
+          kind: 'file-ref',
+          title: imgPath.split(/[\\/]/).pop() || '生成图像',
+          path: imgPath,
+          mediaType: 'image',
+        });
+      }
+    }
+  }
+  if (typeof result.busTablePath === 'string' && result.busTablePath.trim()) {
+    artifacts.push({
+      kind: 'file-ref',
+      title:
+        result.busTablePath.split(/[\\/]/).pop() || '共享数据总线表 (Parquet)',
+      path: result.busTablePath,
+      mediaType: 'data',
+    });
+  }
+
+  // Command / kernel stdout & stderr output
+  const stdout = typeof result.stdout === 'string' ? result.stdout.trim() : '';
+  const stderr = typeof result.stderr === 'string' ? result.stderr.trim() : '';
+  if (stdout || stderr) {
+    artifacts.push({
+      kind: 'terminal-output',
+      title: `${label || toolName} 输出`,
+      stdout: stdout || undefined,
+      stderr: stderr || undefined,
+    });
+  }
+
+  return artifacts;
+}
 
 const MAX_CONTEXT_BYTES = 250_000;
 const MAX_HISTORY_MESSAGES = 64;
@@ -35,6 +191,7 @@ export interface AgentSessionPause {
   learningPathProposal: LearningPathProposal | null;
   favoritesCategorizationProposal: FavoritesCategorizationProposal | null;
   knowledgeNoteProposal: KnowledgeNoteProposal | null;
+  knowledgeDocumentProposal?: KnowledgeDocumentEditProposal | null;
   readerChapterProposal: ReaderChapterProposal | null;
   terminalCommandProposal?: TerminalCommandProposal | null;
 }
@@ -477,6 +634,7 @@ function pauseFrom(execution: AgentToolResult): AgentSessionPause | null {
     !execution.learningPathProposal &&
     !execution.favoritesCategorizationProposal &&
     !execution.knowledgeNoteProposal &&
+    !execution.knowledgeDocumentProposal &&
     !execution.readerChapterProposal &&
     !execution.terminalCommandProposal
   ) {
@@ -488,6 +646,7 @@ function pauseFrom(execution: AgentToolResult): AgentSessionPause | null {
     favoritesCategorizationProposal:
       execution.favoritesCategorizationProposal ?? null,
     knowledgeNoteProposal: execution.knowledgeNoteProposal ?? null,
+    knowledgeDocumentProposal: execution.knowledgeDocumentProposal ?? null,
     readerChapterProposal: execution.readerChapterProposal ?? null,
     terminalCommandProposal: execution.terminalCommandProposal ?? null,
   };
@@ -511,6 +670,19 @@ function pauseReply(
   }
   if (execution.knowledgeNoteProposal) {
     return '笔记修改预览已准备好。请确认或放弃后再继续。';
+  }
+  if (execution.knowledgeDocumentProposal) {
+    const p = execution.knowledgeDocumentProposal;
+    const actionText =
+      p.mode === 'create_copy'
+        ? `新建知识库文档「${p.newTitle || p.targetTitle}」`
+        : p.mode === 'append'
+          ? `在「${p.targetTitle}」文末追加内容`
+          : `更新当前知识库文档「${p.targetTitle}」`;
+    return (
+      assistantContent?.trim() ||
+      `已生成文档变更提案（${actionText}，共 ${p.content.length.toLocaleString()} 字），请在下方确认后写入知识库。`
+    );
   }
   if (execution.readerChapterProposal) {
     return '章节跳转预览已准备好。请确认或放弃后再继续。';
@@ -547,6 +719,7 @@ export async function runAgentSession(args: {
   contextMessages?: AgentChatMessage[];
   customTools?: AgentToolDefinition[];
   systemPromptOverride?: string;
+  signal?: AbortSignal;
   onEvent?(event: AgentCallEvent): void;
 }): Promise<AgentSessionResult> {
   if (!args.profile.surface && !args.customTools) {
@@ -617,6 +790,9 @@ export async function runAgentSession(args: {
   });
 
   for (let round = 0; round < args.profile.maxRounds; round += 1) {
+    if (args.signal?.aborted) {
+      throw new AgentSessionCancelledError();
+    }
     if (workingMessages.length > MAX_WORKING_MESSAGES) {
       compactWorkingMessagesInPlace(MAX_WORKING_MESSAGES);
     }
@@ -636,6 +812,9 @@ export async function runAgentSession(args: {
       JSON.stringify(workingMessages),
     );
     const startedAt = Date.now();
+    const requestId = args.signal
+      ? `agent-req-${startedAt}-${round + 1}-${Math.random().toString(36).slice(2, 7)}`
+      : undefined;
     const requestEvent = {
       id: `${args.profile.id}-model-${round + 1}`,
       kind: 'model' as const,
@@ -645,6 +824,16 @@ export async function runAgentSession(args: {
     };
     usage.requestCount += 1;
     args.onEvent?.({ ...requestEvent, status: 'running' });
+
+    const onAbort = () => {
+      if (requestId) {
+        void agentApi.cancelCompletion({ requestId }).catch(() => undefined);
+      }
+    };
+    if (args.signal) {
+      args.signal.addEventListener('abort', onAbort, { once: true });
+    }
+
     let assistant: AgentCompletionResponse;
     try {
       assistant = await agentApi.complete({
@@ -655,6 +844,7 @@ export async function runAgentSession(args: {
         ...(args.provider.providerId
           ? { providerId: args.provider.providerId }
           : {}),
+        ...(requestId ? { requestId } : {}),
       });
     } catch (error) {
       const endedAt = Date.now();
@@ -664,7 +854,17 @@ export async function runAgentSession(args: {
         endedAt,
         durationMs: endedAt - startedAt,
       });
+      if (args.signal?.aborted || isAgentSessionCancelledError(error)) {
+        throw new AgentSessionCancelledError();
+      }
       throw error;
+    } finally {
+      if (args.signal) {
+        args.signal.removeEventListener('abort', onAbort);
+      }
+    }
+    if (args.signal?.aborted) {
+      throw new AgentSessionCancelledError();
     }
     const requestEndedAt = Date.now();
     args.onEvent?.({
@@ -702,10 +902,14 @@ export async function runAgentSession(args: {
 
     const batchTools: AgentChatMessage[] = [];
     for (const call of calls) {
+      if (args.signal?.aborted) {
+        throw new AgentSessionCancelledError();
+      }
       totalToolCalls += 1;
       if (totalToolCalls > args.profile.maxToolCalls) {
         throw new Error('工具调用次数达到上限，请把请求拆成更小的步骤。');
       }
+      const redactedArgs = parseRedactedToolArgs(call.function.arguments);
       const action: AgentToolAction = {
         id: `${args.profile.id}-tool-${round + 1}-${call.id}`,
         kind: 'tool',
@@ -715,6 +919,7 @@ export async function runAgentSession(args: {
         summary: '正在执行',
         status: 'running',
         startedAt: Date.now(),
+        ...(redactedArgs ? { inputArgs: redactedArgs } : {}),
       };
       args.onEvent?.(action);
       try {
@@ -736,6 +941,11 @@ export async function runAgentSession(args: {
         workingMessages.push(toolMessage);
         const pause = pauseFrom(execution);
         const endedAt = Date.now();
+        const extractedArtifacts = extractToolArtifacts(
+          call.function.name,
+          execution.label,
+          execution.result,
+        );
         args.onEvent?.({
           ...action,
           label: execution.label,
@@ -743,6 +953,10 @@ export async function runAgentSession(args: {
           status: pause ? 'approval' : 'done',
           endedAt,
           durationMs: endedAt - action.startedAt,
+          outputPreview: formatSafeOutputPreview(execution.result),
+          ...(extractedArtifacts.length > 0
+            ? { artifacts: extractedArtifacts }
+            : {}),
         });
         if (pause) {
           const skipped = JSON.stringify({
@@ -773,6 +987,7 @@ export async function runAgentSession(args: {
           status: 'failed',
           endedAt,
           durationMs: endedAt - action.startedAt,
+          errorDetail: message,
         });
       }
     }

@@ -122,6 +122,7 @@ export interface TerminalCodeLabViewHandle {
     kind?: 'code' | 'markdown',
     groupId?: string,
     groupTitle?: string,
+    sqlAttachDbIds?: string[],
   ) => void;
   setPythonRuntime: (runtime: string) => void;
   setRRuntime: (rscriptPath: string) => void;
@@ -468,6 +469,7 @@ export const TerminalCodeLabView = forwardRef<
   const [rKernelId, setRKernelId] = useState<string | null>(null);
   const [variables, setVariables] = useState<PythonWorkerVarSummary[]>([]);
   const lastPreferredPyRuntimeRef = useRef(preferredPythonRuntime);
+  const activeSqlQueryIdsRef = useRef<Map<string, string>>(new Map());
   const rKernelIdRef = useRef<string | null>(null);
   rKernelIdRef.current = rKernelId;
 
@@ -1182,6 +1184,9 @@ export const TerminalCodeLabView = forwardRef<
             port: c.port ?? null,
             database: c.database ?? null,
             username: c.username ?? null,
+            readOnly: c.readOnly ?? true,
+            sslMode: c.sslMode ?? null,
+            statementTimeoutSec: c.statementTimeoutSec ?? null,
           })),
           defaultPythonPath:
             baseProf.pythonPath && baseProf.pythonPath !== 'pyodide'
@@ -1263,6 +1268,9 @@ export const TerminalCodeLabView = forwardRef<
           port: c.port ?? null,
           database: c.database ?? null,
           username: c.username ?? null,
+          readOnly: c.readOnly ?? true,
+          sslMode: c.sslMode ?? null,
+          statementTimeoutSec: c.statementTimeoutSec ?? null,
         })),
         defaultPythonPath:
           baseProf.pythonPath && baseProf.pythonPath !== 'pyodide'
@@ -1460,7 +1468,7 @@ export const TerminalCodeLabView = forwardRef<
   );
 
   const runCellById = useCallback(
-    async (cellId: string, advance = false) => {
+    async (cellId: string, advance = false, sqlPageOverride?: number) => {
       const targetIndex = cellsRef.current.findIndex((c) => c.id === cellId);
       if (targetIndex < 0) return;
       const cell = cellsRef.current[targetIndex];
@@ -1549,6 +1557,8 @@ export const TerminalCodeLabView = forwardRef<
           const conn = cell.sqlConnectionId
             ? effectiveDbConnections.find((c) => c.id === cell.sqlConnectionId)
             : undefined;
+          const effectivePyFallback =
+            selectedPyRuntime !== 'pyodide' ? selectedPyRuntime : null;
           const connPayload: DataDbConnectionInput | null = conn
             ? {
                 id: conn.id,
@@ -1560,9 +1570,10 @@ export const TerminalCodeLabView = forwardRef<
                 database: conn.database ?? null,
                 username: conn.username ?? null,
                 password: null,
-                pythonPath:
-                  conn.pythonPath ??
-                  (selectedPyRuntime !== 'pyodide' ? selectedPyRuntime : null),
+                pythonPath: conn.pythonPath ?? effectivePyFallback,
+                readOnly: conn.readOnly ?? true,
+                sslMode: conn.sslMode ?? 'prefer',
+                statementTimeoutSec: conn.statementTimeoutSec ?? 30,
               }
             : null;
           const mountedPayload = conn
@@ -1572,6 +1583,26 @@ export const TerminalCodeLabView = forwardRef<
                 path: f.path,
                 format: f.format,
               }));
+          const attachPayloads: DataDbConnectionInput[] = !conn
+            ? (cell.sqlAttachDbIds ?? [])
+                .map((id) => effectiveDbConnections.find((c) => c.id === id))
+                .filter((c): c is DataLabDbConnection => Boolean(c))
+                .map((c) => ({
+                  id: c.id,
+                  name: c.name,
+                  dbType: c.dbType,
+                  filePath: c.filePath ?? null,
+                  host: c.host ?? null,
+                  port: c.port ?? null,
+                  database: c.database ?? null,
+                  username: c.username ?? null,
+                  password: null,
+                  pythonPath: c.pythonPath ?? effectivePyFallback,
+                  readOnly: true,
+                  sslMode: c.sslMode ?? 'prefer',
+                  statementTimeoutSec: c.statementTimeoutSec ?? 30,
+                }))
+            : [];
           const rawVar = (cell.sqlResultVar ?? '').trim();
           const validBusVar =
             rawVar && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(rawVar) ? rawVar : null;
@@ -1582,22 +1613,42 @@ export const TerminalCodeLabView = forwardRef<
               : baseProf.pythonPath && baseProf.pythonPath !== 'pyodide'
                 ? baseProf.pythonPath
                 : null;
-          const res = await terminalApi.querySql({
-            sql: liveSource,
-            connection: connPayload,
-            mountedFiles: mountedPayload,
-            pythonPath: effectivePyForSql,
-            maxRows: 200,
-            exportBusTable: validBusVar,
-            sessionId: 'default',
-          });
+          const queryId = `sql-${cellId}-${Date.now().toString(36)}`;
+          activeSqlQueryIdsRef.current.set(cellId, queryId);
+          const pageNum = Math.max(1, sqlPageOverride ?? 1);
+          const pageSize = Math.max(
+            50,
+            Math.min(2000, cell.sqlPageSize ?? 200),
+          );
+          let res;
+          try {
+            res = await terminalApi.querySql({
+              sql: liveSource,
+              connection: connPayload,
+              mountedFiles: mountedPayload,
+              pythonPath: effectivePyForSql,
+              maxRows: pageSize,
+              page: pageNum,
+              readOnly: conn ? (conn.readOnly ?? true) : true,
+              queryId,
+              exportBusTable: pageNum === 1 ? validBusVar : null,
+              attachConnections:
+                attachPayloads.length > 0 ? attachPayloads : null,
+              statementTimeoutSec: conn?.statementTimeoutSec ?? 30,
+              sessionId: 'default',
+            });
+          } finally {
+            if (activeSqlQueryIdsRef.current.get(cellId) === queryId) {
+              activeSqlQueryIdsRef.current.delete(cellId);
+            }
+          }
           const outputs: CodeLabOutputItem[] = [];
           let boundVarName: string | undefined;
           if (res.ok) {
             if (validBusVar && res.busTablePath) {
-              boundVarName = `${validBusVar} (共享总线 · Py/R 可 sm_load)`;
+              boundVarName = `${validBusVar} (Parquet 总线 · Py/R 可 sm_load)`;
             }
-            if (validBusVar && res.columns.length > 0) {
+            if (pageNum === 1 && validBusVar && res.columns.length > 0) {
               const colNames = res.columns.map((c) => c.name);
               const injectPy = res.busTablePath
                 ? `try:\n    ${validBusVar} = sm_load(${JSON.stringify(validBusVar)})\nexcept Exception:\n    import json as _sm_json\n    _sm_cols = _sm_json.loads(${JSON.stringify(JSON.stringify(colNames))})\n    _sm_rows = _sm_json.loads(${JSON.stringify(JSON.stringify(res.rows))})\n    ${validBusVar} = [dict(zip(_sm_cols, _r)) for _r in _sm_rows]`
@@ -1607,7 +1658,7 @@ export const TerminalCodeLabView = forwardRef<
                 if (injected.ok) {
                   setVariables(injected.vars);
                   boundVarName = res.busTablePath
-                    ? `${validBusVar} (Py + 总线)`
+                    ? `${validBusVar} (Py + Parquet 总线)`
                     : validBusVar;
                 }
               } catch {
@@ -1623,6 +1674,11 @@ export const TerminalCodeLabView = forwardRef<
               engine: res.engine,
               boundVar: boundVarName,
               message: res.message ?? undefined,
+              page: res.page ?? pageNum,
+              pageSize: res.pageSize ?? pageSize,
+              hasMore: res.hasMore ?? res.truncated,
+              readOnly: res.readOnly ?? (conn ? (conn.readOnly ?? true) : true),
+              exportedRows: res.exportedRows ?? null,
             });
           } else {
             outputs.push({
@@ -2395,7 +2451,12 @@ export const TerminalCodeLabView = forwardRef<
   const handleChangeCellSqlConfig = useCallback(
     (
       cellId: string,
-      patch: { sqlConnectionId?: string; sqlResultVar?: string },
+      patch: {
+        sqlConnectionId?: string;
+        sqlResultVar?: string;
+        sqlPageSize?: number;
+        sqlAttachDbIds?: string[];
+      },
     ) => {
       setCells((prev) =>
         prev.map((c) => (c.id === cellId ? { ...c, ...patch } : c)),
@@ -2403,6 +2464,25 @@ export const TerminalCodeLabView = forwardRef<
       setDirty(true);
     },
     [],
+  );
+
+  const handleCancelSqlCell = useCallback(
+    (cellId: string) => {
+      const qid = activeSqlQueryIdsRef.current.get(cellId);
+      if (!qid) return;
+      void terminalApi
+        .cancelSql({ queryId: qid })
+        .then(() => showTempNotice('已发送 SQL 取消指令'))
+        .catch(() => undefined);
+    },
+    [showTempNotice],
+  );
+
+  const handleChangeSqlPage = useCallback(
+    (cellId: string, nextPage: number) => {
+      void runCellById(cellId, false, nextPage);
+    },
+    [runCellById],
   );
 
   const handleInsertSnippetCell = useCallback(
@@ -2537,6 +2617,7 @@ export const TerminalCodeLabView = forwardRef<
       source: string,
       autoRun: boolean,
       sqlConnectionId?: string,
+      sqlAttachDbIds?: string[],
     ) => {
       if (!focusedGroupId) return;
       const groupTitle =
@@ -2552,6 +2633,8 @@ export const TerminalCodeLabView = forwardRef<
         status: 'idle',
         outputs: [],
         sqlConnectionId,
+        sqlAttachDbIds:
+          lang === 'sql' && sqlAttachDbIds?.length ? sqlAttachDbIds : undefined,
         groupId: focusedGroupId,
         groupTitle,
         groupCollapsed: false,
@@ -2719,6 +2802,7 @@ export const TerminalCodeLabView = forwardRef<
         kind = 'code',
         groupId,
         groupTitle,
+        sqlAttachDbIds,
       ) => {
         if (kind === 'code') {
           setLanguage(lang);
@@ -2742,6 +2826,10 @@ export const TerminalCodeLabView = forwardRef<
           sqlResultVar:
             kind === 'code' && lang === 'sql'
               ? (sqlResultVar ?? '')
+              : undefined,
+          sqlAttachDbIds:
+            kind === 'code' && lang === 'sql' && sqlAttachDbIds?.length
+              ? sqlAttachDbIds
               : undefined,
           groupId: cleanGroupId,
           groupTitle: cleanGroupId
@@ -4611,6 +4699,8 @@ export const TerminalCodeLabView = forwardRef<
                           onChangeStdin={handleChangeCellStdin}
                           dbConnections={effectiveDbConnections}
                           onChangeSqlConfig={handleChangeCellSqlConfig}
+                          onCancelSqlCell={handleCancelSqlCell}
+                          onChangeSqlPage={handleChangeSqlPage}
                           onToggleMarkdownEdit={handleToggleMarkdownEdit}
                           onStartMarkdownEdit={handleStartMarkdownEdit}
                           onEditorFocus={handleEditorFocus}
@@ -4917,6 +5007,8 @@ export const TerminalCodeLabView = forwardRef<
                                 onChangeStdin={handleChangeCellStdin}
                                 dbConnections={effectiveDbConnections}
                                 onChangeSqlConfig={handleChangeCellSqlConfig}
+                                onCancelSqlCell={handleCancelSqlCell}
+                                onChangeSqlPage={handleChangeSqlPage}
                                 onToggleMarkdownEdit={handleToggleMarkdownEdit}
                                 onStartMarkdownEdit={handleStartMarkdownEdit}
                                 onEditorFocus={handleEditorFocus}

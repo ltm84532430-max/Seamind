@@ -258,10 +258,18 @@ function InteractiveCodeBlock({
   actions?: CodeBlockActionCallbacks;
 }) {
   const [copied, setCopied] = useState(false);
+  const lineCount = useMemo(
+    () => (code ? code.replace(/\r\n?/g, '\n').split('\n').length : 0),
+    [code],
+  );
+  const isLongBlock = lineCount > 26;
+  const [collapsed, setCollapsed] = useState(false);
   const normalized = language.toLowerCase();
   const isLabLang =
     normalized === 'py' ||
     normalized === 'python' ||
+    normalized === 'sql' ||
+    normalized === 'r' ||
     normalized === 'c' ||
     normalized === 'cpp' ||
     normalized === 'c++' ||
@@ -283,16 +291,19 @@ function InteractiveCodeBlock({
   };
 
   return (
-    <div className="tui-code-block">
+    <div className={`tui-code-block${collapsed ? ' is-collapsed' : ''}`}>
       <div className="tui-code-header">
-        <span className="tui-code-lang">{language || 'text'}</span>
+        <div className="tui-code-header-left">
+          <span className="tui-code-lang">{language || 'text'}</span>
+          <span className="tui-code-lines">{lineCount} 行</span>
+        </div>
         <div className="tui-code-actions">
           {isLabLang && actions?.onRunInCodeLab && (
             <button
               type="button"
               className="tui-code-btn is-accent"
               onClick={() => actions.onRunInCodeLab?.(normalized, code)}
-              title="将此代码推入 Euporie Code Lab 单元格并运行"
+              title="将此代码推入 Code Lab 单元格并运行"
             >
               ▶ 在 Code Lab 运行
             </button>
@@ -307,14 +318,26 @@ function InteractiveCodeBlock({
               ↗ 填入右侧终端
             </button>
           )}
+          {isLongBlock && (
+            <button
+              type="button"
+              className="tui-code-btn"
+              onClick={() => setCollapsed((v) => !v)}
+              aria-expanded={!collapsed}
+            >
+              {collapsed ? '展开' : '折叠'}
+            </button>
+          )}
           <button type="button" className="tui-code-btn" onClick={handleCopy}>
             {copied ? '✓ 已复制' : '复制'}
           </button>
         </div>
       </div>
-      <pre className="tui-code-pre">
-        <code>{code}</code>
-      </pre>
+      {!collapsed && (
+        <pre className="tui-code-pre">
+          <code>{code}</code>
+        </pre>
+      )}
     </div>
   );
 }

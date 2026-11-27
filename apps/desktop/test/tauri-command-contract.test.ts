@@ -29,9 +29,11 @@ describe('Tauri command names', () => {
     );
     const missing: string[] = [];
     for (const path of sourceFiles(join(desktopRoot, 'src'))) {
+      const text = readFileSync(path, 'utf8');
+      if (!text.includes('invoke')) continue;
       const source = ts.createSourceFile(
         path,
-        readFileSync(path, 'utf8'),
+        text,
         ts.ScriptTarget.Latest,
         true,
         path.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
@@ -61,9 +63,11 @@ describe('Tauri command names', () => {
     for (const path of sourceFiles(join(desktopRoot, 'src')).filter((item) =>
       item.endsWith('.tsx'),
     )) {
+      const text = readFileSync(path, 'utf8');
+      if (!text.includes('@tauri-apps/api/core')) continue;
       const source = ts.createSourceFile(
         path,
-        readFileSync(path, 'utf8'),
+        text,
         ts.ScriptTarget.Latest,
         true,
         ts.ScriptKind.TSX,
@@ -92,6 +96,7 @@ describe('Tauri command names', () => {
     const mismatches: string[] = [];
     for (const path of sourceFiles(join(desktopRoot, 'src'))) {
       const text = readFileSync(path, 'utf8');
+      if (!text.includes('invoke')) continue;
       const source = ts.createSourceFile(
         path,
         text,

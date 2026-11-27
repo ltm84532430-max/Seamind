@@ -1,6 +1,7 @@
 import {
   memo,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type MutableRefObject,
@@ -57,13 +58,73 @@ const LANG_FULL: Record<TerminalCodeLabLanguage, string> = {
 
 const DataTableOutput = memo(function DataTableOutput({
   table,
+  isRunning = false,
+  onChangePage,
 }: {
   table: CodeLabTableOutput;
+  isRunning?: boolean;
+  onChangePage?: (nextPage: number) => void;
 }) {
   const [copiedMd, setCopiedMd] = useState(false);
+  const [filterText, setFilterText] = useState('');
+  const [sortState, setSortState] = useState<{
+    colIdx: number;
+    dir: 'asc' | 'desc';
+  } | null>(null);
+  const [selectedCell, setSelectedCell] = useState<{
+    colName: string;
+    value: string;
+  } | null>(null);
+  const [copiedCell, setCopiedCell] = useState(false);
+
+  const page = table.page ?? 1;
+  const pageSize = table.pageSize ?? Math.max(table.rows.length, 100);
+  const hasMore = Boolean(table.hasMore ?? table.truncated);
+  const rowOffset = (page - 1) * pageSize;
+
+  const displayRows = useMemo(() => {
+    const q = filterText.trim().toLowerCase();
+    let indexed = table.rows.map((row, idx) => ({ row, idx }));
+    if (q) {
+      indexed = indexed.filter(({ row }) =>
+        row.some((v) => v != null && String(v).toLowerCase().includes(q)),
+      );
+    }
+    if (sortState) {
+      const { colIdx, dir } = sortState;
+      const mult = dir === 'asc' ? 1 : -1;
+      indexed = [...indexed].sort((a, b) => {
+        const va = a.row[colIdx];
+        const vb = b.row[colIdx];
+        if (va == null && vb == null) return 0;
+        if (va == null) return 1;
+        if (vb == null) return -1;
+        if (typeof va === 'number' && typeof vb === 'number') {
+          return (va - vb) * mult;
+        }
+        return (
+          String(va).localeCompare(String(vb), undefined, {
+            numeric: true,
+          }) * mult
+        );
+      });
+    }
+    return indexed;
+  }, [table.rows, filterText, sortState]);
+
+  const toggleSort = (colIdx: number) => {
+    setSortState((prev) => {
+      if (!prev || prev.colIdx !== colIdx) return { colIdx, dir: 'asc' };
+      if (prev.dir === 'asc') return { colIdx, dir: 'desc' };
+      return null;
+    });
+  };
 
   const handleCopyMarkdown = () => {
-    const md = formatTableToMarkdown(table.columns, table.rows);
+    const md = formatTableToMarkdown(
+      table.columns,
+      displayRows.map((x) => x.row),
+    );
     if (!md) return;
     void navigator.clipboard?.writeText(md).then(() => {
       setCopiedMd(true);
@@ -72,7 +133,10 @@ const DataTableOutput = memo(function DataTableOutput({
   };
 
   const handleExportCsv = () => {
-    const csv = formatTableToCsv(table.columns, table.rows);
+    const csv = formatTableToCsv(
+      table.columns,
+      displayRows.map((x) => x.row),
+    );
     if (!csv) return;
     const blob = new Blob([`\uFEFF${csv}`], {
       type: 'text/csv;charset=utf-8',
@@ -80,9 +144,17 @@ const DataTableOutput = memo(function DataTableOutput({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `query_result_${Date.now()}.csv`;
+    a.download = `query_result_p${page}_${Date.now()}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const handleCopySelectedCell = () => {
+    if (!selectedCell) return;
+    void navigator.clipboard?.writeText(selectedCell.value).then(() => {
+      setCopiedCell(true);
+      window.setTimeout(() => setCopiedCell(false), 1200);
+    });
   };
 
   return (
@@ -92,19 +164,65 @@ const DataTableOutput = memo(function DataTableOutput({
           {table.engine && (
             <span className="codelab-data-engine-pill">{table.engine}</span>
           )}
+          {table.readOnly && (
+            <span className="codelab-data-ro-pill" title="数据库会话层只读保护">
+              只读
+            </span>
+          )}
           <span>
-            {table.rows.length} 行 × {table.columns.length} 列
-            {table.truncated ? '（已截断预览）' : ''}
+            {displayRows.length === table.rows.length
+              ? `${table.rows.length} 行`
+              : `${displayRows.length}/${table.rows.length} 行`}{' '}
+            × {table.columns.length} 列
+            {hasMore
+              ? ` · 第 ${page} 页（还有更多）`
+              : page > 1
+                ? ` · 第 ${page} 页`
+                : ''}
           </span>
           {table.boundVar && (
             <span className="codelab-data-bound-pill">
               已注入 → {table.boundVar}
+              {table.exportedRows != null
+                ? ` (${table.exportedRows.toLocaleString()} 行)`
+                : ''}
             </span>
           )}
           {table.message && <span>{table.message}</span>}
         </div>
         {table.columns.length > 0 && (
           <div className="codelab-data-table-actions">
+            {table.rows.length > 5 && (
+              <input
+                type="text"
+                className="codelab-data-filter-input"
+                value={filterText}
+                onChange={(e) => setFilterText(e.target.value)}
+                placeholder="筛选当前页…"
+                aria-label="筛选查询结果当前页"
+              />
+            )}
+            {onChangePage && (page > 1 || hasMore) && (
+              <div className="codelab-data-pager">
+                <button
+                  type="button"
+                  className="codelab-data-mini-btn"
+                  disabled={page <= 1 || isRunning}
+                  onClick={() => onChangePage(Math.max(1, page - 1))}
+                >
+                  上一页
+                </button>
+                <span className="codelab-data-page-num">P{page}</span>
+                <button
+                  type="button"
+                  className="codelab-data-mini-btn"
+                  disabled={!hasMore || isRunning}
+                  onClick={() => onChangePage(page + 1)}
+                >
+                  下一页
+                </button>
+              </div>
+            )}
             <button
               type="button"
               className="codelab-data-mini-btn"
@@ -122,50 +240,102 @@ const DataTableOutput = memo(function DataTableOutput({
           </div>
         )}
       </div>
+
+      {selectedCell && (
+        <div className="codelab-data-cell-inspector">
+          <span className="codelab-data-cell-col">{selectedCell.colName}</span>
+          <code className="codelab-data-cell-val">{selectedCell.value}</code>
+          <button
+            type="button"
+            className="codelab-data-mini-btn"
+            onClick={handleCopySelectedCell}
+          >
+            {copiedCell ? '已复制' : '复制'}
+          </button>
+          <button
+            type="button"
+            className="codelab-data-mini-btn"
+            onClick={() => setSelectedCell(null)}
+          >
+            关闭
+          </button>
+        </div>
+      )}
+
       {table.columns.length > 0 ? (
         <div className="codelab-data-table-scroll">
           <table className="codelab-data-table">
             <thead>
               <tr>
                 <th className="codelab-data-idx-col">#</th>
-                {table.columns.map((col, idx) => (
-                  <th key={`${col.name}-${idx}`}>
-                    <div className="codelab-data-th-inner">
-                      <span>{col.name}</span>
-                      <span className="codelab-data-col-type">
-                        {col.dataType}
-                      </span>
-                    </div>
-                  </th>
-                ))}
+                {table.columns.map((col, idx) => {
+                  const activeSort =
+                    sortState?.colIdx === idx ? sortState.dir : null;
+                  return (
+                    <th key={`${col.name}-${idx}`}>
+                      <button
+                        type="button"
+                        className="codelab-data-th-btn"
+                        onClick={() => toggleSort(idx)}
+                        title={`点击按 ${col.name} 排序（类型：${col.dataType}）`}
+                      >
+                        <div className="codelab-data-th-inner">
+                          <span>
+                            {col.name}
+                            {activeSort === 'asc'
+                              ? ' ↑'
+                              : activeSort === 'desc'
+                                ? ' ↓'
+                                : ''}
+                          </span>
+                          <span className="codelab-data-col-type">
+                            {col.dataType}
+                          </span>
+                        </div>
+                      </button>
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
-              {table.rows.length === 0 ? (
+              {displayRows.length === 0 ? (
                 <tr>
                   <td
                     colSpan={table.columns.length + 1}
                     className="codelab-data-empty-cell"
                   >
-                    查询返回 0 行结果
+                    {filterText.trim()
+                      ? '当前页无匹配筛选条件的行'
+                      : '查询返回 0 行结果'}
                   </td>
                 </tr>
               ) : (
-                table.rows.map((row, rIdx) => (
-                  <tr key={rIdx}>
-                    <td className="codelab-data-idx-col">{rIdx + 1}</td>
-                    {table.columns.map((_, cIdx) => {
+                displayRows.map(({ row, idx: origIdx }) => (
+                  <tr key={origIdx}>
+                    <td className="codelab-data-idx-col">
+                      {rowOffset + origIdx + 1}
+                    </td>
+                    {table.columns.map((col, cIdx) => {
                       const val = row[cIdx];
                       const isNull = val === null || val === undefined;
                       const isNum = typeof val === 'number';
+                      const textVal = isNull ? 'NULL' : String(val);
                       return (
                         <td
                           key={cIdx}
                           className={
                             isNull ? 'is-null' : isNum ? 'is-num' : undefined
                           }
+                          title={textVal}
+                          onClick={() =>
+                            setSelectedCell({
+                              colName: col.name,
+                              value: textVal,
+                            })
+                          }
                         >
-                          {isNull ? 'NULL' : String(val)}
+                          {textVal}
                         </td>
                       );
                     })}
@@ -239,6 +409,8 @@ export const CellOutputList = memo(function CellOutputList({
   onPinOutput,
   pinned = false,
   stale = false,
+  isRunning = false,
+  onChangeSqlPage,
 }: {
   cellId: string;
   outputs: CodeLabOutputItem[];
@@ -250,6 +422,8 @@ export const CellOutputList = memo(function CellOutputList({
   onPinOutput?: (cellId: string) => void;
   pinned?: boolean;
   stale?: boolean;
+  isRunning?: boolean;
+  onChangeSqlPage?: (cellId: string, nextPage: number) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -403,7 +577,18 @@ export const CellOutputList = memo(function CellOutputList({
               return <KatexOutputBlock key={oIdx} latex={out.latex} />;
             }
             if (out.kind === 'table') {
-              return <DataTableOutput key={oIdx} table={out} />;
+              return (
+                <DataTableOutput
+                  key={oIdx}
+                  table={out}
+                  isRunning={isRunning}
+                  onChangePage={
+                    onChangeSqlPage
+                      ? (nextPage) => onChangeSqlPage(cellId, nextPage)
+                      : undefined
+                  }
+                />
+              );
             }
             return (
               <GuardedTextOutput
@@ -438,8 +623,15 @@ export interface CodeLabCellRowProps {
   dbConnections?: DataLabDbConnection[];
   onChangeSqlConfig?: (
     cellId: string,
-    patch: { sqlConnectionId?: string; sqlResultVar?: string },
+    patch: {
+      sqlConnectionId?: string;
+      sqlResultVar?: string;
+      sqlPageSize?: number;
+      sqlAttachDbIds?: string[];
+    },
   ) => void;
+  onCancelSqlCell?: (cellId: string) => void;
+  onChangeSqlPage?: (cellId: string, nextPage: number) => void;
   onToggleMarkdownEdit: (cellId: string) => void;
   onStartMarkdownEdit: (cellId: string) => void;
   onEditorFocus: (cellId: string) => void;
@@ -483,6 +675,8 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
   onChangeStdin,
   dbConnections = [],
   onChangeSqlConfig,
+  onCancelSqlCell,
+  onChangeSqlPage,
   onToggleMarkdownEdit,
   onStartMarkdownEdit,
   onEditorFocus,
@@ -890,10 +1084,11 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
                     })
                   }
                 >
-                  <option value="">本地文件 (DuckDB / 内存 SQLite)</option>
+                  <option value="">本地文件 (DuckDB 联邦 / 内存 SQLite)</option>
                   {dbConnections.map((conn) => (
                     <option key={conn.id} value={conn.id}>
-                      [{conn.dbType.toUpperCase()}] {conn.name}
+                      [{conn.dbType.toUpperCase()}
+                      {conn.readOnly === false ? '·读写' : '·只读'}] {conn.name}
                     </option>
                   ))}
                 </select>
@@ -909,9 +1104,77 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
                     })
                   }
                   placeholder="可选，如 df_res"
-                  title="执行成功后自动将全量结果写入共享总线并注入 Python / R（sm_load 可读）"
+                  title="执行成功后自动将结果写成 Parquet 写入共享总线并注入 Python / R（sm_load 可读）"
                 />
               </label>
+              <label className="codelab-sql-field is-pagesize">
+                <span>每页</span>
+                <select
+                  value={String(cell.sqlPageSize ?? 200)}
+                  onChange={(e) =>
+                    onChangeSqlConfig(cell.id, {
+                      sqlPageSize: Number(e.target.value) || 200,
+                    })
+                  }
+                  title="服务端分页每页返回行数"
+                >
+                  <option value="100">100 行</option>
+                  <option value="200">200 行</option>
+                  <option value="500">500 行</option>
+                  <option value="1000">1000 行</option>
+                </select>
+              </label>
+              {cell.status === 'running' && onCancelSqlCell && (
+                <button
+                  type="button"
+                  className="codelab-sql-stop-btn"
+                  onClick={() => onCancelSqlCell(cell.id)}
+                  title="取消正在执行的 SQL 查询"
+                >
+                  停止查询
+                </button>
+              )}
+              {!cell.sqlConnectionId && dbConnections.length > 0 && (
+                <div
+                  className="codelab-sql-federate-row"
+                  title="勾选后将以 DuckDB 只读 ATTACH 挂载到本条 SQL，支持与本地 Parquet 直接 JOIN"
+                >
+                  <span className="codelab-sql-federate-label">
+                    DuckDB 联邦挂载
+                  </span>
+                  {dbConnections
+                    .filter(
+                      (c) =>
+                        c.dbType === 'postgres' ||
+                        c.dbType === 'sqlite' ||
+                        c.dbType === 'duckdb',
+                    )
+                    .map((conn) => {
+                      const attached = (cell.sqlAttachDbIds ?? []).includes(
+                        conn.id,
+                      );
+                      return (
+                        <button
+                          key={conn.id}
+                          type="button"
+                          className={`codelab-sql-attach-chip${attached ? ' is-active' : ''}`}
+                          onClick={() => {
+                            const prev = cell.sqlAttachDbIds ?? [];
+                            const next = attached
+                              ? prev.filter((id) => id !== conn.id)
+                              : [...prev, conn.id];
+                            onChangeSqlConfig(cell.id, {
+                              sqlAttachDbIds: next,
+                            });
+                          }}
+                        >
+                          {attached ? '✓ ' : '+ '}
+                          {conn.database || conn.name}
+                        </button>
+                      );
+                    })}
+                </div>
+              )}
             </div>
           )}
 
@@ -957,6 +1220,10 @@ export const CodeLabCellRow = memo(function CodeLabCellRow({
                 cell.lastExecutedSource !== undefined &&
                 cell.lastExecutedSource !== cell.source,
               )}
+              isRunning={cell.status === 'running'}
+              onChangeSqlPage={
+                cell.language === 'sql' ? onChangeSqlPage : undefined
+              }
             />
           ))}
 

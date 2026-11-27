@@ -27,6 +27,7 @@ pub struct REnvInfo {
     pub has_arrow: bool,
     pub has_dbi: bool,
     pub has_duckdb: bool,
+    pub has_rpostgres: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,6 +108,9 @@ options(width = 120, warn = 1, stringsAsFactors = FALSE)
 SEAMIND_BUS_DIR <- Sys.getenv("SEAMIND_BUS_DIR", "")
 SEAMIND_TABLES_DIR <- Sys.getenv("SEAMIND_TABLES_DIR", "")
 SEAMIND_ARTIFACTS_DIR <- Sys.getenv("SEAMIND_ARTIFACTS_DIR", "")
+SEAMIND_DATALAB_BRIDGE_URL <- Sys.getenv("SEAMIND_DATALAB_BRIDGE_URL", "")
+SEAMIND_DATALAB_BRIDGE_TOKEN <- Sys.getenv("SEAMIND_DATALAB_BRIDGE_TOKEN", "")
+SEAMIND_SESSION_ID <- Sys.getenv("SEAMIND_SESSION_ID", "default")
 assign("SEAMIND_BUS_DIR", SEAMIND_BUS_DIR, envir = .sm_helpers)
 assign("SEAMIND_TABLES_DIR", SEAMIND_TABLES_DIR, envir = .sm_helpers)
 assign("SEAMIND_ARTIFACTS_DIR", SEAMIND_ARTIFACTS_DIR, envir = .sm_helpers)
@@ -144,6 +148,141 @@ tryCatch({
 }
 
 sm_files <- function() .sm_parse_context_files()
+
+.sm_json_escape <- function(s) {
+  s <- as.character(s)[1L]
+  if (is.na(s)) return("null")
+  s <- gsub("\\\\", "\\\\\\\\", s)
+  s <- gsub("\"", "\\\\\"", s)
+  s <- gsub("\r", "\\\\r", s)
+  s <- gsub("\n", "\\\\n", s)
+  s <- gsub("\t", "\\\\t", s)
+  paste0("\"", s, "\"")
+}
+
+.sm_bridge_post <- function(endpoint, body_json) {
+  if (!nzchar(SEAMIND_DATALAB_BRIDGE_URL) || !nzchar(SEAMIND_DATALAB_BRIDGE_TOKEN)) {
+    stop("Seamind DataLab 本地安全桥接未初始化，请重启 R 内核后重试。")
+  }
+  url <- paste0(sub("/+$", "", SEAMIND_DATALAB_BRIDGE_URL), endpoint)
+  req_file <- tempfile(pattern = "sm_r_req_", fileext = ".json")
+  resp_file <- tempfile(pattern = "sm_r_resp_", fileext = ".json")
+  on.exit({
+    if (file.exists(req_file)) unlink(req_file)
+    if (file.exists(resp_file)) unlink(resp_file)
+  }, add = TRUE)
+  con_out <- file(req_file, open = "wb")
+  writeBin(charToRaw(enc2utf8(body_json)), con_out)
+  close(con_out)
+  curl_bin <- if (.Platform$OS.type == "windows") "curl.exe" else "curl"
+  args <- c(
+    "-sS", "-X", "POST",
+    "-H", "Content-Type: application/json",
+    "-H", paste0("Authorization: Bearer ", SEAMIND_DATALAB_BRIDGE_TOKEN),
+    "--data-binary", paste0("@", req_file),
+    "-o", resp_file,
+    url
+  )
+  status <- suppressWarnings(system2(curl_bin, args = args, stdout = FALSE, stderr = FALSE))
+  if (!identical(status, 0L) || !file.exists(resp_file)) {
+    stop("调用 Seamind 本地数据库桥接失败（请确认系统可用 curl）。")
+  }
+  raw_txt <- paste(readLines(resp_file, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
+  if (requireNamespace("jsonlite", quietly = TRUE)) {
+    return(jsonlite::fromJSON(raw_txt, simplifyVector = FALSE))
+  }
+  stop("解析数据库桥接响应需要 jsonlite 包：install.packages('jsonlite')")
+}
+
+sm_dbs <- function() {
+  if (!nzchar(SEAMIND_BUS_DIR)) return(list())
+  ctx_path <- file.path(SEAMIND_BUS_DIR, "context.json")
+  if (!file.exists(ctx_path)) return(list())
+  if (requireNamespace("jsonlite", quietly = TRUE)) {
+    res <- tryCatch(jsonlite::fromJSON(ctx_path, simplifyVector = FALSE), error = function(e) NULL)
+    if (!is.null(res) && !is.null(res$dbConnections)) {
+      out <- list()
+      for (item in res$dbConnections) {
+        nm <- if (!is.null(item$name) && nzchar(as.character(item$name))) as.character(item$name) else as.character(item$id)
+        if (nzchar(nm)) out[[nm]] <- item
+      }
+      return(out)
+    }
+  }
+  list()
+}
+
+sm_db_tables <- function(conn_name = NULL, schema = NULL) {
+  conn_part <- if (is.null(conn_name)) "null" else .sm_json_escape(conn_name)
+  body <- paste0("{\"connection\":", conn_part, ",\"sessionId\":", .sm_json_escape(SEAMIND_SESSION_ID), "}")
+  res <- .sm_bridge_post("/db/tables", body)
+  if (!isTRUE(res$ok)) {
+    stop(if (!is.null(res$error)) res$error else if (!is.null(res$message)) res$message else "读取数据库表列表失败")
+  }
+  tbls <- res$tables
+  if (length(tbls) == 0L) return(data.frame(schema = character(0), table = character(0), type = character(0), estimated_rows = numeric(0)))
+  sch_v <- vapply(tbls, function(t) if (!is.null(t$schema)) as.character(t$schema) else "", character(1))
+  name_v <- vapply(tbls, function(t) as.character(t$name), character(1))
+  type_v <- vapply(tbls, function(t) if (!is.null(t$tableType)) as.character(t$tableType) else "table", character(1))
+  rows_v <- vapply(tbls, function(t) {
+    v <- if (!is.null(t$estimatedRows)) t$estimatedRows else t$rowCount
+    if (is.null(v)) NA_real_ else as.numeric(v)
+  }, numeric(1))
+  df <- data.frame(schema = sch_v, table = name_v, type = type_v, estimated_rows = rows_v, stringsAsFactors = FALSE)
+  if (!is.null(schema) && nzchar(schema)) {
+    df <- df[tolower(df$schema) == tolower(schema), , drop = FALSE]
+  }
+  df
+}
+
+sm_db_to_bus <- function(conn_name, sql, bus_name, max_rows = 200000L, read_only = TRUE) {
+  ro_lit <- if (isTRUE(read_only)) "true" else "false"
+  body <- paste0(
+    "{\"connection\":", .sm_json_escape(conn_name),
+    ",\"sql\":", .sm_json_escape(sql),
+    ",\"busName\":", .sm_json_escape(bus_name),
+    ",\"maxRows\":", as.integer(max_rows),
+    ",\"readOnly\":", ro_lit,
+    ",\"sessionId\":", .sm_json_escape(SEAMIND_SESSION_ID), "}"
+  )
+  res <- .sm_bridge_post("/db/query-to-bus", body)
+  if (!isTRUE(res$ok)) {
+    stop(if (!is.null(res$error)) res$error else "数据库查询物化到共享总线失败")
+  }
+  res
+}
+
+sm_db_query <- function(conn_name, sql, limit = 100000L, read_only = TRUE) {
+  ro_lit <- if (isTRUE(read_only)) "true" else "false"
+  body <- paste0(
+    "{\"connection\":", .sm_json_escape(conn_name),
+    ",\"sql\":", .sm_json_escape(sql),
+    ",\"maxRows\":", as.integer(limit),
+    ",\"readOnly\":", ro_lit,
+    ",\"sessionId\":", .sm_json_escape(SEAMIND_SESSION_ID), "}"
+  )
+  res <- .sm_bridge_post("/db/query-to-bus", body)
+  if (!isTRUE(res$ok)) {
+    stop(if (!is.null(res$error)) res$error else "数据库查询失败")
+  }
+  target <- as.character(res$path)[1L]
+  if (is.na(target) || !nzchar(target) || !file.exists(target)) {
+    return(data.frame())
+  }
+  on.exit(unlink(target), add = TRUE)
+  low <- tolower(target)
+  if (grepl("\\.parquet$", low)) {
+    if (requireNamespace("arrow", quietly = TRUE)) return(as.data.frame(arrow::read_parquet(target)))
+    if (requireNamespace("duckdb", quietly = TRUE) && requireNamespace("DBI", quietly = TRUE)) {
+      con <- DBI::dbConnect(duckdb::duckdb())
+      on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+      qpath <- gsub("'", "''", target, fixed = TRUE)
+      return(DBI::dbGetQuery(con, paste0("SELECT * FROM read_parquet('", qpath, "')")))
+    }
+    stop("读取数据库 Parquet 结果需要 arrow 或 duckdb 包：install.packages('arrow')")
+  }
+  utils::read.csv(target, check.names = FALSE, fileEncoding = "UTF-8")
+}
 
 sm_tables <- function() {
   out <- character(0)
@@ -230,6 +369,10 @@ sm_show_image <- function(path) {
 }
 
 assign("sm_files", sm_files, envir = .sm_helpers)
+assign("sm_dbs", sm_dbs, envir = .sm_helpers)
+assign("sm_db_tables", sm_db_tables, envir = .sm_helpers)
+assign("sm_db_query", sm_db_query, envir = .sm_helpers)
+assign("sm_db_to_bus", sm_db_to_bus, envir = .sm_helpers)
 assign("sm_tables", sm_tables, envir = .sm_helpers)
 assign("sm_save", sm_save, envir = .sm_helpers)
 assign("sm_load", sm_load, envir = .sm_helpers)
@@ -543,6 +686,7 @@ struct RPkgFlags {
     has_arrow: bool,
     has_dbi: bool,
     has_duckdb: bool,
+    has_rpostgres: bool,
     version: Option<String>,
 }
 
@@ -554,6 +698,7 @@ fn inspect_r_installation(rscript_path: &Path) -> RPkgFlags {
         has_arrow: false,
         has_dbi: false,
         has_duckdb: false,
+        has_rpostgres: false,
         version: None,
     };
 
@@ -623,6 +768,9 @@ fn inspect_r_installation(rscript_path: &Path) -> RPkgFlags {
         }
         if dir.join("duckdb").is_dir() {
             flags.has_duckdb = true;
+        }
+        if dir.join("RPostgres").is_dir() {
+            flags.has_rpostgres = true;
         }
     }
 
@@ -756,6 +904,7 @@ pub(crate) fn collect_candidate_r_envs(extra_paths: Option<&[String]>) -> Vec<RE
             has_arrow: flags.has_arrow,
             has_dbi: flags.has_dbi,
             has_duckdb: flags.has_duckdb,
+            has_rpostgres: flags.has_rpostgres,
         });
     };
 
@@ -934,9 +1083,10 @@ async fn spawn_r_kernel(
             cmd.current_dir(p);
         }
     }
-    if let Ok((_, bus_dir, tables_dir, artifacts_dir)) =
+    if let Ok((sid, bus_dir, tables_dir, artifacts_dir)) =
         crate::data_lab::ensure_session_bus_dirs(session_id)
     {
+        cmd.env("SEAMIND_SESSION_ID", sid);
         cmd.env("SEAMIND_BUS_DIR", bus_dir.to_string_lossy().to_string());
         cmd.env(
             "SEAMIND_TABLES_DIR",
@@ -946,6 +1096,10 @@ async fn spawn_r_kernel(
             "SEAMIND_ARTIFACTS_DIR",
             artifacts_dir.to_string_lossy().to_string(),
         );
+    }
+    if let Some(bridge) = crate::data_lab_bridge::ensure_datalab_bridge() {
+        cmd.env("SEAMIND_DATALAB_BRIDGE_URL", bridge.url);
+        cmd.env("SEAMIND_DATALAB_BRIDGE_TOKEN", bridge.token);
     }
     cmd.env("R_DEFAULT_PACKAGES", "datasets,utils,grDevices,graphics,stats,methods");
     cmd.stdin(std::process::Stdio::piped());

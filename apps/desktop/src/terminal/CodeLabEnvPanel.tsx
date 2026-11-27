@@ -38,6 +38,8 @@ function collectPythonPkgTags(env: PythonEnvInfo): string[] {
   if (env.hasMatplotlib) tags.push('matplotlib');
   if (env.hasSqlalchemy) tags.push('sqlalchemy');
   if (env.hasScipy) tags.push('scipy');
+  if (env.hasPsycopg) tags.push('psycopg');
+  if (env.hasPymysql) tags.push('pymysql');
   return tags;
 }
 
@@ -49,6 +51,7 @@ function collectRPkgTags(env: REnvInfo): string[] {
   if (env.hasArrow) tags.push('arrow');
   if (env.hasDuckdb) tags.push('duckdb');
   if (env.hasDbi) tags.push('DBI');
+  if (env.hasRpostgres) tags.push('RPostgres');
   return tags;
 }
 

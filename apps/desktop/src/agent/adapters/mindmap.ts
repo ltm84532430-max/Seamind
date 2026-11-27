@@ -6,10 +6,15 @@ import type {
   ProposeNodeEditInput,
   RunMindmapCodeBlockInput,
 } from '../tool-api';
-import type { ActiveMindmapSnapshot, NodeEditProposal } from '../types';
+import type {
+  ActiveKnowledgeDocumentSnapshot,
+  ActiveMindmapSnapshot,
+  NodeEditProposal,
+} from '../types';
 
 export interface MindmapCapabilityDeps {
   getCurrentMindmap(): ActiveMindmapSnapshot;
+  readCurrentKnowledgeDocument?(): ActiveKnowledgeDocumentSnapshot | null;
   searchLibrary(query: string, category?: string): Promise<MapDocument[]>;
   readDocument(relativePath: string): Promise<OpenedDocument>;
   proposeNodeEdit(input: ProposeNodeEditInput): NodeEditProposal;
@@ -25,6 +30,7 @@ export function createMindmapCapabilities(
 ): Pick<
   AgentCapabilities,
   | 'getCurrentMindmap'
+  | 'readCurrentKnowledgeDocument'
   | 'searchLibrary'
   | 'readDocument'
   | 'proposeNodeEdit'
@@ -34,6 +40,12 @@ export function createMindmapCapabilities(
 > {
   return {
     getCurrentMindmap: () => deps.getCurrentMindmap(),
+    ...(deps.readCurrentKnowledgeDocument
+      ? {
+          readCurrentKnowledgeDocument: () =>
+            deps.readCurrentKnowledgeDocument!(),
+        }
+      : {}),
     searchLibrary: (query, category) => deps.searchLibrary(query, category),
     readDocument: (relativePath) => deps.readDocument(relativePath),
     proposeNodeEdit: (input) => deps.proposeNodeEdit(input),

@@ -45,6 +45,7 @@ import {
 } from './TerminalAgentView';
 import {
   registerCodeLabLiveBridge,
+  setActiveLabTabSnapshot,
   type CodeLabLiveBridgeController,
   type CodeLabNotebookSelector,
 } from './codelab-live-bridge';
@@ -53,6 +54,8 @@ import {
   type CodeLabCanvasViewMode,
   type TerminalCodeLabViewHandle,
 } from './TerminalCodeLabView';
+import { DbErStudioView } from './DbErStudioView';
+import { OFFLINE_ER_CONNECTION_ID } from './db-er-model';
 import {
   CODELAB_AGENT_PUSH_EVENT,
   CODELAB_COLLECTION_EVENT,
@@ -215,6 +218,8 @@ interface SavedLabWorkspace {
     fileId: string | null;
     title: string;
     language: TerminalCodeLabLanguage;
+    labMode?: 'notebook' | 'er';
+    erConnectionId?: string;
   }>;
   paneTabIds: string[];
   focusedPaneIndex: number;
@@ -411,17 +416,25 @@ export function TerminalWorkspace({
     const restoredTabs = (restoredLabRef.current?.tabs ?? [])
       .filter(
         (entry) =>
-          !entry.fileId || savedFiles.some((file) => file.id === entry.fileId),
+          entry.labMode === 'er' ||
+          !entry.fileId ||
+          savedFiles.some((file) => file.id === entry.fileId),
       )
       .map((entry): TerminalTab => ({
         id: entry.id,
         title:
-          savedFiles.find((file) => file.id === entry.fileId)?.title ??
-          entry.title,
+          entry.labMode === 'er'
+            ? entry.title
+            : (savedFiles.find((file) => file.id === entry.fileId)?.title ??
+              entry.title),
         kind: 'lab',
+        labMode: entry.labMode === 'er' ? 'er' : 'notebook',
+        erConnectionId:
+          entry.labMode === 'er' ? entry.erConnectionId : undefined,
         shell: initialShell,
         labLanguage: entry.language,
-        labFileId: entry.fileId ?? undefined,
+        labFileId:
+          entry.labMode === 'er' ? undefined : (entry.fileId ?? undefined),
         cwd: initialCleanCwd,
         status: 'ready',
         createdAt: Date.now(),
@@ -605,9 +618,11 @@ export function TerminalWorkspace({
         .filter((tab) => tab.kind === 'lab')
         .map((tab) => ({
           id: tab.id,
-          fileId: tab.labFileId ?? null,
+          fileId: tab.labMode === 'er' ? null : (tab.labFileId ?? null),
           title: tab.title,
           language: tab.labLanguage ?? 'python',
+          labMode: tab.labMode === 'er' ? 'er' : 'notebook',
+          erConnectionId: tab.erConnectionId,
         })),
       paneTabIds,
       focusedPaneIndex,
@@ -681,6 +696,9 @@ export function TerminalWorkspace({
           port: c.port ?? null,
           database: c.database ?? null,
           username: c.username ?? null,
+          readOnly: c.readOnly ?? true,
+          sslMode: c.sslMode ?? null,
+          statementTimeoutSec: c.statementTimeoutSec ?? null,
         })),
         defaultPythonPath:
           baseProfile.pythonPath && baseProfile.pythonPath !== 'pyodide'
@@ -1119,6 +1137,28 @@ export function TerminalWorkspace({
     () => tabs.find((t) => t.id === activeTabId) ?? tabs[0],
     [tabs, activeTabId],
   );
+
+  useEffect(() => {
+    if (standalone) return;
+    if (workspaceFocus && workspaceFocus !== 'lab') return;
+    if (!activeTab || activeTab.kind !== 'lab') return;
+    setActiveLabTabSnapshot({
+      mode: activeTab.labMode === 'er' ? 'er' : 'notebook',
+      title:
+        activeTab.title ||
+        (activeTab.labMode === 'er' ? 'ER 图谱' : '代码实验本'),
+      erConnectionId:
+        activeTab.labMode === 'er' ? (activeTab.erConnectionId ?? null) : null,
+    });
+  }, [
+    standalone,
+    workspaceFocus,
+    activeTab?.id,
+    activeTab?.kind,
+    activeTab?.labMode,
+    activeTab?.title,
+    activeTab?.erConnectionId,
+  ]);
 
   const focusedLiveCwd =
     terminalRefs.current.get(activeTabId)?.getCwd() ||
@@ -2257,14 +2297,14 @@ export function TerminalWorkspace({
       // 1. Explicit fileId / title match across all mounted lab tabs
       if (targetId || targetTitle) {
         for (const tab of tabs) {
-          if (tab.kind !== 'lab') continue;
+          if (tab.kind !== 'lab' || tab.labMode === 'er') continue;
           const handle = labRefs.current.get(tab.id);
           if (handle && matchesSelector(tab, handle)) return handle;
         }
       }
 
       // 2. If the currently focused pane is a lab tab, use it
-      if (activeTab?.kind === 'lab') {
+      if (activeTab?.kind === 'lab' && activeTab.labMode !== 'er') {
         const handle = labRefs.current.get(activeTab.id);
         if (handle) return handle;
       }
@@ -2272,7 +2312,9 @@ export function TerminalWorkspace({
       // 3. CRITICAL for split view (e.g. Left = CodeLab, Right = Agent):
       //    Prefer the currently VISIBLE lab pane over hidden background lab tabs!
       for (const paneTabId of activePaneIds) {
-        const tab = tabs.find((t) => t.id === paneTabId && t.kind === 'lab');
+        const tab = tabs.find(
+          (t) => t.id === paneTabId && t.kind === 'lab' && t.labMode !== 'er',
+        );
         if (!tab) continue;
         const handle = labRefs.current.get(tab.id);
         if (handle) return handle;
@@ -2283,6 +2325,7 @@ export function TerminalWorkspace({
         const langTab = tabs.find(
           (t) =>
             t.kind === 'lab' &&
+            t.labMode !== 'er' &&
             t.labLanguage === selector.preferredLang &&
             labRefs.current.has(t.id),
         );
@@ -2290,7 +2333,7 @@ export function TerminalWorkspace({
       }
 
       for (const tab of tabs) {
-        if (tab.kind !== 'lab') continue;
+        if (tab.kind !== 'lab' || tab.labMode === 'er') continue;
         const handle = labRefs.current.get(tab.id);
         if (handle) return handle;
       }
@@ -2312,8 +2355,12 @@ export function TerminalWorkspace({
       // without stealing focus from an active Agent pane when possible.
       const preferredLang = selector?.preferredLang ?? 'python';
       const unmountedLab =
-        tabs.find((t) => t.kind === 'lab' && t.labLanguage === preferredLang) ??
-        tabs.find((t) => t.kind === 'lab');
+        tabs.find(
+          (t) =>
+            t.kind === 'lab' &&
+            t.labMode !== 'er' &&
+            t.labLanguage === preferredLang,
+        ) ?? tabs.find((t) => t.kind === 'lab' && t.labMode !== 'er');
 
       if (unmountedLab) {
         if (splitMode === 'single') {
@@ -2473,16 +2520,73 @@ export function TerminalWorkspace({
     [handleOpenSavedCodeFile, labInfoByTab, tabs],
   );
 
+  const handleOpenErStudio = useCallback(
+    (connectionId: string, title?: string) => {
+      setRailModule('lab');
+      const existing = tabs.find(
+        (t) =>
+          t.kind === 'lab' &&
+          t.labMode === 'er' &&
+          t.erConnectionId === connectionId,
+      );
+      if (existing) {
+        activateOrCreateTabInFocusedPane(existing.id);
+        return;
+      }
+      if (tabs.length >= MAX_WORKSPACE_TABS) {
+        showTempNotice(
+          `已达到 ${MAX_WORKSPACE_TABS} 个标签上限，请先关闭不用的标签`,
+        );
+        return;
+      }
+      const conn = dbConnections.find((c) => c.id === connectionId);
+      const tabTitle =
+        title ||
+        (conn ? `ER · ${conn.database || conn.name}` : 'ER · 离线建模草图');
+      const newTab: TerminalTab = {
+        id: makeTabId(),
+        title: tabTitle,
+        kind: 'lab',
+        labMode: 'er',
+        erConnectionId: connectionId,
+        shell: activeTab?.shell ?? 'powershell',
+        labLanguage: 'sql',
+        cwd: normalizeDisplayPath(focusedLiveCwd),
+        status: 'ready',
+        createdAt: Date.now(),
+      };
+      setTabs((prev) => [...prev, newTab]);
+      setPaneTabIds((prev) => {
+        const next = [...prev];
+        next[safeFocusedPane] = newTab.id;
+        return next;
+      });
+      setFocusedPaneIndex(safeFocusedPane);
+      setShowShellMenu(false);
+    },
+    [
+      activateOrCreateTabInFocusedPane,
+      activeTab?.shell,
+      dbConnections,
+      focusedLiveCwd,
+      safeFocusedPane,
+      tabs,
+    ],
+  );
+
   const handleInsertDataCellToLab = useCallback(
     (
       lang: TerminalCodeLabLanguage,
       source: string,
       autoRun: boolean,
       sqlConnectionId?: string,
+      sqlAttachDbIds?: string[],
       sqlResultVar?: string,
       kind: 'code' | 'markdown' = 'code',
     ) => {
       setRailModule('lab');
+      const isErFocused =
+        activeTab?.kind === 'lab' && activeTab.labMode === 'er';
       withActiveLabHandle(lang, (handle) => {
         handle.insertAndRunCell(
           lang,
@@ -2492,10 +2596,29 @@ export function TerminalWorkspace({
           sqlConnectionId,
           sqlResultVar,
           kind,
+          undefined,
+          undefined,
+          sqlAttachDbIds,
         );
+        if (isErFocused) {
+          const targetTab = tabsRef.current.find(
+            (t) =>
+              t.kind === 'lab' &&
+              t.labMode !== 'er' &&
+              labRefs.current.get(t.id) === handle,
+          );
+          if (targetTab && !activePaneIdsRef.current.includes(targetTab.id)) {
+            activateOrCreateTabInFocusedPane(targetTab.id);
+          }
+        }
       });
     },
-    [withActiveLabHandle],
+    [
+      activateOrCreateTabInFocusedPane,
+      activeTab?.kind,
+      activeTab?.labMode,
+      withActiveLabHandle,
+    ],
   );
 
   // Register synchronous live Code Lab controller for Agent & MCP tools (Lab workspace owns this bridge)
@@ -2664,6 +2787,15 @@ export function TerminalWorkspace({
       run: () => createSpecialTab('lab', 'python'),
     },
     {
+      id: 'new-er-studio',
+      badge: '数据',
+      title: '打开 Database ER Studio 数据库关系图谱',
+      subtitle:
+        '实时反推多 Schema ER 图、逻辑外键推断、一键 JOIN 与知识库字典导出',
+      run: () =>
+        handleOpenErStudio(dbConnections[0]?.id ?? OFFLINE_ER_CONNECTION_ID),
+    },
+    {
       id: 'new-c-lab',
       badge: '新建',
       title: '打开 Euporie C/C++ 编译实验本',
@@ -2790,24 +2922,43 @@ export function TerminalWorkspace({
                 aria-selected={isActive}
               >
                 {isNotebookTab ? (
-                  <span
-                    className={`tab-note-glyph is-${tab.labLanguage ?? 'python'}`}
-                    aria-hidden="true"
-                  >
-                    <svg
-                      viewBox="0 0 16 16"
-                      width="12"
-                      height="12"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.35"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
+                  tab.labMode === 'er' ? (
+                    <span className="er-tab-er-glyph" aria-hidden="true">
+                      <svg
+                        viewBox="0 0 16 16"
+                        width="13"
+                        height="13"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.35"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <rect x="1.5" y="2.2" width="5" height="4.5" rx="0.8" />
+                        <rect x="9.5" y="9.3" width="5" height="4.5" rx="0.8" />
+                        <path d="M6.5 4.5h2a1.5 1.5 0 0 1 1.5 1.5v3.3" />
+                      </svg>
+                    </span>
+                  ) : (
+                    <span
+                      className={`tab-note-glyph is-${tab.labLanguage ?? 'python'}`}
+                      aria-hidden="true"
                     >
-                      <path d="M4 2.2h5.8L12.6 5v8.8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3.2a1 1 0 0 1 1-1Z" />
-                      <path d="M9.6 2.2V5h3" />
-                    </svg>
-                  </span>
+                      <svg
+                        viewBox="0 0 16 16"
+                        width="12"
+                        height="12"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.35"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M4 2.2h5.8L12.6 5v8.8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3.2a1 1 0 0 1 1-1Z" />
+                        <path d="M9.6 2.2V5h3" />
+                      </svg>
+                    </span>
+                  )
                 ) : (
                   <span
                     className={`tab-status-dot is-${tab.status}`}
@@ -3049,6 +3200,18 @@ export function TerminalWorkspace({
                         onClick={() => createSpecialTab('lab', 'c')}
                       >
                         C/C++ 实验本
+                      </button>
+                      <button
+                        type="button"
+                        className="shell-cli-quick-btn is-primary"
+                        disabled={tabs.length >= MAX_WORKSPACE_TABS}
+                        onClick={() =>
+                          handleOpenErStudio(
+                            dbConnections[0]?.id ?? OFFLINE_ER_CONNECTION_ID,
+                          )
+                        }
+                      >
+                        数据库 ER 图谱
                       </button>
                     </div>
                   </>
@@ -3721,6 +3884,7 @@ export function TerminalWorkspace({
                         saveDataLabConnections(next);
                       }}
                       onInsertDataCell={handleInsertDataCellToLab}
+                      onOpenErStudio={handleOpenErStudio}
                       onRefreshEnvs={() => refreshDataEnvs()}
                       onRefreshBus={syncSharedBusContext}
                       onSaveBaseProfile={(next) => {
@@ -3753,11 +3917,59 @@ export function TerminalWorkspace({
                     <AgentWorkspaceSidebar
                       agentTabs={agentTabs}
                       activeTabId={activeTabId}
+                      workspaceResources={{
+                        cwd: activeTab?.cwd || initialCleanCwd,
+                        books: (mergedBridge?.books ?? []).map((b) => ({
+                          title: b.title,
+                        })),
+                        documents: (mergedBridge?.documents ?? []).map((d) => ({
+                          title: d.title,
+                        })),
+                        dataFiles: mountedDataFiles.map((f) => ({
+                          alias: f.alias,
+                          format: f.format,
+                        })),
+                        dbConnections: dbConnections.map((c) => ({
+                          name: c.name,
+                          dbType: c.dbType,
+                          database: c.database,
+                          readOnly: c.readOnly ?? true,
+                          tables: (c.tables ?? []).slice(0, 6).map((t) => ({
+                            name: t.name,
+                            schema: t.schema ?? null,
+                            estimatedRows:
+                              t.estimatedRows ?? t.rowCount ?? null,
+                          })),
+                        })),
+                        labNotebooks: codeLabFiles.map((f) => ({
+                          id: f.id,
+                          title: f.title,
+                          language: f.language,
+                        })),
+                        activeDocumentTitle:
+                          mergedBridge?.activeDocument?.title ?? null,
+                        activeMindmapTitle:
+                          mergedBridge?.activeMindmapTitle ?? null,
+                      }}
                       onCreateAgentTab={() => createSpecialTab('agent')}
                       onSelectTab={(tabId) =>
                         activateOrCreateTabInFocusedPane(tabId)
                       }
                       onSendPrompt={(prompt) => sendToAgentPane(prompt)}
+                      onAttachContext={(token) => {
+                        const targetAgent =
+                          activeTab?.kind === 'agent'
+                            ? activeTab
+                            : agentTabs[0];
+                        if (targetAgent) {
+                          activateOrCreateTabInFocusedPane(targetAgent.id);
+                          window.setTimeout(() => {
+                            agentRefs.current
+                              .get(targetAgent.id)
+                              ?.attachContext(token);
+                          }, 40);
+                        }
+                      }}
                       onOpenModelModal={() => {
                         if (activeTab?.kind === 'agent') {
                           agentRefs.current.get(activeTab.id)?.openModelModal();
@@ -4076,7 +4288,51 @@ export function TerminalWorkspace({
                   bridge={mergedBridge}
                   paneAccessor={paneAccessor}
                   onFocusPane={onFocusTabPane}
+                  onOpenCommandPalette={() => {
+                    setPaletteOpen(true);
+                    setPaletteQuery('');
+                    setPaletteIndex(0);
+                    requestAnimationFrame(() =>
+                      paletteSearchRef.current?.focus(),
+                    );
+                  }}
                   onStatusChange={onTabStatus}
+                />
+              );
+            }
+
+            if (tab.kind === 'lab' && tab.labMode === 'er') {
+              return (
+                <DbErStudioView
+                  key={tab.id}
+                  tab={tab}
+                  theme={theme}
+                  active={active && isVisibleInStage}
+                  style={paneStyle}
+                  bridge={mergedBridge}
+                  dbConnections={dbConnections}
+                  mountedFiles={mountedDataFiles}
+                  preferredPythonRuntime={selectedPythonRuntime}
+                  onUpdateDbConnections={(next) => {
+                    setDbConnections(next);
+                    saveDataLabConnections(next);
+                  }}
+                  onChangeTabConnection={(tabId, nextConnId, nextTitle) => {
+                    setTabs((previous) =>
+                      previous.map((item) =>
+                        item.id === tabId
+                          ? {
+                              ...item,
+                              erConnectionId: nextConnId,
+                              title: nextTitle,
+                            }
+                          : item,
+                      ),
+                    );
+                  }}
+                  onInsertDataCell={handleInsertDataCellToLab}
+                  onFocusPane={onFocusTabPane}
+                  onNotify={showTempNotice}
                 />
               );
             }

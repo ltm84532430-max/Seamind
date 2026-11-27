@@ -119,6 +119,32 @@ export interface KnowledgeExcerptProposal {
 export type KnowledgeNoteProposal =
   KnowledgeNoteUpdateProposal | KnowledgeExcerptProposal;
 
+export interface ActiveKnowledgeDocumentSnapshot {
+  title: string;
+  relativePath: string | null;
+  category: string;
+  kind: 'doc' | 'mindmap';
+  markdown: string;
+  dirty?: boolean;
+  openTabs?: Array<{
+    title: string;
+    relativePath: string;
+    active: boolean;
+  }>;
+}
+
+export type KnowledgeDocumentEditMode = 'replace' | 'append' | 'create_copy';
+
+export interface KnowledgeDocumentEditProposal {
+  mode: KnowledgeDocumentEditMode;
+  targetRelativePath: string | null;
+  targetTitle: string;
+  targetCategory: string;
+  newTitle?: string;
+  content: string;
+  rationale: string;
+}
+
 export interface ReaderChapterProposal {
   kind: 'chapter';
   chapterTarget: string;
@@ -195,6 +221,29 @@ export interface AgentToolDescriptor {
   inputSchema: Record<string, unknown>;
 }
 
+export type AgentToolArtifact =
+  | {
+      kind: 'table';
+      title: string;
+      columns: string[];
+      rows: Array<Array<string | number | boolean | null>>;
+      totalRows?: number | null;
+      truncated?: boolean;
+      engine?: string;
+    }
+  | {
+      kind: 'file-ref';
+      title: string;
+      path: string;
+      mediaType?: 'image' | 'data' | 'document';
+    }
+  | {
+      kind: 'terminal-output';
+      title: string;
+      stdout?: string;
+      stderr?: string;
+    };
+
 export interface AgentToolAction {
   id: string;
   kind: 'tool';
@@ -206,6 +255,10 @@ export interface AgentToolAction {
   startedAt: number;
   endedAt?: number;
   durationMs?: number;
+  inputArgs?: Record<string, unknown>;
+  outputPreview?: string;
+  errorDetail?: string;
+  artifacts?: AgentToolArtifact[];
 }
 
 export type AgentCallEvent = AgentModelRequestEvent | AgentToolAction;

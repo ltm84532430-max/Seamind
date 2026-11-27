@@ -1,6 +1,7 @@
 import type { TerminalCodeLabLanguage } from './terminal-types';
 import type {
   DataColumnInfo,
+  DataDbCustomType,
   DataDbTableSchema,
   DataScalarValue,
   PythonVarSummary,
@@ -24,6 +25,11 @@ export interface CodeLabTableOutput {
   engine?: string;
   boundVar?: string;
   message?: string;
+  page?: number | null;
+  pageSize?: number | null;
+  hasMore?: boolean | null;
+  readOnly?: boolean | null;
+  exportedRows?: number | null;
 }
 
 export type CodeLabOutputItem =
@@ -52,6 +58,8 @@ export interface CodeLabCell {
   exitCode?: number | null;
   sqlConnectionId?: string;
   sqlResultVar?: string;
+  sqlPageSize?: number;
+  sqlAttachDbIds?: string[];
   groupId?: string;
   groupTitle?: string;
   groupCollapsed?: boolean;
@@ -669,6 +677,8 @@ export interface CodeLabAgentPushPayload {
   autoRun?: boolean;
   sqlConnectionId?: string;
   sqlResultVar?: string;
+  sqlPageSize?: number;
+  sqlAttachDbIds?: string[];
   groupId?: string;
   groupTitle?: string;
 }
@@ -1594,6 +1604,9 @@ export interface DataLabMountedFile {
   updatedAt: number;
 }
 
+export type DbSslMode =
+  'prefer' | 'disable' | 'require' | 'verify-ca' | 'verify-full';
+
 export interface DataLabDbConnection {
   id: string;
   name: string;
@@ -1605,7 +1618,11 @@ export interface DataLabDbConnection {
   username?: string;
   hasPassword?: boolean;
   pythonPath?: string;
+  readOnly?: boolean;
+  sslMode?: DbSslMode;
+  statementTimeoutSec?: number;
   tables?: DataDbTableSchema[];
+  customTypes?: DataDbCustomType[];
   lastTestedAt?: number;
   lastStatus?: string;
 }

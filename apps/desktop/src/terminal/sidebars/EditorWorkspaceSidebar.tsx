@@ -89,7 +89,9 @@ export interface EditorWorkspaceSidebarProps {
     source: string,
     autoRun: boolean,
     sqlConnectionId?: string,
+    sqlAttachDbIds?: string[],
   ) => void;
+  onOpenErStudio?: (connectionId: string, title?: string) => void;
   onRefreshEnvs: () => void;
   onRefreshBus: () => void;
   onSaveBaseProfile: (next: DataLabBaseProfile) => void;
@@ -402,6 +404,7 @@ export const EditorWorkspaceSidebar = memo(function EditorWorkspaceSidebar({
   onUpdateDataFiles,
   onUpdateDbConnections,
   onInsertDataCell,
+  onOpenErStudio,
   onRefreshEnvs,
   onRefreshBus,
   onSaveBaseProfile,
@@ -1217,6 +1220,7 @@ export const EditorWorkspaceSidebar = memo(function EditorWorkspaceSidebar({
                 onUpdateFiles={onUpdateDataFiles}
                 onUpdateConnections={onUpdateDbConnections}
                 onInsertCell={onInsertDataCell}
+                onOpenErStudio={onOpenErStudio}
                 onNotify={onNotify}
               />
             )}

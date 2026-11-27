@@ -37,9 +37,12 @@ export const agentApi = {
     messages: AgentChatMessage[];
     tools: unknown;
     providerId?: string | null;
+    requestId?: string | null;
   }) =>
     invoke<AgentChatMessage & { usage?: CompletionUsage }>(
       'agent_completion',
       args,
     ),
+  cancelCompletion: (args: { requestId: string }) =>
+    invoke<void>('agent_completion_cancel', args),
 };

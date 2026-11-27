@@ -10703,532 +10703,861 @@ body.is-obsidian-file-dragging * {
 }
 
 /* ==========================================================================
-   ASCII Pixel Terminal Aesthetic for Seamind Agent Workspace
+   Database Connection Modal, Multi-Schema Tree, Profiler & SQL Grid Upgrades
    ========================================================================== */
-.t-agent-topbar {
-  height: 32px;
-  padding: 0 16px;
-  font-family: var(--mono);
-  background: var(--term-surface);
-}
 
-.t-agent-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 0;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--term-success) 35%, transparent);
-}
-
-.t-agent-engine-btn,
-.t-agent-top-model-btn {
-  border-radius: 0;
-  font-family: var(--mono);
-  font-size: 12px;
-}
-
-.t-agent-action-btn {
-  height: 22px;
-  padding: 0 7px;
-  border: 1px solid transparent;
-  border-radius: 0;
-  font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0.01em;
-  transition:
-    border-color 110ms ease,
-    background-color 110ms ease,
-    color 110ms ease,
-    box-shadow 110ms ease;
-}
-
-.t-agent-action-btn:hover {
-  border-color: var(--term-border-strong);
-  background: var(--term-subtle);
-  color: var(--term-ink);
-  box-shadow: 2px 2px 0 color-mix(in srgb, var(--term-ink) 8%, transparent);
-}
-
-.t-agent-action-btn.is-active {
-  border-color: var(--term-accent);
-  background: var(--term-accent-soft);
-  color: var(--term-accent);
-}
-
-.t-agent-scroll {
-  padding: 24px 28px;
-  background-color: var(--term-bg);
-  background-image: radial-gradient(
-    color-mix(in srgb, var(--term-ink) 8%, transparent) 1px,
-    transparent 1px
-  );
-  background-size: 16px 16px;
-}
-
-.t-agent-startup {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  width: 100%;
-  max-width: 720px;
-}
-
-.t-agent-ascii-frame {
-  width: 100%;
-  border: 1px solid var(--term-border-strong);
-  border-radius: 0;
-  background: var(--term-surface);
-  box-shadow: 4px 4px 0 color-mix(in srgb, var(--term-ink) 8%, transparent);
-  font-family: var(--mono);
-  overflow: hidden;
-}
-
-.app-shell[data-theme='dark'] .t-agent-ascii-frame,
-.app-shell[data-theme='navy'] .t-agent-ascii-frame,
-.app-shell[data-theme='purple'] .t-agent-ascii-frame {
-  box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.36);
-}
-
-.t-agent-ascii-bar {
+.datalab-conn-meta-line {
   display: flex;
   align-items: center;
-  gap: 8px;
-  height: 28px;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--term-border);
-  background: var(--term-subtle);
-  font-size: 11px;
-  color: var(--term-muted);
+  flex-wrap: wrap;
+  gap: 5px;
 }
 
-.t-agent-ascii-corner {
-  flex: none;
-  color: var(--term-muted);
-  opacity: 0.72;
-  font-weight: 600;
-}
-
-.t-agent-ascii-bar-title {
-  flex: none;
-  color: var(--term-ink);
-  font-weight: 700;
-  letter-spacing: 0.04em;
-}
-
-.t-agent-ascii-rule {
-  flex: 1 1 0;
-  min-width: 12px;
-  height: 1px;
-  border-top: 1px dashed var(--term-border-strong);
-  opacity: 0.75;
-}
-
-.t-agent-ascii-status {
+.datalab-ro-pill {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  flex: none;
-  padding: 1px 6px;
-  border: 1px solid color-mix(in srgb, var(--term-success) 42%, transparent);
-  background: color-mix(in srgb, var(--term-success) 10%, transparent);
-  color: var(--term-success);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-}
-
-.t-agent-ascii-led {
-  display: inline-block;
-  width: 5px;
-  height: 5px;
-  background: var(--term-success);
-}
-
-.t-agent-ascii-hero {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  padding: 16px 16px 14px;
-}
-
-.t-agent-ascii-hero .t-agent-cli-emblem-box {
-  width: 68px;
-  height: 68px;
-  flex: 0 0 68px;
-  border: 1px solid var(--term-border-strong);
-  border-radius: 0;
-  box-shadow: 3px 3px 0 color-mix(in srgb, var(--term-ink) 12%, transparent);
-  image-rendering: pixelated;
-}
-
-.t-agent-ascii-hero-main {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-width: 0;
-  flex: 1 1 0;
-}
-
-.t-agent-ascii-logo {
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--term-accent);
-  font: 700 10.5px/1.15 var(--mono);
-  letter-spacing: 0.02em;
-  white-space: pre;
-  overflow-x: hidden;
-  user-select: none;
-}
-
-.t-agent-ascii-kv-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.t-agent-ascii-kv-row {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  min-width: 0;
-  font-size: 11.5px;
-  line-height: 1.35;
-}
-
-.t-agent-ascii-k {
-  flex: 0 0 58px;
-  color: var(--term-muted);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-}
-
-.t-agent-ascii-v {
-  flex: 1 1 0;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--term-ink);
-  font-size: 11.5px;
-}
-
-.t-agent-ascii-v.is-link {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--term-accent);
-  font-family: inherit;
-  font-weight: 600;
-  text-align: left;
-  cursor: pointer;
-}
-
-.t-agent-ascii-v.is-link:hover {
-  text-decoration: underline;
-}
-
-.t-agent-ascii-v.is-path {
-  color: var(--term-muted);
-}
-
-.t-agent-ascii-divider {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 12px;
-  height: 22px;
-  background: color-mix(in srgb, var(--term-subtle) 65%, var(--term-surface));
-  border-top: 1px solid var(--term-border);
-  border-bottom: 1px solid var(--term-border);
-  font-size: 10px;
-  color: var(--term-muted);
-}
-
-.t-agent-ascii-divider-label {
-  flex: none;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  color: var(--term-muted);
-}
-
-.t-agent-ascii-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px 12px;
-  padding: 10px 14px;
-}
-
-.t-agent-ascii-col {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-.t-agent-ascii-cmd-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  height: 28px;
-  padding: 0 8px;
+  padding: 0 5px;
+  height: 16px;
   border: 1px solid var(--term-border);
-  border-radius: 0;
-  background: var(--term-bg);
-  color: var(--term-ink);
-  font-family: var(--mono);
-  font-size: 11.5px;
-  text-align: left;
-  cursor: pointer;
-  transition:
-    border-color 110ms ease,
-    background-color 110ms ease,
-    transform 100ms ease,
-    box-shadow 110ms ease;
+  font: 600 9.5px var(--mono, Consolas, monospace);
 }
 
-.t-agent-ascii-cmd-row:hover {
+.datalab-ro-pill.is-ro {
   border-color: var(--term-accent);
   background: var(--term-accent-soft);
-  box-shadow: 2px 2px 0 color-mix(in srgb, var(--term-accent) 26%, transparent);
-  transform: translate(-1px, -1px);
-}
-
-.t-agent-ascii-cmd-key {
-  flex: 0 0 62px;
   color: var(--term-accent);
-  font-weight: 700;
+}
+
+.datalab-ro-pill.is-rw {
+  border-color: var(--term-warning, #c27803);
+  color: var(--term-warning, #c27803);
+}
+
+.datalab-schema-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.datalab-schema-search {
+  width: 100%;
+  height: 24px;
   font-size: 11px;
-  white-space: nowrap;
 }
 
-.t-agent-ascii-cmd-key.is-ref {
-  color: var(--term-primary);
+.datalab-schema-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
 }
 
-.t-agent-ascii-cmd-key.is-kbd {
+.datalab-schema-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.datalab-schema-group-head {
+  width: 100%;
+  padding: 3px 5px;
+  border: 1px solid transparent;
+  background: var(--term-subtle);
   color: var(--term-ink);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font: 600 10.5px var(--mono, Consolas, monospace);
+  cursor: pointer;
+  text-align: left;
 }
 
-.t-agent-ascii-cmd-desc {
+.datalab-schema-group-head:hover {
+  border-color: var(--term-border);
+}
+
+.datalab-schema-caret {
+  width: 10px;
+  flex-shrink: 0;
+  color: var(--term-muted);
+  font-size: 10px;
+}
+
+.datalab-schema-name {
   flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--ui-font);
-  font-size: 11.5px;
-  color: var(--term-muted);
 }
 
-.t-agent-ascii-cmd-row:hover .t-agent-ascii-cmd-desc {
-  color: var(--term-ink);
+.datalab-table-list.is-grouped {
+  max-height: none;
+  overflow: visible;
+  padding-left: 4px;
 }
 
-.t-agent-ascii-cmd-ret {
-  flex: none;
-  font-size: 11px;
-  color: var(--term-muted);
-  opacity: 0.65;
+.datalab-table-node {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 
-.t-agent-ascii-cmd-row:hover .t-agent-ascii-cmd-ret {
-  color: var(--term-accent);
-  opacity: 1;
+.datalab-table-row {
+  display: flex;
 }
 
-.t-agent-ascii-prompt {
+.datalab-table-title {
   display: flex;
   align-items: center;
-  gap: 8px;
-  height: 30px;
-  padding: 0 12px;
-  border-top: 1px solid var(--term-border);
-  background: var(--term-subtle);
-  font-size: 11px;
-  color: var(--term-muted);
-  cursor: text;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 0;
 }
 
-.t-agent-ascii-prompt .t-agent-cli-chevron {
-  color: var(--term-accent);
-  font-weight: 700;
-}
-
-.t-agent-ascii-prompt .t-agent-cli-block-cursor {
-  width: 7px;
-  height: 13px;
-  border-radius: 0;
-  background: var(--term-accent);
-  animation: t-agent-pixel-blink 1.05s steps(2, end) infinite;
-}
-
-@keyframes t-agent-pixel-blink {
-  0%,
-  49% {
-    opacity: 1;
-  }
-  50%,
-  100% {
-    opacity: 0.12;
-  }
-}
-
-.t-agent-ascii-prompt-hint {
-  flex: none;
-  color: var(--term-muted);
-  font-size: 11px;
+.datalab-table-name-txt {
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* Pixel-Framed Message Turns, Context Chips & Composer */
-.t-agent-turn {
-  border-bottom: 1px dashed var(--term-border-strong);
+.datalab-view-tag {
+  padding: 0 3px;
+  border: 1px solid var(--term-border);
+  font: 600 8.5px var(--mono, Consolas, monospace);
+  color: var(--term-muted);
+  flex-shrink: 0;
 }
 
-.t-agent-context-bar {
+.datalab-table-detail {
+  margin: 0 0 4px 10px;
+  padding: 5px 6px;
+  border-left: 2px solid var(--term-border-strong);
+  background: var(--term-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.datalab-table-submeta {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
-  margin-bottom: 8px;
-}
-
-.t-agent-ctx-chip {
-  height: 22px;
-  padding: 0 7px;
-  border: 1px solid var(--term-border);
-  border-radius: 0;
-  background: var(--term-surface);
+  gap: 4px;
+  font: 500 10px var(--mono, Consolas, monospace);
   color: var(--term-muted);
-  font: 500 11px/20px var(--mono);
+}
+
+.datalab-table-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.datalab-col-list.is-db-cols {
+  max-height: 140px;
+}
+
+.datalab-col-row.is-clickable {
+  width: 100%;
+  padding: 2px 3px;
+  border: 0;
+  background: transparent;
   cursor: pointer;
-  transition:
-    border-color 110ms ease,
-    color 110ms ease,
-    box-shadow 110ms ease,
-    transform 100ms ease;
+  text-align: left;
 }
 
-.t-agent-ctx-chip:hover {
-  border-color: var(--term-accent);
-  color: var(--term-accent);
+.datalab-col-row.is-clickable:hover {
   background: var(--term-surface);
-  box-shadow: 2px 2px 0 color-mix(in srgb, var(--term-accent) 22%, transparent);
-  transform: translate(-1px, -1px);
+  color: var(--term-accent);
 }
 
-.t-agent-ctx-chip.is-alert {
-  border-color: color-mix(in srgb, var(--term-warning) 55%, var(--term-border));
-  background: color-mix(in srgb, var(--term-warning) 10%, var(--term-surface));
-  color: var(--term-warning);
+.datalab-col-name-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.datalab-pk-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 4px;
+  margin-right: 4px;
+  border: 1px solid var(--term-accent);
+  background: var(--term-accent-soft);
+  color: var(--term-accent);
+  font: 700 8.5px var(--mono, Consolas, monospace);
+  flex-shrink: 0;
+}
+
+.datalab-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgba(15, 23, 42, 0.48);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.datalab-modal-card {
+  width: min(580px, 94vw);
+  max-height: 88vh;
+  background: var(--term-surface, #ffffff);
+  color: var(--term-ink, #1e293b);
+  border: 1px solid var(--term-border-strong, #cbd5e1);
+  border-radius: 6px;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.25);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.datalab-modal-card.is-wide {
+  width: min(860px, 95vw);
+}
+
+.datalab-modal-header {
+  padding: 14px 18px 12px;
+  border-bottom: 1px solid var(--term-border);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.datalab-modal-header h3 {
+  margin: 0;
+  font-size: 15px;
   font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.t-agent-composer-wrap {
-  padding: 10px 28px 12px;
-  border-top: 1px solid var(--term-border-strong);
+.datalab-modal-subtitle {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  color: var(--term-muted);
+}
+
+.datalab-modal-close {
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--term-border);
+  background: transparent;
+  color: var(--term-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.datalab-modal-close:hover {
+  color: var(--term-ink);
   background: var(--term-subtle);
 }
 
-.t-agent-composer-box {
-  padding: 8px 11px;
-  border: 1px solid var(--term-border-strong);
-  border-radius: 0;
-  background: var(--term-surface);
-  box-shadow: 2px 2px 0 color-mix(in srgb, var(--term-ink) 7%, transparent);
-  transition:
-    border-color 120ms ease,
-    box-shadow 120ms ease;
+.datalab-modal-body {
+  padding: 14px 18px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.t-agent-composer-box:focus-within {
-  border-color: var(--term-accent);
-  box-shadow: 3px 3px 0 color-mix(in srgb, var(--term-accent) 22%, transparent);
+.datalab-modal-footer {
+  padding: 12px 18px;
+  border-top: 1px solid var(--term-border);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  background: var(--term-subtle);
 }
 
-.t-agent-composer-plus-btn {
-  border: 1px solid var(--term-border);
-  border-radius: 0;
-  background: var(--term-surface);
-}
-
-.t-agent-composer-plus-btn:hover {
-  border-color: var(--term-accent);
-  color: var(--term-accent);
-  background: var(--term-accent-soft);
-}
-
-.t-agent-model-trigger {
-  border: 1px solid var(--term-border);
-  border-radius: 0;
-  background: var(--term-surface);
-  font-family: var(--mono);
+.datalab-modal-primary {
+  height: 30px;
+  padding: 0 14px;
   font-size: 12px;
 }
 
-.t-agent-model-trigger:hover,
-.t-agent-model-trigger.is-open {
+.datalab-modal-engine-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--term-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.datalab-modal-engine-tab {
+  height: 32px;
+  border: 0;
+  background: var(--term-subtle);
+  color: var(--term-muted);
+  font: 600 12px var(--ui-font, system-ui, sans-serif);
+  cursor: pointer;
+}
+
+.datalab-modal-engine-tab + .datalab-modal-engine-tab {
+  border-left: 1px solid var(--term-border);
+}
+
+.datalab-modal-engine-tab.is-active {
+  background: var(--term-accent-soft);
+  color: var(--term-accent);
+}
+
+.datalab-modal-engine-tab:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
+.datalab-modal-url-box {
+  padding: 10px;
+  border: 1px dashed var(--term-border-strong);
+  background: var(--term-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.datalab-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.datalab-field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.datalab-field-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.datalab-field-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--term-ink);
+}
+
+.datalab-field-badge {
+  padding: 1px 6px;
+  border: 1px solid var(--term-border);
+  background: var(--term-subtle);
+  color: var(--term-muted);
+  font: 600 10px var(--mono, Consolas, monospace);
+}
+
+.datalab-field-badge.is-ok {
+  border-color: var(--term-accent);
+  background: var(--term-accent-soft);
+  color: var(--term-accent);
+}
+
+.datalab-modal-input {
+  width: 100%;
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--term-border);
+  background: var(--term-bg, var(--term-surface));
+  color: var(--term-ink);
+  font: 400 12.5px var(--mono, Consolas, monospace);
+  box-sizing: border-box;
+}
+
+.datalab-modal-input:focus {
+  outline: none;
+  border-color: var(--term-accent);
+}
+
+.datalab-modal-inline-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.datalab-modal-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.datalab-modal-grid-2-host {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px;
+  gap: 10px;
+}
+
+.datalab-pwd-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.datalab-pwd-wrap .datalab-modal-input {
+  padding-right: 46px;
+}
+
+.datalab-pwd-toggle {
+  position: absolute;
+  right: 4px;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid var(--term-border);
+  background: var(--term-subtle);
+  color: var(--term-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.datalab-pwd-toggle:hover {
+  color: var(--term-ink);
+}
+
+.datalab-modal-hint {
+  font-size: 11px;
+  color: var(--term-muted);
+}
+
+.datalab-db-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 150px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--term-border);
+  background: var(--term-subtle);
+}
+
+.datalab-db-picker-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  background: var(--term-surface);
+}
+
+.datalab-db-picker-item.is-primary {
   border-color: var(--term-accent);
   background: var(--term-accent-soft);
 }
 
-.t-agent-send-btn {
-  height: 28px;
-  padding: 0 12px;
-  border: 1px solid var(--term-accent);
-  border-radius: 0;
-  background: var(--term-accent-soft);
+.datalab-db-picker-select {
+  flex: 1 1 0;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--term-ink);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font: 500 12px var(--mono, Consolas, monospace);
+  cursor: pointer;
+  text-align: left;
+}
+
+.datalab-db-picker-select span {
+  font-size: 10.5px;
+  color: var(--term-muted);
+}
+
+.datalab-db-picker-multi {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--term-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.datalab-db-picker-badge {
+  font-size: 10px;
+  font-weight: 600;
   color: var(--term-accent);
-  font: 700 12px var(--mono);
-  box-shadow: 2px 2px 0 color-mix(in srgb, var(--term-accent) 24%, transparent);
-  transition:
-    background-color 110ms ease,
-    color 110ms ease,
-    transform 100ms ease,
-    box-shadow 110ms ease;
+  flex-shrink: 0;
 }
 
-.t-agent-send-btn:hover:not(:disabled) {
-  background: var(--term-accent);
-  color: #ffffff;
-  transform: translate(-1px, -1px);
-  box-shadow: 3px 3px 0 color-mix(in srgb, var(--term-accent) 34%, transparent);
+.datalab-modal-create-box {
+  padding: 8px 10px;
+  border: 1px solid var(--term-border);
+  background: var(--term-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--term-muted);
 }
 
-.t-agent-send-btn:disabled {
-  border-color: var(--term-border);
+.datalab-modal-safety-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--term-border);
+  background: var(--term-subtle);
+}
+
+.datalab-checkbox-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.datalab-checkbox-label small {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--term-muted);
+}
+
+.datalab-modal-advanced {
+  padding: 10px;
+  border: 1px solid var(--term-border);
+  background: var(--term-subtle);
+}
+
+.datalab-diag-error {
+  padding: 10px 12px;
+  border: 1px solid var(--term-danger, #c53030);
+  border-left-width: 3px;
+  background: color-mix(
+    in srgb,
+    var(--term-danger, #c53030) 7%,
+    var(--term-surface)
+  );
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.datalab-diag-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--term-danger, #c53030);
+}
+
+.datalab-diag-raw {
+  font: 400 11px var(--mono, Consolas, monospace);
+  color: var(--term-ink);
+  word-break: break-word;
+}
+
+.datalab-diag-tips {
+  margin: 2px 0 0;
+  padding-left: 18px;
+  font-size: 11.5px;
+  color: var(--term-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.datalab-profiler-badge {
+  padding: 1px 6px;
+  border: 1px solid var(--term-border);
+  background: var(--term-subtle);
+  color: var(--term-muted);
+  font: 500 10.5px var(--mono, Consolas, monospace);
+}
+
+.datalab-profiler-toolbar {
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--term-border);
+  background: var(--term-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.datalab-profiler-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.datalab-profiler-tab {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--term-border);
   background: var(--term-surface);
   color: var(--term-muted);
-  box-shadow: none;
+  font-size: 11.5px;
+  cursor: pointer;
 }
 
-.t-agent-root.is-compact .t-agent-ascii-grid {
-  grid-template-columns: minmax(0, 1fr);
+.datalab-profiler-tab.is-active {
+  border-color: var(--term-accent);
+  background: var(--term-accent-soft);
+  color: var(--term-accent);
+  font-weight: 600;
 }
 
-.t-agent-root.is-compact .t-agent-ascii-logo {
-  font-size: 8.5px;
+.datalab-profiler-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
-.t-agent-root.is-compact .t-agent-ascii-hero {
-  gap: 12px;
-  padding: 12px;
+.datalab-profiler-comment {
+  padding: 8px 10px;
+  border-left: 2px solid var(--term-accent);
+  background: var(--term-subtle);
+  font-size: 12px;
 }
 
-.t-agent-root.is-compact .t-agent-ascii-hero .t-agent-cli-emblem-box {
-  width: 48px;
-  height: 48px;
-  flex-basis: 48px;
+.datalab-profiler-state {
+  padding: 20px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--term-muted);
 }
 
-@media (max-width: 720px) {
-  .t-agent-ascii-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .t-agent-ascii-logo {
-    font-size: 8.5px;
-  }
+.datalab-profiler-table-wrap {
+  overflow: auto;
+  border: 1px solid var(--term-border);
+}
+
+.datalab-profiler-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+
+.datalab-profiler-table th {
+  padding: 6px 8px;
+  text-align: left;
+  background: var(--term-subtle);
+  border-bottom: 1px solid var(--term-border);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.datalab-profiler-table th small {
+  display: block;
+  font: 400 10px var(--mono, Consolas, monospace);
+  color: var(--term-muted);
+}
+
+.datalab-profiler-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--term-border);
+  vertical-align: top;
+}
+
+.datalab-profiler-table td.is-mono {
+  font-family: var(--mono, Consolas, monospace);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.datalab-profiler-table td.is-muted {
+  color: var(--term-muted);
+}
+
+.datalab-profiler-table td.is-wrap {
+  white-space: normal;
+  max-width: 240px;
+  word-break: break-word;
+}
+
+.datalab-mcv-text {
+  color: var(--term-muted);
+  font-size: 10.5px;
+}
+
+.datalab-profiler-relations {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.datalab-profiler-subhead {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--term-ink);
+}
+
+.datalab-profiler-kv {
+  font-size: 11.5px;
+  color: var(--term-muted);
+}
+
+.datalab-profiler-kv.is-mono {
+  font-family: var(--mono, Consolas, monospace);
+  color: var(--term-ink);
+}
+
+.datalab-profiler-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.datalab-profiler-index-item {
+  padding: 8px 10px;
+  border: 1px solid var(--term-border);
+  background: var(--term-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+}
+
+.datalab-profiler-index-def {
+  font: 400 11px var(--mono, Consolas, monospace);
+  color: var(--term-muted);
+  word-break: break-all;
+}
+
+.codelab-data-ro-pill {
+  padding: 1px 6px;
+  border: 1px solid var(--term-accent);
+  background: var(--term-accent-soft);
+  color: var(--term-accent);
+  font: 600 10px var(--mono, Consolas, monospace);
+}
+
+.codelab-data-filter-input {
+  height: 22px;
+  width: 120px;
+  padding: 0 6px;
+  border: 1px solid var(--term-border);
+  background: var(--term-surface);
+  color: var(--term-ink);
+  font-size: 11px;
+}
+
+.codelab-data-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.codelab-data-page-num {
+  font: 600 10.5px var(--mono, Consolas, monospace);
+  color: var(--term-muted);
+  padding: 0 3px;
+}
+
+.codelab-data-th-btn {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.codelab-data-cell-inspector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--term-border);
+  background: var(--term-subtle);
+  font-size: 11px;
+}
+
+.codelab-data-cell-col {
+  font-weight: 600;
+  color: var(--term-accent);
+  flex-shrink: 0;
+}
+
+.codelab-data-cell-val {
+  flex: 1 1 0;
+  min-width: 0;
+  font-family: var(--mono, Consolas, monospace);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.codelab-sql-field.is-pagesize {
+  flex: 0 0 auto;
+}
+
+.codelab-sql-stop-btn {
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--term-danger, #c53030);
+  background: color-mix(in srgb, var(--term-danger, #c53030) 10%, transparent);
+  color: var(--term-danger, #c53030);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.codelab-sql-federate-row {
+  flex: 1 0 100%;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--term-border);
+}
+
+.codelab-sql-federate-label {
+  font-size: 10.5px;
+  color: var(--term-muted);
+}
+
+.codelab-sql-attach-chip {
+  height: 20px;
+  padding: 0 7px;
+  border: 1px solid var(--term-border);
+  background: var(--term-surface);
+  color: var(--term-muted);
+  font: 500 10.5px var(--mono, Consolas, monospace);
+  cursor: pointer;
+}
+
+.codelab-sql-attach-chip.is-active {
+  border-color: var(--term-accent);
+  background: var(--term-accent-soft);
+  color: var(--term-accent);
+}
+
+.ag-rail-db-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ag-rail-db-tables {
+  padding-left: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ag-rail-res-item.is-nested {
+  font-family: var(--mono, Consolas, monospace);
+  font-size: 10.5px;
+  opacity: 0.88;
 }

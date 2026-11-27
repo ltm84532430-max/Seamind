@@ -1,7 +1,13 @@
+import type { ActiveWorkspace } from '../../app/app-storage';
 import { epubApi } from '../../ebook/epub-api';
 import { literatureApi } from '../../literature/literature-api';
 import { systemApi } from '../../system/system-api';
 import { terminalApi } from '../../terminal/terminal-api';
+import type {
+  AgentToolScopeMode,
+  AgentWorkspaceContextSnapshot,
+  AgentWorkspaceSubView,
+} from '../../terminal/terminal-types';
 import type {
   AgentCapabilities,
   AgentToolResult,
@@ -163,6 +169,8 @@ const CROSS_SURFACE_FULL_TOOL_NAMES: readonly string[] = [
   'terminal_read_pane',
   'terminal_send_command',
   'cli_delegate',
+  'knowledge_get_current_document',
+  'knowledge_propose_document_edit',
   'library_search',
   'library_read_document',
   'mindmap_get_current',
@@ -191,6 +199,92 @@ const CROSS_SURFACE_FULL_TOOL_NAMES: readonly string[] = [
   'favorites_propose_categorization',
 ];
 
+const KNOWLEDGE_DOC_TOOLS: readonly string[] = [
+  'knowledge_get_current_document',
+  'knowledge_propose_document_edit',
+  'library_search',
+  'library_read_document',
+];
+
+const MINDMAP_TOOLS: readonly string[] = [
+  'mindmap_get_current',
+  'mindmap_propose_node_edit',
+  'mindmap_propose_node_branch',
+  'mindmap_propose_code_block',
+  'mindmap_run_code_block',
+  'library_search',
+  'library_read_document',
+];
+
+const READER_TOOLS: readonly string[] = [
+  'epub_get_current_chapter',
+  'epub_propose_footnote',
+  'knowledge_get_book_note',
+  'knowledge_update_book_note',
+  'knowledge_query_book_galaxy',
+  'knowledge_sync_reader_chapter',
+  'knowledge_append_excerpt',
+  'library_search',
+  'library_read_document',
+];
+
+const PLAYER_TOOLS: readonly string[] = [
+  'player_search_youtube',
+  'learning_path_list',
+  'learning_path_get',
+  'learning_path_propose',
+  'favorites_get_board',
+  'favorites_propose_categorization',
+];
+
+const EXAMS_TOOLS: readonly string[] = [
+  'exam_list_papers',
+  'exam_get_paper',
+  'code_run_c',
+  'code_run_python',
+  'epub_get_current_chapter',
+];
+
+const LITERATURE_TOOLS: readonly string[] = [
+  'literature_list_papers',
+  'library_search',
+  'library_read_document',
+];
+
+const FEED_TOOLS: readonly string[] = [
+  'rss_get_current_article',
+  'rss_list_subscriptions',
+  'rss_add_subscription',
+];
+
+const SHELL_TOOLS: readonly string[] = [
+  'terminal_read_pane',
+  'terminal_send_command',
+  'code_run_c',
+  'code_run_python',
+  'cli_delegate',
+];
+
+const LAB_NOTEBOOK_TOOLS: readonly string[] = [
+  'datalab_read_notebook',
+  'datalab_update_cell',
+  'datalab_push_cell',
+  'datalab_run_cell',
+  'datalab_delete_cell',
+  ...DATALAB_TOOL_NAMES,
+  'code_run_c',
+];
+
+const LAB_ER_TOOLS: readonly string[] = [
+  'datalab_er_get_diagram',
+  'datalab_er_annotate',
+  'datalab_inspect_db',
+  'datalab_profile_table',
+  'datalab_query_sql',
+  'datalab_list_sources',
+  ...DATALAB_TOOL_NAMES,
+];
+
 function dedupeToolNames(
   prioritized: readonly string[],
   fallback?: readonly string[],
@@ -208,75 +302,332 @@ function dedupeToolNames(
   return out;
 }
 
+/**
+ * Returns the focused, primary tool set for a specific Seamind workspace & sub-view.
+ * Prevents unrelated background tools (e.g., mindmap_get_current or terminal_read_pane)
+ * from polluting the model when the user is working in a specific page.
+ */
+export function resolveWorkspaceToolNames(
+  workspace: ActiveWorkspace,
+  subView?: AgentWorkspaceSubView,
+): string[] {
+  switch (workspace) {
+    case 'knowledge':
+      return dedupeToolNames(KNOWLEDGE_DOC_TOOLS);
+    case 'mindmap':
+      return dedupeToolNames(MINDMAP_TOOLS);
+    case 'lab':
+      return dedupeToolNames(
+        subView === 'er' ? LAB_ER_TOOLS : LAB_NOTEBOOK_TOOLS,
+      );
+    case 'reader':
+      return dedupeToolNames(READER_TOOLS);
+    case 'player':
+      return dedupeToolNames(PLAYER_TOOLS);
+    case 'exams':
+      return dedupeToolNames(EXAMS_TOOLS);
+    case 'literature':
+      return dedupeToolNames(LITERATURE_TOOLS);
+    case 'feed':
+      return dedupeToolNames(FEED_TOOLS);
+    case 'terminal':
+      return dedupeToolNames(SHELL_TOOLS);
+    case 'tasks':
+      return dedupeToolNames([
+        'library_search',
+        'library_read_document',
+        'learning_path_list',
+        'exam_list_papers',
+      ]);
+    case 'agent':
+    default:
+      return dedupeToolNames(CROSS_SURFACE_FULL_TOOL_NAMES);
+  }
+}
+
+function extraToolsForMentions(
+  mentions?: ReadonlyArray<{ tag: string }>,
+): string[] {
+  if (!mentions || mentions.length === 0) return [];
+  const extra: string[] = [];
+  for (const m of mentions) {
+    switch (m.tag) {
+      case '#doc':
+      case '#kb':
+        extra.push(...KNOWLEDGE_DOC_TOOLS);
+        break;
+      case '#map':
+        extra.push(...MINDMAP_TOOLS);
+        break;
+      case '#data':
+      case '#lab':
+      case '#env':
+        extra.push(...LAB_NOTEBOOK_TOOLS);
+        break;
+      case '#book':
+      case '#chapter':
+        extra.push(...READER_TOOLS);
+        break;
+      case '#exam':
+        extra.push(...EXAMS_TOOLS);
+        break;
+      case '#video':
+        extra.push(...PLAYER_TOOLS);
+        break;
+      case '#paper':
+        extra.push(...LITERATURE_TOOLS);
+        break;
+      case '#rss':
+        extra.push(...FEED_TOOLS);
+        break;
+      case '#pane':
+      case '#last-error':
+        extra.push(...SHELL_TOOLS);
+        break;
+      default:
+        break;
+    }
+  }
+  return extra;
+}
+
+const WORKSPACE_LABEL_ZH: Record<ActiveWorkspace, string> = {
+  knowledge: '知识库',
+  mindmap: '思维导图',
+  lab: '编辑器',
+  agent: 'Agent',
+  terminal: '系统终端',
+  reader: '电子书',
+  exams: '试卷',
+  player: '播放器',
+  literature: '论文',
+  feed: 'RSS 订阅',
+  tasks: '任务',
+};
+
+export function formatWorkspaceFocusBadge(
+  workspaceContext?: AgentWorkspaceContextSnapshot | null,
+  scopeMode: AgentToolScopeMode = 'focused',
+): {
+  shortLabel: string;
+  detailTitle: string;
+  isFocusedMode: boolean;
+} {
+  if (scopeMode === 'all') {
+    return {
+      shortLabel: '全模块模式',
+      detailTitle:
+        '当前为全软件跨模块模式（已开放全部 46 个工具）；点击切回「仅聚焦当前主页面」',
+      isFocusedMode: false,
+    };
+  }
+  if (!workspaceContext || !workspaceContext.targetWorkspace) {
+    return {
+      shortLabel: '独立中枢 · 全模块',
+      detailTitle:
+        '当前处于独立 Agent 全屏视图（未与业务页分屏），可自由调用各模块工具；开启分屏后将自动聚焦对应主页面',
+      isFocusedMode: false,
+    };
+  }
+  const ws = workspaceContext.targetWorkspace;
+  const posPrefix =
+    workspaceContext.targetPosition === 'left'
+      ? '左侧 · '
+      : workspaceContext.targetPosition === 'right'
+        ? '右侧 · '
+        : '';
+  let pageLabel = WORKSPACE_LABEL_ZH[ws] || ws;
+  if (ws === 'knowledge') {
+    pageLabel =
+      workspaceContext.targetSubView === 'doc' ? '知识库文档' : '知识库概览';
+  } else if (ws === 'lab') {
+    pageLabel =
+      workspaceContext.targetSubView === 'er' ? '数据库 ER 图谱' : '代码实验本';
+  } else if (ws === 'reader') {
+    pageLabel =
+      workspaceContext.targetSubView === 'pdf' ? 'PDF 书籍' : '电子书阅读';
+  }
+  const activeTitle =
+    ws === 'knowledge'
+      ? workspaceContext.activeKnowledgeDoc?.title
+      : ws === 'mindmap'
+        ? workspaceContext.activeMindmap?.title
+        : ws === 'lab'
+          ? workspaceContext.activeLab?.title
+          : ws === 'reader'
+            ? workspaceContext.activeBook?.title
+            : null;
+  return {
+    shortLabel: `聚焦 ${posPrefix}${pageLabel}`,
+    detailTitle: `当前优先调用「${pageLabel}」模块工具${activeTitle ? `（当前打开：${activeTitle}）` : ''}；使用 /命令、#资源 或点击此处可切换全软件跨模块`,
+    isFocusedMode: true,
+  };
+}
+
+/**
+ * Generates a concise live UI state header injected into the Agent system prompt
+ * (and CLI prompt) so the model knows with 100% accuracy what page & document the user sees.
+ */
+export function buildWorkspaceContextPrompt(
+  workspaceContext?: AgentWorkspaceContextSnapshot | null,
+  scopeMode: AgentToolScopeMode = 'focused',
+): string {
+  if (!workspaceContext) return '';
+  const target = workspaceContext.targetWorkspace;
+  const posText =
+    workspaceContext.targetPosition === 'left'
+      ? '左侧主页面'
+      : workspaceContext.targetPosition === 'right'
+        ? '右侧分屏页面'
+        : workspaceContext.targetPosition === 'main'
+          ? '当前主页面'
+          : '无并排业务页面';
+
+  const lines: string[] = [
+    '[Seamind 实时界面状态（以此为准，切勿猜错当前页面）]',
+  ];
+  if (workspaceContext.splitActive && target) {
+    lines.push(
+      `- 当前窗口布局：分屏模式（${posText}：${WORKSPACE_LABEL_ZH[target]} | 对侧：Agent）`,
+    );
+  } else if (target) {
+    lines.push(`- 当前主页面：${WORKSPACE_LABEL_ZH[target]}`);
+  } else {
+    lines.push(
+      '- 当前窗口布局：独立全屏 Agent 视图（当前未与具体业务页面分屏，切勿默认假设后台旧导图或终端就是用户正在看的内容）。',
+    );
+  }
+
+  lines.push(
+    `- 工具作用域：${scopeMode === 'all' || !target ? '全软件跨模块模式' : `主页面优先聚焦（仅优先暴露「${WORKSPACE_LABEL_ZH[target]}」模块工具，除非用户显式跨页点名）`}`,
+  );
+
+  if (target === 'knowledge') {
+    const doc = workspaceContext.activeKnowledgeDoc;
+    if (doc) {
+      lines.push(
+        `- 当前正在阅读的知识库文档：《${doc.title}》`,
+        `  - 相对路径：${doc.relativePath ?? '未命名草稿'} | 分类：${doc.category || '未分类'} | 规模：${doc.lineCount} 行 · ${doc.charCount.toLocaleString()} 字`,
+      );
+      if (doc.openTabs.length > 1) {
+        lines.push(
+          `  - 同页已打开的其他文档标签：${doc.openTabs
+            .filter((t) => !t.active)
+            .slice(0, 6)
+            .map((t) => `《${t.title}》(${t.relativePath})`)
+            .join('、')}`,
+        );
+      }
+      lines.push(
+        '- 行动约束：用户提及「左边 / 这篇文档 / 当前文件 / 翻译它 / 总结它」时，**必须调用 `knowledge_get_current_document` 读取正文**（文档超过 12,000 字时先读开头与 headings 目录，按需用 offset 分段读取）；如需生成译文或落盘修改，请调用 `knowledge_propose_document_edit`（长文翻译优先用 `mode="create_copy"` 保留原文）。严禁把后台未显示的思维导图当成当前文档！',
+      );
+    } else {
+      lines.push(
+        '- 当前知识库正停留在「概览首页」，尚未打开具体 Markdown 文档；如需查阅某篇笔记请先调用 `library_search` 再 `library_read_document`。',
+      );
+    }
+  } else if (target === 'mindmap') {
+    const mm = workspaceContext.activeMindmap;
+    lines.push(
+      `- 当前思维导图：${mm ? `《${mm.title}》(${mm.relativePath ?? '草稿'})` : '未加载'}`,
+      '- 行动约束：涉及查看或修改当前导图时，先调用 `mindmap_get_current` 获取最新 revision 与 nodeId。',
+    );
+  } else if (target === 'lab') {
+    const lab = workspaceContext.activeLab;
+    if (lab?.mode === 'er') {
+      lines.push(
+        `- 当前编辑器子视图：数据库 ER 关系图谱（${lab.title || 'ER Studio'}${lab.erConnectionId ? ` · connId=${lab.erConnectionId}` : ''}）`,
+        '- 行动约束：优先调用 `datalab_er_get_diagram`、`datalab_er_annotate`、`datalab_profile_table`、`datalab_query_sql` 完成实库研究与图谱批注。',
+      );
+    } else {
+      lines.push(
+        `- 当前编辑器子视图：Code Lab 多语言科研实验本（${lab?.title || '当前实验本'}）`,
+        '- 行动约束：优先调用 `datalab_read_notebook`、`datalab_update_cell`、`datalab_push_cell`、`datalab_run_cell`、`datalab_query_sql`。',
+      );
+    }
+  } else if (target === 'reader') {
+    const bk = workspaceContext.activeBook;
+    lines.push(
+      `- 当前电子书阅读器：${bk ? `《${bk.title}》${bk.chapterLabel ? ` · 当前章：${bk.chapterLabel}` : ''}` : '书架概览（尚未打开书籍）'}`,
+      '- 行动约束：优先调用 `epub_get_current_chapter`、`knowledge_get_book_note`、`knowledge_query_book_galaxy` 进行伴读与笔记联动。',
+    );
+  } else if (target === 'player') {
+    lines.push(
+      '- 行动约束：当前在播放器工作区，优先调用 `player_search_youtube`、`learning_path_*`、`favorites_*`。',
+    );
+  } else if (target === 'exams') {
+    lines.push(
+      '- 行动约束：当前在试卷中心工作区，优先调用 `exam_list_papers`、`exam_get_paper`、`code_run_c`、`code_run_python`。',
+    );
+  } else if (target === 'literature') {
+    lines.push(
+      '- 行动约束：当前在论文文献工作区，优先调用 `literature_list_papers`、`library_search`、`library_read_document`。',
+    );
+  } else if (target === 'feed') {
+    lines.push(
+      '- 行动约束：当前在 RSS 订阅工作区，优先调用 `rss_get_current_article`、`rss_list_subscriptions`、`rss_add_subscription`。',
+    );
+  } else if (target === 'terminal') {
+    lines.push(
+      '- 行动约束：当前在系统终端工作区，优先调用 `terminal_read_pane`、`terminal_send_command`、`cli_delegate`。',
+    );
+  }
+
+  return lines.join('\n');
+}
+
+export interface SelectTerminalAgentToolsOptions {
+  workspaceContext?: AgentWorkspaceContextSnapshot | null;
+  scopeMode?: AgentToolScopeMode;
+  mentions?: ReadonlyArray<{ tag: string }>;
+  includeCliDelegate?: boolean;
+}
+
 export function selectTerminalAgentToolNames(
   slashCommand: string | null,
   promptText: string,
+  options?: SelectTerminalAgentToolsOptions,
 ): string[] {
+  const mentionExtras = extraToolsForMentions(options?.mentions);
+  const withMentions = (
+    base: readonly string[],
+    fallback?: readonly string[],
+  ) =>
+    dedupeToolNames(
+      mentionExtras.length > 0 ? [...base, ...mentionExtras] : base,
+      fallback,
+    );
+
   switch (slashCommand) {
     case '/book':
-      return dedupeToolNames([
-        'epub_get_current_chapter',
+      return withMentions([...READER_TOOLS, 'cli_delegate']);
+    case '/kb':
+      return withMentions([
+        ...KNOWLEDGE_DOC_TOOLS,
         'knowledge_get_book_note',
-        'knowledge_query_book_galaxy',
         'knowledge_update_book_note',
-        'knowledge_append_excerpt',
-        'knowledge_sync_reader_chapter',
-        'epub_propose_footnote',
-        'library_search',
-        'library_read_document',
         'cli_delegate',
       ]);
-    case '/kb':
     case '/map':
-      return dedupeToolNames([
-        'mindmap_get_current',
-        'library_search',
-        'library_read_document',
-        'mindmap_propose_node_edit',
-        'mindmap_propose_node_branch',
-        'mindmap_propose_code_block',
-        'mindmap_run_code_block',
-        'knowledge_get_book_note',
-        'knowledge_update_book_note',
+      return withMentions([
+        ...MINDMAP_TOOLS,
+        'knowledge_get_current_document',
         'cli_delegate',
       ]);
     case '/exam':
-      return dedupeToolNames([
-        'exam_list_papers',
-        'exam_get_paper',
-        'epub_get_current_chapter',
-        'library_search',
-        'code_run_c',
-        'code_run_python',
-        'cli_delegate',
-      ]);
+      return withMentions([...EXAMS_TOOLS, 'library_search', 'cli_delegate']);
     case '/player':
-      return dedupeToolNames([
-        'player_search_youtube',
-        'learning_path_list',
-        'learning_path_get',
-        'learning_path_propose',
-        'favorites_get_board',
-        'favorites_propose_categorization',
-      ]);
+      return withMentions(PLAYER_TOOLS);
     case '/paper':
-      return dedupeToolNames([
-        'literature_list_papers',
-        'library_search',
-        'library_read_document',
+      return withMentions([
+        ...LITERATURE_TOOLS,
         'mindmap_propose_node_branch',
         'cli_delegate',
       ]);
     case '/rss':
-      return dedupeToolNames([
-        'rss_get_current_article',
-        'rss_list_subscriptions',
-        'rss_add_subscription',
-        'library_search',
-        'cli_delegate',
-      ]);
+      return withMentions([...FEED_TOOLS, 'library_search', 'cli_delegate']);
     case '/data':
-      return dedupeToolNames([
+      return withMentions([
         ...DATALAB_TOOL_NAMES,
         'terminal_read_pane',
         'terminal_send_command',
@@ -284,7 +635,7 @@ export function selectTerminalAgentToolNames(
       ]);
     case '/code':
     case '/exec':
-      return dedupeToolNames([
+      return withMentions([
         ...DATALAB_TOOL_NAMES,
         'code_run_c',
         'terminal_read_pane',
@@ -294,25 +645,51 @@ export function selectTerminalAgentToolNames(
         'cli_delegate',
       ]);
     default: {
+      const ctx = options?.workspaceContext;
+      const scopeMode = options?.scopeMode ?? 'focused';
+
+      // Primary-page-first scoping: when a business workspace is visibly paired with Agent
+      // and the user stays in default 'focused' mode, expose ONLY the visible page(s)' tools
+      // plus any explicitly #mentioned modules (zero unrelated tool noise or misfires!).
+      if (scopeMode === 'focused' && ctx && ctx.targetWorkspace) {
+        const visibleTargets =
+          ctx.visibleWorkspaces.length > 0
+            ? ctx.visibleWorkspaces
+            : [ctx.targetWorkspace];
+        const scoped: string[] = [];
+        // Always place primary targetWorkspace tools FIRST
+        scoped.push(
+          ...resolveWorkspaceToolNames(ctx.targetWorkspace, ctx.targetSubView),
+        );
+        // If user opened additional visible business panes, include their tools too
+        for (const ws of visibleTargets) {
+          if (ws !== ctx.targetWorkspace && ws !== 'agent') {
+            scoped.push(...resolveWorkspaceToolNames(ws));
+          }
+        }
+        if (options?.includeCliDelegate) {
+          scoped.push('cli_delegate');
+        }
+        return withMentions(scoped);
+      }
+
+      // Full cross-module mode (standalone fullscreen Agent or explicit 'all' toggle)
       const lower = promptText.toLowerCase();
       if (
         lower.includes('youtube') ||
         lower.includes('视频') ||
         lower.includes('学习路径')
       ) {
-        return dedupeToolNames(
-          [
-            'player_search_youtube',
-            'learning_path_list',
-            'learning_path_get',
-            'learning_path_propose',
-            'favorites_get_board',
-            'favorites_propose_categorization',
-          ],
-          CROSS_SURFACE_FULL_TOOL_NAMES,
-        );
+        return withMentions(PLAYER_TOOLS, CROSS_SURFACE_FULL_TOOL_NAMES);
       }
-      return dedupeToolNames(CROSS_SURFACE_FULL_TOOL_NAMES);
+      if (
+        lower.includes('知识库') ||
+        lower.includes('文档') ||
+        lower.includes('翻译')
+      ) {
+        return withMentions(KNOWLEDGE_DOC_TOOLS, CROSS_SURFACE_FULL_TOOL_NAMES);
+      }
+      return withMentions(CROSS_SURFACE_FULL_TOOL_NAMES);
     }
   }
 }

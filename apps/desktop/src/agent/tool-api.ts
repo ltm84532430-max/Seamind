@@ -9,9 +9,11 @@ import type {
   VideoInput,
 } from '../player/types';
 import type {
+  ActiveKnowledgeDocumentSnapshot,
   AgentAnalysisMode,
   ActiveMindmapSnapshot,
   FavoritesCategorizationProposal,
+  KnowledgeDocumentEditProposal,
   LearningPathProposal,
   LearningPathProposalMode,
   KnowledgeNoteProposal,
@@ -176,6 +178,7 @@ export interface AgentCapabilities {
     notePath?: string;
   }>;
   getCurrentMindmap(): ActiveMindmapSnapshot;
+  readCurrentKnowledgeDocument?(): ActiveKnowledgeDocumentSnapshot | null;
   searchLibrary(query: string, category?: string): Promise<MapDocument[]>;
   readDocument(relativePath: string): Promise<OpenedDocument>;
   proposeNodeEdit(input: ProposeNodeEditInput): NodeEditProposal;
@@ -239,6 +242,7 @@ export interface AgentToolResult {
   learningPathProposal?: LearningPathProposal;
   favoritesCategorizationProposal?: FavoritesCategorizationProposal;
   knowledgeNoteProposal?: KnowledgeNoteProposal;
+  knowledgeDocumentProposal?: KnowledgeDocumentEditProposal;
   readerChapterProposal?: ReaderChapterProposal;
   terminalCommandProposal?: TerminalCommandProposal;
 }

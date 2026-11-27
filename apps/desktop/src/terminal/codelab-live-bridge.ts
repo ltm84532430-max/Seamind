@@ -110,7 +110,15 @@ export interface CodeLabLiveBridgeController {
   ) => Promise<CodeLabMutationResult>;
 }
 
+export interface ActiveLabTabSnapshot {
+  mode: 'notebook' | 'er';
+  title: string;
+  erConnectionId?: string | null;
+}
+
 let activeLiveBridgeController: CodeLabLiveBridgeController | null = null;
+let activeLabTabSnapshot: ActiveLabTabSnapshot | null = null;
+const labTabListeners = new Set<() => void>();
 
 /**
  * Registers the live Code Lab workspace controller so Agent & MCP tools can
@@ -130,4 +138,34 @@ export function registerCodeLabLiveBridge(
 
 export function getCodeLabLiveBridge(): CodeLabLiveBridgeController | null {
   return activeLiveBridgeController;
+}
+
+export function setActiveLabTabSnapshot(
+  snapshot: ActiveLabTabSnapshot | null,
+): void {
+  const prev = activeLabTabSnapshot;
+  if (
+    prev?.mode === snapshot?.mode &&
+    prev?.title === snapshot?.title &&
+    (prev?.erConnectionId ?? null) === (snapshot?.erConnectionId ?? null)
+  ) {
+    return;
+  }
+  activeLabTabSnapshot = snapshot;
+  for (const listener of labTabListeners) {
+    listener();
+  }
+}
+
+export function getActiveLabTabSnapshot(): ActiveLabTabSnapshot | null {
+  return activeLabTabSnapshot;
+}
+
+export function subscribeActiveLabTabSnapshot(
+  listener: () => void,
+): () => void {
+  labTabListeners.add(listener);
+  return () => {
+    labTabListeners.delete(listener);
+  };
 }

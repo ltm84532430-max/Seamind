@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import {
   terminalApi,
-  type DataDbConnectionInput,
+  type DataDbTableSchema,
   type LocalPostgresInstance,
 } from './terminal-api';
 import {
@@ -11,6 +11,13 @@ import {
   type DataLabDbConnection,
   type DataLabMountedFile,
 } from './terminal-codelab-model';
+import {
+  buildConnectionInput,
+  buildTableSelectSql,
+} from './db-connection-utils';
+import { DbConnectionModal } from './DbConnectionModal';
+import { DbSchemaTree } from './DbSchemaTree';
+import { DbTableProfilerModal } from './DbTableProfilerModal';
 import type { TerminalCodeLabLanguage } from './terminal-types';
 
 interface CodeLabDataPanelProps {
@@ -24,7 +31,9 @@ interface CodeLabDataPanelProps {
     source: string,
     autoRun: boolean,
     sqlConnectionId?: string,
+    sqlAttachDbIds?: string[],
   ) => void;
+  onOpenErStudio?: (connectionId: string, title?: string) => void;
   onNotify?: (message: string) => void;
 }
 
@@ -49,7 +58,6 @@ function buildFileReaderSnippet(
     }
     return `import pandas as pd\n\ndf_${file.alias} = pd.read_csv(r"${file.path}"${fmt === 'tsv' ? ', sep="\\t"' : ''})\nprint(df_${file.alias}.shape)\ndf_${file.alias}.head(10)`;
   }
-  // R snippet
   if (fmt === 'parquet') {
     return `library(arrow)\ndf_${file.alias} <- read_parquet("${escapedWinPath}")\nhead(df_${file.alias}, 10)`;
   }
@@ -59,20 +67,6 @@ function buildFileReaderSnippet(
   return `df_${file.alias} <- read.csv("${escapedWinPath}", stringsAsFactors = FALSE)\nsummary(df_${file.alias})\nhead(df_${file.alias}, 10)`;
 }
 
-function buildTableSelectSql(
-  tableName: string,
-  schema: string | null | undefined,
-  dbType: DataLabDbConnection['dbType'],
-): string {
-  const qualified =
-    schema && schema !== 'main' && dbType === 'postgres'
-      ? `"${schema}"."${tableName}"`
-      : dbType === 'mysql'
-        ? `\`${tableName}\``
-        : `"${tableName}"`;
-  return `SELECT *\nFROM ${qualified}\nLIMIT 50;`;
-}
-
 export function CodeLabDataPanel({
   mountedFiles,
   dbConnections,
@@ -80,6 +74,7 @@ export function CodeLabDataPanel({
   onUpdateFiles,
   onUpdateConnections,
   onInsertCell,
+  onOpenErStudio,
   onNotify,
 }: CodeLabDataPanelProps) {
   const [manualFilePath, setManualFilePath] = useState('');
@@ -92,18 +87,21 @@ export function CodeLabDataPanel({
   >({});
   const [testingConnId, setTestingConnId] = useState<string | null>(null);
 
-  // Add DB connection form state
-  const [showConnForm, setShowConnForm] = useState(false);
-  const [dbType, setDbType] = useState<DataLabDbConnection['dbType']>('sqlite');
-  const [connName, setConnName] = useState('');
-  const [connFilePath, setConnFilePath] = useState('');
-  const [connHost, setConnHost] = useState('127.0.0.1');
-  const [connPort, setConnPort] = useState('5432');
-  const [connDatabase, setConnDatabase] = useState('');
-  const [connUsername, setConnUsername] = useState('');
-  const [connPassword, setConnPassword] = useState('');
-  const [savingConn, setSavingConn] = useState(false);
-  const [connFormError, setConnFormError] = useState('');
+  // Modal state for creating / editing DB connections
+  const [connModalOpen, setConnModalOpen] = useState(false);
+  const [editingConn, setEditingConn] = useState<DataLabDbConnection | null>(
+    null,
+  );
+  const [presetPgInstance, setPresetPgInstance] =
+    useState<LocalPostgresInstance | null>(null);
+
+  // Profiler modal state
+  const [profilerTarget, setProfilerTarget] = useState<{
+    conn: DataLabDbConnection;
+    table: DataDbTableSchema;
+  } | null>(null);
+
+  // Local PostgreSQL discovery state
   const [localPgInstances, setLocalPgInstances] = useState<
     LocalPostgresInstance[]
   >([]);
@@ -112,18 +110,6 @@ export function CodeLabDataPanel({
   const [startingPgService, setStartingPgService] = useState<string | null>(
     null,
   );
-  const [showCreateDatabase, setShowCreateDatabase] = useState(false);
-  const [newDatabaseName, setNewDatabaseName] = useState('');
-  const [creatingDatabase, setCreatingDatabase] = useState(false);
-  const [createDatabaseMessage, setCreateDatabaseMessage] = useState('');
-  const [createForConnId, setCreateForConnId] = useState<string | null>(null);
-  const [savedNewDatabaseName, setSavedNewDatabaseName] = useState('');
-  const [creatingForConnId, setCreatingForConnId] = useState<string | null>(
-    null,
-  );
-  const [savedCreateStatus, setSavedCreateStatus] = useState<
-    Record<string, string>
-  >({});
 
   useEffect(() => {
     let active = true;
@@ -179,34 +165,10 @@ export function CodeLabDataPanel({
         setStartingPgService(null);
       }
     }
-    setDbType('postgres');
-    setConnName(selected.displayName || selected.serviceName);
-    setConnHost('127.0.0.1');
-    setConnPort(String(selected.port));
-    setConnDatabase('postgres');
-    setConnUsername('postgres');
-    setConnPassword('');
-    setConnFormError('');
-    setCreateDatabaseMessage('');
-    setShowConnForm(true);
+    setEditingConn(null);
+    setPresetPgInstance(selected);
+    setConnModalOpen(true);
   };
-
-  const formConnectionInput = (
-    id: string,
-    databaseOverride?: string,
-  ): DataDbConnectionInput => ({
-    id,
-    name: connName.trim() || 'PostgreSQL',
-    dbType,
-    filePath:
-      dbType === 'sqlite' || dbType === 'duckdb' ? connFilePath.trim() : null,
-    host: dbType === 'sqlite' || dbType === 'duckdb' ? null : connHost.trim(),
-    port: dbType === 'sqlite' || dbType === 'duckdb' ? null : Number(connPort),
-    database: (databaseOverride ?? connDatabase.trim()) || null,
-    username: connUsername.trim() || null,
-    password: connPassword || null,
-    pythonPath: preferredPythonPath ?? null,
-  });
 
   const inspectAndMountPath = async (rawPath: string) => {
     const cleanPath = rawPath.trim().replace(/^["']|["']$/g, '');
@@ -296,63 +258,18 @@ export function CodeLabDataPanel({
     }
   };
 
-  const handleBrowseDbFile = async () => {
-    try {
-      const selected = await open({
-        multiple: false,
-        title:
-          dbType === 'duckdb' ? '选择 DuckDB 文件' : '选择 SQLite 数据库文件',
-        filters: [
-          {
-            name: dbType === 'duckdb' ? 'DuckDB' : 'SQLite',
-            extensions:
-              dbType === 'duckdb'
-                ? ['duckdb', 'ddb']
-                : ['db', 'sqlite', 'sqlite3'],
-          },
-          { name: '所有文件', extensions: ['*'] },
-        ],
-      });
-      if (typeof selected === 'string' && selected) {
-        setConnFilePath(selected);
-        if (!connName.trim()) {
-          const base =
-            selected
-              .split(/[\\/]/)
-              .pop()
-              ?.replace(/\.[^.]+$/, '') || dbType;
-          setConnName(base);
-        }
-      }
-    } catch {
-      // ignore cancel
-    }
-  };
-
-  const handleTestConnection = async (
-    conn: DataLabDbConnection,
-    overridePassword?: string,
-  ) => {
+  const handleTestConnection = async (conn: DataLabDbConnection) => {
     setTestingConnId(conn.id);
     try {
-      const input: DataDbConnectionInput = {
-        id: conn.id,
-        name: conn.name,
-        dbType: conn.dbType,
-        filePath: conn.filePath ?? null,
-        host: conn.host ?? null,
-        port: conn.port ?? null,
-        database: conn.database ?? null,
-        username: conn.username ?? null,
-        password: overridePassword || null,
-        pythonPath: conn.pythonPath ?? preferredPythonPath ?? null,
-      };
-      const res = await terminalApi.testDbConnection({ connection: input });
+      const res = await terminalApi.testDbConnection({
+        connection: buildConnectionInput(conn, preferredPythonPath),
+      });
       const updated = dbConnections.map((item) =>
         item.id === conn.id
           ? {
               ...item,
               tables: res.tables,
+              customTypes: res.customTypes ?? [],
               lastTestedAt: Date.now(),
               lastStatus: res.ok ? `已连接 · ${res.engine}` : res.message,
             }
@@ -363,7 +280,6 @@ export function CodeLabDataPanel({
         setExpandedConnIds((prev) => ({ ...prev, [conn.id]: true }));
       }
       onNotify?.(res.message);
-      return res;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const updated = dbConnections.map((item) =>
@@ -373,196 +289,23 @@ export function CodeLabDataPanel({
       );
       onUpdateConnections(updated);
       onNotify?.(msg);
-      return null;
     } finally {
       setTestingConnId(null);
     }
   };
 
-  const handleSaveNewConnection = async () => {
-    const isFileDb = dbType === 'sqlite' || dbType === 'duckdb';
-    if (isFileDb && !connFilePath.trim()) {
-      setConnFormError('请指定数据库文件路径');
-      return;
-    }
-    if (!isFileDb && !connHost.trim()) {
-      setConnFormError('请输入数据库主机地址');
-      return;
-    }
-    const parsedPort = Number(connPort);
-    if (
-      !isFileDb &&
-      (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535)
-    ) {
-      setConnFormError('端口必须是 1–65535 之间的整数。');
-      return;
-    }
-    setConnFormError('');
-    setSavingConn(true);
-    try {
-      const id = `db-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
-      const displayName =
-        connName.trim() ||
-        (isFileDb
-          ? connFilePath.split(/[\\/]/).pop() || dbType.toUpperCase()
-          : `${dbType}://${connHost}/${connDatabase || 'default'}`);
-      const newConn: DataLabDbConnection = {
-        id,
-        name: displayName,
-        dbType,
-        filePath: isFileDb ? connFilePath.trim() : undefined,
-        host: isFileDb ? undefined : connHost.trim(),
-        port: isFileDb ? undefined : parsedPort,
-        database: isFileDb ? undefined : connDatabase.trim() || undefined,
-        username: isFileDb ? undefined : connUsername.trim() || undefined,
-        hasPassword: !isFileDb && Boolean(connPassword),
-        pythonPath: preferredPythonPath ?? undefined,
-      };
-      const testRes = await terminalApi
-        .testDbConnection({
-          connection: { ...formConnectionInput(id), name: newConn.name },
-        })
-        .catch((err) => ({
-          ok: false,
-          message: err instanceof Error ? err.message : String(err),
-          tables: [],
-          engine: dbType.toUpperCase(),
-        }));
-      if (!testRes.ok) {
-        setConnFormError(testRes.message);
-        onNotify?.(testRes.message);
-        return;
-      }
-      if (!isFileDb && connPassword) {
-        await terminalApi.saveDbPassword({
-          connectionId: id,
-          password: connPassword,
-        });
-      }
-
-      const savedConn: DataLabDbConnection = {
-        ...newConn,
-        tables: testRes.tables,
-        lastTestedAt: Date.now(),
-        lastStatus: `已连接 · ${testRes.engine}`,
-      };
-      onUpdateConnections([savedConn, ...dbConnections]);
-      setExpandedConnIds((prev) => ({ ...prev, [savedConn.id]: true }));
-      setShowConnForm(false);
-      setShowCreateDatabase(false);
-      setCreateDatabaseMessage('');
-      setConnName('');
-      setConnFilePath('');
-      setConnPassword('');
-      onNotify?.(testRes.message);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setConnFormError(message);
-      onNotify?.(message);
-    } finally {
-      setSavingConn(false);
-    }
-  };
-
-  const handleCreatePostgresDatabase = async () => {
-    const name = newDatabaseName.trim();
-    if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(name)) {
-      setConnFormError(
-        '数据库名须以字母或下划线开头，只能包含字母、数字、下划线，最长 63 字符。',
-      );
-      return;
-    }
-    const port = Number(connPort);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      setConnFormError('端口必须是 1–65535 之间的整数。');
-      return;
-    }
-    setCreatingDatabase(true);
-    setConnFormError('');
-    setCreateDatabaseMessage('');
-    try {
-      const message = await terminalApi.createPostgresDatabase({
-        connection: formConnectionInput(`db-create-${Date.now()}`),
-        databaseName: name,
-      });
-      setConnDatabase(name);
-      setNewDatabaseName('');
-      setShowCreateDatabase(false);
-      setCreateDatabaseMessage(`${message} 请测试并保存连接。`);
-      onNotify?.(message);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setConnFormError(message);
-      onNotify?.(message);
-    } finally {
-      setCreatingDatabase(false);
-    }
-  };
-
-  const handleCreateForSavedConnection = async (conn: DataLabDbConnection) => {
-    const name = savedNewDatabaseName.trim();
-    if (!/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(name)) {
-      setSavedCreateStatus((previous) => ({
-        ...previous,
-        [conn.id]:
-          '数据库名须以字母或下划线开头，只能包含字母、数字、下划线，最长 63 字符。',
-      }));
-      return;
-    }
-    setCreatingForConnId(conn.id);
-    setSavedCreateStatus((previous) => ({ ...previous, [conn.id]: '' }));
-    let created = false;
-    try {
-      const baseInput: DataDbConnectionInput = {
-        id: conn.id,
-        name: conn.name,
-        dbType: 'postgres',
-        host: conn.host ?? '127.0.0.1',
-        port: conn.port ?? 5432,
-        database: conn.database ?? 'postgres',
-        username: conn.username ?? 'postgres',
-        password: null,
-        pythonPath: conn.pythonPath ?? preferredPythonPath ?? null,
-      };
-      await terminalApi.createPostgresDatabase({
-        connection: baseInput,
-        databaseName: name,
-      });
-      created = true;
-      const tested = await terminalApi.testDbConnection({
-        connection: { ...baseInput, database: name },
-      });
-      if (!tested.ok) throw new Error(tested.message);
-      const newId = `db-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
-      const hasPassword = await terminalApi.copyDbPassword({
-        sourceConnectionId: conn.id,
-        targetConnectionId: newId,
-      });
-      const newConn: DataLabDbConnection = {
-        ...conn,
-        id: newId,
-        name: `${conn.name} / ${name}`,
-        database: name,
-        hasPassword,
-        tables: tested.tables,
-        lastTestedAt: Date.now(),
-        lastStatus: `已连接 · ${tested.engine}`,
-      };
-      onUpdateConnections([newConn, ...dbConnections]);
-      setExpandedConnIds((previous) => ({ ...previous, [newId]: true }));
-      setCreateForConnId(null);
-      setSavedNewDatabaseName('');
-      onNotify?.(`数据库 ${name} 已创建并连接。`);
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      const message = created
-        ? `数据库 ${name} 已创建，但新连接未保存：${reason}`
-        : reason;
-      setSavedCreateStatus((previous) => ({ ...previous, [conn.id]: message }));
-      onNotify?.(message);
-    } finally {
-      setCreatingForConnId(null);
-    }
+  const handleToggleReadOnly = (conn: DataLabDbConnection) => {
+    const nextRo = !(conn.readOnly ?? true);
+    onUpdateConnections(
+      dbConnections.map((item) =>
+        item.id === conn.id ? { ...item, readOnly: nextRo } : item,
+      ),
+    );
+    onNotify?.(
+      nextRo
+        ? `${conn.name} 已切换为只读研究模式（防误写）。`
+        : `${conn.name} 已切换为读写模式，请谨慎执行写入语句。`,
+    );
   };
 
   const handleRemoveConnection = async (id: string) => {
@@ -571,6 +314,28 @@ export function CodeLabDataPanel({
       .catch(() => undefined);
     onUpdateConnections(dbConnections.filter((c) => c.id !== id));
   };
+
+  const handleModalSaved = (
+    savedBatch: DataLabDbConnection[],
+    mode: 'create' | 'edit',
+    message: string,
+  ) => {
+    if (mode === 'edit' && savedBatch[0]) {
+      const edited = savedBatch[0];
+      onUpdateConnections(
+        dbConnections.map((c) => (c.id === edited.id ? edited : c)),
+      );
+      setExpandedConnIds((prev) => ({ ...prev, [edited.id]: true }));
+    } else {
+      onUpdateConnections([...savedBatch, ...dbConnections]);
+      const nextExpanded: Record<string, boolean> = {};
+      for (const c of savedBatch) nextExpanded[c.id] = true;
+      setExpandedConnIds((prev) => ({ ...prev, ...nextExpanded }));
+    }
+    onNotify?.(message);
+  };
+
+  const firstMountedAlias = mountedFiles[0]?.alias;
 
   return (
     <div className="datalab-panel">
@@ -738,7 +503,7 @@ export function CodeLabDataPanel({
                       </div>
                       {file.columns && file.columns.length > 0 ? (
                         <div className="datalab-col-list">
-                          {file.columns.slice(0, 24).map((col, idx) => (
+                          {file.columns.slice(0, 32).map((col, idx) => (
                             <div
                               key={`${col.name}-${idx}`}
                               className="datalab-col-row"
@@ -749,9 +514,9 @@ export function CodeLabDataPanel({
                               </span>
                             </div>
                           ))}
-                          {file.columns.length > 24 && (
+                          {file.columns.length > 32 && (
                             <div className="datalab-col-more">
-                              还有 {file.columns.length - 24} 列…
+                              还有 {file.columns.length - 32} 列…
                             </div>
                           )}
                         </div>
@@ -780,22 +545,18 @@ export function CodeLabDataPanel({
               onClick={() => void refreshLocalPg()}
               disabled={discoveringPg || Boolean(startingPgService)}
             >
-              {discoveringPg ? '查找中…' : '查找本机 PG'}
+              {discoveringPg ? '查找中…' : '本机 PG'}
             </button>
             <button
               type="button"
               className="terminal-rail-mini-btn is-accent"
               onClick={() => {
-                if (showConnForm) {
-                  setConnPassword('');
-                  setConnFormError('');
-                  setShowCreateDatabase(false);
-                  setCreateDatabaseMessage('');
-                }
-                setShowConnForm((value) => !value);
+                setEditingConn(null);
+                setPresetPgInstance(null);
+                setConnModalOpen(true);
               }}
             >
-              {showConnForm ? '取消' : '+ 新建连接'}
+              + 新建连接
             </button>
           </div>
         </div>
@@ -808,15 +569,13 @@ export function CodeLabDataPanel({
               return (
                 <div key={instance.serviceName} className="datalab-local-pg">
                   <div className="datalab-local-pg-info">
-                    <strong>
+                    <strong
+                      title={instance.displayName || instance.serviceName}
+                    >
                       {instance.displayName || instance.serviceName}
                     </strong>
                     <span>
-                      127.0.0.1:{instance.port}
-                      {instance.portSource === 'default'
-                        ? ' · 默认端口，连接前可修改'
-                        : ''}
-                      {' · '}
+                      127.0.0.1:{instance.port} ·{' '}
                       {running ? '运行中' : stopped ? '已停止' : instance.state}
                     </span>
                   </div>
@@ -831,7 +590,7 @@ export function CodeLabDataPanel({
                     {startingPgService === instance.serviceName
                       ? '启动中…'
                       : running
-                        ? '连接'
+                        ? '配置连接'
                         : '启动并连接'}
                   </button>
                 </div>
@@ -839,204 +598,76 @@ export function CodeLabDataPanel({
             })}
           </div>
         )}
+
         {pgDiscoveryError && (
           <div className="datalab-inline-error" role="alert">
             {pgDiscoveryError}
           </div>
         )}
-        {!discoveringPg &&
-          localPgInstances.length === 0 &&
-          !pgDiscoveryError && (
-            <div className="terminal-rail-empty-hint">
-              未发现 Windows PostgreSQL 服务；可手动填写本机或远程连接。
-            </div>
-          )}
 
-        {showConnForm && (
-          <div className="datalab-conn-form">
-            <div className="datalab-dbtype-row">
-              {(['sqlite', 'duckdb', 'postgres', 'mysql'] as const).map(
-                (kind) => (
-                  <button
-                    key={kind}
-                    type="button"
-                    className={`datalab-dbtype-btn${dbType === kind ? ' is-active' : ''}`}
-                    onClick={() => {
-                      setDbType(kind);
-                      setConnPort(kind === 'mysql' ? '3306' : '5432');
-                      setConnFormError('');
-                      setShowCreateDatabase(false);
-                      setConnPassword('');
-                      setCreateDatabaseMessage('');
-                    }}
-                  >
-                    {kind === 'postgres' ? 'PG' : kind.toUpperCase()}
-                  </button>
-                ),
-              )}
-            </div>
-
-            <input
-              type="text"
-              className="terminal-rail-search"
-              value={connName}
-              onChange={(e) => setConnName(e.target.value)}
-              placeholder="连接名称（可选）"
-            />
-
-            {dbType === 'sqlite' || dbType === 'duckdb' ? (
-              <div className="datalab-file-picker-row">
-                <input
-                  type="text"
-                  className="terminal-rail-search"
-                  value={connFilePath}
-                  onChange={(e) => setConnFilePath(e.target.value)}
-                  placeholder={
-                    dbType === 'duckdb'
-                      ? '输入 .duckdb 路径或 :memory:'
-                      : '输入 .db / .sqlite 文件路径'
-                  }
-                />
-                <button
-                  type="button"
-                  className="terminal-rail-mini-btn"
-                  onClick={() => void handleBrowseDbFile()}
-                >
-                  浏览
-                </button>
-              </div>
-            ) : (
-              <>
-                <div className="datalab-host-row">
-                  <input
-                    type="text"
-                    className="terminal-rail-search"
-                    value={connHost}
-                    onChange={(e) => setConnHost(e.target.value)}
-                    placeholder="主机 127.0.0.1"
-                  />
-                  <input
-                    type="text"
-                    className="terminal-rail-search datalab-port-input"
-                    value={connPort}
-                    onChange={(e) => setConnPort(e.target.value)}
-                    placeholder="端口"
-                  />
-                </div>
-                <input
-                  type="text"
-                  className="terminal-rail-search"
-                  value={connDatabase}
-                  onChange={(e) => setConnDatabase(e.target.value)}
-                  placeholder="数据库名 (database)"
-                />
-                <div className="datalab-host-row">
-                  <input
-                    type="text"
-                    className="terminal-rail-search"
-                    value={connUsername}
-                    onChange={(e) => setConnUsername(e.target.value)}
-                    placeholder="用户名"
-                  />
-                  <input
-                    type="password"
-                    className="terminal-rail-search"
-                    value={connPassword}
-                    onChange={(e) => setConnPassword(e.target.value)}
-                    placeholder="密码（Windows 凭据管理器）"
-                  />
-                </div>
-                {dbType === 'postgres' && (
-                  <div className="datalab-create-db">
-                    <button
-                      type="button"
-                      className="terminal-rail-mini-btn"
-                      onClick={() => setShowCreateDatabase((value) => !value)}
-                    >
-                      {showCreateDatabase ? '收起创建数据库' : '+ 创建新数据库'}
-                    </button>
-                    {showCreateDatabase && (
-                      <div className="datalab-create-db-fields">
-                        <span>
-                          用上面的账户连接现有数据库，创建后切换到新数据库。
-                        </span>
-                        <input
-                          type="text"
-                          className="terminal-rail-search"
-                          value={newDatabaseName}
-                          onChange={(event) =>
-                            setNewDatabaseName(event.target.value)
-                          }
-                          placeholder="新数据库名，例如 research"
-                          aria-label="新 PostgreSQL 数据库名"
-                        />
-                        <button
-                          type="button"
-                          className="terminal-rail-mini-btn is-accent"
-                          disabled={creatingDatabase || savingConn}
-                          onClick={() => void handleCreatePostgresDatabase()}
-                        >
-                          {creatingDatabase ? '正在创建…' : '确认创建数据库'}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </>
-            )}
-
-            {createDatabaseMessage && (
-              <div className="datalab-inline-success" role="status">
-                {createDatabaseMessage}
-              </div>
-            )}
-            {connFormError && (
-              <div className="datalab-inline-error" role="alert">
-                {connFormError}
-              </div>
-            )}
-
-            <button
-              type="button"
-              className="terminal-rail-mini-btn is-accent datalab-submit-btn"
-              disabled={savingConn}
-              onClick={() => void handleSaveNewConnection()}
-            >
-              {savingConn ? '正在测试并保存…' : '测试并保存连接'}
-            </button>
-          </div>
-        )}
-
-        {dbConnections.length === 0 && !showConnForm ? (
+        {dbConnections.length === 0 ? (
           <div className="terminal-rail-empty-hint">
-            支持 SQLite（免依赖直连）、DuckDB、PostgreSQL 与 MySQL。
+            支持 PostgreSQL（多库发现/只读研究/百万行分页）、DuckDB、SQLite 与
+            MySQL。点击「配置连接」或「+ 新建连接」打开向导。
           </div>
         ) : (
           <div className="datalab-card-list">
             {dbConnections.map((conn) => {
               const expanded = Boolean(expandedConnIds[conn.id]);
+              const isReadOnly = conn.readOnly ?? true;
               return (
                 <div key={conn.id} className="datalab-card">
-                  <button
-                    type="button"
-                    className="datalab-card-head"
-                    onClick={() =>
-                      setExpandedConnIds((prev) => ({
-                        ...prev,
-                        [conn.id]: !prev[conn.id],
-                      }))
-                    }
-                  >
-                    <span className="datalab-fmt-badge">
-                      {conn.dbType === 'postgres'
-                        ? 'PG'
-                        : conn.dbType.toUpperCase()}
+                  <div className="datalab-card-top">
+                    <button
+                      type="button"
+                      className="datalab-card-head"
+                      onClick={() =>
+                        setExpandedConnIds((prev) => ({
+                          ...prev,
+                          [conn.id]: !prev[conn.id],
+                        }))
+                      }
+                      title={`${conn.name}${conn.database ? ` · 库: ${conn.database}` : ''}`}
+                    >
+                      <span className="datalab-fmt-badge">
+                        {conn.dbType === 'postgres'
+                          ? 'PG'
+                          : conn.dbType.toUpperCase()}
+                      </span>
+                      <strong className="datalab-card-name">{conn.name}</strong>
+                      <span className="datalab-card-meta">
+                        {conn.tables ? `${conn.tables.length} 表` : ''}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="datalab-card-remove"
+                      onClick={() => void handleRemoveConnection(conn.id)}
+                      title="删除连接"
+                      aria-label={`删除连接 ${conn.name}`}
+                    >
+                      ×
+                    </button>
+                  </div>
+
+                  <div className="datalab-card-submeta datalab-conn-meta-line">
+                    <span
+                      className={`datalab-ro-pill${isReadOnly ? ' is-ro' : ' is-rw'}`}
+                      title={
+                        isReadOnly
+                          ? '只读研究模式：数据库会话层禁止写入'
+                          : '读写模式：允许执行写入语句'
+                      }
+                    >
+                      {isReadOnly ? '只读' : '读写'}
                     </span>
-                    <strong className="datalab-card-name">{conn.name}</strong>
-                    <span className="datalab-card-meta">
-                      {conn.tables ? `${conn.tables.length} 表` : ''}
-                    </span>
-                  </button>
+                    {conn.database && <span>库: {conn.database}</span>}
+                    {conn.host && (
+                      <span>
+                        · {conn.host}:{conn.port ?? 5432}
+                      </span>
+                    )}
+                  </div>
 
                   {conn.lastStatus && (
                     <div
@@ -1048,6 +679,21 @@ export function CodeLabDataPanel({
                   )}
 
                   <div className="datalab-card-actions">
+                    {onOpenErStudio && (
+                      <button
+                        type="button"
+                        className="terminal-rail-mini-btn is-accent"
+                        onClick={() =>
+                          onOpenErStudio(
+                            conn.id,
+                            `ER · ${conn.database || conn.name}`,
+                          )
+                        }
+                        title="在编辑器标签页打开交互式 Database ER Studio（支持与右侧 Agent 分屏联动）"
+                      >
+                        ER 图谱
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="terminal-rail-mini-btn is-accent"
@@ -1059,6 +705,7 @@ export function CodeLabDataPanel({
                                 conn.tables[0].name,
                                 conn.tables[0].schema,
                                 conn.dbType,
+                                100,
                               )
                             : '-- 输入 SQL 查询\nSELECT 1;',
                           false,
@@ -1066,7 +713,7 @@ export function CodeLabDataPanel({
                         )
                       }
                     >
-                      新建 SQL 格
+                      新建 SQL
                     </button>
                     <button
                       type="button"
@@ -1076,111 +723,38 @@ export function CodeLabDataPanel({
                     >
                       {testingConnId === conn.id ? '检测中…' : '刷新表'}
                     </button>
-                    {conn.dbType === 'postgres' && (
-                      <button
-                        type="button"
-                        className="terminal-rail-mini-btn"
-                        onClick={() => {
-                          setCreateForConnId((current) =>
-                            current === conn.id ? null : conn.id,
-                          );
-                          setSavedNewDatabaseName('');
-                          setSavedCreateStatus((previous) => ({
-                            ...previous,
-                            [conn.id]: '',
-                          }));
-                        }}
-                      >
-                        创建数据库
-                      </button>
-                    )}
                     <button
                       type="button"
                       className="terminal-rail-mini-btn"
-                      onClick={() => void handleRemoveConnection(conn.id)}
-                      title="删除连接"
+                      onClick={() => {
+                        setEditingConn(conn);
+                        setPresetPgInstance(null);
+                        setConnModalOpen(true);
+                      }}
                     >
-                      ×
+                      编辑
+                    </button>
+                    <button
+                      type="button"
+                      className="terminal-rail-mini-btn"
+                      onClick={() => handleToggleReadOnly(conn)}
+                      title="快速切换只读研究模式与读写模式"
+                    >
+                      {isReadOnly ? '切读写' : '切只读'}
                     </button>
                   </div>
 
-                  {createForConnId === conn.id && (
-                    <div className="datalab-create-db-fields">
-                      <span>
-                        使用此连接的账户创建数据库，并自动添加新连接。
-                      </span>
-                      <input
-                        type="text"
-                        className="terminal-rail-search"
-                        value={savedNewDatabaseName}
-                        onChange={(event) =>
-                          setSavedNewDatabaseName(event.target.value)
-                        }
-                        placeholder="新数据库名，例如 research"
-                        aria-label="新 PostgreSQL 数据库名"
-                      />
-                      <button
-                        type="button"
-                        className="terminal-rail-mini-btn is-accent"
-                        disabled={creatingForConnId === conn.id}
-                        onClick={() =>
-                          void handleCreateForSavedConnection(conn)
-                        }
-                      >
-                        {creatingForConnId === conn.id
-                          ? '正在创建…'
-                          : '确认创建数据库'}
-                      </button>
-                    </div>
-                  )}
-                  {savedCreateStatus[conn.id] && (
-                    <div className="datalab-inline-error" role="alert">
-                      {savedCreateStatus[conn.id]}
-                    </div>
-                  )}
-
                   {expanded && (
                     <div className="datalab-schema-box">
-                      {conn.tables && conn.tables.length > 0 ? (
-                        <div className="datalab-table-list">
-                          {conn.tables.slice(0, 30).map((tbl) => (
-                            <div
-                              key={`${tbl.schema ?? ''}.${tbl.name}`}
-                              className="datalab-table-item"
-                            >
-                              <button
-                                type="button"
-                                className="datalab-table-btn"
-                                onClick={() =>
-                                  onInsertCell(
-                                    'sql',
-                                    buildTableSelectSql(
-                                      tbl.name,
-                                      tbl.schema,
-                                      conn.dbType,
-                                    ),
-                                    true,
-                                    conn.id,
-                                  )
-                                }
-                                title={`点击直接查询 ${tbl.name} 前 50 行`}
-                              >
-                                <span>{tbl.name}</span>
-                                <span className="datalab-col-type">
-                                  {tbl.columns.length}列
-                                  {tbl.rowCount != null
-                                    ? ` · ${tbl.rowCount}行`
-                                    : ''}
-                                </span>
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="terminal-rail-empty-hint">
-                          暂无数据表，点击「刷新表」重新读取 Schema。
-                        </div>
-                      )}
+                      <DbSchemaTree
+                        connection={conn}
+                        firstMountedAlias={firstMountedAlias}
+                        onInsertCell={onInsertCell}
+                        onProfileTable={(c, tbl) =>
+                          setProfilerTarget({ conn: c, table: tbl })
+                        }
+                        onNotify={onNotify}
+                      />
                     </div>
                   )}
                 </div>
@@ -1189,6 +763,25 @@ export function CodeLabDataPanel({
           </div>
         )}
       </div>
+
+      <DbConnectionModal
+        open={connModalOpen}
+        editingConnection={editingConn}
+        presetInstance={presetPgInstance}
+        preferredPythonPath={preferredPythonPath}
+        existingConnections={dbConnections}
+        onClose={() => setConnModalOpen(false)}
+        onSaved={handleModalSaved}
+      />
+
+      <DbTableProfilerModal
+        connection={profilerTarget?.conn ?? null}
+        table={profilerTarget?.table ?? null}
+        preferredPythonPath={preferredPythonPath}
+        firstMountedAlias={firstMountedAlias}
+        onClose={() => setProfilerTarget(null)}
+        onInsertCell={onInsertCell}
+      />
     </div>
   );
 }

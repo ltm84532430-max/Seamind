@@ -27,6 +27,8 @@ pub struct PythonEnvInfo {
     pub has_polars: bool,
     pub has_sqlalchemy: bool,
     pub has_scipy: bool,
+    pub has_psycopg: bool,
+    pub has_pymysql: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,6 +146,9 @@ except Exception:
 SEAMIND_BUS_DIR = os.environ.get('SEAMIND_BUS_DIR', '')
 SEAMIND_TABLES_DIR = os.environ.get('SEAMIND_TABLES_DIR', '')
 SEAMIND_ARTIFACTS_DIR = os.environ.get('SEAMIND_ARTIFACTS_DIR', '')
+SEAMIND_DATALAB_BRIDGE_URL = os.environ.get('SEAMIND_DATALAB_BRIDGE_URL', '')
+SEAMIND_DATALAB_BRIDGE_TOKEN = os.environ.get('SEAMIND_DATALAB_BRIDGE_TOKEN', '')
+SEAMIND_SESSION_ID = os.environ.get('SEAMIND_SESSION_ID', 'default')
 
 def _sm_safe_name(raw):
     out = ''.join(ch if (ch.isalnum() or ch == '_') else '_' for ch in str(raw or 'table')).strip('_')
@@ -271,7 +276,188 @@ def sm_load(name):
         return _pd.read_excel(target)
     return _pd.read_csv(target)
 
-def sm_sql(query):
+def _sm_bridge_post(endpoint, payload, timeout=120):
+    if not SEAMIND_DATALAB_BRIDGE_URL or not SEAMIND_DATALAB_BRIDGE_TOKEN:
+        raise RuntimeError('Seamind DataLab 本地安全桥接未初始化，请重启 Python 内核后重试。')
+    import urllib.request as _urlreq
+    req = _urlreq.Request(
+        SEAMIND_DATALAB_BRIDGE_URL.rstrip('/') + endpoint,
+        data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+        headers={
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + SEAMIND_DATALAB_BRIDGE_TOKEN,
+        },
+        method='POST',
+    )
+    with _urlreq.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode('utf-8', errors='replace'))
+
+def _sm_resolve_db(conn_name=None):
+    res = _sm_bridge_post('/db/resolve', {
+        'connection': conn_name,
+        'sessionId': SEAMIND_SESSION_ID or 'default',
+    }, timeout=30)
+    if not res.get('ok'):
+        raise RuntimeError(res.get('error') or '无法解析数据库连接凭据')
+    return res['connection']
+
+def _sm_pg_conn_str(cfg):
+    def _q(val):
+        s = str(val or '')
+        return "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'"
+    parts = [
+        f"host={_q(cfg.get('host') or '127.0.0.1')}",
+        f"port={int(cfg.get('port') or 5432)}",
+        f"dbname={_q(cfg.get('database') or 'postgres')}",
+        f"user={_q(cfg.get('username') or 'postgres')}",
+    ]
+    if cfg.get('password'):
+        parts.append(f"password={_q(cfg.get('password'))}")
+    ssl_mode = cfg.get('sslMode') or 'prefer'
+    if ssl_mode:
+        parts.append(f"sslmode={_q(ssl_mode)}")
+    return ' '.join(parts)
+
+def sm_db_tables(conn_name=None, schema=None):
+    import pandas as _pd
+    res = _sm_bridge_post('/db/tables', {
+        'connection': conn_name,
+        'sessionId': SEAMIND_SESSION_ID or 'default',
+    }, timeout=60)
+    if not res.get('ok'):
+        raise RuntimeError(res.get('error') or res.get('message') or '读取数据库表列表失败')
+    rows = []
+    for t in res.get('tables') or []:
+        sch = t.get('schema') or ''
+        if schema and sch.lower() != str(schema).lower():
+            continue
+        rows.append({
+            'schema': sch,
+            'table': t.get('name'),
+            'type': t.get('tableType'),
+            'estimated_rows': t.get('estimatedRows') if t.get('estimatedRows') is not None else t.get('rowCount'),
+            'total_bytes': t.get('totalBytes'),
+            'columns': len(t.get('columns') or []),
+            'primary_keys': ', '.join(t.get('primaryKeys') or []),
+            'comment': t.get('comment') or '',
+        })
+    return _pd.DataFrame(rows)
+
+def sm_db_query(conn_name, sql, params=None, limit=None, read_only=None):
+    import pandas as _pd
+    cfg = _sm_resolve_db(conn_name)
+    db_type = str(cfg.get('dbType') or '').lower()
+    ro = cfg.get('readOnly', True) if read_only is None else bool(read_only)
+    timeout_sec = max(1, min(600, int(cfg.get('statementTimeoutSec') or 30)))
+
+    if db_type == 'sqlite':
+        import sqlite3
+        con = sqlite3.connect(f"file:{cfg.get('filePath')}?mode=ro" if ro else cfg.get('filePath'), uri=ro)
+        try:
+            cur = con.execute(sql, params or [])
+            cols = [d[0] for d in (cur.description or [])]
+            data = cur.fetchmany(int(limit)) if limit else cur.fetchall()
+            return _pd.DataFrame(data, columns=cols)
+        finally:
+            con.close()
+
+    if db_type == 'duckdb':
+        import duckdb as _ddb
+        fpath = (cfg.get('filePath') or '').strip() or ':memory:'
+        con = _ddb.connect(fpath, read_only=(ro and fpath != ':memory:' and os.path.exists(fpath)))
+        try:
+            res = con.execute(sql, params) if params is not None else con.execute(sql)
+            df = res.df()
+            return df.head(int(limit)) if limit else df
+        finally:
+            con.close()
+
+    if db_type == 'postgres':
+        host = cfg.get('host') or '127.0.0.1'
+        port = int(cfg.get('port') or 5432)
+        dbname = cfg.get('database') or 'postgres'
+        user = cfg.get('username') or 'postgres'
+        password = cfg.get('password') or ''
+        sslmode = cfg.get('sslMode') or 'prefer'
+        c = None
+        try:
+            import psycopg
+            c = psycopg.connect(host=host, port=port, dbname=dbname, user=user, password=password, sslmode=sslmode, connect_timeout=10)
+        except ImportError:
+            import psycopg2
+            c = psycopg2.connect(host=host, port=port, dbname=dbname, user=user, password=password, sslmode=sslmode, connect_timeout=10)
+        try:
+            with c.cursor() as setup_cur:
+                setup_cur.execute(f"SET statement_timeout = '{timeout_sec * 1000}ms'")
+                if ro:
+                    setup_cur.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
+            c.commit()
+            cur = c.cursor()
+            try:
+                cur.execute(sql, params) if params is not None else cur.execute(sql)
+                cols = [d[0] for d in (cur.description or [])]
+                if not cols:
+                    if not ro:
+                        c.commit()
+                    return _pd.DataFrame()
+                rows = cur.fetchmany(int(limit)) if limit else cur.fetchall()
+                return _pd.DataFrame(rows, columns=cols)
+            finally:
+                cur.close()
+        finally:
+            c.close()
+
+    if db_type == 'mysql':
+        host = cfg.get('host') or '127.0.0.1'
+        port = int(cfg.get('port') or 3306)
+        dbname = cfg.get('database') or None
+        user = cfg.get('username') or 'root'
+        password = cfg.get('password') or ''
+        try:
+            import pymysql
+            c = pymysql.connect(host=host, port=port, database=dbname, user=user, password=password, connect_timeout=10, charset='utf8mb4')
+        except ImportError:
+            import mysql.connector
+            c = mysql.connector.connect(host=host, port=port, database=dbname, user=user, password=password, connect_timeout=10)
+        try:
+            cur = c.cursor()
+            if ro:
+                cur.execute("SET SESSION TRANSACTION READ ONLY")
+            cur.execute(sql, params) if params is not None else cur.execute(sql)
+            cols = [d[0] for d in (cur.description or [])]
+            if not cols:
+                if not ro:
+                    c.commit()
+                return _pd.DataFrame()
+            rows = cur.fetchmany(int(limit)) if limit else cur.fetchall()
+            cur.close()
+            return _pd.DataFrame(rows, columns=cols)
+        finally:
+            c.close()
+
+    raise RuntimeError(f'暂不支持的数据库类型：{db_type}')
+
+def sm_db_to_bus(conn_name, sql, bus_name, max_rows=200000, read_only=None):
+    res = _sm_bridge_post('/db/query-to-bus', {
+        'connection': conn_name,
+        'sql': sql,
+        'busName': bus_name,
+        'maxRows': int(max_rows),
+        'readOnly': read_only,
+        'sessionId': SEAMIND_SESSION_ID or 'default',
+    }, timeout=300)
+    if not res.get('ok'):
+        raise RuntimeError(res.get('error') or '数据库物化到共享总线失败')
+    return {
+        'busName': res.get('busName'),
+        'path': res.get('path'),
+        'rowCount': res.get('rowCount'),
+        'truncated': res.get('truncated'),
+        'engine': res.get('engine'),
+        'durationMs': res.get('durationMs'),
+    }
+
+def sm_sql(query, attach_dbs=None):
     import duckdb as _ddb
     con = _ddb.connect(':memory:')
     try:
@@ -306,6 +492,28 @@ def sm_sql(query):
                 con.execute(f'CREATE OR REPLACE TEMP VIEW "{safe}" AS SELECT * FROM read_json_auto({p_sql})')
             else:
                 con.execute(f'CREATE OR REPLACE TEMP VIEW "{safe}" AS SELECT * FROM read_csv_auto({p_sql})')
+        if attach_dbs:
+            targets = [attach_dbs] if isinstance(attach_dbs, str) else list(attach_dbs)
+            pg_loaded = False
+            for ref in targets:
+                cfg = _sm_resolve_db(ref)
+                dbt = str(cfg.get('dbType') or '').lower()
+                alias = _sm_safe_name(cfg.get('database') or cfg.get('name') or ref).lower()
+                if dbt == 'postgres':
+                    if not pg_loaded:
+                        try:
+                            con.execute("LOAD postgres")
+                        except Exception:
+                            con.execute("INSTALL postgres; LOAD postgres")
+                        pg_loaded = True
+                    dsn = _sm_pg_conn_str(cfg).replace("'", "''")
+                    con.execute(f"ATTACH '{dsn}' AS \"{alias}\" (TYPE POSTGRES, READ_ONLY)")
+                elif dbt == 'sqlite' and cfg.get('filePath'):
+                    p_sql = str(cfg.get('filePath')).replace("'", "''")
+                    con.execute(f"ATTACH '{p_sql}' AS \"{alias}\" (TYPE SQLITE, READ_ONLY)")
+                elif dbt == 'duckdb' and cfg.get('filePath'):
+                    p_sql = str(cfg.get('filePath')).replace("'", "''")
+                    con.execute(f"ATTACH '{p_sql}' AS \"{alias}\" (READ_ONLY)")
         return con.execute(query).df()
     finally:
         con.close()
@@ -615,6 +823,9 @@ def _make_base_ns():
         'sm_context': sm_context,
         'sm_files': sm_files,
         'sm_dbs': sm_dbs,
+        'sm_db_tables': sm_db_tables,
+        'sm_db_query': sm_db_query,
+        'sm_db_to_bus': sm_db_to_bus,
         'sm_tables': sm_tables,
         'sm_save': sm_save,
         'sm_load': sm_load,
@@ -775,6 +986,8 @@ struct PythonPkgFlags {
     has_polars: bool,
     has_sqlalchemy: bool,
     has_scipy: bool,
+    has_psycopg: bool,
+    has_pymysql: bool,
     version: Option<String>,
 }
 
@@ -788,6 +1001,8 @@ fn inspect_python_site_packages(python_path: &Path) -> PythonPkgFlags {
         has_polars: false,
         has_sqlalchemy: false,
         has_scipy: false,
+        has_psycopg: false,
+        has_pymysql: false,
         version: None,
     };
     let Some(parent) = python_path.parent() else {
@@ -854,6 +1069,12 @@ fn inspect_python_site_packages(python_path: &Path) -> PythonPkgFlags {
         }
         if dir.join("scipy").exists() {
             flags.has_scipy = true;
+        }
+        if dir.join("psycopg").exists() || dir.join("psycopg2").exists() {
+            flags.has_psycopg = true;
+        }
+        if dir.join("pymysql").exists() || dir.join("mysql").exists() {
+            flags.has_pymysql = true;
         }
     }
 
@@ -1128,6 +1349,8 @@ pub(crate) fn collect_candidate_envs(
                 has_polars: flags.has_polars,
                 has_sqlalchemy: flags.has_sqlalchemy,
                 has_scipy: flags.has_scipy,
+                has_psycopg: flags.has_psycopg,
+                has_pymysql: flags.has_pymysql,
             });
         };
 
@@ -1243,6 +1466,32 @@ pub fn python_kernel_detect_envs(
     ))
 }
 
+fn ensure_python_kernel_driver_script() -> Result<PathBuf, String> {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(EMBEDDED_KERNEL_DRIVER.as_bytes());
+    let digest = format!("{:x}", hasher.finalize());
+    let short_hash = &digest[..12];
+    let dir = std::env::temp_dir().join("seamind_datalab_bus").join("scripts");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("创建 Python 内核脚本目录失败：{e}"))?;
+    let path = dir.join(format!("seamind_py_kernel_{short_hash}.py"));
+    if !path.is_file()
+        || std::fs::metadata(&path)
+            .map(|m| m.len() != EMBEDDED_KERNEL_DRIVER.len() as u64)
+            .unwrap_or(true)
+    {
+        let tmp = dir.join(format!("seamind_py_kernel_{short_hash}_{}.tmp", Uuid::new_v4()));
+        std::fs::write(&tmp, EMBEDDED_KERNEL_DRIVER.as_bytes())
+            .map_err(|e| format!("写入 Python 内核脚本失败：{e}"))?;
+        if std::fs::rename(&tmp, &path).is_err() {
+            let _ = std::fs::write(&path, EMBEDDED_KERNEL_DRIVER.as_bytes());
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+    Ok(path)
+}
+
 async fn spawn_kernel_process(
     python_path: &str,
     cwd: Option<&str>,
@@ -1254,10 +1503,11 @@ async fn spawn_kernel_process(
         )
     })?;
     let exe_display = exe_path.to_string_lossy().to_string();
+    let driver_path = ensure_python_kernel_driver_script()?;
     let mut cmd = Command::new(&exe_path);
     // Windows' locale codec can fail while reading UTF-8 .pth files before our
-    // driver starts. PYTHONIOENCODING only covers stdio, so enable UTF-8 mode.
-    cmd.args(["-X", "utf8", "-u", "-c", EMBEDDED_KERNEL_DRIVER]);
+    // driver starts. Execute from a cached .py file to avoid Windows' 32KB CreateProcess limit (os error 206).
+    cmd.args(["-X", "utf8", "-u"]).arg(&driver_path);
     apply_python_env_activation(&mut cmd, &exe_path);
     if let Some(dir) = cwd.map(str::trim).filter(|s| !s.is_empty()) {
         let p = PathBuf::from(dir.trim_start_matches("\\\\?\\"));
@@ -1265,9 +1515,10 @@ async fn spawn_kernel_process(
             cmd.current_dir(p);
         }
     }
-    if let Ok((_, bus_dir, tables_dir, artifacts_dir)) =
+    if let Ok((sid, bus_dir, tables_dir, artifacts_dir)) =
         crate::data_lab::ensure_session_bus_dirs(session_id)
     {
+        cmd.env("SEAMIND_SESSION_ID", sid);
         cmd.env("SEAMIND_BUS_DIR", bus_dir.to_string_lossy().to_string());
         cmd.env(
             "SEAMIND_TABLES_DIR",
@@ -1277,6 +1528,10 @@ async fn spawn_kernel_process(
             "SEAMIND_ARTIFACTS_DIR",
             artifacts_dir.to_string_lossy().to_string(),
         );
+    }
+    if let Some(bridge) = crate::data_lab_bridge::ensure_datalab_bridge() {
+        cmd.env("SEAMIND_DATALAB_BRIDGE_URL", bridge.url);
+        cmd.env("SEAMIND_DATALAB_BRIDGE_TOKEN", bridge.token);
     }
     cmd.env("PYTHONIOENCODING", "utf-8");
     cmd.env("MPLBACKEND", "Agg");

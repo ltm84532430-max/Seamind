@@ -16,6 +16,8 @@ export interface PythonEnvInfo {
   hasPolars: boolean;
   hasSqlalchemy: boolean;
   hasScipy: boolean;
+  hasPsycopg?: boolean;
+  hasPymysql?: boolean;
 }
 
 export interface PythonVarSummary {
@@ -51,6 +53,7 @@ export interface REnvInfo {
   hasArrow: boolean;
   hasDbi: boolean;
   hasDuckdb: boolean;
+  hasRpostgres?: boolean;
 }
 
 export interface REvalResult {
@@ -69,6 +72,11 @@ export interface REvalResult {
 export interface DataColumnInfo {
   name: string;
   dataType: string;
+  nullable?: boolean | null;
+  isPrimaryKey?: boolean | null;
+  isUnique?: boolean | null;
+  defaultValue?: string | null;
+  comment?: string | null;
 }
 
 export type DataScalarValue = string | number | boolean | null;
@@ -84,6 +92,11 @@ export interface DataTableResult {
   message?: string | null;
   error?: string | null;
   busTablePath?: string | null;
+  page?: number | null;
+  pageSize?: number | null;
+  hasMore?: boolean | null;
+  readOnly?: boolean | null;
+  exportedRows?: number | null;
 }
 
 export interface DataBusEntry {
@@ -112,6 +125,9 @@ export interface DataBusDbSummary {
   port?: number | null;
   database?: string | null;
   username?: string | null;
+  readOnly?: boolean | null;
+  sslMode?: string | null;
+  statementTimeoutSec?: number | null;
 }
 
 export interface DataFileInspection {
@@ -136,6 +152,36 @@ export interface DataDbConnectionInput {
   username?: string | null;
   password?: string | null;
   pythonPath?: string | null;
+  readOnly?: boolean | null;
+  sslMode?: string | null;
+  statementTimeoutSec?: number | null;
+}
+
+export interface DataDbForeignKey {
+  column: string;
+  refSchema?: string | null;
+  refTable: string;
+  refColumn: string;
+  constraintName?: string | null;
+  onUpdate?: string | null;
+  onDelete?: string | null;
+}
+
+export interface DataDbCustomType {
+  name: string;
+  schema?: string | null;
+  kind: string;
+  values: string[];
+  fields: DataColumnInfo[];
+  comment?: string | null;
+}
+
+export interface DataDbIndexInfo {
+  name: string;
+  columns: string[];
+  unique: boolean;
+  primary: boolean;
+  definition?: string | null;
 }
 
 export interface DataDbTableSchema {
@@ -144,12 +190,66 @@ export interface DataDbTableSchema {
   tableType: string;
   rowCount?: number | null;
   columns: DataColumnInfo[];
+  estimatedRows?: number | null;
+  totalBytes?: number | null;
+  comment?: string | null;
+  primaryKeys?: string[];
+  foreignKeys?: DataDbForeignKey[];
+  indexes?: DataDbIndexInfo[];
+}
+
+export interface DataDbDatabaseEntry {
+  name: string;
+  sizeBytes?: number | null;
+  owner?: string | null;
+  encoding?: string | null;
+}
+
+export interface DataDbPgpassMatch {
+  found: boolean;
+  path?: string | null;
+  matchedHost?: string | null;
+  matchedDatabase?: string | null;
+  matchedUser?: string | null;
+}
+
+export interface DataDbColumnProfile {
+  name: string;
+  dataType: string;
+  nullable?: boolean | null;
+  isPrimaryKey: boolean;
+  comment?: string | null;
+  nullFraction?: number | null;
+  nDistinct?: number | null;
+  mostCommonVals: string[];
+  minValue?: string | null;
+  maxValue?: string | null;
+}
+
+export interface DataDbTableProfile {
+  ok: boolean;
+  schema?: string | null;
+  tableName: string;
+  tableType: string;
+  estimatedRows?: number | null;
+  totalBytes?: number | null;
+  comment?: string | null;
+  primaryKeys: string[];
+  foreignKeys: DataDbForeignKey[];
+  indexes: DataDbIndexInfo[];
+  columns: DataDbColumnProfile[];
+  sampleColumns: DataColumnInfo[];
+  sampleRows: DataScalarValue[][];
+  engine: string;
+  durationMs: number;
+  error?: string | null;
 }
 
 export interface DataDbTestResult {
   ok: boolean;
   message: string;
   tables: DataDbTableSchema[];
+  customTypes?: DataDbCustomType[];
   engine: string;
 }
 
@@ -301,6 +401,44 @@ export const terminalApi = {
   }) => invoke<boolean>('data_lab_copy_db_password', args),
   deleteDbPassword: (args: { connectionId: string }) =>
     invoke<void>('data_lab_delete_db_password', args),
+  checkPgpass: (args: {
+    host: string;
+    port?: number | null;
+    database?: string | null;
+    username?: string | null;
+  }) =>
+    invoke<DataDbPgpassMatch>('data_lab_check_pgpass', {
+      host: args.host,
+      port: args.port ?? null,
+      database: args.database ?? null,
+      username: args.username ?? null,
+    }),
+  listDatabases: (args: { connection: DataDbConnectionInput }) =>
+    invoke<DataDbDatabaseEntry[]>('data_lab_list_databases', args),
+  inspectTableDetail: (args: {
+    connection: DataDbConnectionInput;
+    schema?: string | null;
+    tableName: string;
+  }) =>
+    invoke<DataDbTableSchema>('data_lab_inspect_table_detail', {
+      connection: args.connection,
+      schema: args.schema ?? null,
+      tableName: args.tableName,
+    }),
+  profileTable: (args: {
+    connection: DataDbConnectionInput;
+    schema?: string | null;
+    tableName: string;
+    sampleRows?: number | null;
+  }) =>
+    invoke<DataDbTableProfile>('data_lab_profile_table', {
+      connection: args.connection,
+      schema: args.schema ?? null,
+      tableName: args.tableName,
+      sampleRows: args.sampleRows ?? null,
+    }),
+  cancelSql: (args: { queryId: string }) =>
+    invoke<boolean>('data_lab_cancel_sql', args),
   inspectDataFile: (args: {
     path: string;
     pythonPath?: string | null;
@@ -329,6 +467,12 @@ export const terminalApi = {
     maxRows?: number | null;
     exportBusTable?: string | null;
     sessionId?: string | null;
+    page?: number | null;
+    readOnly?: boolean | null;
+    queryId?: string | null;
+    exportMaxRows?: number | null;
+    attachConnections?: DataDbConnectionInput[] | null;
+    statementTimeoutSec?: number | null;
   }) =>
     invoke<DataTableResult>('data_lab_query_sql', {
       sql: args.sql,
@@ -338,6 +482,12 @@ export const terminalApi = {
       maxRows: args.maxRows ?? null,
       exportBusTable: args.exportBusTable ?? null,
       sessionId: args.sessionId ?? null,
+      page: args.page ?? null,
+      readOnly: args.readOnly ?? null,
+      queryId: args.queryId ?? null,
+      exportMaxRows: args.exportMaxRows ?? null,
+      attachConnections: args.attachConnections ?? null,
+      statementTimeoutSec: args.statementTimeoutSec ?? null,
     }),
   getDataBusInfo: (args?: { sessionId?: string | null }) =>
     invoke<DataBusInfo>('data_lab_bus_info', {
@@ -358,6 +508,13 @@ export const terminalApi = {
       defaultPythonPath: args.defaultPythonPath ?? null,
       defaultRscriptPath: args.defaultRscriptPath ?? null,
       defaultConnectionId: args.defaultConnectionId ?? null,
+    }),
+  writeErExport: (args: { filePath: string; dataBase64: string }) =>
+    invoke<number>('data_lab_write_er_export', args),
+  openErExport: (args: { filePath: string; revealInFolder?: boolean | null }) =>
+    invoke<void>('data_lab_open_er_export', {
+      filePath: args.filePath,
+      revealInFolder: args.revealInFolder ?? null,
     }),
   detectCliAgents: () => invoke<CliEngineStatus[]>('cli_agent_detect'),
   listCliAgentModels: (args: { engine: string }) =>
