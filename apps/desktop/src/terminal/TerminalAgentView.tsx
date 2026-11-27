@@ -67,6 +67,12 @@ import type {
   TerminalWorkspaceBridge,
 } from './terminal-types';
 
+const SEAMIND_ASCII_LOGO = [
+  '█▀▀ █▀▀ ▄▀▄ █▄ ▄█ ▀█▀ █▄ █ █▀▄',
+  '▀▀█ █▀▀ █▀█ █ ▀ █  █  █ ▀█ █ █',
+  '▀▀▀ ▀▀▀ ▀ ▀ ▀   ▀ ▀▀▀ ▀  ▀ ▀▀ ',
+].join('\n');
+
 export interface TerminalAgentViewHandle {
   focus: () => void;
   submitPrompt: (text: string) => void;
@@ -1661,96 +1667,203 @@ export const TerminalAgentView = forwardRef<
           <div className="t-agent-scroll" ref={scrollHostRef}>
             {turns.length === 0 ? (
               <div className="t-agent-startup">
-                <div className="t-agent-cli-banner">
-                  <div className="t-agent-cli-emblem-box">
-                    <MetallicBookPixelEmblem />
+                <div className="t-agent-ascii-frame">
+                  <div className="t-agent-ascii-bar">
+                    <span className="t-agent-ascii-corner" aria-hidden="true">
+                      ┌─
+                    </span>
+                    <span className="t-agent-ascii-bar-title">
+                      SEAMIND CLI v0.1.4
+                    </span>
+                    <span className="t-agent-ascii-rule" aria-hidden="true" />
+                    <span className="t-agent-ascii-status">
+                      <i className="t-agent-ascii-led" aria-hidden="true" />
+                      ONLINE
+                    </span>
+                    <span className="t-agent-ascii-corner" aria-hidden="true">
+                      ─┐
+                    </span>
                   </div>
-                  <div className="t-agent-cli-meta-stack">
-                    <div className="t-agent-cli-line-brand">
-                      Seamind Terminal CLI 0.1.4
-                    </div>
-                    <div className="t-agent-cli-line-sub">
-                      workspace://local-library · 32 MCP tools mounted
-                    </div>
-                    <div className="t-agent-cli-line-model">
-                      {activeEngineTitle} ({engineConfig.mode.toUpperCase()})
-                    </div>
-                    <div
-                      className="t-agent-cli-line-path"
-                      title={tab.cwd || '.'}
-                    >
-                      {normalizeDisplayPath(tab.cwd || '.')}
-                    </div>
-                  </div>
-                </div>
 
-                <div
-                  className="t-agent-cli-prompt-strip"
-                  onClick={() => inputRef.current?.focus()}
-                >
-                  <span className="t-agent-cli-chevron" aria-hidden="true">
-                    &gt;
-                  </span>
-                  <span
-                    className="t-agent-cli-block-cursor"
-                    aria-hidden="true"
-                  />
+                  <div className="t-agent-ascii-hero">
+                    <div className="t-agent-cli-emblem-box">
+                      <MetallicBookPixelEmblem />
+                    </div>
+                    <div className="t-agent-ascii-hero-main">
+                      <pre className="t-agent-ascii-logo" aria-label="SEAMIND">
+                        {SEAMIND_ASCII_LOGO}
+                      </pre>
+                      <div className="t-agent-ascii-kv-list">
+                        <div className="t-agent-ascii-kv-row">
+                          <span className="t-agent-ascii-k">ENGINE</span>
+                          <button
+                            type="button"
+                            className="t-agent-ascii-v is-link"
+                            onClick={() => setModelModalOpen(true)}
+                            title="点击切换推理引擎或模型 (Ctrl+M)"
+                          >
+                            {activeEngineTitle} [
+                            {engineConfig.mode.toUpperCase()}]
+                          </button>
+                        </div>
+                        <div className="t-agent-ascii-kv-row">
+                          <span className="t-agent-ascii-k">KERNEL</span>
+                          <span className="t-agent-ascii-v">
+                            32 MCP tools · workspace://local-library
+                          </span>
+                        </div>
+                        <div className="t-agent-ascii-kv-row">
+                          <span className="t-agent-ascii-k">WORKDIR</span>
+                          <span
+                            className="t-agent-ascii-v is-path"
+                            title={tab.cwd || '.'}
+                          >
+                            {normalizeDisplayPath(tab.cwd || '.')}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="t-agent-ascii-divider" aria-hidden="true">
+                    <span>├─</span>
+                    <span className="t-agent-ascii-divider-label">
+                      COMMANDS &amp; CONTEXT
+                    </span>
+                    <span className="t-agent-ascii-rule" />
+                    <span>─┤</span>
+                  </div>
+
+                  <div className="t-agent-ascii-grid">
+                    <div className="t-agent-ascii-col">
+                      <button
+                        type="button"
+                        className="t-agent-ascii-cmd-row"
+                        onClick={() => void handleSubmit('/help')}
+                      >
+                        <span className="t-agent-ascii-cmd-key">/help</span>
+                        <span className="t-agent-ascii-cmd-desc">
+                          协议与快捷键指南
+                        </span>
+                        <span className="t-agent-ascii-cmd-ret">↵</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="t-agent-ascii-cmd-row"
+                        onClick={() =>
+                          insertTokenIntoComposer('/book #chapter ')
+                        }
+                      >
+                        <span className="t-agent-ascii-cmd-key">/book</span>
+                        <span className="t-agent-ascii-cmd-desc">
+                          伴读推导与章节精读
+                        </span>
+                        <span className="t-agent-ascii-cmd-ret">↵</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="t-agent-ascii-cmd-row"
+                        onClick={() => insertTokenIntoComposer('/code python ')}
+                      >
+                        <span className="t-agent-ascii-cmd-key">/code</span>
+                        <span className="t-agent-ascii-cmd-desc">
+                          生成并写入代码实验格
+                        </span>
+                        <span className="t-agent-ascii-cmd-ret">↵</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="t-agent-ascii-cmd-row"
+                        onClick={() =>
+                          insertTokenIntoComposer('/exec #last-error ')
+                        }
+                      >
+                        <span className="t-agent-ascii-cmd-key">/exec</span>
+                        <span className="t-agent-ascii-cmd-desc">
+                          诊断并修复终端报错
+                        </span>
+                        <span className="t-agent-ascii-cmd-ret">↵</span>
+                      </button>
+                    </div>
+
+                    <div className="t-agent-ascii-col">
+                      <button
+                        type="button"
+                        className="t-agent-ascii-cmd-row"
+                        onClick={() => insertTokenIntoComposer('#data #lab ')}
+                      >
+                        <span className="t-agent-ascii-cmd-key is-ref">
+                          #data
+                        </span>
+                        <span className="t-agent-ascii-cmd-desc">
+                          挂载数据文件与实验本
+                        </span>
+                        <span className="t-agent-ascii-cmd-ret">+</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="t-agent-ascii-cmd-row"
+                        onClick={() => insertTokenIntoComposer('#chapter #kb ')}
+                      >
+                        <span className="t-agent-ascii-cmd-key is-ref">
+                          #chapter
+                        </span>
+                        <span className="t-agent-ascii-cmd-desc">
+                          挂载当前书章与知识库
+                        </span>
+                        <span className="t-agent-ascii-cmd-ret">+</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="t-agent-ascii-cmd-row"
+                        onClick={() => setModelModalOpen(true)}
+                      >
+                        <span className="t-agent-ascii-cmd-key is-kbd">
+                          Ctrl+M
+                        </span>
+                        <span className="t-agent-ascii-cmd-desc">
+                          切换推理模型与协同内核
+                        </span>
+                        <span className="t-agent-ascii-cmd-ret">⚙</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="t-agent-ascii-cmd-row"
+                        onClick={() => void handleSubmit('/help')}
+                      >
+                        <span className="t-agent-ascii-cmd-key is-kbd">
+                          Ctrl+K
+                        </span>
+                        <span className="t-agent-ascii-cmd-desc">
+                          打开全局终端命令面板
+                        </span>
+                        <span className="t-agent-ascii-cmd-ret">⌘</span>
+                      </button>
+                    </div>
+                  </div>
+
                   <div
-                    className="t-agent-cli-quick-pills"
-                    onClick={(e) => e.stopPropagation()}
+                    className="t-agent-ascii-prompt"
+                    onClick={() => inputRef.current?.focus()}
                   >
-                    <button
-                      type="button"
-                      className="t-agent-cli-pill"
-                      onClick={() => void handleSubmit('/help')}
-                    >
-                      /help 使用指南
-                    </button>
-                    <button
-                      type="button"
-                      className="t-agent-cli-pill"
-                      onClick={() => insertTokenIntoComposer('/book #chapter ')}
-                    >
-                      /book 伴读推导
-                    </button>
-                    <button
-                      type="button"
-                      className="t-agent-cli-pill"
-                      onClick={() => insertTokenIntoComposer('/code python ')}
-                    >
-                      /code 实验生成
-                    </button>
-                    <button
-                      type="button"
-                      className="t-agent-cli-pill"
-                      onClick={() =>
-                        insertTokenIntoComposer('/exec #last-error ')
-                      }
-                    >
-                      /exec 终端诊断
-                    </button>
+                    <span className="t-agent-ascii-corner" aria-hidden="true">
+                      └─
+                    </span>
+                    <span className="t-agent-cli-chevron" aria-hidden="true">
+                      &gt;
+                    </span>
+                    <span
+                      className="t-agent-cli-block-cursor"
+                      aria-hidden="true"
+                    />
+                    <span className="t-agent-ascii-prompt-hint">
+                      READY · 输入指令或点选上方命令开始
+                    </span>
+                    <span className="t-agent-ascii-rule" aria-hidden="true" />
+                    <span className="t-agent-ascii-corner" aria-hidden="true">
+                      ─┘
+                    </span>
                   </div>
-                </div>
-
-                <div className="t-agent-cli-footer-row">
-                  <div className="t-agent-cli-footer-left">
-                    <button
-                      type="button"
-                      className="t-agent-splash-link"
-                      onClick={() => void handleSubmit('/help')}
-                    >
-                      ? for shortcuts (/help)
-                    </button>
-                    <span aria-hidden="true">·</span>
-                    <span># 挂载书籍/笔记/分屏现场</span>
-                  </div>
-                  <button
-                    type="button"
-                    className="t-agent-splash-link t-agent-cli-footer-right"
-                    onClick={() => setModelModalOpen(true)}
-                  >
-                    {activeEngineTitle} · {engineConfig.mode} (Ctrl+M)
-                  </button>
                 </div>
               </div>
             ) : (
@@ -2907,7 +3020,7 @@ export const TerminalAgentView = forwardRef<
                   disabled={isBusy || !inputText.trim()}
                   onClick={() => void handleSubmit()}
                 >
-                  {isBusy ? '执行中' : '发送'}
+                  {isBusy ? '执行中…' : '发送 ↵'}
                 </button>
               </div>
             </div>

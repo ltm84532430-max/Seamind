@@ -10701,3 +10701,534 @@ body.is-obsidian-file-dragging * {
   justify-content: flex-end;
   gap: 4px;
 }
+
+/* ==========================================================================
+   ASCII Pixel Terminal Aesthetic for Seamind Agent Workspace
+   ========================================================================== */
+.t-agent-topbar {
+  height: 32px;
+  padding: 0 16px;
+  font-family: var(--mono);
+  background: var(--term-surface);
+}
+
+.t-agent-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 0;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--term-success) 35%, transparent);
+}
+
+.t-agent-engine-btn,
+.t-agent-top-model-btn {
+  border-radius: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.t-agent-action-btn {
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.01em;
+  transition:
+    border-color 110ms ease,
+    background-color 110ms ease,
+    color 110ms ease,
+    box-shadow 110ms ease;
+}
+
+.t-agent-action-btn:hover {
+  border-color: var(--term-border-strong);
+  background: var(--term-subtle);
+  color: var(--term-ink);
+  box-shadow: 2px 2px 0 color-mix(in srgb, var(--term-ink) 8%, transparent);
+}
+
+.t-agent-action-btn.is-active {
+  border-color: var(--term-accent);
+  background: var(--term-accent-soft);
+  color: var(--term-accent);
+}
+
+.t-agent-scroll {
+  padding: 24px 28px;
+  background-color: var(--term-bg);
+  background-image: radial-gradient(
+    color-mix(in srgb, var(--term-ink) 8%, transparent) 1px,
+    transparent 1px
+  );
+  background-size: 16px 16px;
+}
+
+.t-agent-startup {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  max-width: 720px;
+}
+
+.t-agent-ascii-frame {
+  width: 100%;
+  border: 1px solid var(--term-border-strong);
+  border-radius: 0;
+  background: var(--term-surface);
+  box-shadow: 4px 4px 0 color-mix(in srgb, var(--term-ink) 8%, transparent);
+  font-family: var(--mono);
+  overflow: hidden;
+}
+
+.app-shell[data-theme='dark'] .t-agent-ascii-frame,
+.app-shell[data-theme='navy'] .t-agent-ascii-frame,
+.app-shell[data-theme='purple'] .t-agent-ascii-frame {
+  box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.36);
+}
+
+.t-agent-ascii-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--term-border);
+  background: var(--term-subtle);
+  font-size: 11px;
+  color: var(--term-muted);
+}
+
+.t-agent-ascii-corner {
+  flex: none;
+  color: var(--term-muted);
+  opacity: 0.72;
+  font-weight: 600;
+}
+
+.t-agent-ascii-bar-title {
+  flex: none;
+  color: var(--term-ink);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.t-agent-ascii-rule {
+  flex: 1 1 0;
+  min-width: 12px;
+  height: 1px;
+  border-top: 1px dashed var(--term-border-strong);
+  opacity: 0.75;
+}
+
+.t-agent-ascii-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--term-success) 42%, transparent);
+  background: color-mix(in srgb, var(--term-success) 10%, transparent);
+  color: var(--term-success);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.t-agent-ascii-led {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  background: var(--term-success);
+}
+
+.t-agent-ascii-hero {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 16px 16px 14px;
+}
+
+.t-agent-ascii-hero .t-agent-cli-emblem-box {
+  width: 68px;
+  height: 68px;
+  flex: 0 0 68px;
+  border: 1px solid var(--term-border-strong);
+  border-radius: 0;
+  box-shadow: 3px 3px 0 color-mix(in srgb, var(--term-ink) 12%, transparent);
+  image-rendering: pixelated;
+}
+
+.t-agent-ascii-hero-main {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 0;
+}
+
+.t-agent-ascii-logo {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--term-accent);
+  font: 700 10.5px/1.15 var(--mono);
+  letter-spacing: 0.02em;
+  white-space: pre;
+  overflow-x: hidden;
+  user-select: none;
+}
+
+.t-agent-ascii-kv-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.t-agent-ascii-kv-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.t-agent-ascii-k {
+  flex: 0 0 58px;
+  color: var(--term-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.t-agent-ascii-v {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--term-ink);
+  font-size: 11.5px;
+}
+
+.t-agent-ascii-v.is-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--term-accent);
+  font-family: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.t-agent-ascii-v.is-link:hover {
+  text-decoration: underline;
+}
+
+.t-agent-ascii-v.is-path {
+  color: var(--term-muted);
+}
+
+.t-agent-ascii-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  height: 22px;
+  background: color-mix(in srgb, var(--term-subtle) 65%, var(--term-surface));
+  border-top: 1px solid var(--term-border);
+  border-bottom: 1px solid var(--term-border);
+  font-size: 10px;
+  color: var(--term-muted);
+}
+
+.t-agent-ascii-divider-label {
+  flex: none;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--term-muted);
+}
+
+.t-agent-ascii-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+  padding: 10px 14px;
+}
+
+.t-agent-ascii-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.t-agent-ascii-cmd-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--term-border);
+  border-radius: 0;
+  background: var(--term-bg);
+  color: var(--term-ink);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 110ms ease,
+    background-color 110ms ease,
+    transform 100ms ease,
+    box-shadow 110ms ease;
+}
+
+.t-agent-ascii-cmd-row:hover {
+  border-color: var(--term-accent);
+  background: var(--term-accent-soft);
+  box-shadow: 2px 2px 0 color-mix(in srgb, var(--term-accent) 26%, transparent);
+  transform: translate(-1px, -1px);
+}
+
+.t-agent-ascii-cmd-key {
+  flex: 0 0 62px;
+  color: var(--term-accent);
+  font-weight: 700;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.t-agent-ascii-cmd-key.is-ref {
+  color: var(--term-primary);
+}
+
+.t-agent-ascii-cmd-key.is-kbd {
+  color: var(--term-ink);
+}
+
+.t-agent-ascii-cmd-desc {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--ui-font);
+  font-size: 11.5px;
+  color: var(--term-muted);
+}
+
+.t-agent-ascii-cmd-row:hover .t-agent-ascii-cmd-desc {
+  color: var(--term-ink);
+}
+
+.t-agent-ascii-cmd-ret {
+  flex: none;
+  font-size: 11px;
+  color: var(--term-muted);
+  opacity: 0.65;
+}
+
+.t-agent-ascii-cmd-row:hover .t-agent-ascii-cmd-ret {
+  color: var(--term-accent);
+  opacity: 1;
+}
+
+.t-agent-ascii-prompt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 12px;
+  border-top: 1px solid var(--term-border);
+  background: var(--term-subtle);
+  font-size: 11px;
+  color: var(--term-muted);
+  cursor: text;
+}
+
+.t-agent-ascii-prompt .t-agent-cli-chevron {
+  color: var(--term-accent);
+  font-weight: 700;
+}
+
+.t-agent-ascii-prompt .t-agent-cli-block-cursor {
+  width: 7px;
+  height: 13px;
+  border-radius: 0;
+  background: var(--term-accent);
+  animation: t-agent-pixel-blink 1.05s steps(2, end) infinite;
+}
+
+@keyframes t-agent-pixel-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0.12;
+  }
+}
+
+.t-agent-ascii-prompt-hint {
+  flex: none;
+  color: var(--term-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* Pixel-Framed Message Turns, Context Chips & Composer */
+.t-agent-turn {
+  border-bottom: 1px dashed var(--term-border-strong);
+}
+
+.t-agent-context-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+.t-agent-ctx-chip {
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid var(--term-border);
+  border-radius: 0;
+  background: var(--term-surface);
+  color: var(--term-muted);
+  font: 500 11px/20px var(--mono);
+  cursor: pointer;
+  transition:
+    border-color 110ms ease,
+    color 110ms ease,
+    box-shadow 110ms ease,
+    transform 100ms ease;
+}
+
+.t-agent-ctx-chip:hover {
+  border-color: var(--term-accent);
+  color: var(--term-accent);
+  background: var(--term-surface);
+  box-shadow: 2px 2px 0 color-mix(in srgb, var(--term-accent) 22%, transparent);
+  transform: translate(-1px, -1px);
+}
+
+.t-agent-ctx-chip.is-alert {
+  border-color: color-mix(in srgb, var(--term-warning) 55%, var(--term-border));
+  background: color-mix(in srgb, var(--term-warning) 10%, var(--term-surface));
+  color: var(--term-warning);
+  font-weight: 600;
+}
+
+.t-agent-composer-wrap {
+  padding: 10px 28px 12px;
+  border-top: 1px solid var(--term-border-strong);
+  background: var(--term-subtle);
+}
+
+.t-agent-composer-box {
+  padding: 8px 11px;
+  border: 1px solid var(--term-border-strong);
+  border-radius: 0;
+  background: var(--term-surface);
+  box-shadow: 2px 2px 0 color-mix(in srgb, var(--term-ink) 7%, transparent);
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.t-agent-composer-box:focus-within {
+  border-color: var(--term-accent);
+  box-shadow: 3px 3px 0 color-mix(in srgb, var(--term-accent) 22%, transparent);
+}
+
+.t-agent-composer-plus-btn {
+  border: 1px solid var(--term-border);
+  border-radius: 0;
+  background: var(--term-surface);
+}
+
+.t-agent-composer-plus-btn:hover {
+  border-color: var(--term-accent);
+  color: var(--term-accent);
+  background: var(--term-accent-soft);
+}
+
+.t-agent-model-trigger {
+  border: 1px solid var(--term-border);
+  border-radius: 0;
+  background: var(--term-surface);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.t-agent-model-trigger:hover,
+.t-agent-model-trigger.is-open {
+  border-color: var(--term-accent);
+  background: var(--term-accent-soft);
+}
+
+.t-agent-send-btn {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--term-accent);
+  border-radius: 0;
+  background: var(--term-accent-soft);
+  color: var(--term-accent);
+  font: 700 12px var(--mono);
+  box-shadow: 2px 2px 0 color-mix(in srgb, var(--term-accent) 24%, transparent);
+  transition:
+    background-color 110ms ease,
+    color 110ms ease,
+    transform 100ms ease,
+    box-shadow 110ms ease;
+}
+
+.t-agent-send-btn:hover:not(:disabled) {
+  background: var(--term-accent);
+  color: #ffffff;
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 color-mix(in srgb, var(--term-accent) 34%, transparent);
+}
+
+.t-agent-send-btn:disabled {
+  border-color: var(--term-border);
+  background: var(--term-surface);
+  color: var(--term-muted);
+  box-shadow: none;
+}
+
+.t-agent-root.is-compact .t-agent-ascii-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.t-agent-root.is-compact .t-agent-ascii-logo {
+  font-size: 8.5px;
+}
+
+.t-agent-root.is-compact .t-agent-ascii-hero {
+  gap: 12px;
+  padding: 12px;
+}
+
+.t-agent-root.is-compact .t-agent-ascii-hero .t-agent-cli-emblem-box {
+  width: 48px;
+  height: 48px;
+  flex-basis: 48px;
+}
+
+@media (max-width: 720px) {
+  .t-agent-ascii-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .t-agent-ascii-logo {
+    font-size: 8.5px;
+  }
+}

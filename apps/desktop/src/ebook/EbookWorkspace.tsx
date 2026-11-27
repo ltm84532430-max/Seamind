@@ -12,6 +12,7 @@ import { listEpubExams } from '../exams/epub-exams';
 import {
   clearEpubReaderData,
   deleteEpubReadingPlan,
+  EBOOK_READING_ACTIVITY_EVENT,
   epubProgressKey,
   loadEpubBookMetadata,
   loadEpubReadingActivity,
@@ -20,12 +21,21 @@ import {
   saveEpubReadingPlan,
 } from './ebook-storage';
 import type { EpubReadingPlan } from './ebook-storage';
+import { formatReadingDurationCompact } from './ebook-reading-analytics';
+import {
+  buildShelfGridCssVars,
+  loadShelfColumns,
+  MAX_SHELF_COLUMNS,
+  MIN_SHELF_COLUMNS,
+  saveShelfColumns,
+} from './ebook-shelf-density';
 import EbookReadingDashboard from './EbookReadingDashboard';
 import type { EbookDashboardBook } from './EbookReadingDashboard';
 import EbookReadingHeatmap from './EbookReadingHeatmap';
 import ZlibSearchDialog from './ZlibSearchDialog';
 
 type ShelfSort = 'recent' | 'title' | 'added';
+type EbookPage = 'shelf' | 'online' | 'heatmap';
 
 const NEW_BOOK_CATEGORY = '__new_book_category__';
 
@@ -63,6 +73,7 @@ export default function EbookWorkspace({
   const books = snapshot?.books ?? [];
   const pdfBooks = snapshot?.pdfBooks ?? [];
   const [query, setQuery] = useState('');
+  const [page, setPage] = useState<EbookPage>('shelf');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [categoryError, setCategoryError] = useState('');
   const [categoryTarget, setCategoryTarget] = useState<EpubBookDocument | null>(
@@ -70,6 +81,17 @@ export default function EbookWorkspace({
   );
   const [newCategoryName, setNewCategoryName] = useState('');
   const [sortBy, setSortBy] = useState<ShelfSort>('recent');
+  const [shelfColumns, setShelfColumns] = useState<number>(() =>
+    loadShelfColumns(),
+  );
+  const updateShelfColumns = (cols: number) => {
+    const saved = saveShelfColumns(cols);
+    setShelfColumns(saved);
+  };
+  const shelfGridStyle = useMemo(
+    () => buildShelfGridCssVars(shelfColumns),
+    [shelfColumns],
+  );
   const [deleteTarget, setDeleteTarget] = useState<EpubBookDocument | null>(
     null,
   );
@@ -117,6 +139,23 @@ export default function EbookWorkspace({
       active = false;
     };
   }, [snapshot?.books, active]);
+
+  useEffect(() => {
+    const syncActivity = () => {
+      setDashboardRevision((value) => value + 1);
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (!event.key || event.key.includes('epub-reading-activity')) {
+        syncActivity();
+      }
+    };
+    window.addEventListener(EBOOK_READING_ACTIVITY_EVENT, syncActivity);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener(EBOOK_READING_ACTIVITY_EVENT, syncActivity);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
 
   useEffect(() => {
     if (!openMenuPath) return;
@@ -412,33 +451,78 @@ export default function EbookWorkspace({
   return (
     <main
       className={`ebook-shelf${dashboardCollapsed ? ' is-dashboard-collapsed' : ''}`}
+      data-ebook-page={page}
       aria-label="电子书书架"
     >
-      <EbookReadingDashboard
-        books={dashboardBooks}
-        open={dashboardOpen}
-        collapsed={dashboardCollapsed}
-        onClose={() => setDashboardOpen(false)}
-        onToggleCollapsed={() =>
-          setDashboardCollapsed((collapsed) => {
-            const next = !collapsed;
-            try {
-              localStorage.setItem(
-                'seamind_ebook_dashboard_collapsed',
-                String(next),
-              );
-            } catch {
-              // ignore
-            }
-            return next;
-          })
-        }
-        onCancelPlan={cancelReadingPlan}
-        rootPath={snapshot?.rootPath ?? ''}
-        libraryBooks={books}
-        onOpenBook={onOpenBook}
-      />
-      <div className="ebook-shelf-content">
+      <nav className="ebook-page-tabs" aria-label="电子书页面" role="tablist">
+        {(
+          [
+            ['shelf', '我的书架'],
+            ['online', '在线找书'],
+            ['heatmap', '阅读热力'],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            role="tab"
+            id={`ebook-tab-${value}`}
+            aria-controls={`ebook-panel-${value}`}
+            aria-selected={page === value}
+            tabIndex={page === value ? 0 : -1}
+            className={page === value ? 'is-active' : ''}
+            onClick={() => setPage(value)}
+            onKeyDown={(event) => {
+              if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')
+                return;
+              event.preventDefault();
+              const pages: EbookPage[] = ['shelf', 'online', 'heatmap'];
+              const offset = event.key === 'ArrowRight' ? 1 : -1;
+              const next =
+                pages[
+                  (pages.indexOf(value) + offset + pages.length) % pages.length
+                ];
+              setPage(next);
+              document.getElementById(`ebook-tab-${next}`)?.focus();
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+      <div className="ebook-dashboard-pane" hidden={page !== 'shelf'}>
+        <EbookReadingDashboard
+          books={dashboardBooks}
+          open={dashboardOpen}
+          collapsed={dashboardCollapsed}
+          onClose={() => setDashboardOpen(false)}
+          onToggleCollapsed={() =>
+            setDashboardCollapsed((collapsed) => {
+              const next = !collapsed;
+              try {
+                localStorage.setItem(
+                  'seamind_ebook_dashboard_collapsed',
+                  String(next),
+                );
+              } catch {
+                // ignore
+              }
+              return next;
+            })
+          }
+          onCancelPlan={cancelReadingPlan}
+          rootPath={snapshot?.rootPath ?? ''}
+          libraryBooks={books}
+          onOpenBook={onOpenBook}
+        />
+      </div>
+      <div
+        className="ebook-shelf-content"
+        id="ebook-panel-shelf"
+        role="tabpanel"
+        aria-labelledby="ebook-tab-shelf"
+        hidden={page !== 'shelf'}
+      >
         {!snapshot?.rootPath ? (
           <section className="ebook-shelf-empty">
             <div className="ebook-shelf-empty-icon" aria-hidden="true">
@@ -509,6 +593,27 @@ export default function EbookWorkspace({
                     ))}
                   </select>
                 </label>
+                <label
+                  className="ebook-shelf-density-slider"
+                  title={`调节每行显示电子书数量（当前每行 ${shelfColumns} 格，可滑至 ${MIN_SHELF_COLUMNS}–${MAX_SHELF_COLUMNS} 格）`}
+                >
+                  <span className="ebook-shelf-density-label">排版</span>
+                  <input
+                    type="range"
+                    className="ebook-shelf-density-range"
+                    min={MIN_SHELF_COLUMNS}
+                    max={MAX_SHELF_COLUMNS}
+                    step={1}
+                    value={shelfColumns}
+                    aria-label="书架每行电子书数量"
+                    onChange={(event) =>
+                      updateShelfColumns(Number(event.target.value))
+                    }
+                  />
+                  <span className="ebook-shelf-density-readout">
+                    {shelfColumns}格
+                  </span>
+                </label>
                 <button
                   type="button"
                   className="ebook-shelf-refresh-button"
@@ -527,11 +632,6 @@ export default function EbookWorkspace({
               </p>
             )}
 
-            <EbookReadingHeatmap
-              books={dashboardBooks}
-              onActivityChanged={() => setDashboardRevision((v) => v + 1)}
-            />
-
             {categoryFilter.startsWith('category:') && (
               <header className="ebook-category-content-heading">
                 <button type="button" onClick={() => setCategoryFilter('all')}>
@@ -545,10 +645,30 @@ export default function EbookWorkspace({
             )}
 
             {visibleBooks.length || visiblePdfBooks.length ? (
-              <section className="ebook-shelf-grid" aria-label="已导入的电子书">
+              <section
+                className="ebook-shelf-grid"
+                data-shelf-columns={shelfColumns}
+                style={shelfGridStyle}
+                aria-label="已导入的电子书"
+              >
                 {categoryFilter === 'all' &&
                   categoryGroups.map(({ category, books: groupedBooks }) => {
                     const previewBooks = groupedBooks.slice(0, 4);
+                    const isSingleBook = previewBooks.length === 1;
+                    const emptySlotsCount = isSingleBook
+                      ? 0
+                      : Math.max(0, 4 - previewBooks.length);
+                    let categorySeconds = 0;
+                    for (const row of groupedBooks) {
+                      const act = loadEpubReadingActivity(
+                        epubProgressKey(row.book),
+                      );
+                      for (const sec of Object.values(
+                        act?.dailySeconds ?? {},
+                      )) {
+                        categorySeconds += sec;
+                      }
+                    }
                     return (
                       <button
                         type="button"
@@ -561,7 +681,7 @@ export default function EbookWorkspace({
                         }
                       >
                         <span
-                          className={`ebook-category-folder-preview has-${previewBooks.length}`}
+                          className={`ebook-category-folder-preview ${isSingleBook ? 'has-1' : 'has-grid'}`}
                           aria-hidden="true"
                         >
                           {previewBooks.map(
@@ -587,18 +707,25 @@ export default function EbookWorkspace({
                               </span>
                             ),
                           )}
-                          {previewBooks.length > 1 &&
-                            previewBooks.length < 4 && (
+                          {Array.from(
+                            { length: emptySlotsCount },
+                            (_, slotIdx) => (
                               <span
-                                className={`ebook-category-folder-empty${previewBooks.length === 2 ? ' is-wide' : ''}`}
-                              >
-                                已全部展示
-                              </span>
-                            )}
+                                key={`slot-${slotIdx}`}
+                                className="ebook-category-folder-slot is-empty"
+                              />
+                            ),
+                          )}
                         </span>
                         <strong>{category}</strong>
                         <span className="ebook-category-folder-count">
                           {groupedBooks.length} 本书
+                          {categorySeconds > 0
+                            ? ` · ${formatReadingDurationCompact(categorySeconds)}`
+                            : ''}
+                        </span>
+                        <span className="ebook-category-folder-action">
+                          打开分类 <span aria-hidden="true">→</span>
                         </span>
                       </button>
                     );
@@ -762,6 +889,10 @@ export default function EbookWorkspace({
                         <span className="ebook-book-meta">
                           PDF · {book.category || formatBookSize(book.fileSize)}
                         </span>
+                        <span
+                          className="ebook-book-progress is-empty"
+                          aria-hidden="true"
+                        />
                         <span className="ebook-book-date">
                           {progress
                             ? `读至第 ${progress.pageNumber} 页`
@@ -1093,16 +1224,34 @@ export default function EbookWorkspace({
         </div>
       )}
 
-      <ZlibSearchDialog
-        active={active}
-        hasRoot={Boolean(snapshot?.rootPath)}
-        onBookDownloaded={(doc, openImmediately) => {
-          onRefresh();
-          if (openImmediately) {
-            onOpenBook(doc);
-          }
-        }}
-      />
+      <div
+        className="ebook-online-page"
+        id="ebook-panel-online"
+        role="tabpanel"
+        aria-labelledby="ebook-tab-online"
+        hidden={page !== 'online'}
+      >
+        <ZlibSearchDialog
+          active={active && page === 'online'}
+          hasRoot={Boolean(snapshot?.rootPath)}
+          onBookDownloaded={(doc, openImmediately) => {
+            onRefresh();
+            if (openImmediately) onOpenBook(doc);
+          }}
+        />
+      </div>
+      <div
+        className="ebook-heatmap-page"
+        id="ebook-panel-heatmap"
+        role="tabpanel"
+        aria-labelledby="ebook-tab-heatmap"
+        hidden={page !== 'heatmap'}
+      >
+        <EbookReadingHeatmap
+          books={dashboardBooks}
+          onActivityChanged={() => setDashboardRevision((value) => value + 1)}
+        />
+      </div>
     </main>
   );
 }

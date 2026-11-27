@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -84,6 +85,7 @@ export function ExamGraphView({
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
+  const svgInstanceId = useId().replace(/[^a-zA-Z0-9_-]/g, '');
 
   const [dimensions, setDimensions] = useState({ width: 960, height: 640 });
   const [scale, setScale] = useState(INITIAL_ZOOM);
@@ -186,6 +188,21 @@ export function ExamGraphView({
     }
     return map;
   }, [graph.nodes]);
+
+  const clusterCoverClipIds = useMemo(() => {
+    const ids = new Map<string, string>();
+    let seq = 0;
+    for (const node of graph.nodes) {
+      if (node.kind === 'cluster' && clusterCovers.has(node.id)) {
+        ids.set(node.id, `exam-cclip-${svgInstanceId}-${seq}`);
+        seq += 1;
+      }
+    }
+    return ids;
+  }, [clusterCovers, graph.nodes, svgInstanceId]);
+
+  const sunClipId = `exam-sun-clip-${svgInstanceId}`;
+  const sunGradId = `exam-sun-grad-${svgInstanceId}`;
 
   const effectiveSunCover = useMemo(() => {
     if (coverDataUrl) return coverDataUrl;
@@ -771,64 +788,26 @@ export function ExamGraphView({
           aria-label="试卷星系知识拓扑"
         >
           <defs>
-            <radialGradient id="examStarSunGrad" cx="50%" cy="50%" r="50%">
+            <radialGradient id={sunGradId} cx="50%" cy="50%" r="50%">
               <stop offset="0%" stopColor="#ff7b54" />
               <stop offset="70%" stopColor="#e05638" />
               <stop offset="100%" stopColor="#992e18" />
             </radialGradient>
             {effectiveSunCover && (
-              <>
-                <clipPath id="exam-sun-cover-clip">
-                  <circle cx="0" cy="0" r={sunRadius} />
-                </clipPath>
-                <pattern
-                  id="exam-sun-cover-pattern"
-                  x={-sunRadius}
-                  y={-sunRadius}
-                  width={sunRadius * 2}
-                  height={sunRadius * 2}
-                  patternUnits="userSpaceOnUse"
-                >
-                  <image
-                    href={effectiveSunCover}
-                    x="0"
-                    y="0"
-                    width={sunRadius * 2}
-                    height={sunRadius * 2}
-                    preserveAspectRatio="xMidYMid slice"
-                  />
-                </pattern>
-              </>
+              <clipPath id={sunClipId}>
+                <circle cx="0" cy="0" r={sunRadius} />
+              </clipPath>
             )}
             {graph.nodes.map((node) => {
               if (node.kind !== 'cluster') return null;
-              const cover = clusterCovers.get(node.id);
-              if (!cover) return null;
+              const clipId = clusterCoverClipIds.get(node.id);
+              if (!clipId) return null;
               const r =
                 Math.min(20, 11.5 + node.examCount * 0.75) * nodeSizeScale;
               return (
-                <g key={`cover-def-${node.id}`}>
-                  <clipPath id={`exam-cluster-clip-${node.id}`}>
-                    <circle cx="0" cy="0" r={r} />
-                  </clipPath>
-                  <pattern
-                    id={`exam-cluster-pattern-${node.id}`}
-                    x={-r}
-                    y={-r}
-                    width={r * 2}
-                    height={r * 2}
-                    patternUnits="userSpaceOnUse"
-                  >
-                    <image
-                      href={cover}
-                      x="0"
-                      y="0"
-                      width={r * 2}
-                      height={r * 2}
-                      preserveAspectRatio="xMidYMid slice"
-                    />
-                  </pattern>
-                </g>
+                <clipPath key={`clip-def-${clipId}`} id={clipId}>
+                  <circle cx="0" cy="0" r={r} />
+                </clipPath>
               );
             })}
           </defs>
@@ -1012,17 +991,33 @@ export function ExamGraphView({
 
                   {isSun ? (
                     effectiveSunCover ? (
-                      <circle
-                        r={displayRadius}
-                        fill="url(#exam-sun-cover-pattern)"
-                        clipPath="url(#exam-sun-cover-clip)"
-                        className="galaxy-sun-circle"
-                      />
+                      <>
+                        <circle
+                          r={displayRadius}
+                          fill="#eef2f6"
+                          className="galaxy-sun-circle"
+                        />
+                        <image
+                          href={effectiveSunCover}
+                          x={-displayRadius}
+                          y={-displayRadius}
+                          width={displayRadius * 2}
+                          height={displayRadius * 2}
+                          preserveAspectRatio="xMidYMid slice"
+                          clipPath={`url(#${sunClipId})`}
+                        />
+                        <circle
+                          r={displayRadius}
+                          fill="none"
+                          stroke="rgba(186, 91, 66, 0.45)"
+                          strokeWidth="1.5"
+                        />
+                      </>
                     ) : (
                       <>
                         <circle
                           r={displayRadius}
-                          fill="url(#examStarSunGrad)"
+                          fill={`url(#${sunGradId})`}
                           className="galaxy-node-circle"
                         />
                         <text
@@ -1034,14 +1029,32 @@ export function ExamGraphView({
                         </text>
                       </>
                     )
-                  ) : isCluster && clusterCover ? (
-                    <circle
-                      r={displayRadius}
-                      fill={`url(#exam-cluster-pattern-${node.id})`}
-                      clipPath={`url(#exam-cluster-clip-${node.id})`}
-                      className="galaxy-sun-circle"
-                      style={{ '--node-color': node.color } as CSSProperties}
-                    />
+                  ) : isCluster &&
+                    clusterCover &&
+                    clusterCoverClipIds.has(node.id) ? (
+                    <>
+                      <circle
+                        r={displayRadius}
+                        fill="#eef2f6"
+                        className="galaxy-sun-circle"
+                      />
+                      <image
+                        href={clusterCover}
+                        x={-displayRadius}
+                        y={-displayRadius}
+                        width={displayRadius * 2}
+                        height={displayRadius * 2}
+                        preserveAspectRatio="xMidYMid slice"
+                        clipPath={`url(#${clusterCoverClipIds.get(node.id)})`}
+                      />
+                      <circle
+                        r={displayRadius}
+                        fill="none"
+                        stroke={node.color}
+                        strokeOpacity="0.55"
+                        strokeWidth="1.5"
+                      />
+                    </>
                   ) : (
                     <circle
                       r={displayRadius}

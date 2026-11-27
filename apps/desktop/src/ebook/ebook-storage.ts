@@ -17,9 +17,13 @@ export interface EpubReadingActivity {
   furthestProgress: number;
   estimatedTotalWords: number | null;
   dailyWords: Record<string, number>;
+  dailySeconds?: Record<string, number>;
   pendingProgress: Record<string, number>;
   wordCountUnavailable: boolean;
 }
+
+export const EBOOK_READING_ACTIVITY_EVENT =
+  'seamind:ebook-reading-activity-changed';
 
 export interface EpubReadingPlan {
   targetChapters: number;
@@ -587,6 +591,19 @@ function readActivity(progressKey: string): EpubReadingActivity | null {
         }
       }
     }
+    const dailySeconds: Record<string, number> = {};
+    if (value.dailySeconds && typeof value.dailySeconds === 'object') {
+      for (const [date, seconds] of Object.entries(value.dailySeconds)) {
+        if (
+          /^\d{4}-\d{2}-\d{2}$/.test(date) &&
+          typeof seconds === 'number' &&
+          Number.isFinite(seconds) &&
+          seconds > 0
+        ) {
+          dailySeconds[date] = Math.round(seconds);
+        }
+      }
+    }
     const pendingProgress: Record<string, number> = {};
     if (value.pendingProgress && typeof value.pendingProgress === 'object') {
       for (const [date, progress] of Object.entries(value.pendingProgress)) {
@@ -610,6 +627,7 @@ function readActivity(progressKey: string): EpubReadingActivity | null {
           ? Math.max(0, Math.floor(value.estimatedTotalWords))
           : null,
       dailyWords,
+      dailySeconds,
       pendingProgress,
       wordCountUnavailable: value.wordCountUnavailable === true,
     };
@@ -624,6 +642,9 @@ function saveActivity(progressKey: string, activity: EpubReadingActivity) {
       `${READING_ACTIVITY_PREFIX}${suffix(progressKey)}`,
       JSON.stringify(activity),
     );
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(EBOOK_READING_ACTIVITY_EVENT));
+    }
   } catch {
     // Reading remains available when local storage is full or disabled.
   }
@@ -634,6 +655,38 @@ export function loadEpubReadingActivity(
 ): EpubReadingActivity | null {
   rebindRenamedEpubProgress(progressKey);
   return readActivity(progressKey);
+}
+
+export function recordEpubReadingDuration(
+  progressKey: string,
+  deltaSeconds: number,
+  dateKey?: string,
+): EpubReadingActivity {
+  const safeDelta = Math.max(
+    0,
+    Math.min(600, Math.round(Number.isFinite(deltaSeconds) ? deltaSeconds : 0)),
+  );
+  const activity = readActivity(progressKey) ?? {
+    furthestProgress: 0,
+    estimatedTotalWords: null,
+    dailyWords: {},
+    dailySeconds: {},
+    pendingProgress: {},
+    wordCountUnavailable: false,
+  };
+  if (safeDelta <= 0) {
+    return activity;
+  }
+  const date =
+    dateKey && /^\d{4}-\d{2}-\d{2}$/.test(dateKey) ? dateKey : localDateKey();
+  const nextDailySeconds = { ...(activity.dailySeconds ?? {}) };
+  nextDailySeconds[date] = (nextDailySeconds[date] ?? 0) + safeDelta;
+  const next: EpubReadingActivity = {
+    ...activity,
+    dailySeconds: nextDailySeconds,
+  };
+  saveActivity(progressKey, next);
+  return next;
 }
 
 export function recordEpubReadingProgress(
@@ -727,6 +780,10 @@ export function clearReadingActivityForDate(
             delete activity.dailyWords[date];
             modified = true;
           }
+          if (activity.dailySeconds && date in activity.dailySeconds) {
+            delete activity.dailySeconds[date];
+            modified = true;
+          }
           if (activity.pendingProgress && date in activity.pendingProgress) {
             delete activity.pendingProgress[date];
             modified = true;
@@ -769,6 +826,7 @@ export function clearAllReadingActivity(progressKeys?: string[]): number {
         const activity = JSON.parse(raw) as Partial<EpubReadingActivity>;
         if (activity && typeof activity === 'object') {
           activity.dailyWords = {};
+          activity.dailySeconds = {};
           activity.pendingProgress = {};
           localStorage.setItem(storageKey, JSON.stringify(activity));
           clearedCount++;

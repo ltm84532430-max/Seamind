@@ -13,6 +13,7 @@ import {
   loadEpubAnnotations,
   loadEpubBookmarks,
   recordEpubChapterProgress,
+  recordEpubReadingDuration,
   recordEpubReadingProgress,
   saveEpubReadingWordEstimate,
   saveEpubAnnotations,
@@ -865,6 +866,64 @@ export default function EpubReader({
     saveEpubAnnotations(selection.progressKey, annotations);
     onAnnotationsChangeRef.current?.(annotations);
   }, [annotations, selection.progressKey]);
+
+  // Active reading duration heartbeat (15s flush, 90s idle cutoff, pauses when hidden)
+  useEffect(() => {
+    const activeKey = selection.progressKey;
+    if (!activeKey) return undefined;
+
+    const TICK_MS = 15_000;
+    const IDLE_LIMIT_MS = 90_000;
+    let lastInteractionAt = Date.now();
+    let lastTickAt = Date.now();
+
+    const markActive = () => {
+      const now = Date.now();
+      if (now - lastInteractionAt > IDLE_LIMIT_MS) {
+        lastTickAt = now;
+      }
+      lastInteractionAt = now;
+    };
+
+    const flushDuration = () => {
+      const now = Date.now();
+      const elapsedSec = Math.round((now - lastTickAt) / 1000);
+      lastTickAt = now;
+      if (
+        document.visibilityState !== 'visible' ||
+        now - lastInteractionAt > IDLE_LIMIT_MS ||
+        elapsedSec < 3
+      ) {
+        return;
+      }
+      recordEpubReadingDuration(activeKey, elapsedSec);
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        flushDuration();
+      } else {
+        const now = Date.now();
+        lastInteractionAt = now;
+        lastTickAt = now;
+      }
+    };
+
+    const timer = window.setInterval(flushDuration, TICK_MS);
+    window.addEventListener('pointerdown', markActive, { passive: true });
+    window.addEventListener('keydown', markActive, { passive: true });
+    window.addEventListener('wheel', markActive, { passive: true });
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      flushDuration();
+      window.clearInterval(timer);
+      window.removeEventListener('pointerdown', markActive);
+      window.removeEventListener('keydown', markActive);
+      window.removeEventListener('wheel', markActive);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [selection.progressKey]);
 
   useEffect(() => {
     const main = stageRef.current?.parentElement;

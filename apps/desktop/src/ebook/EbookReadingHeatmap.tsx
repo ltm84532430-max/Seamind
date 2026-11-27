@@ -1,6 +1,13 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { MouseEvent } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent } from 'react';
+import { EbookCategoryTimeChart } from './EbookCategoryTimeChart';
 import type { EbookDashboardBook } from './EbookReadingDashboard';
+import {
+  formatReadingDuration,
+  formatReadingDurationCompact,
+  UNCATEGORIZED_BOOK_GROUP,
+  type ReadingMetricMode,
+} from './ebook-reading-analytics';
 import {
   clearReadingActivityForDate,
   clearAllReadingActivity,
@@ -8,10 +15,18 @@ import {
 
 export type HeatmapViewUnit = 'month' | 'year';
 
+interface DayBookEntry {
+  title: string;
+  words: number;
+  seconds: number;
+  category: string;
+}
+
 interface DayActivity {
   date: string;
   words: number;
-  books: Array<{ title: string; words: number }>;
+  seconds: number;
+  books: DayBookEntry[];
 }
 
 interface MonthCell {
@@ -21,14 +36,16 @@ interface MonthCell {
   isToday: boolean;
   isFuture: boolean;
   words: number;
-  books: Array<{ title: string; words: number }>;
+  seconds: number;
+  books: DayBookEntry[];
   level: number;
 }
 
 interface YearDayCell {
   date: string;
   words: number;
-  books: Array<{ title: string; words: number }>;
+  seconds: number;
+  books: DayBookEntry[];
   inRange: boolean;
   isFuture: boolean;
   level: number;
@@ -83,13 +100,23 @@ export default function EbookReadingHeatmap({
   const [hoveredDate, setHoveredDate] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<boolean>(true);
   const [localRevision, setLocalRevision] = useState<number>(0);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [categoryMetric, setCategoryMetric] = useState<ReadingMetricMode>(
+    () => {
+      const hasAnySeconds = books.some((b) =>
+        Object.values(b.activity?.dailySeconds ?? {}).some((s) => s > 0),
+      );
+      return hasAnySeconds ? 'time' : 'words';
+    },
+  );
+  const moreActionsRef = useRef<HTMLDetailsElement>(null);
 
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
     date: string;
     words: number;
-    books: Array<{ title: string; words: number }>;
+    books: DayBookEntry[];
   } | null>(null);
 
   useEffect(() => {
@@ -114,7 +141,7 @@ export default function EbookReadingHeatmap({
     e: MouseEvent<HTMLElement | SVGElement>,
     date: string,
     words: number,
-    dayBooks: Array<{ title: string; words: number }>,
+    dayBooks: DayBookEntry[],
   ) => {
     e.preventDefault();
     e.stopPropagation();
@@ -144,6 +171,9 @@ export default function EbookReadingHeatmap({
       if (b.activity?.dailyWords && date in b.activity.dailyWords) {
         delete b.activity.dailyWords[date];
       }
+      if (b.activity?.dailySeconds && date in b.activity.dailySeconds) {
+        delete b.activity.dailySeconds[date];
+      }
       if (b.activity?.pendingProgress && date in b.activity.pendingProgress) {
         delete b.activity.pendingProgress[date];
       }
@@ -168,6 +198,7 @@ export default function EbookReadingHeatmap({
     for (const b of books) {
       if (b.activity) {
         b.activity.dailyWords = {};
+        b.activity.dailySeconds = {};
         b.activity.pendingProgress = {};
       }
     }
@@ -181,30 +212,44 @@ export default function EbookReadingHeatmap({
   const yearGridRef = useRef<HTMLDivElement>(null);
   const [chartBoxRef, chartSize] = useElementSize({ width: 520, height: 173 });
 
-  // Map of date string YYYY-MM-DD -> { words, books }
+  // Map of date string YYYY-MM-DD -> { words, seconds, books }
   const activityByDate = useMemo(() => {
     const result = new Map<string, DayActivity>();
     for (const book of books) {
-      for (const [date, words] of Object.entries(
-        book.activity?.dailyWords ?? {},
-      )) {
-        if (!words || words <= 0) continue;
-        const day = result.get(date) ?? { date, words: 0, books: [] };
+      const category =
+        book.metadata?.manualCategory?.trim() || UNCATEGORIZED_BOOK_GROUP;
+      const dateSet = new Set<string>([
+        ...Object.keys(book.activity?.dailyWords ?? {}),
+        ...Object.keys(book.activity?.dailySeconds ?? {}),
+      ]);
+      for (const date of dateSet) {
+        const words = book.activity?.dailyWords?.[date] ?? 0;
+        const seconds = book.activity?.dailySeconds?.[date] ?? 0;
+        if (words <= 0 && seconds <= 0) continue;
+        const day = result.get(date) ?? {
+          date,
+          words: 0,
+          seconds: 0,
+          books: [],
+        };
         day.words += words;
-        day.books.push({ title: book.title, words });
+        day.seconds += seconds;
+        day.books.push({ title: book.title, words, seconds, category });
         result.set(date, day);
       }
     }
     return result;
   }, [books, localRevision]);
 
-  // Total words tracked across all dates
-  const totalTrackedWords = useMemo(() => {
-    let sum = 0;
+  // Total words & seconds tracked across all dates
+  const { totalTrackedWords, totalTrackedSeconds } = useMemo(() => {
+    let wordsSum = 0;
+    let secondsSum = 0;
     for (const item of activityByDate.values()) {
-      sum += item.words;
+      wordsSum += item.words;
+      secondsSum += item.seconds;
     }
-    return sum;
+    return { totalTrackedWords: wordsSum, totalTrackedSeconds: secondsSum };
   }, [activityByDate]);
 
   // Stepper handlers
@@ -238,6 +283,35 @@ export default function EbookReadingHeatmap({
     setFocusedDate(todayKey);
   };
 
+  const handleDateKeyDown = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    dateKey: string,
+  ) => {
+    const offset =
+      event.key === 'ArrowLeft'
+        ? -1
+        : event.key === 'ArrowRight'
+          ? 1
+          : event.key === 'ArrowUp'
+            ? -7
+            : event.key === 'ArrowDown'
+              ? 7
+              : null;
+    if (offset === null) return;
+    const [year, month, day] = dateKey.split('-').map(Number);
+    const nextDate = new Date(year, month - 1, day + offset);
+    const nextKey = localDateKey(nextDate);
+    const grid = event.currentTarget.closest(
+      '.ebook-month-grid, .ebook-heatmap-grid',
+    );
+    const target = grid?.querySelector<HTMLButtonElement>(
+      `[data-date="${nextKey}"]`,
+    );
+    if (!target) return;
+    event.preventDefault();
+    target.focus();
+  };
+
   // --- Month View Data Computation ---
   const monthData = useMemo(() => {
     const daysInMonth = new Date(selectedYear, selectedMonth, 0).getDate();
@@ -259,6 +333,7 @@ export default function EbookReadingHeatmap({
       const key = localDateKey(prevDate);
       const act = activityByDate.get(key);
       const words = act?.words ?? 0;
+      const seconds = act?.seconds ?? 0;
       cells.push({
         date: key,
         dayNumber: dayNum,
@@ -266,12 +341,14 @@ export default function EbookReadingHeatmap({
         isToday: key === todayKey,
         isFuture: key > todayKey,
         words,
+        seconds,
         books: act?.books ?? [],
-        level: getHeatLevel(words),
+        level: 0,
       });
     }
 
     let monthWords = 0;
+    let monthSeconds = 0;
     let activeDaysCount = 0;
     let peakDayWords = 0;
     let peakDayDate = '';
@@ -279,18 +356,22 @@ export default function EbookReadingHeatmap({
       day: number;
       date: string;
       words: number;
-      books: Array<{ title: string; words: number }>;
+      seconds: number;
+      books: DayBookEntry[];
     }> = [];
 
     for (let day = 1; day <= daysInMonth; day += 1) {
       const date = new Date(selectedYear, selectedMonth - 1, day);
       const key = localDateKey(date);
       const act = activityByDate.get(key);
-      const words = act?.words ?? 0;
-      const booksList = act?.books ?? [];
+      const isFuture = key > todayKey;
+      const words = isFuture ? 0 : (act?.words ?? 0);
+      const seconds = isFuture ? 0 : (act?.seconds ?? 0);
+      const booksList = isFuture ? [] : (act?.books ?? []);
 
       monthWords += words;
-      if (words > 0) {
+      monthSeconds += seconds;
+      if (words > 0 || seconds > 0) {
         activeDaysCount += 1;
         if (words > peakDayWords) {
           peakDayWords = words;
@@ -298,15 +379,16 @@ export default function EbookReadingHeatmap({
         }
       }
 
-      daysOfMonth.push({ day, date: key, words, books: booksList });
+      daysOfMonth.push({ day, date: key, words, seconds, books: booksList });
 
       cells.push({
         date: key,
         dayNumber: day,
         isCurrentMonth: true,
         isToday: key === todayKey,
-        isFuture: key > todayKey,
+        isFuture,
         words,
+        seconds,
         books: booksList,
         level: getHeatLevel(words),
       });
@@ -319,6 +401,7 @@ export default function EbookReadingHeatmap({
       const key = localDateKey(nextDate);
       const act = activityByDate.get(key);
       const words = act?.words ?? 0;
+      const seconds = act?.seconds ?? 0;
       cells.push({
         date: key,
         dayNumber: day,
@@ -326,8 +409,9 @@ export default function EbookReadingHeatmap({
         isToday: key === todayKey,
         isFuture: key > todayKey,
         words,
+        seconds,
         books: act?.books ?? [],
-        level: getHeatLevel(words),
+        level: 0,
       });
     }
 
@@ -339,14 +423,18 @@ export default function EbookReadingHeatmap({
       ? Math.max(1, today.getDate())
       : daysInMonth;
     const dailyAvg = Math.round(monthWords / elapsedDays);
-    const activeRate = Math.round((activeDaysCount / daysInMonth) * 100);
+    const dailyAvgSeconds = Math.round(monthSeconds / elapsedDays);
+    const activeRate = Math.round((activeDaysCount / elapsedDays) * 100);
 
     return {
       cells,
       daysInMonth,
       daysOfMonth,
       totalWords: monthWords,
+      totalSeconds: monthSeconds,
+      dailyAvgSeconds,
       activeDays: activeDaysCount,
+      elapsedDays,
       dailyAvg,
       activeRate,
       peakWords: peakDayWords,
@@ -366,6 +454,7 @@ export default function EbookReadingHeatmap({
     const weeks: YearDayCell[][] = [];
     const currentWeekCursor = new Date(gridStart);
     let yearWords = 0;
+    let yearSeconds = 0;
     let activeDays = 0;
     let peakDayWords = 0;
     let peakDayDate = '';
@@ -383,13 +472,15 @@ export default function EbookReadingHeatmap({
         const inRange = curDate >= startOfYear && curDate <= endOfYear;
         const isFuture = key > todayKey;
         const act = activityByDate.get(key);
-        const words = act?.words ?? 0;
+        const words = isFuture ? 0 : (act?.words ?? 0);
+        const seconds = isFuture ? 0 : (act?.seconds ?? 0);
 
         if (inRange) {
           yearWords += words;
+          yearSeconds += seconds;
           const monthIndex = curDate.getMonth();
           monthlyWords[monthIndex] += words;
-          if (words > 0) {
+          if (words > 0 || seconds > 0) {
             activeDays += 1;
             monthlyActiveDays[monthIndex] += 1;
             if (words > peakDayWords) {
@@ -402,7 +493,8 @@ export default function EbookReadingHeatmap({
         days.push({
           date: key,
           words,
-          books: act?.books ?? [],
+          seconds,
+          books: isFuture ? [] : (act?.books ?? []),
           inRange,
           isFuture,
           level: getHeatLevel(words),
@@ -412,14 +504,18 @@ export default function EbookReadingHeatmap({
     }
 
     const isCurrentActualYear = selectedYear === today.getFullYear();
-    const dayOfYearSoFar = isCurrentActualYear
-      ? Math.max(
-          1,
-          Math.floor((today.getTime() - startOfYear.getTime()) / 86400000) + 1,
-        )
-      : 365;
-    const dailyAvg = Math.round(yearWords / dayOfYearSoFar);
-    const activeRate = Math.round((activeDays / 365) * 100);
+    const daysInYear =
+      new Date(selectedYear, 1, 29).getMonth() === 1 ? 366 : 365;
+    const elapsedDays = isCurrentActualYear
+      ? Math.floor(
+          (Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()) -
+            Date.UTC(selectedYear, 0, 1)) /
+            86400000,
+        ) + 1
+      : daysInYear;
+    const dailyAvg = Math.round(yearWords / elapsedDays);
+    const dailyAvgSeconds = Math.round(yearSeconds / elapsedDays);
+    const activeRate = Math.round((activeDays / elapsedDays) * 100);
 
     // Month headers for year grid
     const monthHeaders: Array<{ label: string; start: number; span: number }> =
@@ -440,7 +536,10 @@ export default function EbookReadingHeatmap({
       weeks,
       monthHeaders,
       totalWords: yearWords,
+      totalSeconds: yearSeconds,
+      dailyAvgSeconds,
       activeDays,
+      elapsedDays,
       dailyAvg,
       activeRate,
       peakWords: peakDayWords,
@@ -455,9 +554,11 @@ export default function EbookReadingHeatmap({
     if (viewUnit === 'month') {
       return {
         totalWords: monthData.totalWords,
+        totalSeconds: monthData.totalSeconds,
+        dailyAvgSeconds: monthData.dailyAvgSeconds,
         dailyAvg: monthData.dailyAvg,
         activeDays: monthData.activeDays,
-        totalDays: monthData.daysInMonth,
+        totalDays: monthData.elapsedDays,
         activeRate: monthData.activeRate,
         peakWords: monthData.peakWords,
         peakDate: monthData.peakDate,
@@ -465,9 +566,11 @@ export default function EbookReadingHeatmap({
     }
     return {
       totalWords: yearData.totalWords,
+      totalSeconds: yearData.totalSeconds,
+      dailyAvgSeconds: yearData.dailyAvgSeconds,
       dailyAvg: yearData.dailyAvg,
       activeDays: yearData.activeDays,
-      totalDays: 365,
+      totalDays: yearData.elapsedDays,
       activeRate: yearData.activeRate,
       peakWords: yearData.peakWords,
       peakDate: yearData.peakDate,
@@ -478,6 +581,7 @@ export default function EbookReadingHeatmap({
   const activeInspectDate = hoveredDate || focusedDate;
   const inspectActivity = activityByDate.get(activeInspectDate);
   const inspectWords = inspectActivity?.words ?? 0;
+  const inspectSeconds = inspectActivity?.seconds ?? 0;
   const inspectBooks = inspectActivity?.books ?? [];
 
   return (
@@ -485,24 +589,18 @@ export default function EbookReadingHeatmap({
       className={`ebook-reading-heatmap ebook-library-heatmap ebook-institutional-heatmap${expanded ? ' is-expanded' : ''}`}
       aria-labelledby="ebook-heatmap-title"
     >
-      {/* 1. Institutional Desk Header */}
+      {/* 1. Clean Header */}
       <header className="ebook-institutional-header">
         <div className="ebook-institutional-title-block">
-          <div className="ebook-institutional-kicker-row">
-            <span className="ebook-institutional-kicker">
-              READING VELOCITY & HEAT TELEMETRY
-            </span>
-            <span className="ebook-institutional-badge">机构级阅读审计</span>
-          </div>
           <div className="ebook-institutional-title-row">
-            <h2 id="ebook-heatmap-title">阅读热力与字数图表</h2>
+            <h2 id="ebook-heatmap-title">阅读统计</h2>
             <span
               className="ebook-institutional-period-tag"
               aria-label="当前统计周期"
             >
               {viewUnit === 'month'
-                ? `${selectedYear}年 ${selectedMonth}月`
-                : `${selectedYear}年度`}
+                ? `${selectedYear}年${selectedMonth}月`
+                : `${selectedYear}年`}
             </span>
           </div>
         </div>
@@ -571,15 +669,22 @@ export default function EbookReadingHeatmap({
             </button>
           </div>
 
-          {/* Clear / Reset Reading Stats */}
-          <button
-            type="button"
-            className="ebook-heatmap-clear-all"
-            onClick={handleClearAll}
-            title="清空热力图中的全部每日阅读字数记录（重置测试数据）"
-          >
-            清除统计记录
-          </button>
+          <details className="ebook-heatmap-more" ref={moreActionsRef}>
+            <summary aria-label="更多热力图操作">更多</summary>
+            <div className="ebook-heatmap-more-menu">
+              <button
+                type="button"
+                className="ebook-heatmap-clear-all"
+                onClick={() => {
+                  moreActionsRef.current?.removeAttribute('open');
+                  handleClearAll();
+                }}
+                title="清空全部电子书的每日阅读字数记录"
+              >
+                清除统计记录…
+              </button>
+            </div>
+          </details>
 
           {/* Expand / Collapse Toggle */}
           <button
@@ -596,14 +701,14 @@ export default function EbookReadingHeatmap({
 
       {expanded && (
         <div className="ebook-institutional-body">
-          {/* 2. Institutional KPI Metrics Ribbon */}
+          {/* 2. KPI Metrics Ribbon */}
           <div
             className="ebook-institutional-kpi-ribbon"
             role="region"
             aria-label="阅读指标数据概览"
           >
             <div className="ebook-institutional-kpi-tile">
-              <span className="ebook-kpi-label">周期累计读量 · VOLUME</span>
+              <span className="ebook-kpi-label">累计读量</span>
               <div className="ebook-kpi-main">
                 <strong className="ebook-kpi-value">
                   {formatWords(currentMetrics.totalWords)}
@@ -612,13 +717,34 @@ export default function EbookReadingHeatmap({
               </div>
               <span className="ebook-kpi-sub">
                 {viewUnit === 'month'
-                  ? `${selectedMonth}月全月有效沉浸`
-                  : `${selectedYear}年度总计读量`}
+                  ? selectedYear === today.getFullYear() &&
+                    selectedMonth === today.getMonth() + 1
+                    ? `截至 ${today.getDate()} 日`
+                    : `${selectedMonth} 月累计`
+                  : selectedYear === today.getFullYear()
+                    ? `截至 ${today.getMonth() + 1} 月 ${today.getDate()} 日`
+                    : `${selectedYear} 年累计`}
               </span>
             </div>
 
             <div className="ebook-institutional-kpi-tile">
-              <span className="ebook-kpi-label">日均阅读强度 · DAILY AVG</span>
+              <span className="ebook-kpi-label">阅读时长</span>
+              <div className="ebook-kpi-main">
+                <strong className="ebook-kpi-value">
+                  {currentMetrics.totalSeconds > 0
+                    ? formatReadingDurationCompact(currentMetrics.totalSeconds)
+                    : '0m'}
+                </strong>
+              </div>
+              <span className="ebook-kpi-sub">
+                {currentMetrics.totalSeconds > 0
+                  ? `日均 ${formatReadingDurationCompact(currentMetrics.dailyAvgSeconds)}`
+                  : '阅读时自动计时'}
+              </span>
+            </div>
+
+            <div className="ebook-institutional-kpi-tile">
+              <span className="ebook-kpi-label">日均读量</span>
               <div className="ebook-kpi-main">
                 <strong className="ebook-kpi-value">
                   {formatWords(currentMetrics.dailyAvg)}
@@ -626,16 +752,12 @@ export default function EbookReadingHeatmap({
                 <span className="ebook-kpi-unit">字/日</span>
               </div>
               <span className="ebook-kpi-sub">
-                {viewUnit === 'month'
-                  ? '当月自然日均基准线'
-                  : '年度日均阅读推进'}
+                按 {currentMetrics.totalDays} 天计算
               </span>
             </div>
 
             <div className="ebook-institutional-kpi-tile">
-              <span className="ebook-kpi-label">
-                有效打卡天数 · ACTIVE RATIO
-              </span>
+              <span className="ebook-kpi-label">活跃天数</span>
               <div className="ebook-kpi-main">
                 <strong className="ebook-kpi-value">
                   {currentMetrics.activeDays}
@@ -648,11 +770,11 @@ export default function EbookReadingHeatmap({
                   {currentMetrics.activeRate}%
                 </span>
               </div>
-              <span className="ebook-kpi-sub">阅读活跃频次占比</span>
+              <span className="ebook-kpi-sub">有效阅读天数占比</span>
             </div>
 
             <div className="ebook-institutional-kpi-tile">
-              <span className="ebook-kpi-label">单日阅读峰值 · PEAK DAY</span>
+              <span className="ebook-kpi-label">单日峰值</span>
               <div className="ebook-kpi-main">
                 <strong className="ebook-kpi-value">
                   {currentMetrics.peakWords > 0
@@ -665,29 +787,28 @@ export default function EbookReadingHeatmap({
               </div>
               <span className="ebook-kpi-sub">
                 {currentMetrics.peakDate
-                  ? `发生于 ${currentMetrics.peakDate}`
+                  ? currentMetrics.peakDate
                   : '本周期暂无记录'}
               </span>
             </div>
           </div>
 
-          {/* 3. Main Split View: Heatmap Matrix (Left) + 2D Summary Chart (Right) */}
-          <div className="ebook-institutional-analytics-split">
-            {/* Left Column: Heatmap (Month or Year) */}
+          {/* 3. Adaptive Pixel-Strict Bento Grid (Month: 2-col + bottom full | Year: top full + 2-col bottom) */}
+          <div
+            className={`ebook-analytics-bento ${viewUnit === 'year' ? 'is-year' : 'is-month'}`}
+          >
+            {/* Heatmap Pane */}
             <div className="ebook-institutional-heatmap-pane">
               <div className="ebook-pane-header">
                 <div className="ebook-pane-title-group">
-                  <span className="ebook-pane-tag">HEATMAP MATRIX</span>
                   <h3 className="ebook-pane-title">
-                    {viewUnit === 'month'
-                      ? '月度阅读密度阵列'
-                      : '年度 52 周密度分布'}
+                    {viewUnit === 'month' ? '月度热力' : '年度热力'}
                   </h3>
                 </div>
                 <span className="ebook-pane-status">
                   {viewUnit === 'month'
                     ? `${selectedYear}年${selectedMonth}月 · ${monthData.daysInMonth}天`
-                    : `${selectedYear}年 · 52周`}
+                    : `${selectedYear}年 · 53周`}
                 </span>
               </div>
 
@@ -708,63 +829,98 @@ export default function EbookReadingHeatmap({
                     role="grid"
                     aria-label={`${selectedYear}年${selectedMonth}月每日阅读热力`}
                   >
-                    {monthData.cells.map((cell) => {
-                      const isSelected = focusedDate === cell.date;
-                      const isHovered = hoveredDate === cell.date;
-                      const label = cell.isCurrentMonth
-                        ? `${cell.date}，约 ${formatWords(cell.words)} 字${
-                            cell.books.length
-                              ? `\n${cell.books.map((b) => `${b.title}：约 ${formatWords(b.words)} 字`).join('\n')}`
-                              : ''
-                          }`
-                        : `${cell.date}（非本月）`;
-
-                      return (
-                        <button
-                          type="button"
-                          role="gridcell"
-                          key={cell.date}
-                          data-date={cell.date}
-                          className={`ebook-month-day level-${cell.level}${
-                            cell.isCurrentMonth ? '' : ' is-outside'
-                          }${cell.isToday ? ' is-today' : ''}${
-                            isSelected ? ' is-selected' : ''
-                          }${isHovered ? ' is-hovered' : ''}`}
-                          tabIndex={focusedDate === cell.date ? 0 : -1}
-                          title={label}
-                          aria-label={label}
-                          onMouseEnter={() => setHoveredDate(cell.date)}
-                          onMouseLeave={() => setHoveredDate(null)}
-                          onClick={() => setFocusedDate(cell.date)}
-                          onFocus={() => setFocusedDate(cell.date)}
-                          onContextMenu={(e) =>
-                            handleCellContextMenu(
-                              e,
-                              cell.date,
-                              cell.words,
-                              cell.books,
-                            )
-                          }
+                    {Array.from(
+                      { length: monthData.cells.length / 7 },
+                      (_, weekIndex) => (
+                        <div
+                          className="ebook-month-week"
+                          role="row"
+                          key={monthData.cells[weekIndex * 7].date}
                         >
-                          <span className="ebook-month-day-num">
-                            {cell.dayNumber}
-                          </span>
-                          {cell.words > 0 && (
-                            <span className="ebook-month-day-val">
-                              {cell.words >= 1000
-                                ? `${(cell.words / 1000).toFixed(1)}k`
-                                : cell.words}
-                            </span>
-                          )}
-                          {cell.isToday && (
-                            <span
-                              className="ebook-month-today-dot"
-                              aria-hidden="true"
-                            />
-                          )}
-                        </button>
-                      );
-                    })}
+                          {monthData.cells
+                            .slice(weekIndex * 7, weekIndex * 7 + 7)
+                            .map((cell) => {
+                              const isSelected = focusedDate === cell.date;
+                              const isHovered = hoveredDate === cell.date;
+                              const matchesCategory = Boolean(
+                                selectedCategory &&
+                                cell.isCurrentMonth &&
+                                cell.books.some(
+                                  (b) => b.category === selectedCategory,
+                                ),
+                              );
+                              const mutedByCategory = Boolean(
+                                selectedCategory &&
+                                cell.isCurrentMonth &&
+                                !matchesCategory,
+                              );
+                              const label = cell.isCurrentMonth
+                                ? `${cell.date}${cell.isFuture ? '（未来日期）' : ''}，约 ${formatWords(cell.words)} 字${
+                                    cell.seconds > 0
+                                      ? ` · ${formatReadingDuration(cell.seconds)}`
+                                      : ''
+                                  }${
+                                    cell.books.length
+                                      ? `\n${cell.books.map((b) => `${b.title}：约 ${formatWords(b.words)} 字${b.seconds > 0 ? ` / ${formatReadingDurationCompact(b.seconds)}` : ''}`).join('\n')}`
+                                      : ''
+                                  }`
+                                : `${cell.date}（非本月）`;
+
+                              return (
+                                <button
+                                  type="button"
+                                  role="gridcell"
+                                  key={cell.date}
+                                  data-date={cell.date}
+                                  className={`ebook-month-day level-${cell.isCurrentMonth ? cell.level : 0}${
+                                    cell.isCurrentMonth ? '' : ' is-outside'
+                                  }${cell.isFuture ? ' is-future' : ''}${cell.isToday ? ' is-today' : ''}${
+                                    isSelected ? ' is-selected' : ''
+                                  }${isHovered ? ' is-hovered' : ''}${
+                                    matchesCategory ? ' is-category-match' : ''
+                                  }${mutedByCategory ? ' is-category-muted' : ''}`}
+                                  tabIndex={focusedDate === cell.date ? 0 : -1}
+                                  aria-selected={isSelected}
+                                  title={label}
+                                  aria-label={label}
+                                  onKeyDown={(event) =>
+                                    handleDateKeyDown(event, cell.date)
+                                  }
+                                  onMouseEnter={() => setHoveredDate(cell.date)}
+                                  onMouseLeave={() => setHoveredDate(null)}
+                                  onClick={() => setFocusedDate(cell.date)}
+                                  onFocus={() => setFocusedDate(cell.date)}
+                                  onContextMenu={(e) =>
+                                    handleCellContextMenu(
+                                      e,
+                                      cell.date,
+                                      cell.words,
+                                      cell.books,
+                                    )
+                                  }
+                                >
+                                  <span className="ebook-month-day-num">
+                                    {cell.dayNumber}
+                                  </span>
+                                  {cell.isCurrentMonth && cell.words > 0 && (
+                                    <span className="ebook-month-day-val">
+                                      {cell.words >= 1000
+                                        ? `${(cell.words / 1000).toFixed(1)}k`
+                                        : cell.words}
+                                    </span>
+                                  )}
+                                  {cell.isToday && (
+                                    <span
+                                      className="ebook-month-today-dot"
+                                      aria-hidden="true"
+                                    />
+                                  )}
+                                </button>
+                              );
+                            })}
+                        </div>
+                      ),
+                    )}
                   </div>
                 </div>
               ) : (
@@ -809,8 +965,24 @@ export default function EbookReadingHeatmap({
                           {week.map((day) => {
                             const isSelected = focusedDate === day.date;
                             const isHovered = hoveredDate === day.date;
+                            const matchesCategory = Boolean(
+                              selectedCategory &&
+                              day.inRange &&
+                              day.books.some(
+                                (b) => b.category === selectedCategory,
+                              ),
+                            );
+                            const mutedByCategory = Boolean(
+                              selectedCategory &&
+                              day.inRange &&
+                              !matchesCategory,
+                            );
                             const label = day.inRange
-                              ? `${day.date}，约 ${formatWords(day.words)} 字${
+                              ? `${day.date}${day.isFuture ? '（未来日期）' : ''}，约 ${formatWords(day.words)} 字${
+                                  day.seconds > 0
+                                    ? ` · ${formatReadingDuration(day.seconds)}`
+                                    : ''
+                                }${
                                   day.books.length
                                     ? `\n${day.books.map((b) => `${b.title}：约 ${formatWords(b.words)} 字`).join('\n')}`
                                     : ''
@@ -823,14 +995,20 @@ export default function EbookReadingHeatmap({
                                 role="gridcell"
                                 className={`ebook-heatmap-day level-${day.level}${
                                   day.inRange ? '' : ' is-outside'
-                                }${isSelected ? ' is-selected' : ''}${
+                                }${day.isFuture ? ' is-future' : ''}${isSelected ? ' is-selected' : ''}${
                                   isHovered ? ' is-hovered' : ''
+                                }${matchesCategory ? ' is-category-match' : ''}${
+                                  mutedByCategory ? ' is-category-muted' : ''
                                 }`}
                                 data-date={day.date}
                                 key={day.date}
                                 tabIndex={focusedDate === day.date ? 0 : -1}
+                                aria-selected={isSelected}
                                 aria-label={label}
                                 title={label}
+                                onKeyDown={(event) =>
+                                  handleDateKeyDown(event, day.date)
+                                }
                                 onMouseEnter={() => setHoveredDate(day.date)}
                                 onMouseLeave={() => setHoveredDate(null)}
                                 onClick={() => setFocusedDate(day.date)}
@@ -853,52 +1031,51 @@ export default function EbookReadingHeatmap({
                 </div>
               )}
 
-              {/* Institutional Color Scale Legend */}
+              {/* Compact Pixel-Strict Heat Scale Bar */}
               <div
-                className="ebook-institutional-legend"
+                className="ebook-institutional-legend is-compact-ramp"
                 aria-label="热力等级色阶"
               >
-                <span className="ebook-legend-title">阅读热阶：</span>
-                <div className="ebook-legend-chips">
-                  <span className="ebook-legend-chip">
-                    <i className="level-0" />
-                    <span>0</span>
+                <span className="ebook-legend-summary">
+                  活跃 {currentMetrics.activeDays} 天
+                </span>
+                <div className="ebook-legend-ramp">
+                  <span className="ebook-legend-edge">少</span>
+                  <span className="ebook-legend-swatches">
+                    {(
+                      [
+                        [0, '0 字'],
+                        [1, '1 – 499 字'],
+                        [2, '500 – 2,999 字'],
+                        [3, '3,000 – 9,999 字'],
+                        [4, '10,000 – 49,999 字'],
+                        [5, '≥ 50,000 字'],
+                      ] as const
+                    ).map(([lvl, tip]) => (
+                      <i
+                        key={lvl}
+                        className={`ebook-legend-swatch level-${lvl}`}
+                        title={tip}
+                      />
+                    ))}
                   </span>
-                  <span className="ebook-legend-chip">
-                    <i className="level-1" />
-                    <span>1-500</span>
-                  </span>
-                  <span className="ebook-legend-chip">
-                    <i className="level-2" />
-                    <span>500-1.5k</span>
-                  </span>
-                  <span className="ebook-legend-chip">
-                    <i className="level-3" />
-                    <span>1.5k-3k</span>
-                  </span>
-                  <span className="ebook-legend-chip">
-                    <i className="level-4" />
-                    <span>&gt;3,000 字</span>
-                  </span>
+                  <span className="ebook-legend-edge">多</span>
                 </div>
               </div>
             </div>
 
-            {/* Right Column: 2D Daily Word Count Summary Chart (二维字数图表总结) */}
+            {/* Chart & Day Inspector Pane */}
             <div className="ebook-institutional-chart-pane">
               <div className="ebook-pane-header">
                 <div className="ebook-pane-title-group">
-                  <span className="ebook-pane-tag">2D ANALYTICS CHART</span>
                   <h3 className="ebook-pane-title">
-                    {viewUnit === 'month'
-                      ? '每日阅读字数分布图'
-                      : '全年月度阅读字数分布'}
+                    {viewUnit === 'month' ? '每日分布' : '月度分布'}
                   </h3>
                 </div>
                 <span className="ebook-pane-sub">
                   {viewUnit === 'month'
-                    ? `1日 - ${monthData.daysInMonth}日序列`
-                    : '1月 - 12月聚合柱图'}
+                    ? `1日 – ${monthData.daysInMonth}日`
+                    : '1月 – 12月'}
                 </span>
               </div>
 
@@ -969,6 +1146,11 @@ export default function EbookReadingHeatmap({
                       {formatWords(inspectWords)}
                     </span>
                     <span className="ebook-inspector-unit">字</span>
+                    {inspectSeconds > 0 && (
+                      <span className="ebook-inspector-duration-pill">
+                        {formatReadingDuration(inspectSeconds)}
+                      </span>
+                    )}
                     {viewUnit === 'month' &&
                       monthData.totalWords > 0 &&
                       inspectWords > 0 && (
@@ -990,11 +1172,14 @@ export default function EbookReadingHeatmap({
                           <li key={i} className="ebook-inspector-book-item">
                             <span
                               className="ebook-inspector-book-name"
-                              title={b.title}
+                              title={`${b.title}（${b.category}）`}
                             >
                               《{b.title}》
                             </span>
                             <span className="ebook-inspector-book-words">
+                              {b.seconds > 0
+                                ? `${formatReadingDurationCompact(b.seconds)} · `
+                                : ''}
                               {formatWords(b.words)} 字
                             </span>
                           </li>
@@ -1002,21 +1187,33 @@ export default function EbookReadingHeatmap({
                       </ul>
                     ) : (
                       <span className="ebook-inspector-empty">
-                        当天未产生有效阅读字数。
+                        当天未产生有效阅读记录。
                       </span>
                     )}
                   </div>
                 </div>
               </div>
             </div>
+
+            {/* Category Reading Time Donut & Breakdown (Bottom Full in Month / Bottom-Right in Year) */}
+            <EbookCategoryTimeChart
+              books={books}
+              viewUnit={viewUnit}
+              selectedYear={selectedYear}
+              selectedMonth={selectedMonth}
+              metric={categoryMetric}
+              onMetricChange={setCategoryMetric}
+              selectedCategory={selectedCategory}
+              onSelectCategory={setSelectedCategory}
+            />
           </div>
 
           <p className="ebook-heatmap-note">
-            机构级阅读审计体系按本地有效阅读活动实时聚合。全库累计记录有效阅读约{' '}
-            {formatWords(totalTrackedWords)} 字。
-            {books.some((book) => book.activity?.wordCountUnavailable) &&
-              ' 图片型或无法提取正文的 EPUB 不计入字数。'}{' '}
-            悬停或点击任意日期单元格或图表立柱，可查看当日阅读书目明细。右键单击任意日期可清除该日测试字数。
+            全库累计阅读约 {formatWords(totalTrackedWords)} 字
+            {totalTrackedSeconds > 0
+              ? ` · 实测 ${formatReadingDuration(totalTrackedSeconds)}`
+              : ''}
+            。点击日期或组合扇区可联动查看明细，右键日期可清除记录。
           </p>
         </div>
       )}
@@ -1081,7 +1278,8 @@ function Month2DChart({
     day: number;
     date: string;
     words: number;
-    books: Array<{ title: string; words: number }>;
+    seconds: number;
+    books: DayBookEntry[];
   }>;
   dailyAvg: number;
   activeDate: string;
@@ -1091,7 +1289,7 @@ function Month2DChart({
     e: MouseEvent<SVGGElement>,
     date: string,
     words: number,
-    books: Array<{ title: string; words: number }>,
+    books: DayBookEntry[],
   ) => void;
   width: number;
   height: number;
@@ -1249,16 +1447,26 @@ function Month2DChart({
           </g>
         );
       })}
-      {/* Drawn last so the bars cannot hide the benchmark label. */}
+      {/* Drawn as a clean top-right pill so bars and active columns never collide with the benchmark label. */}
       {avgY !== null && (
-        <text
-          x={svgWidth - paddingRight - 4}
-          y={avgY - 4}
-          textAnchor="end"
-          className="ebook-chart-avg-label"
-        >
-          AVG {formatWords(dailyAvg)} 字
-        </text>
+        <g className="ebook-chart-avg-pill-group">
+          <rect
+            x={svgWidth - paddingRight - 108}
+            y={4}
+            width={106}
+            height={16}
+            rx={4}
+            className="ebook-chart-avg-pill-bg"
+          />
+          <text
+            x={svgWidth - paddingRight - 55}
+            y={15}
+            textAnchor="middle"
+            className="ebook-chart-avg-label"
+          >
+            日均 {formatWords(dailyAvg)} 字
+          </text>
+        </g>
       )}
     </svg>
   );
@@ -1403,14 +1611,24 @@ function Year2DChart({
         );
       })}
       {avgY !== null && (
-        <text
-          x={svgWidth - paddingRight - 4}
-          y={avgY - 4}
-          textAnchor="end"
-          className="ebook-chart-avg-label"
-        >
-          月均基准 {formatWords(monthlyAvg)} 字
-        </text>
+        <g className="ebook-chart-avg-pill-group">
+          <rect
+            x={svgWidth - paddingRight - 122}
+            y={4}
+            width={120}
+            height={16}
+            rx={4}
+            className="ebook-chart-avg-pill-bg"
+          />
+          <text
+            x={svgWidth - paddingRight - 62}
+            y={15}
+            textAnchor="middle"
+            className="ebook-chart-avg-label"
+          >
+            月均基准 {formatWords(monthlyAvg)} 字
+          </text>
+        </g>
       )}
     </svg>
   );
@@ -1442,9 +1660,10 @@ function formatWords(words: number): string {
 function getHeatLevel(words: number): number {
   if (words <= 0) return 0;
   if (words < 500) return 1;
-  if (words < 1500) return 2;
-  if (words < 3000) return 3;
-  return 4;
+  if (words < 3000) return 2;
+  if (words < 10000) return 3;
+  if (words < 50000) return 4;
+  return 5;
 }
 
 function getMonthHeatLevel(words: number): number {

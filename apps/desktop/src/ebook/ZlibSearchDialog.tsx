@@ -375,7 +375,10 @@ export default function ZlibSearchDialog({
 
   return (
     <>
-      <aside className="zlib-side-panel" aria-label="在线找书">
+      <section
+        className="zlib-side-panel zlib-catalog-page"
+        aria-label="在线找书"
+      >
         <header className="zlib-side-header">
           <div>
             <span className="zlib-side-kicker">ONLINE CATALOG</span>
@@ -621,7 +624,7 @@ export default function ZlibSearchDialog({
             </div>
           )}
         </div>
-      </aside>
+      </section>
 
       {loginOpen && (
         <div
